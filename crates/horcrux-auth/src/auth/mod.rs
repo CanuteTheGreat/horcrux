@@ -7,6 +7,7 @@
 //! - [`realms`]: password checks against PAM / LDAP / Active Directory, and
 //!   OpenID Connect ([`oidc`]).
 //! - [`totp`], [`webauthn`]: second factors (plus one-time recovery codes).
+//! - [`sysgroups`]: system accounts' groups -> Horcrux roles (PAM logins).
 //! - [`password`]: Argon2 password hashing and API key generation.
 pub mod acl;
 pub mod oidc;
@@ -14,6 +15,7 @@ pub mod password;
 pub mod privileges;
 pub mod realms;
 pub mod store;
+pub mod sysgroups;
 pub mod totp;
 pub mod webauthn;
 

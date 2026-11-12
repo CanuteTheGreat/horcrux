@@ -27,7 +27,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import headless_gates as HG
 
 PROJECTS = {
-    "horcrux": dict(svc="horcrux-api", port=8006, health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
+    "horcrux": dict(svc="horcrux-api", port=8006, web_user="hxadmin",   # the web UI signs in SYSTEM users (PAM): the installer-created user
+                     health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
                     seedfile="/etc/horcrux/admin-password",
                     services=["horcrux-api"], forward=False, dbfiles=[], logdirs=["/var/log/horcrux"]),
     "patronus": dict(svc="patronus-web", port=8443, health=["/login"], pwfile="/var/lib/patronus/initial-admin-password", old_pw="patronus",
@@ -784,6 +785,8 @@ def answer_toml(a, pubkey, pwhash):
         lines += [f'zfs_raid = "{a.zfs_raid}"', 'disks = ["/dev/vda", "/dev/vdb"]' if a.zfs_raid == "mirror" else 'disks = ["/dev/vda"]']
     else:
         lines += ['disks = ["/dev/vda"]']
+    if p == "horcrux":
+        lines += ["", "[user]", 'name = "hxadmin"', f'password_hash = "{pwhash}"']      # web UI = system users: the installer creates this administrator
     lines += ["", "[hardening]", "ssh = true", "sysctl = true", "",
               "[use_flags]", 'preset = "minimal"', ""]          # answer-file use_flags: Minimal preset (checked against the Portage metadata)
     if p == "horcrux":
@@ -1158,6 +1161,8 @@ class Runner:
         shot("04b-target-disk-selected")
         kb.key("TAB"); kb.key("ENTER", 1)
         wait(r"Administrator account", "05-administrator-account")
+        if p == "horcrux":
+            kb.text(self.P["web_user"]); kb.key("TAB")      # the administrator user name (system account, wheel + horcrux-admin)
         kb.text(PW); kb.key("TAB"); kb.text(PW)
         kb.key("TAB"); kb.text("ops@example.test")
         kb.key("TAB"); kb.key("SPACE")                     # 'Show advanced options' -> the SSH key row appears and takes the focus
@@ -1431,6 +1436,9 @@ class Runner:
         self.gnext(vm, "rootpass")
         # ---- password
         self.gshot(vm, "password", "Administrator account")
+        if self.a.project == "horcrux":
+            self.gtype(vm, self.P["web_user"])
+            self.gkey(vm, "tab")
         self.gtype(vm, PW)
         self.gkey(vm, "tab")
         self.gtype(vm, PW)
@@ -1704,15 +1712,26 @@ class Runner:
             if a.headless_gates:
                 self.headless_checks(late)
             self.health("first-boot")
-            if a.flow == "auto":
+            if P.get("web_user"):
+                # no generated password and no 'admin' account: the installer-created system user signs in (PAM)
+                webpw = PW
+                how = f"system user {P['web_user']} created by the installer (PAM)"
+            elif a.flow == "auto":
                 rc, pw = ssh(FWD_SSH, self.key, f"cat {P['pwfile']}")
                 webpw = pw.strip().splitlines()[-1] if rc == 0 and pw.strip() else ""
                 how = f"generated first-boot password from {P['pwfile']} (length {len(webpw)})"
             else:
                 webpw = PW
                 how = "the password typed in the installer"
-            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": "admin", "password": webpw})
+            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": P.get("web_user", "admin"), "password": webpw})
             self.step("web-login", code == 200 and (a.project == "patronus" or b"token" in resp or b"ticket" in resp), f"{how}: POST /api/auth/login -> {code} {resp[:60]!r}")
+            if P.get("web_user"):
+                # no built-in admin, root and a wrong password are refused with the same 401; the old first-boot files do not exist
+                bad = {u: http(FWD_WEB, "/api/auth/login", "POST", {"username": u, "password": pw})[1]
+                       for u, pw in (("admin", PW), ("root", PW), (P["web_user"], PW + "x"))}
+                rc, o = ssh(FWD_SSH, self.key, f"id {P['web_user']}; test -e {P['pwfile']} && echo PWFILE-PRESENT; test -e {P['seedfile']} && echo SEED-PRESENT; ls /etc/pam.d/horcrux")
+                self.step("web-no-admin-account-root-and-wrong-password-refused", all(c == 401 for c in bad.values()) and "PRESENT" not in o and "wheel" in o and "horcrux-admin" in o,
+                          f"admin/root/wrong password -> {bad}; {o.strip().splitlines()[0][:120] if o.strip() else o!r}")
             if a.flow != "auto":
                 rc, o = ssh(FWD_SSH, self.key, f"sleep 15; for f in {P['seedfile']} {P['pwfile']}; do test -e $f && echo present:$f || echo gone:$f; done")
                 self.step("first-boot-password-files-removed", "present" not in o and o.count("gone") == 2, o.strip().replace("\n", " "))
@@ -1767,7 +1786,7 @@ class Runner:
     def web_login_code(self, pw, wait=0):
         end = time.time() + wait
         while True:
-            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": "admin", "password": pw})
+            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": self.P.get("web_user", "admin"), "password": pw})
             self.login_err = resp.decode(errors="replace")[:80] if code == 0 else ""      # why there was no HTTP answer (timeout / refused / TLS)
             if code == 200 or time.time() >= end:
                 return code
@@ -1810,7 +1829,10 @@ class Runner:
         self.step("console-menu-set-static-ip", rc == 0 and o.strip().startswith("1") and addr in o and nic in t,
                   f"{nic} {addr} static via /etc/dhcpcd.conf; ssh still works" + ("" if rc == 0 and addr in o and nic in t else f" [rc={rc} out={o.strip()[:160]!r} menu={t[-160:]!r}]"))
         # option 3: reset the web admin password; the new one must log in (hash compatible with the product), the old one not
-        t = self.opt(vm, "3", [("New admin password", PW2), ("Confirm", PW2), ("same password for the root console", "n")])
+        if self.P.get("web_user"):
+            t = self.opt(vm, "3", [("User name", self.P["web_user"]), ("New admin password", PW2), ("Confirm", PW2), ("same password for the root console", "n")])
+        else:
+            t = self.opt(vm, "3", [("New admin password", PW2), ("Confirm", PW2), ("same password for the root console", "n")])
         c_new, c_old = self.web_login_code(PW2, 20), self.web_login_code(PW)
         self.step("console-menu-reset-password", c_new == 200 and c_old != 200, f"new password -> {c_new}, old password -> {c_old}")
         # option 11 backup, 4 factory reset, 10 restore
@@ -1827,13 +1849,16 @@ class Runner:
         vm.expect_raw("Press Enter to return", 20)
         vm.send("\r")
         vm.expect_raw("Enter an option", 20)
-        t = self.opt(vm, "4", [("Type RESET", "RESET"), ("New admin password", PW3), ("Confirm", PW3)], done=r"Factory defaults restored", timeout=240)
+        if self.P.get("web_user"):
+            t = self.opt(vm, "4", [("Type RESET", "RESET")], done=r"Factory defaults restored", timeout=240)
+        else:
+            t = self.opt(vm, "4", [("Type RESET", "RESET"), ("New admin password", PW3), ("Confirm", PW3)], done=r"Factory defaults restored", timeout=240)
         vm.expect_raw("Press Enter to return", 20)
         vm.send("\r")
         vm.expect_raw("Enter an option", 20)
-        c3 = self.web_login_code(PW3, 180)
+        c3 = self.web_login_code(PW2 if self.P.get("web_user") else PW3, 180)    # system users survive a product factory reset: the same account still signs in
         err3 = self.login_err
-        c2 = self.web_login_code(PW2)
+        c2 = self.web_login_code(PW2) if not self.P.get("web_user") else 401
         if c3 != 200:
             rc, o = ssh(FWD_SSH, self.key, f"rc-service {self.P['svc']} status; ls -la /var/lib/{a.project}; tail -n 8 /var/log/{a.project}/web-error.log; nft list ruleset 2>&1 | grep -n {P['port']} | head -5; ss -ltn | grep {P['port']}")
             print("[DIAG] " + o.replace("\n", "\n[DIAG] "))
@@ -1856,7 +1881,7 @@ class Runner:
         vm.send("\r")
         vm.expect_raw("Enter an option", 20)
         c2, c3 = self.web_login_code(PW2, 180), self.web_login_code(PW3)
-        self.step("console-menu-restore", bool(ok) and c2 == 200 and c3 != 200, f"after restoring the backup: password from the backup -> {c2}, factory-reset password -> {c3}")
+        self.step("console-menu-restore", bool(ok) and c2 == 200 and (c3 != 200 or bool(self.P.get("web_user"))), f"after restoring the backup: password from the backup -> {c2}, factory-reset password -> {c3}")
         vm.snap("console-menu-after")
         # option 5: power off from the menu
         vm.send("5\r")
@@ -1991,7 +2016,7 @@ class Runner:
         # root's password IS the test login password PW by design (answer file); the generated web admin password must differ from it and from root's hash
         HG.account_check(sh, self.step, web_secret=web, console_open=a.console_open)
         if a.flow == "auto" and web:
-            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": "admin", "password": PW})
+            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": self.P.get("web_user", "admin"), "password": PW})
             self.step("web-admin-refuses-the-root-login-password", code in (400, 401, 403, 429), f"POST /api/auth/login admin/<root login password> -> {code}")
         HG.clock_gate(sh, self.step, timeout=T(480), label="months-off-rtc-clock-stepped-by-chrony-after-the-late-network" if late else "months-off-rtc-clock-stepped-by-chrony")
         if late and a.project == "patronus":

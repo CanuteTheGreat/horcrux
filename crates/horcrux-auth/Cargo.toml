@@ -37,6 +37,7 @@ sha1 = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true }
 subtle = { workspace = true }
+nix = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }

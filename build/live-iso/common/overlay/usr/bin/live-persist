@@ -316,6 +316,16 @@ def product(action):
         info["password"] = prev["password"]        # restart after the persistence came up: the DB was seeded by this session's password
     elif existing:
         info["note"] = "persisted configuration: log in with the admin password you set earlier"
+    elif p.get("web_auth") == "pam":
+        # the web UI signs in SYSTEM users: the live session gets a throwaway administrator account with a random password
+        pw = random_password()
+        sh(["groupadd", "-f", "horcrux-admin"])
+        if sh(["id", "live-admin"]).returncode != 0:
+            sh(["useradd", "-m", "-s", "/bin/bash", "-G", "wheel,horcrux-admin", "live-admin"])
+        subprocess.run(["chpasswd"], input=f"live-admin:{pw}\n", text=True, check=False)
+        info["password"] = pw
+        info["user"] = "live-admin"
+        info["note"] = "web UI / console user: live-admin (a system account; it exists only for this live session)"
     elif pf:
         pw = random_password()
         os.makedirs(os.path.dirname(pf), exist_ok=True)

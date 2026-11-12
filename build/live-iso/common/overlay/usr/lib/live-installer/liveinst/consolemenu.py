@@ -197,7 +197,7 @@ class Console:
             link = "wifi" if n["wifi"] else ("up" if S.carrier(n["name"]) else "no link")
             self.say(f" {role:<4}{n['name']:<10}{link:<8}{ip}")
         self.say("")
-        self.say(f" Web UI: {self.web_url()}   (user: admin)")
+        self.say(f" Web UI: {self.web_url()}   (user: " + ("a system user in wheel/horcrux-admin" if self.p.get("web_auth") == "pam" else "admin") + ")")
         self.say("")
 
     MENU = [
@@ -210,6 +210,8 @@ class Console:
     def show_menu(self):
         self.header()
         for k, t in self.MENU:
+            if k == "3" and self.p.get("web_auth") == "pam":
+                t = "Reset a user password"          # the web UI signs in system users: this is chpasswd, not a web database
             self.say(f"  {k:>2}) {t}")
         self.say("")
 
@@ -477,7 +479,29 @@ class Console:
                   f"sleep 2; n=$((n+2)); done")
         subprocess.Popen(["sh", "-c", script], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
+    def reset_system_password(self):
+        """web_auth = pam: the web UI accounts ARE the system users, so a reset is a chpasswd (sessions of that user are dropped)"""
+        import pwd
+        users = [u.pw_name for u in pwd.getpwall() if 1000 <= u.pw_uid < 60000 and u.pw_shell not in ("/sbin/nologin", "/usr/sbin/nologin", "/bin/false")]
+        self.say("Reset the password of a system user (the web UI and the console use it). Empty input cancels.")
+        self.say("Users: " + (", ".join(users) or "(none)"))
+        name = self.ask("User name").strip()
+        if not name or name not in users:
+            self.say("Cancelled." if not name else "No such login user.")
+            return
+        pw = self.new_password()
+        if not pw:
+            self.say("Cancelled.")
+            return
+        rc, o = S.sh(f"printf '%s:%s\\n' {S.shquote(name)} {S.shquote(pw)} | chpasswd")
+        self.say(f"Password of {name} changed." if rc == 0 else "could not change it: " + o)
+        if rc == 0 and self.yes("Use the same password for the root console login?", False):
+            rc, o = S.sh(f"printf 'root:%s\\n' {S.shquote(pw)} | chpasswd")
+            self.say("root console password changed." if rc == 0 else "could not change root: " + o)
+
     def reset_password(self):
+        if self.p.get("web_auth") == "pam":
+            return self.reset_system_password()
         self.say("Reset the web administrator ('admin') password. Empty input cancels.")
         pw = self.new_password()
         if not pw:
@@ -503,9 +527,10 @@ class Console:
             return
         path = self.make_backup("pre-factory-reset")
         self.say("Backup: " + path)
-        pw = self.new_password()
+        pam = self.p.get("web_auth") == "pam"
+        pw = None if pam else self.new_password()
         gen = False
-        if not pw:
+        if not pw and not pam:
             import secrets
             pw = secrets.token_urlsafe(18) + "9!"
             gen = True
@@ -517,11 +542,15 @@ class Console:
             except OSError:
                 pass
         self.reapply()
-        self.write_firstboot(pw)
+        if not pam:
+            self.write_firstboot(pw)
         up = self.start_web()
-        self.remove_firstboot_later()
+        if not pam:
+            self.remove_firstboot_later()
         self.say("Factory defaults restored; the web service was restarted." if up else
                  "Factory defaults restored, but the web service is NOT listening: check /var/log and run 'rc-service %s restart'." % self.web)
+        if pam:
+            return self.say("Sign in to the web UI with your system user (wheel / horcrux-admin); there is no separate web account.")
         self.say("Web admin password: " + (pw + "   (generated - note it now, it is not shown again)" if gen else "the one you just entered"))
 
     def reapply(self):

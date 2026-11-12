@@ -12,7 +12,7 @@ from . import autologin
 DIR = "/usr/share/horcrux/desktop"
 MARKER = DIR + "/installed"
 SERVICES = DIR + "/services.list"
-GROUPS = ["wheel", "audio", "video", "usb", "plugdev", "input", "render", "cdrom", "lp", "lpadmin",
+GROUPS = ["wheel", "horcrux-admin", "audio", "video", "usb", "plugdev", "input", "render", "cdrom", "lp", "lpadmin",
           "libvirt", "kvm", "users", "pipewire"]
 # services of the server image that a desktop replaces (NetworkManager owns the network, see services.list)
 REPLACED = ["dhcpcd", "iwd"]
@@ -40,6 +40,30 @@ def parse_services(text):
     return out
 
 
+def create_user(inst):
+    """the login account: sudo (wheel) and Horcrux web admin (horcrux-admin) - the web UI signs in system users"""
+    from .system import InstallError
+    c, T = inst.c, inst.target
+    name = c.get("user_name", "")
+    prob = user_problem(name)
+    if prob:
+        raise InstallError("a user account is needed: " + prob)
+    if not (c.get("user_hash") or c.get("user_password")):
+        raise InstallError("no password for " + name)
+    pam = getattr(inst, "p", {}).get("web_auth") == "pam"
+    for g in ("wheel", "horcrux-admin") if pam else ("wheel",):
+        inst.run(["groupadd", "-f", g] + (["-r"] if g == "horcrux-admin" else []), chroot=True, check=False)
+    have = set(l.split(":")[0] for l in open(f"{T}/etc/group"))
+    groups = ",".join(g for g in GROUPS if g in have)
+    # the home dataset is mounted above the root BE by zfsroot.mount()/mount_rest() (they fail the install
+    # otherwise): a home created in the BE's own /home would be hidden by the empty home dataset at boot
+    inst.run(["useradd", "-m", "-G", groups, "-s", "/bin/bash", "-c", c.get("user_fullname", name), name], chroot=True)
+    if c.get("user_hash"):
+        inst.run(["chpasswd", "-e"], chroot=True, input_=f"{name}:{c['user_hash']}\n")
+    else:
+        inst.run(["chpasswd"], chroot=True, input_=f"{name}:{c['user_password']}\n")
+
+
 def apply(inst):
     from .system import InstallError
     c, T = inst.c, inst.target
@@ -51,15 +75,7 @@ def apply(inst):
         raise InstallError("desktop profile needs a user account: " + prob)
     if not (c.get("user_hash") or c.get("user_password")):
         raise InstallError("desktop profile needs a password for " + name)
-    have = set(l.split(":")[0] for l in open(f"{T}/etc/group"))
-    groups = ",".join(g for g in GROUPS if g in have)
-    # the home dataset is mounted above the root BE by zfsroot.mount()/mount_rest() (they fail the install
-    # otherwise): a home created in the BE's own /home would be hidden by the empty home dataset at boot
-    inst.run(["useradd", "-m", "-G", groups, "-s", "/bin/bash", "-c", c.get("user_fullname", name), name], chroot=True)
-    if c.get("user_hash"):
-        inst.run(["chpasswd", "-e"], chroot=True, input_=f"{name}:{c['user_hash']}\n")
-    else:
-        inst.run(["chpasswd"], chroot=True, input_=f"{name}:{c['user_password']}\n")
+    create_user(inst)
     for s in REPLACED:
         inst.run(["rc-update", "del", s, "default"], chroot=True, check=False)
     if os.path.exists(T + SERVICES):

@@ -114,6 +114,10 @@ set -e
 (ldconfig -p | grep -q libvirt.so.0 && command -v openssl >/dev/null) || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libvirt0 openssl >/dev/null)
 id pamtester >/dev/null 2>&1 || useradd -m pamtester
 echo "pamtester:pam-host-pass-1" | chpasswd
+groupadd -f horcrux-admin
+id pamadmin >/dev/null 2>&1 || useradd -m -G horcrux-admin pamadmin
+echo "pamadmin:pam-admin-pass-1" | chpasswd
+echo "root:pam-root-pass-1" | chpasswd
 printf "auth required pam_unix.so\naccount required pam_unix.so\n" > /etc/pam.d/horcrux
 mkdir -p /tmp/hx/cni/bin /tmp/hx/cni/conf
 cd /tmp/hx
@@ -132,7 +136,7 @@ docker exec \
   -e HORCRUX_TEST_API=https://localhost:8006 \
   -e LDAP_HOST=ldap -e LDAP_ADMIN_PASSWORD=ldap-admin-pass \
   -e DEX_ISSUER=http://dex:5556/dex \
-  -e PAM_USER=pamtester -e PAM_PASSWORD=pam-host-pass-1 \
+  -e PAM_USER=pamtester -e PAM_PASSWORD=pam-host-pass-1 -e PAM_ADMIN_USER=pamadmin -e PAM_ADMIN_PASSWORD=pam-admin-pass-1 -e PAM_ROOT_PASSWORD=pam-root-pass-1 \
   -e ACME_DIR=https://pebble:14000/dir -e ACME_CA=/etc/pebble-ca.pem -e ACME_DOMAIN=horcrux.test \
   "$ID-run" auth-realms-e2e auth_realms_e2e:: --ignored --test-threads=1 --nocapture
 

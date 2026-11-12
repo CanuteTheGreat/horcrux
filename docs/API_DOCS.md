@@ -41,7 +41,7 @@ Before making API calls, you need to authenticate:
 ```bash
 curl --cacert horcrux-ca.pem -X POST https://localhost:8006/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"<admin password>","realm":"local"}'
+  -d '{"username":"alice","password":"<admin password>"}'
 ```
 
 Copy the `token` from the response and paste it into the Bearer Token field.

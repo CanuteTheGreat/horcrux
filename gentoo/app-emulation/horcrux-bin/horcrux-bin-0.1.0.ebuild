@@ -38,6 +38,7 @@ KEYWORDS="amd64 arm64 riscv"
 # qemu[zstd]: qcow2 images with zstd compression (libvirt / virt-manager default on some distros) are imported with qemu-img; without
 # USE=zstd qemu-img answers "unknown compression type: 1" and the VM importer cannot read the disk (HOGSMEADE 2026-11-12).
 RDEPEND="
+	acct-group/horcrux-admin
 	acct-group/kvm
 	app-arch/zstd
 	app-emulation/libvirt[qemu]
@@ -120,5 +121,8 @@ pkg_postinst() {
 	fi
 	elog "Horcrux manager installed. It is NOT started by default on a desktop edition (the server profile enables it):"
 	elog "  rc-update add libvirtd default; rc-update add horcrux-api default; rc-service horcrux-api start    # web UI https://<host>:8006"
-	elog "Cluster: the first admin password is in /var/lib/horcrux/initial-admin-password (or /etc/horcrux/admin-password from the installer)."
+	elog "Web UI login: sign in with a SYSTEM user (PAM service /etc/pam.d/horcrux) who is in the horcrux-admin or wheel group; there is no 'admin' account."
+	elog "  gpasswd -a <user> horcrux-admin     # on every node: each node authenticates against its own users (or a shared SSSD/LDAP directory)"
+	elog "  root cannot log in to the web UI unless [auth] allow_root = true in /etc/horcrux/config.toml; see docs/WEB-LOGIN-PAM.md"
+	elog "MIGRATION: old Horcrux-only accounts keep working for this release (read-only); the legacy 'admin' is disabled by the first PAM administrator login."
 }

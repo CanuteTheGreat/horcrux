@@ -271,19 +271,17 @@ https://localhost:8006
 
 You should see the Horcrux dashboard.
 
-### 3. Admin Password
+### 3. Logging in
 
-There is no default password. On the first start Horcrux creates the user
-`admin`; its password is `ADMIN_PASSWORD` if that was set, otherwise it is
-generated into `/var/lib/horcrux/initial-admin-password` (mode 0600, removed
-once you change the password):
+There is no `admin` account and no generated password: Horcrux signs in the
+**system users** of the host through PAM. Log in with a Linux user that is in
+the `horcrux-admin` or `wheel` group (the installer creates the user you
+typed during installation in both). Add more with
+`useradd -m -G horcrux-admin alice && passwd alice`. In a cluster every node
+checks its own users, so create the user on each node (or use SSSD/LDAP).
+Details, roles by group and migration: [WEB-LOGIN-PAM.md](WEB-LOGIN-PAM.md).
 
-```bash
-sudo cat /var/lib/horcrux/initial-admin-password
-```
-
-Self-registration is off by default. Create further users under
-*Administration > Users* and grant them roles on paths (see
+Self-registration is off. Give further system users access by group, or grant roles on paths (see
 [ACCESS_CONTROL.md](ACCESS_CONTROL.md)).
 
 The API and UI are served over HTTPS from a node-local CA. Download it once

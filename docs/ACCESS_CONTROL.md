@@ -7,12 +7,12 @@ API route.
 
 ## First start
 
-- There is no default password. On the first start with an empty database
-  Horcrux creates the user `admin` with an `Administrator` grant on `/`.
-  The password comes from `ADMIN_PASSWORD`, or is generated and written to
-  `/var/lib/horcrux/initial-admin-password` (mode 0600; the login page shows
-  the path while the file exists). It is deleted when the admin password is
-  changed.
+- There is no built-in `admin` and no default or generated password. Users sign in
+  with their **system account through PAM** and get rights from system groups
+  (`horcrux-admin`/`wheel` = Administrator, optional operator/read-only groups,
+  root refused by default): see [WEB-LOGIN-PAM.md](WEB-LOGIN-PAM.md).
+  Upgraded installs keep their old Horcrux-only accounts read-only for one
+  release; the legacy `admin` is disabled by the first PAM administrator login.
 - Public self-registration (`POST /api/auth/register`) is **off**. Turn it on
   only deliberately (`HORCRUX_ALLOW_REGISTRATION=true` or
   `[auth] allow_registration = true`); such accounts start with no

@@ -327,6 +327,57 @@ async fn pam_realm_login_with_a_host_account() {
     );
 }
 
+/// The web UI signs in SYSTEM users (PAM service "horcrux"): rights come from
+/// the system groups, root is refused, every failure looks the same.
+#[tokio::test]
+#[ignore = "needs PAM users: run tests/auth_realms_e2e.sh"]
+async fn system_users_sign_in_by_group() {
+    let c = client();
+    // a member of horcrux-admin: success, full admin rights
+    let (s, v) = login_raw(
+        &c,
+        json!({"username": env("PAM_ADMIN_USER"), "password": env("PAM_ADMIN_PASSWORD")}),
+    )
+    .await;
+    assert_eq!(s, 200, "{v}");
+    let t = v["ticket"].as_str().unwrap().to_string();
+    let (_, me) = call(&c, &t, "GET", "/auth/me", None).await;
+    assert_eq!(
+        me["user"]["username"],
+        format!("{}@pam", env("PAM_ADMIN_USER"))
+    );
+    assert_eq!(call(&c, &t, "GET", "/vms", None).await.0, 200);
+    assert_eq!(call(&c, &t, "GET", "/users", None).await.0, 200);
+    // the realm list leads with the system users
+    let r = c.get(api("/auth/realms")).send().await.unwrap();
+    let r: Value = r.json().await.unwrap();
+    assert_eq!(r["default_realm"], "pam");
+    assert!(r.get("initial_password_file").is_none());
+
+    // wrong password, user outside every mapped group, root, unknown user: all the same 401
+    let cases = [
+        (env("PAM_ADMIN_USER"), "wrong-password".to_string()),
+        (env("PAM_USER"), env("PAM_PASSWORD")), // right password, not in horcrux-admin/wheel
+        ("root".to_string(), env("PAM_ROOT_PASSWORD")), // right password, root is refused
+        ("no-such-user-hx".to_string(), "x".to_string()),
+    ];
+    let mut bodies = vec![];
+    for (u, p) in cases {
+        let t0 = std::time::Instant::now();
+        let (s, v) = login_raw(&c, json!({"username": u, "password": p})).await;
+        assert_eq!(s, 401, "{u}: {v}");
+        assert!(
+            t0.elapsed() >= Duration::from_millis(3500),
+            "{u}: failure came back too fast"
+        );
+        bodies.push(format!("{} {} {}", v["status"], v["error"], v["message"]));
+    }
+    assert!(
+        bodies.windows(2).all(|w| w[0] == w[1]),
+        "failure responses differ: {bodies:?}"
+    );
+}
+
 #[tokio::test]
 #[ignore = "needs Pebble: run tests/auth_realms_e2e.sh"]
 async fn acme_certificate_from_pebble_is_served() {

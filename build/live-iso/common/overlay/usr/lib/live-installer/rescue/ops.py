@@ -43,6 +43,28 @@ def tty_run(cmd):
 # --------------------------------------------------------------------------
 # the admin password: the SAME argon2id path as the console menu (liveinst.consolemenu.argon2_encode)
 # --------------------------------------------------------------------------
+def pam_admin_users(root):
+    """web_auth = pam: the web UI admins are the login users in wheel / horcrux-admin of the system at `root`"""
+    root = root.rstrip("/")
+    members = set()
+    try:
+        for line in open(root + "/etc/group"):
+            f = line.rstrip("\n").split(":")
+            if len(f) >= 4 and f[0] in ("wheel", "horcrux-admin"):
+                members.update(m for m in f[3].split(",") if m)
+    except OSError:
+        return []
+    ok = set()
+    try:
+        for line in open(root + "/etc/passwd"):
+            f = line.split(":")
+            if len(f) >= 7 and f[0] in members and f[0] != "root" and int(f[2]) >= 1000:
+                ok.add(f[0])
+    except (OSError, ValueError):
+        return []
+    return sorted(ok)
+
+
 def set_admin_password(profile, root, pw, hasher=argon2_encode, chown=None):
     """Set the web admin password inside the mounted system `root`. Returns 'db' (account updated) or 'file'
     (no account yet: the first-boot password file is written, the product reads it on its first start)."""
@@ -357,6 +379,19 @@ class Rescue:
         if self.forensic:
             raise RescueError("forensic mode never changes the system")
         root = rec["root"]
+        if self.p.get("web_auth") == "pam":
+            # the web UI accounts are system users: reset the password of every administrator user (wheel / horcrux-admin)
+            users = pam_admin_users(root)
+            if not users:
+                raise RescueError("no administrator user (wheel / horcrux-admin) found in that system")
+            msg = ""
+            for u in users:
+                rc, o = self.chroot_run(root, ["chpasswd"], input_=f"{u}:{pw}\n")
+                msg += (f"password of {u} changed; " if rc == 0 else f"COULD NOT change {u}: " + o.strip()[-120:] + "; ")
+            if also_root:
+                rc, o = self.chroot_run(root, ["chpasswd"], input_=f"root:{pw}\n")
+                msg += "root console password changed" if rc == 0 else "COULD NOT change root: " + o.strip()[-120:]
+            return msg.rstrip("; ")
         how = set_admin_password(self.p, root, pw, chown=lambda path: self._chown_in_root(root, path))
         msg = "web admin password changed (web sessions dropped)" if how == "db" else \
               "no admin account exists yet: the password is applied when the web service first starts"

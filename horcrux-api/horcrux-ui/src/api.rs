@@ -6072,8 +6072,6 @@ pub struct LoginRealms {
     pub realms: Vec<LoginRealm>,
     #[serde(default)]
     pub registration_enabled: bool,
-    #[serde(default)]
-    pub initial_password_file: Option<String>,
 }
 
 pub async fn get_login_realms() -> Result<LoginRealms, ApiError> {

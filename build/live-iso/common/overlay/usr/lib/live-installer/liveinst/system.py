@@ -679,6 +679,13 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                 errs.append("user password hash: " + crypt_hash_problem(c["user_hash"]))
         elif not c.get("user_password"):
             errs.append("user: no password")
+    if profile.get("web_auth") == "pam" and c.get("install_type", "server") != "desktop":
+        # the web UI signs in system users (PAM): without a login user nobody could use it (root web login is off)
+        from . import desktop
+        if desktop.user_problem(c.get("user_name", "")):
+            errs.append("user: the web UI signs in system users, so an administrator account is required - " + desktop.user_problem(c.get("user_name", "")))
+        elif not (c.get("user_hash") or c.get("user_password")):
+            errs.append("user: no password for " + c["user_name"])
     if profile.get("encryption") == "tpm-or-none" and c.get("enc_passphrase_given"):
         errs.append("this product never asks for a disk passphrase at boot: remove 'passphrase' from the answer file (encryption is automatic with a working TPM 2.0, otherwise off)")
     if c.get("zfs_encrypt") and c.get("zfs_keymode") == "tpm":
@@ -730,7 +737,7 @@ def validate_config(profile, c, unattended=False, require_secret=True):
 def has_login_user(c):
     """a sudo-capable account is created (root can then stay locked)"""
     d = c.get("desktop") or {}
-    return bool((c.get("install_type") == "desktop" and c.get("user_name") and (c.get("user_hash") or c.get("user_password")))
+    return bool((c.get("user_name") and (c.get("user_hash") or c.get("user_password")))
                 or (d.get("enable") and d.get("user") and (d.get("password") or d.get("password_hash"))))
 
 
@@ -1053,7 +1060,11 @@ class Installer:
         if keys:
             self.write("/root/.ssh/authorized_keys", "\n".join(keys) + "\n", 0o600)
             os.chmod(f"{T}/root/.ssh", 0o700)
-        # web admin password (first boot)
+        # web UI = system users (PAM): the administrator account lives in /etc/passwd, in wheel + horcrux-admin
+        if p.get("web_auth") == "pam" and c.get("install_type", "server") != "desktop" and c.get("user_name"):
+            from . import desktop
+            desktop.create_user(self)
+        # legacy first-boot web password file (products whose web UI keeps its own accounts, e.g. Patronus)
         pf = p.get("admin_password_file")
         if c["web_password"] and pf:
             self.write(pf, c["web_password"] + "\n", 0o600)

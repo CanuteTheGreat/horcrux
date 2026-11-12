@@ -6,7 +6,7 @@
 
 use crate::audit::{AuditEvent, AuditEventType, AuditResult, AuditSeverity};
 use crate::auth::store::{self, Principal, RealmRecord, RoleRecord, UserUpdate};
-use crate::auth::{password, privileges, realms, totp, webauthn};
+use crate::auth::{password, privileges, realms, sysgroups, totp, webauthn};
 use crate::error::ApiError;
 use crate::middleware::auth::{
     generate_session_token, AuthUser, SCOPE_TFA_SETUP, TFA_SETUP_TOKEN_TTL_SECS,
@@ -153,44 +153,101 @@ pub fn protected_routes() -> Router<Arc<AppState>> {
 // first run
 // ===========================================================================
 
-/// Where a generated first-run administrator password is left for the operator.
-pub fn initial_password_file(cfg: &crate::config::HorcruxConfig) -> std::path::PathBuf {
-    cfg.paths.data_dir.join("initial-admin-password")
+/// The built-in realm for host (system) accounts, checked through PAM.
+pub const PAM_REALM: &str = "pam";
+
+const NO_LOCAL_ACCOUNTS: &str = "Horcrux has no accounts of its own: sign in with a system user (useradd, then add it to the horcrux-admin or wheel group)";
+
+/// Set when the process was started with `ADMIN_PASSWORD`: the old Horcrux-only
+/// user store is then writable (test harnesses, CI). Otherwise accounts are the
+/// host's system users and the legacy store is read-only (no new local users).
+static LEGACY_STORE_WRITABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn legacy_store_writable() -> bool {
+    LEGACY_STORE_WRITABLE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// First start (no users at all): create the `admin` account with an
-/// `Administrator` grant on `/`. The password comes from `ADMIN_PASSWORD`,
-/// or is generated and written to `<data_dir>/initial-admin-password`
-/// (mode 0600) - there is no built-in default password. That file is removed
-/// once the admin password is changed. Nobody else can create accounts until
-/// an administrator does (public registration is off by default).
+fn pam_realm_record() -> RealmRecord {
+    RealmRecord {
+        name: PAM_REALM.into(),
+        realm_type: "pam".into(),
+        enabled: true,
+        comment: Some("System users (Linux accounts, PAM)".into()),
+        config: json!({}),
+        default_group: None,
+        tfa_required: false,
+    }
+}
+
+fn group_map(cfg: &crate::config::HorcruxConfig) -> sysgroups::GroupMap {
+    sysgroups::GroupMap {
+        admin_groups: cfg.auth.admin_groups.clone(),
+        operator_groups: cfg.auth.operator_groups.clone(),
+        readonly_groups: cfg.auth.readonly_groups.clone(),
+        allow_root: cfg.auth.allow_root,
+    }
+}
+
+/// Start-up: there is NO built-in `admin` account and no generated password.
+/// Users sign in with their system account (PAM) and get rights from system
+/// groups (`horcrux-admin`/`wheel` by default). Old installs keep their
+/// Horcrux-only accounts for this release (read-only; the legacy `admin` is
+/// disabled by the first PAM administrator login). The only way a local
+/// account is still created is an explicit `ADMIN_PASSWORD` (test harnesses).
 pub async fn bootstrap_admin(db: &crate::db::Database, cfg: &crate::config::HorcruxConfig) {
     let pool = db.pool();
-    match store::user_count(pool).await {
-        Ok(0) => {}
-        Ok(n) => {
-            tracing::info!("Found {} existing user(s) in database", n);
-            return;
-        }
+    // the pre-PAM first-run password file is a plaintext secret: never leave it behind
+    let _ = std::fs::remove_file(cfg.paths.data_dir.join("initial-admin-password"));
+    let n = match store::user_count(pool).await {
+        Ok(n) => n,
         Err(e) => {
             tracing::error!("Failed to count users: {}", e);
             return;
         }
+    };
+    let explicit = std::env::var("ADMIN_PASSWORD")
+        .ok()
+        .filter(|p| !p.is_empty());
+    if explicit.is_some() {
+        LEGACY_STORE_WRITABLE.store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    let (pw, generated) = match std::env::var("ADMIN_PASSWORD") {
-        Ok(p) if !p.is_empty() => (p, false),
-        _ => (crate::auth::generate_initial_password(), true),
+    if n > 0 {
+        let legacy = store::list_user_records(pool).await.map(|u| {
+            u.into_iter()
+                .filter(|u| u.realm == "local" && u.enabled)
+                .count()
+        });
+        if let Ok(k) = legacy {
+            if k > 0 && cfg.auth.legacy_local_login {
+                tracing::warn!(
+                    "MIGRATION: {} legacy Horcrux-only account(s) still enabled (read-only this release). \
+                     Log in with a system user in group(s) {:?}; the legacy 'admin' is disabled once that works. \
+                     Set [auth] legacy_local_login = false to refuse legacy logins now.",
+                    k,
+                    cfg.auth.admin_groups
+                );
+            }
+        }
+        return;
+    }
+    let Some(pw) = explicit else {
+        tracing::info!(
+            "No Horcrux-only accounts: sign in with a system user in group(s) {:?} (PAM service 'horcrux')",
+            cfg.auth.admin_groups
+        );
+        return;
     };
     let user = User {
         id: uuid::Uuid::new_v4().to_string(),
         username: "admin".into(),
-        password_hash: password::hash_password(&pw).expect("hash admin password"),
+        password_hash: crate::auth::password::hash_password(&pw).expect("hash admin password"),
         email: "admin@localhost".into(),
         role: "admin".into(),
         realm: "local".into(),
         enabled: true,
         roles: vec![],
-        comment: Some("Initial administrator".into()),
+        comment: Some("ADMIN_PASSWORD test/automation account (deprecated)".into()),
     };
     store::insert_user(pool, &user)
         .await
@@ -198,26 +255,7 @@ pub async fn bootstrap_admin(db: &crate::db::Database, cfg: &crate::config::Horc
     store::add_acl(pool, "/", "user", &user.id, "Administrator", true)
         .await
         .expect("grant admin role");
-    if generated {
-        let path = initial_password_file(cfg);
-        let _ = std::fs::create_dir_all(&cfg.paths.data_dir);
-        match crate::middleware::auth::write_private(&path, format!("{}\n", pw).as_bytes()) {
-            Ok(()) => tracing::warn!(
-                "Created administrator 'admin'; its generated password is in {} (readable by the service user only). Log in and change it.",
-                path.display()
-            ),
-            Err(e) => tracing::error!(
-                "Created administrator 'admin' but could not write {}: {}. Set ADMIN_PASSWORD and recreate the database.",
-                path.display(),
-                e
-            ),
-        }
-    } else {
-        if pw.len() < 12 {
-            tracing::warn!("ADMIN_PASSWORD is short; change the admin password after logging in");
-        }
-        tracing::info!("Created administrator 'admin' with the password from ADMIN_PASSWORD");
-    }
+    tracing::warn!("Created local 'admin' from ADMIN_PASSWORD (deprecated: test harness only)");
 }
 
 // ===========================================================================
@@ -551,7 +589,178 @@ fn dummy_hash() -> &'static str {
     H.get_or_init(|| password::hash_password(&crate::auth::random_token(24)).unwrap_or_default())
 }
 
+/// Every failed login takes at least this long (longer than the usual pam_unix fail delay): wrong password, unknown
+/// user, not-in-a-group and root-denied are indistinguishable by timing or
+/// by response (one generic 401), only the audit log tells them apart.
+const FAIL_FLOOR: std::time::Duration = std::time::Duration::from_millis(4000);
+
 async fn login(
+    State(state): St,
+    host: ClientHost,
+    ci: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(req): Json<LoginBody>,
+) -> ApiResult<Response> {
+    let started = std::time::Instant::now();
+    let r = login_inner(State(state), host, ci, headers, Json(req)).await;
+    if matches!(r, Err(ApiError::AuthenticationFailed)) {
+        let left = FAIL_FLOOR.saturating_sub(started.elapsed());
+        if !left.is_zero() {
+            tokio::time::sleep(left).await;
+        }
+    }
+    r
+}
+
+/// Sign a system user in: PAM checks the password, the user's system groups
+/// decide the role (`GroupMap`), a `<name>@pam` shadow account carries ACLs,
+/// sessions, tokens and second factors. Err(reason) = generic failure.
+async fn pam_login(state: &AppState, name: &str, password: &str) -> Result<User, &'static str> {
+    if !backoff_ok(name) {
+        return Err("too many failures: backing off");
+    }
+    let r = pam_login_checked(state, name, password).await;
+    if r.is_err() {
+        backoff_fail(name);
+    } else {
+        backoff_clear(name);
+    }
+    r
+}
+
+/// API-level backoff on top of the per-IP rate limit and pam_faillock: after
+/// 5 failures for a name within 10 minutes it is not even offered to PAM for
+/// 60 s after the last failure.
+static FAILS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, (u32, std::time::Instant)>>,
+> = std::sync::OnceLock::new();
+
+fn fails(
+) -> std::sync::MutexGuard<'static, std::collections::HashMap<String, (u32, std::time::Instant)>> {
+    FAILS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+fn backoff_ok(name: &str) -> bool {
+    match fails().get(name) {
+        Some((n, at)) if *n >= 5 => at.elapsed() >= std::time::Duration::from_secs(60),
+        _ => true,
+    }
+}
+
+fn backoff_fail(name: &str) {
+    let mut m = fails();
+    if m.len() > 10_000 {
+        m.retain(|_, (_, at)| at.elapsed() < std::time::Duration::from_secs(600));
+    }
+    let e = m
+        .entry(name.to_string())
+        .or_insert((0, std::time::Instant::now()));
+    if e.1.elapsed() > std::time::Duration::from_secs(600) {
+        e.0 = 0;
+    }
+    e.0 += 1;
+    e.1 = std::time::Instant::now();
+}
+
+fn backoff_clear(name: &str) {
+    fails().remove(name);
+}
+
+async fn pam_login_checked(
+    state: &AppState,
+    name: &str,
+    password: &str,
+) -> Result<User, &'static str> {
+    let pool = state.database.pool();
+    let map = group_map(&state.config);
+    let n = name.to_string();
+    let found = tokio::task::spawn_blocking(move || sysgroups::lookup(&n))
+        .await
+        .ok()
+        .flatten();
+    let (uid, groups) = match &found {
+        Some((u, g)) => (Some(*u), g.clone()),
+        None => (None, vec![]),
+    };
+    if (uid == Some(0) || name == "root") && !map.allow_root {
+        return Err("root web login disabled");
+    }
+    // PAM runs for unknown users too (same cost, pam_faillock sees the attempt)
+    let ident = realms::authenticate_password(&pam_realm_record(), name, password)
+        .await
+        .map_err(|e| {
+            tracing::warn!("PAM authentication error: {}", e);
+            "pam unavailable"
+        })?;
+    if ident.is_none() {
+        return Err("bad credentials");
+    }
+    let shadow = format!("{}@{}", name, PAM_REALM);
+    let role = match map.decide(name, uid, &groups) {
+        sysgroups::Decision::Role(r) => r,
+        d => {
+            // lost its group since last time: revoke what a login granted
+            if let Ok(Some(u)) = store::find_user(pool, &shadow).await {
+                for r in sysgroups::MANAGED_ROLES {
+                    let _ = store::delete_acl(pool, "/", "user", &u.id, Some(r)).await;
+                }
+                let _ = store::delete_user_sessions(pool, &u.id).await;
+            }
+            return Err(match d {
+                sysgroups::Decision::DeniedRoot => "root web login disabled",
+                _ => "not in an authorized group",
+            });
+        }
+    };
+    let realm = pam_realm_record();
+    let user = external_user(state, &realm, name, None)
+        .await
+        .map_err(|_| "account creation failed")?;
+    for r in sysgroups::MANAGED_ROLES.iter().filter(|r| **r != role) {
+        let _ = store::delete_acl(pool, "/", "user", &user.id, Some(r)).await;
+    }
+    store::add_acl(pool, "/", "user", &user.id, role, true)
+        .await
+        .map_err(|_| "role sync failed")?;
+    if role == sysgroups::ROLE_ADMIN && !legacy_store_writable() {
+        disable_legacy_admin(state).await;
+    }
+    Ok(user)
+}
+
+/// Migration: once a PAM administrator can log in, the old built-in `admin`
+/// account is switched off (and its sessions end).
+async fn disable_legacy_admin(state: &AppState) {
+    let pool = state.database.pool();
+    if let Ok(Some(u)) = store::find_user(pool, "admin").await {
+        if u.realm == "local" && u.enabled {
+            let upd = UserUpdate {
+                enabled: Some(false),
+                ..Default::default()
+            };
+            if store::update_user(pool, &u.id, &upd).await.is_ok() {
+                tracing::warn!(
+                    "MIGRATION: legacy Horcrux 'admin' account disabled (a system administrator logged in through PAM)"
+                );
+                audit(
+                    state,
+                    AuditEventType::Login,
+                    true,
+                    Some("admin"),
+                    None,
+                    "migration",
+                    Some("legacy admin disabled: PAM admin login works".into()),
+                )
+                .await;
+            }
+        }
+    }
+}
+
+async fn login_inner(
     State(state): St,
     ClientHost(host): ClientHost,
     ci: Option<ConnectInfo<SocketAddr>>,
@@ -564,16 +773,19 @@ async fn login(
         .and_then(|v| v.to_str().ok());
     let pool = state.database.pool();
 
-    // "alice@corp" selects realm "corp" when no realm is given explicitly
+    // realm: explicit, or "alice@corp"; a bare name is a system (PAM) user
+    // (with the legacy store as fallback while it is still accepted)
     let (name, realm) = match req.realm.as_deref().filter(|r| !r.is_empty()) {
         Some(r) => (req.username.clone(), r.to_string()),
         None => match req.username.rsplit_once('@') {
-            Some((n, r)) if store::get_realm(pool, r).await?.is_some() => {
+            Some((n, r)) if r == PAM_REALM || store::get_realm(pool, r).await?.is_some() => {
                 (n.to_string(), r.to_string())
             }
-            _ => (req.username.clone(), "local".to_string()),
+            _ => (req.username.clone(), PAM_REALM.to_string()),
         },
     };
+    // the PAM realm is the default; while legacy accounts are accepted a name that matches one still signs in
+    let implicit = realm == PAM_REALM && !req.username.contains('@');
     let fail = |reason: &'static str| {
         let state = state.clone();
         let user = req.username.clone();
@@ -593,18 +805,40 @@ async fn login(
         }
     };
 
-    let user = if realm == "local" || realm == "pve" {
-        let found = store::find_user(pool, &name)
-            .await?
-            .filter(|u| u.realm == "local" && u.username == name);
+    let legacy_ok = state.config.auth.legacy_local_login;
+    let legacy_check = |pw: String, nm: String| async move {
+        let found = store::find_user(pool, &nm)
+            .await
+            .ok()
+            .flatten()
+            .filter(|u| u.realm == "local" && u.username == nm);
         let hash = found
             .as_ref()
             .map(|u| u.password_hash.clone())
             .unwrap_or_else(|| dummy_hash().to_string());
-        let ok = password::verify_password(&req.password, &hash).unwrap_or(false);
-        match found {
-            Some(u) if ok => u,
-            _ => return Err(fail("bad credentials").await),
+        let ok = password::verify_password(&pw, &hash).unwrap_or(false);
+        found.filter(|_| ok)
+    };
+    let mut chosen: Option<User> = None;
+    if implicit && legacy_ok {
+        // a bare name that is a legacy Horcrux account (migration period) signs in without the PAM delay
+        chosen = legacy_check(req.password.clone(), name.clone()).await;
+    }
+    if chosen.is_none() && realm == PAM_REALM {
+        match pam_login(&state, &name, &req.password).await {
+            Ok(u) => chosen = Some(u),
+            Err(reason) => return Err(fail(reason).await),
+        }
+    }
+    let user = if let Some(u) = chosen {
+        u
+    } else if realm == "local" || realm == "pve" {
+        if !legacy_ok {
+            return Err(fail("legacy local logins are disabled").await);
+        }
+        match legacy_check(req.password.clone(), name.clone()).await {
+            Some(u) => u,
+            None => return Err(fail("bad credentials").await),
         }
     } else {
         let Some(r) = store::get_realm(pool, &realm).await?.filter(|r| r.enabled) else {
@@ -846,6 +1080,9 @@ async fn register(State(state): St, Json(req): Json<RegisterBody>) -> ApiResult<
             "self-registration is disabled; ask an administrator for an account".into(),
         ));
     }
+    if !legacy_store_writable() {
+        return Err(ApiError::Forbidden(NO_LOCAL_ACCOUNTS.into()));
+    }
     validate_username(&req.username)?;
     validate_password(&req.password)?;
     if !req.email.is_empty() && !req.email.contains('@') {
@@ -868,18 +1105,26 @@ async fn register(State(state): St, Json(req): Json<RegisterBody>) -> ApiResult<
 
 /// Realms offered on the login page.
 async fn login_realms(State(state): St) -> ApiResult<Json<Value>> {
-    let mut out = vec![json!({"name": "local", "type": "local", "comment": "Horcrux users"})];
+    let mut out =
+        vec![json!({"name": PAM_REALM, "type": "pam", "comment": "System users (Linux accounts)"})];
+    // the legacy Horcrux-only store is only offered while it is still accepted and has accounts
+    if state.config.auth.legacy_local_login
+        && store::list_user_records(state.database.pool())
+            .await?
+            .iter()
+            .any(|u| u.realm == "local" && u.enabled)
+    {
+        out.push(json!({"name": "local", "type": "local", "comment": "Legacy Horcrux users (migrate to system users)"}));
+    }
     for r in store::list_realms(state.database.pool()).await? {
-        if r.enabled {
+        if r.enabled && r.name != PAM_REALM {
             out.push(json!({"name": r.name, "type": r.realm_type, "comment": r.comment}));
         }
     }
     Ok(Json(json!({
         "realms": out,
-        "registration_enabled": crate::auth::registration_enabled(state.config.auth.allow_registration),
-        "initial_password_file": initial_password_file(&state.config)
-            .exists()
-            .then(|| initial_password_file(&state.config).display().to_string()),
+        "default_realm": PAM_REALM,
+        "registration_enabled": false,
     })))
 }
 
@@ -1228,9 +1473,6 @@ async fn change_password_checked(
         &password::hash_password(new)?,
     )
     .await?;
-    if target.username == "admin" {
-        let _ = std::fs::remove_file(initial_password_file(&state.config));
-    }
     Ok(())
 }
 
@@ -1730,6 +1972,9 @@ async fn create_user(
         .clone()
         .filter(|r| !r.is_empty() && r != "pve")
         .unwrap_or_else(|| "local".into());
+    if realm == "local" && !legacy_store_writable() {
+        return Err(ApiError::Forbidden(NO_LOCAL_ACCOUNTS.into()));
+    }
     let (username, hash) = if realm == "local" {
         validate_username(&req.username)?;
         let pw = req.password.clone().unwrap_or_default();
@@ -1737,7 +1982,7 @@ async fn create_user(
         (req.username.clone(), password::hash_password(&pw)?)
     } else {
         // pre-create an external account (needed when the realm has autocreate off)
-        if store::get_realm(pool, &realm).await?.is_none() {
+        if realm != PAM_REALM && store::get_realm(pool, &realm).await?.is_none() {
             return Err(ApiError::ValidationError(format!(
                 "unknown realm '{}'",
                 realm

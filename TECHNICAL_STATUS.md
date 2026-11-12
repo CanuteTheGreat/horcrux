@@ -590,7 +590,7 @@ systemctl enable --now horcrux
 - ✅ Secret encryption
 
 ### Production Hardening Checklist
-- [ ] Change default admin password (set `ADMIN_PASSWORD` env var)
+- [x] No default admin password: web login uses system users (PAM), see docs/WEB-LOGIN-PAM.md
 - [ ] Enable TLS/SSL
 - [ ] Configure firewall rules
 - [ ] Set up backups

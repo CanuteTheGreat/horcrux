@@ -1,2 +1,5 @@
-# ADMIN_PASSWORD="choose-a-long-password"   # first start only; otherwise a random one
-# is written to /var/lib/horcrux/initial-admin-password
+# Horcrux web UI/API (https://<host>:8006) signs in SYSTEM users through PAM (/etc/pam.d/horcrux).
+# Members of these groups are administrators (default: horcrux-admin and wheel); root cannot log in unless allowed.
+#HORCRUX_ADMIN_GROUPS="horcrux-admin,wheel"
+#HORCRUX_ALLOW_ROOT_LOGIN=false
+# more roles: /etc/horcrux/config.toml  [auth] operator_groups = [..]  readonly_groups = [..]

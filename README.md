@@ -127,9 +127,8 @@ The script checks requirements, creates the `horcrux` user and groups, builds fr
 source, installs binaries and the web UI, configures services and initializes the
 database. Then open `https://localhost:8006`.
 
-On first start there is no default password: the `admin` password comes from
-`ADMIN_PASSWORD`, or is generated into `/var/lib/horcrux/initial-admin-password`
-(deleted once you change it). Self-registration is off. Scripts must use
+There is no `admin` account and no default password: log in to the web UI and API with a
+system user (PAM) in the `horcrux-admin` or `wheel` group - see [docs/WEB-LOGIN-PAM.md](docs/WEB-LOGIN-PAM.md). Self-registration is off. Scripts must use
 `https://` and trust the node CA from `/api/tls/ca.pem` (or the CLI's `--ca-cert`).
 Details: [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md). The full guide is
 [docs/INSTALLATION.md](docs/INSTALLATION.md).
@@ -208,7 +207,7 @@ repo at [docs/openapi.yaml](docs/openapi.yaml); guides are
 ```bash
 TOKEN=$(curl -s --cacert horcrux-ca.pem -X POST https://localhost:8006/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "<your admin password>"}' | jq -r .ticket)
+  -d '{"username": "alice", "password": "<your admin password>"}' | jq -r .ticket)
 
 curl --cacert horcrux-ca.pem -H "Authorization: Bearer $TOKEN" https://localhost:8006/api/vms
 ```

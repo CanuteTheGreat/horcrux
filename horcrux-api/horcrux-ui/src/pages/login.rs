@@ -35,7 +35,7 @@ fn clear_fragment() {
 pub fn Login() -> impl IntoView {
     let (username, set_username) = create_signal(String::new());
     let (password, set_password) = create_signal(String::new());
-    let (realm, set_realm) = create_signal("local".to_string());
+    let (realm, set_realm) = create_signal("pam".to_string());
     let (realms, set_realms) = create_signal(LoginRealms::default());
     let (error, set_error) = create_signal(None::<String>);
     let (busy, set_busy) = create_signal(false);
@@ -97,7 +97,7 @@ pub fn Login() -> impl IntoView {
             .iter()
             .find(|r| r.name == realm.get())
             .map(|r| r.realm_type.clone())
-            .unwrap_or_else(|| "local".into())
+            .unwrap_or_else(|| "pam".into())
     };
 
     let submit = {
@@ -280,7 +280,7 @@ pub fn Login() -> impl IntoView {
                         <Show when=move || selected_type() != "openid" fallback=|| ()>
                             <div class="form-group">
                                 <label>"Username"</label>
-                                <input type="text" id="login-username" required placeholder="admin"
+                                <input type="text" id="login-username" required placeholder="user name"
                                     autocomplete="username"
                                     on:input=move |ev| set_username.set(event_target_value(&ev))
                                     prop:value=username/>
@@ -304,13 +304,9 @@ pub fn Login() -> impl IntoView {
                     </form>
                 </Show>
 
-                {move || realms.get().initial_password_file.map(|f| view! {
-                    <p class="hint" id="initial-password-hint">
-                        "First start: the generated password for user admin is in "
-                        <code>{f}</code>
-                        " on the server. Change it after logging in."
-                    </p>
-                })}
+                <p class="hint" id="system-user-hint">
+                    "Sign in with your system (Linux) user name and password."
+                </p>
                 <p class="version">"Version 0.1.0"</p>
             </div>
         </div>

@@ -7,9 +7,9 @@ swap_mb = 4096
 web_scheme = "https"
 web_port = 8006
 default_hostname = "horcrux.localdomain"
-# read by horcrux-api (init script) on the first start, then deleted
-admin_password_file = "/etc/horcrux/admin-password"
-admin_password_owner = "root"
+# the web UI signs in SYSTEM users through PAM (service "horcrux"); rights come from the groups horcrux-admin / wheel. The installer
+# creates that user: there is no 'admin' account and no generated first-boot password.
+web_auth = "pam"
 # core services (sys-apps/horcrux-core): time sync (chronyd + horcrux-timesync), first-boot network wait + tree sync, cron (the backup job). Missing ones are skipped.
 services = ["horcrux-api", "horcrux-ha-fence", "libvirtd", "docker", "dbus", "sshd", "dhcpcd", "chronyd", "horcrux-timesync", "horcrux-firstboot", "cronie"]
 # console menu (installed system)
@@ -17,7 +17,7 @@ web_service = "horcrux-api"
 db_path = "/var/lib/horcrux/horcrux.db"
 db_table = "users"
 config_paths = ["/etc/horcrux", "/var/lib/horcrux/horcrux.db"]
-factory_reset_files = ["/var/lib/horcrux/initial-admin-password"]
+factory_reset_files = []
 reapply_services = []
 
 # official logo, crop/scale only (branding/README.md); the installer GUI + boot menu read these

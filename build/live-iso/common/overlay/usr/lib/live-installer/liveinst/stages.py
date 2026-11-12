@@ -337,10 +337,19 @@ class ExtractStage(Stage):
         return ["Copy the system image from the installation medium to the new root file system"]
 
 
+def _user_problem(name):
+    from . import desktop
+    return desktop.user_problem(name)
+
+
 class RootpassStage(Stage):
     id, title, short = "rootpass", "Administrator account", "Password"
-    intro = ("Set the administrator password (REQUIRED - there is no default password). "
-             "It is used for the console root login and the web admin user.")
+    intro = ("Create the administrator account (REQUIRED - there is no default account or password). "
+             "Sign in to the console and to the web UI with this user.")
+
+    def _pam_web(self, ctx):
+        """the web UI signs in system users (PAM): ask for that user here (a desktop/Surface machine has its own user page)"""
+        return bool(ctx.p.get("web_auth") == "pam") and not self._user_machine(ctx)
 
     def _user_machine(self, ctx):
         """a desktop/Surface install creates a sudo user: root then stays LOCKED unless a separate password is given"""
@@ -356,6 +365,20 @@ class RootpassStage(Stage):
     def fields(self, ctx):
         c = ctx.c
         user_m = self._user_machine(ctx)
+        if self._pam_web(ctx):
+            return [
+                Field("user", "Administrator user name", "text", c.get("user_name", ""), width=30,
+                      validate=lambda v, a: _user_problem(v),
+                      hint="A system account in the wheel + horcrux-admin groups: it signs in to the console and to the web UI (https, port 8006). root cannot sign in to the web UI"),
+                Field("pw", "Password", "password", c["root_password"], width=40,
+                      hint="At least 12 characters, mixed. For this user and the console root login. Never the disk passphrase"),
+                Field("pw2", "Confirm password", "password", c["root_password"], width=40),
+                Field("strength", "Strength", "info", lambda a: S.password_strength(a["pw"]) if a["pw"] else "-"),
+                Field("email", "E-mail (notifications)", "text", c["email"], validate=lambda v, a: S.email_problem(v), width=40,
+                      hint="Alerts and notices are addressed here"),
+                Field("key", "SSH public key", "text", "\n".join(c["ssh_keys"]), optional=True, width=40, advanced=True,
+                      validate=lambda v, a: S.ssh_key_problem(v), hint="Optional: paste one ssh-ed25519/ssh-rsa line for root key login"),
+            ]
         return [
             Field("pw", "Root password (optional)" if user_m else "Password", "password", c["root_password"], width=40, optional=user_m,
                   hint="Leave EMPTY to keep root locked (log in as your user, sudo). Never the disk passphrase" if user_m
@@ -377,7 +400,9 @@ class RootpassStage(Stage):
 
     def commit(self, ctx, v):
         c = ctx.c
-        c["root_password"], c["web_password"] = v["pw"], v["pw"]
+        c["root_password"] = v["pw"]
+        if self._pam_web(ctx):
+            c["user_name"], c["user_fullname"], c["user_password"], c["user_hash"] = v["user"].strip(), v["user"].strip(), v["pw"], ""
         c["root_hash"] = ""
         c["email"] = v["email"].strip()
         c["ssh_keys"] = [v["key"].strip()] if v["key"].strip() else []
@@ -385,7 +410,11 @@ class RootpassStage(Stage):
     def plan(self, ctx):
         c = ctx.c
         who = "password hash from the answer file" if c["root_hash"] else "the password you entered"
-        return [f"Set the root and web admin password ({who}); no default password exists",
+        if ctx.p.get("web_auth") == "pam" and c.get("user_name"):
+            return [f"Create the administrator user {c['user_name']} (groups wheel + horcrux-admin): console and web UI login; no default account exists",
+                    f"Set the root console password ({who}); root cannot sign in to the web UI",
+                    "Install " + (f"{len(c['ssh_keys'])} SSH key(s) for root" if c["ssh_keys"] else "no SSH key (console login only)")]
+        return [f"Set the root password ({who}); no default password exists",
                 "Install " + (f"{len(c['ssh_keys'])} SSH key(s) for root" if c["ssh_keys"] else "no SSH key (console login only)")]
 
 

@@ -31,13 +31,55 @@ pub struct HorcruxConfig {
 }
 
 /// Authentication settings
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// Allow anyone to create an account at `/api/auth/register` (off by
     /// default; such accounts start without any permissions). Env:
     /// `HORCRUX_ALLOW_REGISTRATION`.
     #[serde(default)]
     pub allow_registration: bool,
+    /// System groups whose members are full administrators of the web UI/API
+    /// (users sign in with their host account through PAM).
+    /// Env: `HORCRUX_ADMIN_GROUPS` (comma separated).
+    #[serde(default = "default_admin_groups")]
+    pub admin_groups: Vec<String>,
+    /// System groups mapped to the `VMAdmin` role (manage guests).
+    #[serde(default)]
+    pub operator_groups: Vec<String>,
+    /// System groups mapped to the read-only `Auditor` role.
+    #[serde(default)]
+    pub readonly_groups: Vec<String>,
+    /// Let root (uid 0) sign in over the web. Off by default.
+    /// Env: `HORCRUX_ALLOW_ROOT_LOGIN`.
+    #[serde(default)]
+    pub allow_root: bool,
+    /// Keep accepting the old Horcrux-only accounts (the pre-PAM user store)
+    /// for this release so nobody is locked out during the upgrade. The
+    /// legacy `admin` account is disabled automatically once a PAM
+    /// administrator has signed in. Set false to refuse them now.
+    #[serde(default = "yes_true")]
+    pub legacy_local_login: bool,
+}
+
+fn default_admin_groups() -> Vec<String> {
+    vec!["horcrux-admin".into(), "wheel".into()]
+}
+
+fn yes_true() -> bool {
+    true
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            allow_registration: false,
+            admin_groups: default_admin_groups(),
+            operator_groups: vec![],
+            readonly_groups: vec![],
+            allow_root: false,
+            legacy_local_login: true,
+        }
+    }
 }
 
 /// Server configuration
@@ -268,6 +310,19 @@ impl HorcruxConfig {
         }
         if let Ok(port) = std::env::var("HORCRUX_HTTP_REDIRECT_PORT") {
             self.server.http_redirect_port = port.trim().parse().ok().filter(|p| *p != 0);
+        }
+        if let Ok(v) = std::env::var("HORCRUX_ADMIN_GROUPS") {
+            self.auth.admin_groups = v
+                .split(',')
+                .map(|g| g.trim().to_string())
+                .filter(|g| !g.is_empty())
+                .collect();
+        }
+        if let Ok(v) = std::env::var("HORCRUX_ALLOW_ROOT_LOGIN") {
+            self.auth.allow_root = matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
         }
         if let Ok(v) = std::env::var("HORCRUX_ALLOW_REGISTRATION") {
             self.auth.allow_registration = matches!(

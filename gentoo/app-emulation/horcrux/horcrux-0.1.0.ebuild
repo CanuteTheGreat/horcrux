@@ -96,7 +96,7 @@ RDEPEND="
 	)
 	kubernetes? ( app-admin/helm )
 	dev-libs/openssl:0=
-	pam? ( sys-libs/pam )
+	pam? ( sys-libs/pam acct-group/horcrux-admin )
 	net-misc/bridge-utils
 	sys-apps/iproute2
 
@@ -399,6 +399,7 @@ pkg_postinst() {
 	fi
 	elog ""
 	elog "Horcrux ${PV} - Gentoo Virtualization Platform"
+	elog "Web UI login: a SYSTEM user (PAM service horcrux) in horcrux-admin or wheel; there is no admin account. gpasswd -a <user> horcrux-admin on every node."
 	elog ""
 	elog "Configuration: /etc/horcrux/config.toml"
 	elog "Data directory: /var/lib/horcrux"

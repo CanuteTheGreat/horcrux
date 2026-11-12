@@ -169,7 +169,7 @@ before you type `ERASE` on the summary screen.
 
    ![management network](images/installer/horcrux/04b-management-network-filled.png)
 
-5. **Administrator account** - REQUIRED password (min. 12 characters, mixed, no guessable words; confirm; strength meter), an optional SSH public key, the notification e-mail, and the opt-in for SSH password login (off by default, with a warning when ticked). The one password protects console login (`root`) and the web UI (`admin`).
+5. **Administrator account** - REQUIRED user name (a system user in `wheel` + `horcrux-admin`: you sign in to the console and to the web UI with it) and password (min. 12 characters, mixed, no guessable words; confirm; strength meter), an optional SSH public key, the notification e-mail, and the opt-in for SSH password login (off by default, with a warning when ticked). The one password protects console login (`root`) and the web UI (`admin`).
 
    ![administrator account](images/installer/horcrux/06b-administrator-account-filled.png)
 
@@ -297,8 +297,7 @@ gateway = "192.168.1.1"
 dns = ["192.168.1.1"]
 ```
 
-The installed system's web-UI `admin` password is generated on first start into
-`/var/lib/horcrux/initial-admin-password` (root-readable) - read it over SSH or the console, and change it.
+The installed system has no web `admin` account: log in to the web UI (https, port 8006) with the user from the answer file's `[user]` section (a system user in `wheel` + `horcrux-admin`, created by the installer; PAM). `[user]` is required for Horcrux. See [WEB-LOGIN-PAM.md](WEB-LOGIN-PAM.md).
 The installer powers the machine off when it is done (`AUTOINSTALL-OK` on the console and in
 `/var/log/autoinstall.log`). Invalid answer files stop with `ANSWER-FILE-ERROR ...` lines and start the guided installer instead.
 
@@ -317,7 +316,7 @@ swap) and the menu offers:
 | Option | What it does |
 |---|---|
 | 1 Shell in the installed system | `chroot` with `/dev /proc /sys /run` bound; `exit` returns to the menu. |
-| 2 Reset the admin password | The same argon2id path as the console menu (`liveinst.consolemenu.argon2_encode`): the hash is written into the product's database in the installed system (`users` / `web_users`), web sessions are dropped, optionally the root console password is changed too, and - if the account has two-factor columns set - you are offered to disable them (lost token). No account yet: the first-boot password file is written instead. |
+| 2 Reset the admin password (Horcrux: the password of every wheel/horcrux-admin user, via chpasswd) | The same argon2id path as the console menu (`liveinst.consolemenu.argon2_encode`): the hash is written into the product's database in the installed system (`users` / `web_users`), web sessions are dropped, optionally the root console password is changed too, and - if the account has two-factor columns set - you are offered to disable them (lost token). No account yet: the first-boot password file is written instead. |
 | 3 Restore a configuration backup | Lists `/var/backups/<product>/*.tar.gz` on the system and `*.tar.gz` on attached USB sticks; same checks as the console menu (manifest of this product, only the product's config paths, no links or devices); the current configuration is saved first. |
 | 4 Reinstall the boot loader | `grub-install` for the firmware you booted (UEFI: `x86_64-efi` / `arm64-efi` / `riscv64-efi` into the mounted ESP with `--removable`; BIOS: `i386-pc` onto the disk(s) holding `/boot`) plus `grub-mkconfig` (ZFS root: the static `grub.cfg`). |
 | 5 File system check | Unmounts the system and runs `e2fsck -f -p` (ext4), `xfs_repair` (XFS) or a scrub + `zpool status -v` (ZFS). |
@@ -345,7 +344,7 @@ attempts) and requires the two SHA-256 values to be identical.
 ## Try it live
 
 Boot entry **7** starts the whole product from the stick, in RAM: the web service (and its helpers) come up with a
-**random admin password generated for this session** and shown on the console, together with the URL; there is no
+**random password for the throwaway `live-admin` user (a system account, PAM login) generated for this session** and shown on the console, together with the URL; there is no
 default password and sshd stays off. Nothing is mounted from the internal disks and no swap is used, so the disks are
 untouched (the QEMU test compares the disk hash before/after). Run `live-installer` from the live shell to install.
 
@@ -372,7 +371,7 @@ unchanged; encrypted persistence refuses a wrong passphrase, unlocks with the ri
 
 * **No default password.** The live image has root locked (the consoles auto-login for physical access; **sshd is off**). The guided installer requires a password (>= 12 characters); the answer file requires a hash and/or an SSH key.
 * **Installed system:** `PermitRootLogin prohibit-password` and `PasswordAuthentication no` - root can log in over SSH only with the key you gave. If you tick *Allow SSH password login* (or set `ssh_password_auth = true`) the installer sets `PermitRootLogin yes` + `PasswordAuthentication yes` and warns you.
-* The web-UI admin password you type is stored only as a first-boot file that is deleted once the service is up.
+* Horcrux: the web UI uses the system user you create (PAM), no web password is stored. Patronus: the web-UI admin password you type is stored only as a first-boot file that is deleted once the service is up.
 
 ## Encrypted ZFS root, boot environments, Apple T2 Macs, Desktop image
 
@@ -510,7 +509,7 @@ turns the menu off.
 |---|---|
 | 1 Assign interfaces | Pick the management NIC, then set its address (same dialog as option 2). Link state is shown per NIC; `d` = identify a port by unplug/replug. |
 | 2 Set interface IP address | DHCP or static (address/prefix, gateway, DNS) for one NIC; Wi-Fi NICs can (re)connect through iwd. Written to `/etc/dhcpcd.conf` (managed block) and applied at once. |
-| 3 Reset the admin password | Sets a new web `admin` password directly in the product's database (argon2id), drops web sessions, optionally also sets the root console password. |
+| 3 Reset the admin password | (Patronus) Sets a new web `admin` password directly in the product's database (argon2id), drops web sessions, optionally also sets the root console password. |
 | 4 Reset to factory defaults | Type `RESET` to confirm; first writes a backup, then deletes the configuration database, re-applies the product's boot units and starts it with a new password. Interface roles and addresses are kept. |
 | 5 / 6 | Power off / restart the machine (asks first). |
 | 7 Ping host | Validated host name or address only (no shell metacharacters). |
