@@ -1,0 +1,11 @@
+# conf.d for hogsmeade-b2-mount.<bucket> (every bucket; per-bucket overrides: /etc/conf.d/hogsmeade-b2-mount.<bucket>)
+#hb2_uid=1000
+#hb2_gid=1000
+#hb2_file_mode=0644
+#hb2_dir_mode=0755
+#hb2_memory_limit=1000        # MB of data cache per mount
+#hb2_read_ahead_large=204800  # KB
+#hb2_stat_cache_ttl=10m
+#hb2_nice=10
+#hb2_ionice=2:7               # class:level
+#hb2_retry=10                 # seconds between attempts while offline

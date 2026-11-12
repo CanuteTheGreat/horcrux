@@ -37,6 +37,8 @@ src_install() {
 		net-analyzer/caido-bin ~amd64
 		media-libs/iir1 ~amd64
 		net-misc/onedrive ~amd64
+		# geesefs (app-misc/hogsmeade-b2-mounts)
+		net-fs/geesefs ~amd64
 		# NOT a hogsmeade-apps dependency (fetch-restricted: the zip must be in /var/cache/distfiles); emerged by hand, kept in @world
 		media-video/davinci-resolve ~amd64
 	EOF2

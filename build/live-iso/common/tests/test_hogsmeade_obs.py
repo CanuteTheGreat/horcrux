@@ -102,7 +102,7 @@ class HogsmeadeNextcloud(unittest.TestCase):
 
 
 APPS = HSM / "local-repo" / "app-misc" / "hogsmeade-apps" / "hogsmeade-apps-1.ebuild"
-APPS_CFG = HSM / "local-repo" / "app-misc" / "hogsmeade-apps-config" / "hogsmeade-apps-config-1.ebuild"
+APPS_CFG = HSM / "local-repo" / "app-misc" / "hogsmeade-apps-config" / "hogsmeade-apps-config-1-r1.ebuild"
 STEAM_REPO = HSM / "local-repo" / "app-misc" / "hogsmeade-steam-repo" / "hogsmeade-steam-repo-1.ebuild"
 STEAM = HSM / "local-repo" / "app-misc" / "hogsmeade-steam" / "hogsmeade-steam-1.ebuild"
 OWNER_APPS = (

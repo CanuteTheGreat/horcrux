@@ -1,0 +1,46 @@
+#!/sbin/openrc-run
+# geesefs mount of one Backblaze B2 bucket at /mnt/<bucket>. One script, one symlink per bucket: hogsmeade-b2-mount.<bucket>.
+# Settings (all optional): /etc/conf.d/hogsmeade-b2-mount (every bucket) and /etc/conf.d/hogsmeade-b2-mount.<bucket> (one bucket).
+# Credentials: profile [<bucket>] in /root/.aws/credentials (0600, never packaged; one restricted key per bucket, see README in the package).
+bucket="${RC_SVCNAME#*.}"
+description="geesefs mount of the B2 bucket ${bucket} at /mnt/${bucket}"
+: "${hb2_endpoint:=https://s3.us-west-002.backblazeb2.com}"
+: "${hb2_uid:=1000}"
+: "${hb2_gid:=1000}"
+: "${hb2_file_mode:=0644}"
+: "${hb2_dir_mode:=0755}"
+: "${hb2_memory_limit:=1000}"        # MB of data cache per mount
+: "${hb2_read_ahead_large:=204800}"  # KB, long linear reads
+: "${hb2_stat_cache_ttl:=10m}"
+: "${hb2_nice:=10}"
+: "${hb2_ionice:=2:7}"               # class:level (best effort, lowest priority)
+: "${hb2_retry:=10}"                 # seconds between attempts while the network or B2 is unreachable
+supervisor=supervise-daemon
+command=/usr/libexec/hogsmeade-b2-mount
+command_args="${bucket} /mnt/${bucket}"
+respawn_delay="${hb2_retry}"
+respawn_max=0
+pidfile="/run/${RC_SVCNAME}.pid"
+export HB2_ENDPOINT="${hb2_endpoint}" HB2_UID="${hb2_uid}" HB2_GID="${hb2_gid}" HB2_FILE_MODE="${hb2_file_mode}" HB2_DIR_MODE="${hb2_dir_mode}"
+export HB2_MEMORY_LIMIT="${hb2_memory_limit}" HB2_READ_AHEAD_LARGE="${hb2_read_ahead_large}" HB2_STAT_CACHE_TTL="${hb2_stat_cache_ttl}"
+export HB2_NICE="${hb2_nice}" HB2_IONICE="${hb2_ionice}"
+
+depend() {
+	# a hard network dependency is deliberately avoided: with no network the daemon keeps retrying (respawn) instead of failing or holding up boot and login
+	use net NetworkManager
+	after net NetworkManager localmount
+}
+
+start_pre() {
+	case "${bucket}" in
+		""|"${RC_SVCNAME}") eerror "use an instance: ${RC_SVCNAME}.<bucket>"; return 1 ;;
+	esac
+	if ! grep -q "^\[${bucket}\]" /root/.aws/credentials 2>/dev/null; then
+		eerror "profile [${bucket}] missing in /root/.aws/credentials (0600, never packaged)"
+		return 1
+	fi
+}
+
+stop_post() {
+	fusermount -u "/mnt/${bucket}" 2>/dev/null || fusermount -uz "/mnt/${bucket}" 2>/dev/null || true
+}

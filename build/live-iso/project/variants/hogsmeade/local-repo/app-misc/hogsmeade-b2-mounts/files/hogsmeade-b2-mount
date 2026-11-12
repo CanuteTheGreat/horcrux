@@ -1,0 +1,17 @@
+#!/bin/sh
+# usage: hogsmeade-b2-mount <bucket> <mountpoint>   (run by the hogsmeade-b2-mount.<bucket> OpenRC service under supervise-daemon)
+# Runs geesefs in the foreground at low CPU/IO priority. A geesefs that died hard leaves a dead FUSE mount ("Transport endpoint is not
+# connected") that would make every respawn fail: detach it first. Exits non-zero while B2 is unreachable; the supervisor retries.
+bucket="$1"; mp="$2"
+[ -n "$bucket" ] && [ -n "$mp" ] || { echo "usage: $0 <bucket> <mountpoint>" >&2; exit 2; }
+export HOME=/root
+if grep -qs " $mp " /proc/self/mounts && ! stat "$mp/." >/dev/null 2>&1; then
+	fusermount -uz "$mp" 2>/dev/null
+fi
+mkdir -p "$mp" || exit 1
+ionice_c="${HB2_IONICE%%:*}"; ionice_n="${HB2_IONICE#*:}"
+exec nice -n "${HB2_NICE:-10}" ionice -c "${ionice_c:-2}" -n "${ionice_n:-7}" /usr/bin/geesefs -f \
+	--endpoint="${HB2_ENDPOINT}" --profile="$bucket" -o allow_other \
+	--file-mode="${HB2_FILE_MODE}" --dir-mode="${HB2_DIR_MODE}" --uid="${HB2_UID}" --gid="${HB2_GID}" \
+	--memory-limit="${HB2_MEMORY_LIMIT}" --read-ahead-large="${HB2_READ_AHEAD_LARGE}" --stat-cache-ttl="${HB2_STAT_CACHE_TTL}" \
+	"$bucket" "$mp"
