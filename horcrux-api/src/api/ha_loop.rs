@@ -1835,8 +1835,17 @@ mod fencing_timing_tests {
     fn margin_below_the_floor_breaks_the_property() {
         let t = defaults();
         let floor = recovery_margin_floor(t.poll, t.fetch, t.watchdog, t.kill);
-        let (_, bad) = sweep(&t, floor - DRIFT_SECS - t.watchdog - 2 * t.poll, false);
-        assert!(bad > 0);
+        // recover - fenced is linear in the margin, so the model's own slack at the
+        // floor is exactly how far the margin can drop before it breaks
+        let (slack, bad) = sweep(&t, floor, false);
+        assert_eq!(bad, 0);
+        assert!(
+            slack <= DRIFT_SECS + 2 * t.watchdog + 2 * t.poll,
+            "floor is {slack} s above the model's limit: too loose"
+        );
+        let (worst, bad) = sweep(&t, floor - slack - 1, false);
+        assert!(bad > 0, "{} s below the floor must violate", slack + 1);
+        assert!(worst < 0);
     }
 
     /// The stuck-QEMU case is inside the proof: the model charges the full kill
