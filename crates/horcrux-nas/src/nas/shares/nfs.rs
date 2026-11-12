@@ -33,6 +33,62 @@ pub struct NfsGlobalConfig {
     pub statd_port: u16,
     /// Lockd port (0 for random)
     pub lockd_port: u16,
+    /// NFSv4 lease time in seconds (`lease-time`; the grace period is set to the same value).
+    ///
+    /// A crashed NFSv4 client keeps its file locks, including the image lock QEMU takes on
+    /// a VM disk, until its lease expires. The kernel default is 90 s, so an HA guest whose
+    /// node died could not be started on a survivor for 90 s whatever the HA timers say
+    /// (VM-cluster HA suite, goal G1 under 90 s: failover took 95 s with the default).
+    #[serde(default = "default_lease_secs")]
+    pub lease_secs: u32,
+}
+
+/// Default NFSv4 lease: short enough for HA failover, long enough (2x the client renew
+/// interval of lease/3 plus slack) to ride out a lost packet or a busy server.
+pub const DEFAULT_LEASE_SECS: u32 = 20;
+
+fn default_lease_secs() -> u32 {
+    DEFAULT_LEASE_SECS
+}
+
+/// Render `/etc/nfs.conf` for the server.
+fn render_nfs_conf(g: &NfsGlobalConfig) -> String {
+    // the kernel accepts a lease of 10..=3600 s; the grace period must be at least the lease
+    let lease = g.lease_secs.clamp(10, 3600);
+    let yn = |b: bool| if b { "y" } else { "n" };
+    format!(
+        r#"# Horcrux NAS NFS configuration
+[nfsd]
+threads = {}
+vers3 = {}
+vers4 = {}
+vers4.1 = {}
+vers4.2 = {}
+tcp = {}
+udp = {}
+lease-time = {lease}
+grace-time = {lease}
+
+[mountd]
+port = {}
+
+[statd]
+port = {}
+
+[lockd]
+port = {}
+"#,
+        g.threads,
+        yn(g.nfsv3),
+        yn(g.nfsv4),
+        yn(g.nfsv41),
+        yn(g.nfsv42),
+        yn(g.tcp),
+        yn(g.udp),
+        g.mountd_port,
+        g.statd_port,
+        g.lockd_port,
+    )
 }
 
 impl Default for NfsGlobalConfig {
@@ -49,6 +105,7 @@ impl Default for NfsGlobalConfig {
             mountd_port: 0,
             statd_port: 0,
             lockd_port: 0,
+            lease_secs: DEFAULT_LEASE_SECS,
         }
     }
 }
@@ -553,37 +610,7 @@ impl NfsServerManager {
         let g = &self.global_config;
 
         // Write /etc/nfs.conf (for newer nfs-utils)
-        let nfs_conf = format!(
-            r#"# Horcrux NAS NFS configuration
-[nfsd]
-threads = {}
-vers3 = {}
-vers4 = {}
-vers4.1 = {}
-vers4.2 = {}
-tcp = {}
-udp = {}
-
-[mountd]
-port = {}
-
-[statd]
-port = {}
-
-[lockd]
-port = {}
-"#,
-            g.threads,
-            if g.nfsv3 { "y" } else { "n" },
-            if g.nfsv4 { "y" } else { "n" },
-            if g.nfsv41 { "y" } else { "n" },
-            if g.nfsv42 { "y" } else { "n" },
-            if g.tcp { "y" } else { "n" },
-            if g.udp { "y" } else { "n" },
-            g.mountd_port,
-            g.statd_port,
-            g.lockd_port,
-        );
+        let nfs_conf = render_nfs_conf(g);
 
         let _ = tokio::fs::write("/etc/nfs.conf", &nfs_conf).await;
 
@@ -866,6 +893,34 @@ pub struct NfsStats {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nfs_conf_carries_a_short_lease_for_ha_failover() {
+        let conf = super::render_nfs_conf(&super::NfsGlobalConfig::default());
+        assert!(conf.contains("lease-time = 20\n"), "{conf}");
+        assert!(conf.contains("grace-time = 20\n"), "{conf}");
+        // both keys live in the [nfsd] section
+        let nfsd = conf.split("[mountd]").next().unwrap();
+        assert!(nfsd.contains("lease-time") && nfsd.contains("grace-time"));
+    }
+
+    #[test]
+    fn nfs_conf_lease_is_clamped_to_what_the_kernel_accepts() {
+        let with = |lease_secs| super::NfsGlobalConfig {
+            lease_secs,
+            ..Default::default()
+        };
+        assert!(super::render_nfs_conf(&with(1)).contains("lease-time = 10\n"));
+        assert!(super::render_nfs_conf(&with(999_999)).contains("lease-time = 3600\n"));
+    }
+
+    #[test]
+    fn old_saved_config_without_lease_gets_the_default() {
+        let mut v = serde_json::to_value(super::NfsGlobalConfig::default()).unwrap();
+        v.as_object_mut().unwrap().remove("lease_secs");
+        let g: super::NfsGlobalConfig = serde_json::from_value(v).unwrap();
+        assert_eq!(g.lease_secs, super::DEFAULT_LEASE_SECS);
+    }
+
     use super::*;
 
     #[test]
