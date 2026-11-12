@@ -16,6 +16,7 @@ pub fn CephPage() -> impl IntoView {
     let (pools, set_pools) = create_signal(Vec::<c::Pool>::new());
     let (rules, set_rules) = create_signal(Vec::<c::CrushRule>::new());
     let (flags, set_flags) = create_signal(Vec::<c::CephFlag>::new());
+    let (placement, set_placement) = create_signal(None::<c::CephPlacement>);
     let (error, set_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
     let name = create_rw_signal(String::new());
@@ -25,6 +26,9 @@ pub fn CephPage() -> impl IntoView {
 
     let reload = move || {
         spawn_local(async move {
+            if let Ok(p) = c::ceph_placement().await {
+                set_placement.set(Some(p));
+            }
             if let Ok(s) = c::ceph_status().await {
                 let up = s.reachable;
                 set_status.set(Some(s));
@@ -146,6 +150,23 @@ pub fn CephPage() -> impl IntoView {
                     </div>
                 }.into_view()
             })}
+
+            <h2>"Placement"</h2>
+            <div id="ceph-placement">
+                {move || placement.get().map(|p| {
+                    let list = |v: &[String]| if v.is_empty() { "none".to_string() } else { v.join(", ") };
+                    view! {
+                        <p id="ceph-placement-osd">{format!("OSD hosts: {}", list(&p.osd_nodes))}</p>
+                        <p id="ceph-placement-mon">{format!("Monitor hosts: {}", list(&p.mon_nodes))}</p>
+                        <ul id="ceph-placement-refused">
+                            {p.osd_refused.iter().map(|(n, why)| view! { <li>{format!("{n} cannot host OSDs: {why}")}</li> }).collect_view()}
+                        </ul>
+                        <ul id="ceph-placement-warnings">
+                            {p.warnings.iter().map(|w| view! { <li>{w.clone()}</li> }).collect_view()}
+                        </ul>
+                    }
+                })}
+            </div>
 
             <h2>"Maintenance flags"</h2>
             <div id="ceph-flags">

@@ -127,3 +127,16 @@ pub async fn ceph_set_flag(flag: &str, set: bool) -> Result<Vec<CephFlag>, ApiEr
     )
     .await
 }
+
+/// `GET /api/ceph/placement`: where OSDs and MONs may go (node roles + uplink).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CephPlacement {
+    pub osd_nodes: Vec<String>,
+    pub mon_nodes: Vec<String>,
+    /// (node, reason) for every node refused as an OSD host.
+    pub osd_refused: Vec<(String, String)>,
+    pub warnings: Vec<String>,
+}
+pub async fn ceph_placement() -> Result<CephPlacement, ApiError> {
+    fetch_json("/ceph/placement").await
+}

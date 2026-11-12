@@ -745,6 +745,7 @@ def main():
         esxi_import_checks(page)
         storage_volume_checks(page, vid)
         cluster_nodes_checks(context)
+        ceph_placement_checks(page)
 
         browser.close()
 
@@ -1214,6 +1215,24 @@ def cluster_nodes_checks(context):
     finally:
         page.close()
     print("UI E2E: /ha/cluster lists this node, Remove node (confirm/cancel/delete), Quorum panel passed")
+
+
+def ceph_placement_checks(page):
+    """/storage/ceph shows where OSDs and monitors may go (GET /api/ceph/placement),
+    also on a node with no Ceph cluster: this single node has no storage role/uplink
+    proof, so the page must show exactly what the API says."""
+    tok = token()
+    plan = api_get("/api/ceph/placement", tok)
+    page.goto(f"{BASE}/storage/ceph")
+    osd = ", ".join(plan["osd_nodes"]) or "none"
+    mon = ", ".join(plan["mon_nodes"]) or "none"
+    expect(page.locator("#ceph-placement-osd")).to_have_text(f"OSD hosts: {osd}", timeout=30000)
+    expect(page.locator("#ceph-placement-mon")).to_have_text(f"Monitor hosts: {mon}")
+    for node, why in plan["osd_refused"]:
+        expect(page.locator("#ceph-placement-refused")).to_contain_text(f"{node} cannot host OSDs: {why}")
+    for w in plan["warnings"]:
+        expect(page.locator("#ceph-placement-warnings")).to_contain_text(w)
+    print("UI E2E: Ceph page placement panel matches /api/ceph/placement passed")
 
 
 def vm_hardware_checks(page, vid):
