@@ -208,7 +208,14 @@ jobs:
     # linux-cross runner cap below 7g while this job is on that label.
     container:
       image: catthehacker/ubuntu:act-latest
-      options: --memory=7g --memory-swap=7g --cpus=3
+      # apparmor=unconfined (2026-11-12): on rw-man-03 (Docker + AppArmor on the 7.0 kernel) the
+      # step processes (docker exec) run as `docker-default//&unconfined` while processes the
+      # tests spawn can carry plain `docker-default`, and the kernel then denies signals between
+      # them (audit: operation=signal DENIED, peer=docker-default//&unconfined; `kill` printed
+      # "Permission denied"). Runs 2106/2115 (runner rw-man-03-burst) failed exactly two unit
+      # tests that signal their own children (tasks stop, HA fence); rw-man-02/06 pass. Job
+      # containers already get the host docker socket, so the profile protects nothing here.
+      options: --memory=7g --memory-swap=7g --cpus=3 --security-opt apparmor=unconfined
     needs: [check, plan]
     if: needs.plan.outputs.dup != 'true'
     # Memory (2026-10-17): linux-cross job containers are capped at 9g
