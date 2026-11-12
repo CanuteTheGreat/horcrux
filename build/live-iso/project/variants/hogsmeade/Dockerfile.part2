@@ -40,7 +40,7 @@ RUN --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,
     for e in /var/db/repos/horcrux/sys-kernel/horcrux-hogsmeade-config/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-live-data/*.ebuild /var/db/repos/horcrux/sys-kernel/horcrux-unlock/*.ebuild \
              /var/db/repos/horcrux/app-admin/rustinion-agent/*.ebuild /var/db/repos/horcrux/sys-apps/horcrux-tools/*.ebuild /var/db/repos/horcrux/app-misc/hogsmeade-tools/*.ebuild \
              /var/db/repos/horcrux/app-misc/awccd/*.ebuild /var/db/repos/horcrux/sci-misc/comfyui/*.ebuild /var/db/repos/horcrux/acct-user/comfyui/*.ebuild /var/db/repos/horcrux/acct-group/comfyui/*.ebuild \
-             /var/db/repos/local/sys-apps/hogsmeade-private/*.ebuild /var/db/repos/local/app-misc/hogsmeade-obs/*.ebuild /var/db/repos/local/app-misc/hogsmeade-nextcloud/*.ebuild /var/db/repos/local/app-misc/hogsmeade-speaker-tuning/*.ebuild; do ebuild "$e" manifest; done; \
+             /var/db/repos/local/sys-apps/hogsmeade-private/*.ebuild /var/db/repos/local/app-misc/hogsmeade-obs/*.ebuild /var/db/repos/local/app-misc/hogsmeade-nextcloud/*.ebuild /var/db/repos/local/app-misc/hogsmeade-speaker-tuning/*.ebuild /var/db/repos/local/app-misc/hogsmeade-input-quirks/*.ebuild; do ebuild "$e" manifest; done; \
     # loose copies from the ISO overlay that packages own now: remove first so Portage owns the files
     # (the Horcrux manager itself is app-emulation/horcrux-bin from the core layer now: its files stay, only its services are not enabled here)
     rm -rf /usr/lib/live-installer /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/console-menu \
@@ -62,7 +62,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,shar
         sys-firmware/sof-firmware sys-power/switcheroo-control x11-apps/mesa-progs sys-apps/smartmontools sys-apps/nvme-cli app-backup/restic \
         app-containers/docker app-containers/docker-compose app-containers/docker-buildx \
         net-misc/remmina media-gfx/gimp media-gfx/geeqie net-misc/mosh net-analyzer/nmap \
-        net-im/discord net-vpn/proton-vpn-gtk-app app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-admin/rustinion-agent sys-firmware/edk2-bin app-admin/sudo \
+        net-im/discord net-vpn/proton-vpn-gtk-app app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-misc/hogsmeade-input-quirks app-admin/rustinion-agent sys-firmware/edk2-bin app-admin/sudo \
         sys-process/cronie app-portage/portage-utils app-portage/eix sys-apps/lm-sensors x11-libs/libnotify \
         > /var/log/hogsmeade-apps.log 2>&1 || { tail -60 /var/log/hogsmeade-apps.log; exit 1; }
 RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
@@ -81,7 +81,7 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     ebuild /var/db/repos/local/sys-apps/hogsmeade-private/hogsmeade-private-1.ebuild manifest; \
     emerge --oneshot sys-apps/hogsmeade-private; \
     rm -rf /var/db/repos/local/sys-apps/hogsmeade-private/files/*; \
-    emerge --noreplace --select=y app-misc/hogsmeade-tools app-misc/awccd app-misc/alienfx sci-misc/comfyui sys-apps/hogsmeade-private app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-admin/rustinion-agent \
+    emerge --noreplace --select=y app-misc/hogsmeade-tools app-misc/awccd app-misc/alienfx sci-misc/comfyui sys-apps/hogsmeade-private app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-misc/hogsmeade-input-quirks app-admin/rustinion-agent \
         sys-firmware/sof-firmware sys-kernel/linux-firmware
 
 # make @world consistent with the desktop profile + new USE, so the owner's first `emerge -uDN @world` is a no-op for them

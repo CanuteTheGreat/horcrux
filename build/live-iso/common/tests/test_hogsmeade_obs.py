@@ -284,5 +284,42 @@ class HogsmeadeSpeakerTuning(unittest.TestCase):
         self.assertEqual(bad, [], "the speaker tuning belongs to the HOGSMEADE layer only")
 
 
+IQ = HSM / "local-repo" / "app-misc" / "hogsmeade-input-quirks" / "hogsmeade-input-quirks-1.ebuild"
+
+
+@unittest.skipUnless(IQ.is_file(), "Horcrux repo tree only")
+class HogsmeadeInputQuirks(unittest.TestCase):
+    """The libinput quirk (internal USB keyboard -> touchpad disable-while-typing) is for ONE laptop model: HOGSMEADE layer only, DMI-matched."""
+
+    def setUp(self):
+        self.t = IQ.read_text()
+
+    def test_quirk_marks_the_usb_keyboard_internal_on_this_model_only(self):
+        for s in ("/usr/share/libinput", "50-hogsmeade-alienware.quirks", "MatchUdevType=keyboard", "MatchBus=usb", "MatchVendor=0x0D62",
+                  "MatchProduct=0x6ABC", "MatchDMIModalias=dmi:*svnAlienware:pnAlienware18Area-51AA18250:*", "AttrKeyboardIntegration=internal"):
+            self.assertIn(s, self.t)
+        self.assertNotIn("/etc/libinput", self.t)
+
+    def test_image_layer_installs_it(self):
+        for d in ("Dockerfile", "Dockerfile.part2"):
+            txt = (HSM / d).read_text()
+            self.assertIn("app-misc/hogsmeade-input-quirks", txt, d)
+            self.assertIn("local/app-misc/hogsmeade-input-quirks/*.ebuild", txt, d + ": its Manifest")
+
+    def test_not_leaked_into_public_or_other_layers(self):
+        pat = re.compile(r"hogsmeade-input-quirks|50-hogsmeade-alienware")
+        bad = []
+        for r in (REPO / "gentoo", LIVE / "common", LIVE / "project"):
+            for p in r.rglob("*"):
+                if not p.is_file() or "__pycache__" in p.parts or p.suffix == ".pyc" or p.name == "test_hogsmeade_obs.py" or HSM in p.parents:
+                    continue
+                try:
+                    if pat.search(p.read_text()):
+                        bad.append(str(p.relative_to(REPO)))
+                except (UnicodeDecodeError, OSError):
+                    pass
+        self.assertEqual(bad, [], "the input quirk belongs to the HOGSMEADE layer only")
+
+
 if __name__ == "__main__":
     unittest.main()
