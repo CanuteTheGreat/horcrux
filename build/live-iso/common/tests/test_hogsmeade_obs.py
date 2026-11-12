@@ -57,5 +57,49 @@ class HogsmeadeObs(unittest.TestCase):
         self.assertEqual(bad, [], "OBS belongs to the HOGSMEADE layer only")
 
 
+NC = HSM / "local-repo" / "app-misc" / "hogsmeade-nextcloud" / "hogsmeade-nextcloud-1.ebuild"
+
+
+@unittest.skipUnless(NC.is_file(), "Horcrux repo tree only")
+class HogsmeadeNextcloud(unittest.TestCase):
+    """The Nextcloud desktop client is the owner's personal app: package-owned in the HOGSMEADE layer only, never in a public image or a lab test machine."""
+
+    def test_package_owns_the_client_and_image_installs_it(self):
+        t = NC.read_text()
+        self.assertIn("net-misc/nextcloud-client[nautilus]", t)
+        self.assertIn("package.use", t)
+        for d in ("Dockerfile", "Dockerfile.part2"):
+            txt = (HSM / d).read_text()
+            self.assertIn("app-misc/hogsmeade-nextcloud", txt, d)
+            self.assertIn("local/app-misc/hogsmeade-nextcloud/*.ebuild", txt, d + ": its Manifest")
+        self.assertIn("net-misc/nextcloud-client nautilus", (HSM / "portage" / "package.use" / "zzz-hogsmeade").read_text())
+
+    def test_not_leaked_into_public_or_test_machine_layers(self):
+        # the package name exists nowhere outside the hogsmeade variant (and this test)
+        bad = []
+        for r in (REPO / "gentoo", LIVE / "common", LIVE / "project"):
+            for p in r.rglob("*"):
+                if not p.is_file() or "__pycache__" in p.parts or p.suffix == ".pyc" or p.name == "test_hogsmeade_obs.py" or HSM in p.parents:
+                    continue
+                try:
+                    if "hogsmeade-nextcloud" in p.read_text():
+                        bad.append(str(p.relative_to(REPO)))
+                except (UnicodeDecodeError, OSError):
+                    pass
+        self.assertEqual(bad, [], "hogsmeade-nextcloud belongs to the HOGSMEADE layer only")
+        # public images and lab test machines forbid the client outright
+        forb = [l.strip() for l in (LIVE / "project" / "public-forbidden.txt").read_text().splitlines() if l.strip() and not l.startswith("#")]
+        self.assertIn("net-misc/nextcloud-client", forb)
+        deny = REPO / "gentoo" / "app-misc" / "horcrux-test-machine" / "files" / "personal-apps.denylist"
+        if deny.is_file():
+            self.assertIn("net-misc/nextcloud*", deny.read_text())
+        # no active (non-comment) shared package list or public Dockerfile installs it
+        shared = [LIVE / "project" / "packages.txt", LIVE / "project" / "packages-late.txt", LIVE / "common" / "packages.txt",
+                  LIVE / "project" / "variants" / "gnome-light" / "packages.txt"]
+        for f in shared:
+            if f.is_file():
+                self.assertNotRegex(f.read_text(), r"(?m)^[^#\n]*nextcloud", str(f))
+
+
 if __name__ == "__main__":
     unittest.main()
