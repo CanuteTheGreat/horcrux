@@ -1,7 +1,10 @@
 #!/bin/sh
 # onedrive-login personal|work : authorise one OneDrive account for the sync service, then enable and start it.
-# (HOGSMEADE, app-misc/hogsmeade-microsoft.) Run it as yourself in a terminal; it prints a URL, you sign in in the browser,
-# copy the address of the (blank) page you land on and paste it back here.
+# (HOGSMEADE, app-misc/hogsmeade-microsoft.) Run it as yourself in a terminal INSIDE your desktop session.
+# onedrive >= 2.5.11 opens the Microsoft sign-in page in your browser and catches the answer itself on a local
+# loopback listener (http://127.0.0.1:53100-53149/, closed afterwards): nothing to copy or paste.
+# (Microsoft's old nativeclient copy-the-URL page no longer works.) The listener is used only when the client sees a
+# graphical session (DISPLAY or WAYLAND_DISPLAY / XDG_SESSION_TYPE, plus XDG_RUNTIME_DIR); use BROWSER=<exe> to pick a browser.
 set -u
 acct="${1:-}"
 case "$acct" in
@@ -9,9 +12,26 @@ case "$acct" in
 	*) echo "usage: onedrive-login personal|work" >&2; exit 2 ;;
 esac
 [ "$(id -u)" -ne 0 ] || { echo "run as your own user, not root" >&2; exit 2; }
+
+# the loopback sign-in needs onedrive >= 2.5.11
+ver="$(onedrive --version 2>/dev/null | sed -n 's/.* v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)"
+if [ -n "$ver" ] && [ "$(printf '%s\n2.5.11\n' "$ver" | sort -V | head -n1)" != "2.5.11" ]; then
+	echo "onedrive-login: onedrive $ver is too old for the browser sign-in (needs >= 2.5.11); update net-misc/onedrive." >&2
+	exit 1
+fi
+
+# GUI detection is done by the client from the environment: warn when it would silently fall back to copy and paste
+if [ -z "${XDG_RUNTIME_DIR:-}" ] || { [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] && \
+	[ "${XDG_SESSION_TYPE:-}" != wayland ] && [ "${XDG_SESSION_TYPE:-}" != x11 ]; }; then
+	echo "onedrive-login: no graphical session in this shell (DISPLAY/WAYLAND_DISPLAY/XDG_RUNTIME_DIR unset)." >&2
+	echo "  Run it from a terminal in your desktop session so the browser opens and the answer is caught automatically." >&2
+	echo "  Continuing in manual mode: Microsoft's nativeclient page may refuse to show the response URL." >&2
+fi
+
 confdir="${XDG_CONFIG_HOME:-$HOME/.config}/onedrive-$acct"
 mkdir -p "$confdir"
 [ -e "$confdir/config" ] || cp "/usr/share/hogsmeade-microsoft/config-$acct" "$confdir/config"
+echo "Signing in to OneDrive ($acct): your browser opens the Microsoft sign-in page; sign in and approve. This window continues by itself."
 onedrive --confdir="$confdir" --reauth || exit 1
 if [ ! -s "$confdir/refresh_token" ]; then
 	echo "onedrive-login: no token was saved, the sign-in did not complete; run it again." >&2

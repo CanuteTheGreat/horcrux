@@ -15,7 +15,7 @@ RDEPEND="
 	app-misc/hogsmeade-microsoft-config
 	net-libs/gnome-online-accounts[ms365]
 	gnome-base/gvfs[onedrive,gnome-online-accounts]
-	net-misc/onedrive[libnotify]
+	>=net-misc/onedrive-2.5.11[libnotify]
 	sys-apps/openrc
 "
 
@@ -41,6 +41,6 @@ pkg_postinst() {
 				elog "seeded ${home}/.config/onedrive-${a}/config for ${u}"
 		done
 	done < <(getent passwd)
-	elog "Authorise each account once, as yourself: 'onedrive-login personal' and 'onedrive-login work' (prints a URL; paste the response URL back)."
+	elog "Authorise each account once, as yourself, in a terminal in your desktop session: 'onedrive-login personal' and 'onedrive-login work' (the browser opens, onedrive catches the answer on a local loopback listener; no copy-paste)."
 	elog "The services onedrive.personal / onedrive.work stay stopped until then. Settings > Online Accounts > Microsoft 365 needs a log-out/in (goa-daemon is already running)."
 }
