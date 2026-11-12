@@ -48,7 +48,156 @@ pub enum ScheduleFrequency {
     Custom { cron: String },       // Custom cron expression
 }
 
+/// One cron field: the set of allowed values.
+#[derive(Debug, Clone, PartialEq)]
+struct CronField {
+    allowed: Vec<bool>,
+    any: bool,
+}
+
+impl CronField {
+    fn parse(src: &str, min: u32, max: u32, what: &str) -> std::result::Result<Self, String> {
+        let mut allowed = vec![false; (max + 1) as usize];
+        let any = src == "*";
+        for part in src.split(',') {
+            let (range, step) = match part.split_once('/') {
+                Some((r, st)) => {
+                    let st: u32 = st
+                        .parse()
+                        .map_err(|_| format!("{what}: bad step in '{part}'"))?;
+                    if st == 0 {
+                        return Err(format!("{what}: step must be at least 1"));
+                    }
+                    (r, st)
+                }
+                None => (part, 1),
+            };
+            let (lo, hi) = if range == "*" {
+                (min, max)
+            } else if let Some((a, b)) = range.split_once('-') {
+                let a: u32 = a.parse().map_err(|_| format!("{what}: bad value '{a}'"))?;
+                let b: u32 = b.parse().map_err(|_| format!("{what}: bad value '{b}'"))?;
+                (a, b)
+            } else {
+                let a: u32 = range
+                    .parse()
+                    .map_err(|_| format!("{what}: bad value '{range}'"))?;
+                // "5/10" means from 5 to the end in steps of 10
+                if part.contains('/') {
+                    (a, max)
+                } else {
+                    (a, a)
+                }
+            };
+            if lo < min || hi > max || lo > hi {
+                return Err(format!("{what}: '{part}' is outside {min}-{max}"));
+            }
+            let mut v = lo;
+            while v <= hi {
+                allowed[v as usize] = true;
+                v += step;
+            }
+        }
+        Ok(Self { allowed, any })
+    }
+
+    fn has(&self, v: u32) -> bool {
+        self.allowed.get(v as usize).copied().unwrap_or(false)
+    }
+}
+
+/// A standard five-field cron expression (minute hour day-of-month month
+/// day-of-week; `*`, lists, ranges and `/step`; day-of-week 0 or 7 = Sunday;
+/// when both day fields are restricted a day matches either, as in cron(8)).
+/// Evaluated in UTC like the other frequencies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CronExpr {
+    minute: CronField,
+    hour: CronField,
+    dom: CronField,
+    month: CronField,
+    dow: CronField,
+}
+
+impl CronExpr {
+    pub fn parse(src: &str) -> std::result::Result<Self, String> {
+        let f: Vec<&str> = src.split_whitespace().collect();
+        if f.len() != 5 {
+            return Err(format!(
+                "cron needs 5 fields (minute hour day-of-month month day-of-week), got {}",
+                f.len()
+            ));
+        }
+        let mut dow = CronField::parse(f[4], 0, 7, "day-of-week")?;
+        if dow.allowed[7] {
+            dow.allowed[0] = true;
+        }
+        Ok(Self {
+            minute: CronField::parse(f[0], 0, 59, "minute")?,
+            hour: CronField::parse(f[1], 0, 23, "hour")?,
+            dom: CronField::parse(f[2], 1, 31, "day-of-month")?,
+            month: CronField::parse(f[3], 1, 12, "month")?,
+            dow,
+        })
+    }
+
+    fn day_matches(&self, d: chrono::NaiveDate) -> bool {
+        let dom = self.dom.has(d.day());
+        let dow = self.dow.has(d.weekday().num_days_from_sunday());
+        match (self.dom.any, self.dow.any) {
+            (false, false) => dom || dow,
+            (false, true) => dom,
+            (true, false) => dow,
+            (true, true) => true,
+        }
+    }
+
+    /// First matching minute strictly after `timestamp` (unix seconds), within
+    /// the next 5 years; `None` for an expression that never fires (31 Feb).
+    pub fn next_after(&self, timestamp: i64) -> Option<i64> {
+        let start = chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)?.naive_utc();
+        let mut day = start.date();
+        let limit = day + chrono::Duration::days(366 * 5);
+        let mut first = true;
+        while day <= limit {
+            if self.month.has(day.month()) && self.day_matches(day) {
+                for h in 0..24u32 {
+                    if !self.hour.has(h) {
+                        continue;
+                    }
+                    for m in 0..60u32 {
+                        if !self.minute.has(m) {
+                            continue;
+                        }
+                        let cand = day.and_hms_opt(h, m, 0)?;
+                        if first && cand <= start {
+                            continue;
+                        }
+                        return Some(cand.and_utc().timestamp());
+                    }
+                }
+            }
+            first = false;
+            day += chrono::Duration::days(1);
+        }
+        None
+    }
+}
+
 impl ScheduleFrequency {
+    /// Reject a custom cron that does not parse or never fires.
+    pub fn validate(&self) -> Result<()> {
+        if let ScheduleFrequency::Custom { cron } = self {
+            let c = CronExpr::parse(cron).map_err(horcrux_common::Error::Validation)?;
+            if c.next_after(chrono::Utc::now().timestamp()).is_none() {
+                return Err(horcrux_common::Error::Validation(format!(
+                    "cron '{cron}' never fires"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Calculate next run time from given timestamp
     pub fn next_run_after(&self, timestamp: i64) -> i64 {
         let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
@@ -125,10 +274,16 @@ impl ScheduleFrequency {
                 }
                 chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(next, chrono::Utc)
             }
-            ScheduleFrequency::Custom { cron: _ } => {
-                // For simplicity, treat custom as hourly
-                // In production, use a cron library like 'cron' crate
-                dt + chrono::Duration::hours(1)
+            ScheduleFrequency::Custom { cron } => {
+                // A cron that does not parse is rejected when the schedule is
+                // saved (`validate`); hourly is only the safe fallback.
+                match CronExpr::parse(cron)
+                    .ok()
+                    .and_then(|c| c.next_after(timestamp))
+                {
+                    Some(t) => return t,
+                    None => dt + chrono::Duration::hours(1),
+                }
             }
         };
 
@@ -182,6 +337,7 @@ impl SnapshotScheduler {
 
     /// Add a new snapshot schedule
     pub async fn add_schedule(&self, mut schedule: SnapshotSchedule) -> Result<()> {
+        schedule.frequency.validate()?;
         // Calculate next run if not set
         if schedule.next_run == 0 {
             schedule.next_run = schedule
@@ -227,6 +383,7 @@ impl SnapshotScheduler {
     /// upsert here would resurrect (and persist) a schedule deleted while a
     /// snapshot was being taken.
     pub async fn update_schedule(&self, schedule: SnapshotSchedule) -> Result<()> {
+        schedule.frequency.validate()?;
         let schedule_id = schedule.id.clone();
         let mut schedules = self.schedules.write().await;
         if !schedules.contains_key(&schedule_id) {
@@ -410,6 +567,116 @@ impl SnapshotScheduler {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> i64 {
+        chrono::NaiveDate::from_ymd_opt(y, mo, d)
+            .unwrap()
+            .and_hms_opt(h, mi, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp()
+    }
+
+    fn cron_next(expr: &str, after: i64) -> i64 {
+        ScheduleFrequency::Custom { cron: expr.into() }.next_run_after(after)
+    }
+
+    #[test]
+    fn custom_cron_every_five_minutes() {
+        // 2026-11-12 10:02 -> 10:05, and from exactly 10:05 -> 10:10 (strictly after)
+        assert_eq!(
+            cron_next("*/5 * * * *", ts(2026, 11, 12, 10, 2)),
+            ts(2026, 11, 12, 10, 5)
+        );
+        assert_eq!(
+            cron_next("*/5 * * * *", ts(2026, 11, 12, 10, 5)),
+            ts(2026, 11, 12, 10, 10)
+        );
+    }
+
+    #[test]
+    fn custom_cron_not_hourly_any_more() {
+        // 02:30 every day, asked at 03:00 -> next day 02:30 (was: +1 h)
+        assert_eq!(
+            cron_next("30 2 * * *", ts(2026, 11, 12, 3, 0)),
+            ts(2026, 11, 13, 2, 30)
+        );
+        assert_eq!(
+            cron_next("30 2 * * *", ts(2026, 11, 12, 1, 0)),
+            ts(2026, 11, 12, 2, 30)
+        );
+    }
+
+    #[test]
+    fn custom_cron_weekday_lists_and_ranges() {
+        // 2026-11-12 is a Thursday; Mon-Fri 09:00 from Fri 10:00 -> Mon 09:00
+        assert_eq!(
+            cron_next("0 9 * * 1-5", ts(2026, 11, 13, 10, 0)),
+            ts(2026, 11, 16, 9, 0)
+        );
+        // Sunday as 0 and as 7
+        assert_eq!(
+            cron_next("0 0 * * 0", ts(2026, 11, 12, 0, 0)),
+            ts(2026, 11, 15, 0, 0)
+        );
+        assert_eq!(
+            cron_next("0 0 * * 7", ts(2026, 11, 12, 0, 0)),
+            ts(2026, 11, 15, 0, 0)
+        );
+        assert_eq!(
+            cron_next("15,45 8 * * *", ts(2026, 11, 12, 8, 20)),
+            ts(2026, 11, 12, 8, 45)
+        );
+    }
+
+    #[test]
+    fn custom_cron_day_of_month_or_weekday() {
+        // both restricted: 1st of the month OR Monday (cron(8) semantics)
+        assert_eq!(
+            cron_next("0 0 1 * 1", ts(2026, 11, 12, 0, 0)),
+            ts(2026, 11, 16, 0, 0)
+        );
+        assert_eq!(
+            cron_next("0 0 1 * 1", ts(2026, 11, 29, 12, 0)),
+            ts(2026, 11, 30, 0, 0)
+        );
+        // month and year roll-over
+        assert_eq!(
+            cron_next("0 0 1 1 *", ts(2026, 11, 12, 0, 0)),
+            ts(2027, 1, 1, 0, 0)
+        );
+    }
+
+    #[test]
+    fn custom_cron_rejects_bad_expressions() {
+        for bad in [
+            "",
+            "* * * *",
+            "60 * * * *",
+            "* 24 * * *",
+            "* * 0 * *",
+            "* * * 13 *",
+            "*/0 * * * *",
+            "a * * * *",
+            "5-1 * * * *",
+            "* * * * 8",
+        ] {
+            let f = ScheduleFrequency::Custom { cron: bad.into() };
+            assert!(f.validate().is_err(), "{bad:?} must be rejected");
+        }
+        // never fires: 31 February
+        assert!(ScheduleFrequency::Custom {
+            cron: "0 0 31 2 *".into()
+        }
+        .validate()
+        .is_err());
+        assert!(ScheduleFrequency::Custom {
+            cron: "0 3 * * 1-5".into()
+        }
+        .validate()
+        .is_ok());
+        assert!(ScheduleFrequency::Hourly.validate().is_ok());
+    }
 
     #[test]
     fn test_hourly_frequency() {

@@ -688,6 +688,17 @@ Authorization: Bearer <token>
 ```
 
 ---
+### Snapshot schedules
+
+`GET/POST /api/snapshot-schedules`, `GET/PUT/DELETE /api/snapshot-schedules/{id}`.
+Body: `{"vm_id","name","frequency","retention_count","enabled","include_memory"}`.
+`frequency` is `"hourly"`, `{"daily":{"hour":3}}`, `{"weekly":{"day":0,"hour":3}}`,
+`{"monthly":{"day":1,"hour":3}}` or `{"custom":{"cron":"*/15 * * * *"}}`. A custom
+cron has five fields (minute hour day-of-month month day-of-week; `*`, lists,
+ranges, `/step`; Sunday = 0 or 7; when both day fields are set a day matches
+either), evaluated in UTC. An expression that does not parse, or never fires,
+is refused with 400 when the schedule is saved.
+
 
 ## Cloning
 
