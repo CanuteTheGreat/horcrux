@@ -140,7 +140,7 @@ class HogsmeadeApps(unittest.TestCase):
             self.assertNotIn("davinci", live(f), f.name)
         t = APPS_CFG.read_text()
         for line in ("media-video/davinci-resolve ~amd64", "media-video/davinci-resolve all-rights-reserved", "media-video/davinci-resolve VIDEO_CARDS: -* nvidia",
-                     "/etc/ctg-backup/paths.d", "/var/cache/distfiles/DaVinci_Resolve_21.2_Linux.zip", "restore /var/cache/distfiles"):
+                     "/etc/hogsmeade/backup-extra.d", "/var/cache/distfiles/DaVinci_Resolve_21.2_Linux.zip", "restore /var/cache/distfiles"):
             self.assertIn(line, t)
         self.assertNotRegex(t, r"(?m)^\s*media-video/davinci-resolve\s*$")
 

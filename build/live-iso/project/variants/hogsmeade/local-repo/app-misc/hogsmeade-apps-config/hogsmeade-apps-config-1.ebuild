@@ -77,15 +77,15 @@ src_install() {
 		# DaVinci Resolve: NVIDIA only (the only VIDEO_CARDS its ebuild needs on this machine)
 		media-video/davinci-resolve VIDEO_CARDS: -* nvidia
 	EOF2
-	# Resolve's installer zip is fetch-restricted and not re-downloadable: back it up (restic, /etc/ctg-backup/paths.d, one file only)
-	insinto /etc/ctg-backup/paths.d
-	newins - hogsmeade-resolve <<-'EOF2'
+	# Resolve's installer zip is fetch-restricted and not re-downloadable: back it up (hogsmeade-backup, /etc/hogsmeade/backup-extra.d, one file only)
+	insinto /etc/hogsmeade/backup-extra.d
+	newins - resolve <<-'EOF2'
 		/var/cache/distfiles/DaVinci_Resolve_21.2_Linux.zip
 	EOF2
 }
 
 pkg_postinst() {
 	elog "DaVinci Resolve is fetch-restricted and deliberately NOT a dependency of app-misc/hogsmeade-apps (a missing zip would break image builds)."
-	elog "On a reinstall: restore /var/cache/distfiles/DaVinci_Resolve_21.2_Linux.zip from the restic backup (it is in /etc/ctg-backup/paths.d/hogsmeade-resolve),"
+	elog "On a reinstall: restore /var/cache/distfiles/DaVinci_Resolve_21.2_Linux.zip from the hogsmeade-backup restic snapshot (restic restore --tag hogsmeade latest --include <that path> --target /) (it is in /etc/hogsmeade/backup-extra.d/resolve),"
 	elog "then 'emerge -av media-video/davinci-resolve' (keyword, licence and VIDEO_CARDS come from this package)."
 }

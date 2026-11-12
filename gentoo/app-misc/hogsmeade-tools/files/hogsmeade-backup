@@ -28,6 +28,12 @@ for ds in rpool/home rpool/data; do
     paths+=("$mp/.zfs/snapshot/$snap")
 done
 [ "${#paths[@]}" -gt 0 ] || { echo "nothing to back up" >&2; exit 5; }
+# single files outside the datasets that a reinstall needs (e.g. the fetch-restricted DaVinci Resolve zip, listed by
+# the HOGSMEADE app-config package in /etc/hogsmeade/backup-extra.d/*): one absolute file path per line; a missing file is skipped
+for f in /etc/hogsmeade/backup-extra.d/*; do
+    [ -f "$f" ] || continue
+    while IFS= read -r x; do case "$x" in ""|"#"*) continue;; esac; [ -f "$x" ] && paths+=("$x"); done < "$f"
+done
 restic backup --tag hogsmeade --exclude-caches \
     --exclude '*/.cache' --exclude '*/Cache' --exclude '*/.local/share/Trash' --exclude '*/node_modules' --exclude '*/.thumbnails' \
     --exclude '*/Nextcloud' \
