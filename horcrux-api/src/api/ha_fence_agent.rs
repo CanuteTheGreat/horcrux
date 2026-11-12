@@ -723,11 +723,15 @@ mod tests {
             eprintln!("skipped: /var/run not writable");
             return;
         }
-        let fake = dir.join("qemu-fake");
-        std::fs::copy("/bin/sleep", &fake).unwrap();
+        // A fake QEMU: a shell named `qemu-fake` (argv0) that blocks reading its
+        // stdin pipe. Not a copy of /bin/sleep: on a multi-call coreutils (uutils)
+        // a copy run under another name exits at once ("unknown program").
+        use std::os::unix::process::CommandExt;
         let spawn = || {
-            std::process::Command::new(&fake)
-                .arg("300")
+            std::process::Command::new("/bin/sh")
+                .arg0("qemu-fake")
+                .args(["-c", "read _"])
+                .stdin(std::process::Stdio::piped())
                 .spawn()
                 .unwrap()
         };
@@ -742,6 +746,11 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+        assert!(
+            crate::vm::qemu::QemuManager::process_running("ut-fence-a")
+                && crate::vm::qemu::QemuManager::process_running("ut-fence-b"),
+            "both fake guests must be running before the fence"
+        );
         // only guest a is an HA guest in the heartbeat
         beat(&["ut-fence-a".to_string()]).unwrap();
         assert!(heartbeat_age().unwrap() <= 1);
