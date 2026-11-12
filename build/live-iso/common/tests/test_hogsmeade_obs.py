@@ -20,7 +20,7 @@ class HogsmeadeObs(unittest.TestCase):
         self.t = EB.read_text()
 
     def test_package_is_the_set_and_owns_the_config(self):
-        for dep in ("media-video/obs-studio[nvenc,pipewire,v4l]", "media-video/ffmpeg[opus,x264,nvenc]", "media-plugins/obs-pipewire-audio-capture", "media-video/v4l2loopback"):
+        for dep in ("media-video/obs-studio[nvenc,screencast,v4l]", "media-video/ffmpeg[opus,x264,nvenc]", "media-plugins/obs-pipewire-audio-capture", "media-video/v4l2loopback"):
             self.assertIn(dep, self.t)
         for f in ("package.accept_keywords", "package.use", "/etc/modprobe.d", "/etc/modules-load.d"):
             self.assertIn(f, self.t)

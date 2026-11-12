@@ -7,11 +7,11 @@ DESCRIPTION="HOGSMEADE: OBS Studio (NVENC, PipeWire, virtual camera) and its key
 S="${WORKDIR}"
 LICENSE="MIT"
 SLOT="0"
-KEYWORDS="~amd64"
+KEYWORDS="amd64"
 
 # the USE requirements mirror the package.use file below (the image build resolves them from the variant's own portage/ files first)
 RDEPEND="
-	media-video/obs-studio[nvenc,pipewire,v4l]
+	media-video/obs-studio[nvenc,screencast,v4l]
 	media-video/ffmpeg[opus,x264,nvenc]
 	media-plugins/obs-pipewire-audio-capture
 	media-video/v4l2loopback
@@ -28,7 +28,7 @@ src_install() {
 	newins - obs-studio <<-'EOF2'
 		# HOGSMEADE (app-misc/hogsmeade-obs)
 		media-video/ffmpeg opus x264 nvenc
-		media-video/obs-studio nvenc pipewire v4l
+		media-video/obs-studio nvenc screencast v4l
 		media-video/v4l2loopback dist-kernel
 	EOF2
 

@@ -14,5 +14,5 @@ dev-libs/libdbusmenu gtk3
 gnome-extra/horcrux-gnome-defaults awcc
 # OBS (app-misc/hogsmeade-obs, owner-only)
 media-video/ffmpeg opus x264 nvenc
-media-video/obs-studio nvenc pipewire v4l
+media-video/obs-studio nvenc screencast v4l
 media-video/v4l2loopback dist-kernel
