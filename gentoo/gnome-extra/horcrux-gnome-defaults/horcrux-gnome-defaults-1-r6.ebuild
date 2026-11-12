@@ -48,6 +48,13 @@ src_install() {
 	else
 		sed -i 's|@@AWCC@@||' "${ED}/etc/dconf/db/local.d/00-horcrux-extensions" || die
 	fi
+	# Fractional display scaling (125%/150%/175%...) in Settings > Displays: stock mutter offers only 100%/200%. scale-monitor-framebuffer is the Wayland
+	# fractional-scale switch, xwayland-native-scaling keeps X11 apps sharp under it. A default, not a lock: `gsettings set` by a user still wins. Both are
+	# Wayland-only (mutter's X11 backend ignores them), so the GNOME-on-Xorg session is unaffected.
+	newins - 10-horcrux-fractional-scaling <<-'EOF'
+		[org/gnome/mutter]
+		experimental-features=['scale-monitor-framebuffer', 'xwayland-native-scaling']
+	EOF
 	dconf compile "${T}/local" "${ED}/etc/dconf/db/local.d" || die "dconf compile failed"
 	insinto /etc/dconf/db
 	doins "${T}/local"
