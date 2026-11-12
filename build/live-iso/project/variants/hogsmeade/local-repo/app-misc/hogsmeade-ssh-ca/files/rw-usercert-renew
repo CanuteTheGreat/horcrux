@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Device-side renewal of the RedWeek user certificate (no AWS credentials needed): sends the CURRENT, still valid cert plus
+# an SSHSIG made with the device key over "rw-usercert-renew <ts> <cert fingerprint>". New cert = same key, key id, principals,
+# 9 weeks. Run daily (systemd user timer / cron); renews when < 30 days are left.
+#   renew-user.sh [KEY=~/.ssh/id_ed25519] [CERT=~/.ssh/id_ed25519-rw-cert.pub]
+set -euo pipefail
+KEY="${1:-$HOME/.ssh/id_ed25519}"; CERT="${2:-${KEY}-rw-cert.pub}"
+URL="${RENEW_URL:-https://ajsjfv6ja3uend5ukysrrlcmz40bwhbr.lambda-url.us-west-2.on.aws/}"
+until_epoch="$(ssh-keygen -L -f "$CERT" | awk '/Valid:/{print $NF}')"
+left=$(( $(date -d "$until_epoch" +%s) - $(date +%s) ))
+if [ "$left" -gt $((30*86400)) ] && [ -z "${FORCE:-}" ]; then echo "rw-usercert: $((left/86400)) days left, nothing to do"; exit 0; fi
+ts="$(date +%s)"; fpr="$(ssh-keygen -lf "$CERT" -E sha256 >/dev/null; awk '{print $2}' "$CERT" | base64 -d | sha256sum | awk '{print $1}' | xxd -r -p | base64 | tr -d '=\n' | sed 's/^/SHA256:/')"
+sig="$(printf 'rw-usercert-renew %s %s' "$ts" "$fpr" | ssh-keygen -Y sign -n rw-usercert@redweek.com -f "$KEY")"
+body="$(python3 -c 'import sys,json; print(json.dumps({"cert":open(sys.argv[1]).read().strip(),"ts":sys.argv[2],"sig":sys.argv[3]}))' "$CERT" "$ts" "$sig")"
+resp="$(curl -sS --fail-with-body -H 'content-type: application/json' -d "$body" "$URL")" || { echo "rw-usercert: renew refused: $resp" >&2; exit 1; }
+tmp="$(mktemp "$CERT.XXXXXX")"; python3 -c 'import sys,json; print(json.load(sys.stdin)["cert"])' <<<"$resp" > "$tmp"
+ssh-keygen -L -f "$tmp" >/dev/null && mv "$tmp" "$CERT" && chmod 600 "$CERT" && echo "rw-usercert: renewed ($(ssh-keygen -L -f "$CERT" | awk '/Valid:/{print $NF}'))"

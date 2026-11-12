@@ -30,7 +30,7 @@ def err(m):
         errs.append(m)
 
 
-NAMED = {"hxgentoo": f"{R}/gentoo", "hxgentoo2": f"{R}/gentoo", "ctgoverlay": f"{W}/overlay", "hsmprivate": f"{W}/priv"}
+NAMED = {"hxgentoo": f"{R}/gentoo", "hxgentoo2": f"{R}/gentoo", "ctgoverlay": f"{W}/overlay", "hsmprivate": f"{W}/priv", "ctgprivate": f"{W}/ctgprivate"}
 # repo name (as emerge sees it) -> host dir of the repo root in the image
 REPO_DIRS = {}  # filled from the COPY simulation
 

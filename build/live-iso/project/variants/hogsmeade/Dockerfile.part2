@@ -2,7 +2,7 @@
 # HOGSMEADE variant, part 2: everything after the (1 h) kernel / desktop / zfs+nvidia layers, on the proven hogshead packaging pattern.
 # Part 1 = Dockerfile target hsm-kinstall (tagged and passed as BASE) so that changes to the overlay, the ebuilds or the Portage config
 # in this part never recompile the kernel or the desktop. Named contexts: hxgentoo2 = the repo's gentoo/ (CURRENT horcrux overlay: horcrux-tools,
-# horcrux-live-data, horcrux-unlock, rustinion-bin, hogsmeade-tools, awccd, comfyui), ctgoverlay, hsmprivate (NEVER in git).
+# horcrux-live-data, horcrux-unlock, rustinion-bin, hogsmeade-tools, awccd, comfyui), ctgoverlay, ctgprivate (ctg-private-overlay checkout), hsmprivate (NEVER in git).
 ARG BASE
 FROM ${BASE} AS hsm-final
 ARG ARCH=x86_64
@@ -70,6 +70,22 @@ RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,shar
     set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
     emerge --update --newuse --usepkg app-misc/hogsmeade-tools app-misc/awccd app-misc/alienfx \
         > /var/log/hogsmeade-tools.log 2>&1 || { tail -60 /var/log/hogsmeade-tools.log; exit 1; }
+# SSH CA (owner rule: one key per device generated ON the device, CA certs grant access, no per-host key registration). The image carries the
+# client (ctg-ssh-ca + its cron renew), the fleet trust data (host CA @cert-authority, user CA, KRL, signer address) and ctg-ops[private-overlay]
+# (registers ::ctg-private for later syncs). NO KEY OR CERTIFICATE is in the image: after the install run `ctg-ssh-ca enroll` and approve it on
+# crystalcave (see owner-device-os-conversion). ::ctg-private is a plain build-time copy here (first boot replaces it with a git checkout).
+COPY --from=ctgprivate / /var/db/repos/ctg-private/
+RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
+    --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
+    set -e; unset ARCH; export FEATURES="-ccache buildpkg"; \
+    printf '[ctg-private]\nlocation = /var/db/repos/ctg-private\nmasters = gentoo\nauto-sync = no\n' > /etc/portage/repos.conf/zz-ctg-private-seed.conf; \
+    emerge --update --newuse --usepkg --select app-admin/ctg-ops net-misc/ctg-ssh-ca-fleet app-misc/hogsmeade-ssh-ca \
+        > /var/log/hogsmeade-ssh-ca.log 2>&1 || { tail -60 /var/log/hogsmeade-ssh-ca.log; exit 1; }; \
+    rm -f /etc/portage/repos.conf/zz-ctg-private-seed.conf; \
+    # ctg-ops pkg_postinst generated a deploy key: it must never be shared by every install, the first boot makes the machine's own
+    rm -f /etc/ctg-private/deploy_key /etc/ctg-private/deploy_key.pub; \
+    test -s /etc/ctg-ssh-ca/ca_known_hosts && test -x /usr/bin/ctg-ssh-ca && test -s /etc/portage/repos.conf/ctg-private.conf; \
+    ! find /etc/ssh /root /home -name 'id_*' -o -name '*-cert.pub' 2>/dev/null | grep -q .
 # ComfyUI: venv with PyTorch cu130 wheels (large download), own layer so a failure does not redo the above
 RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
@@ -82,7 +98,7 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --oneshot sys-apps/hogsmeade-private; \
     rm -rf /var/db/repos/local/sys-apps/hogsmeade-private/files/*; \
     emerge --noreplace --select=y app-misc/hogsmeade-tools app-misc/awccd app-misc/alienfx sci-misc/comfyui sys-apps/hogsmeade-private app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-misc/hogsmeade-input-quirks app-admin/rustinion-agent \
-        sys-firmware/sof-firmware sys-kernel/linux-firmware
+        app-admin/ctg-ops net-misc/ctg-ssh-ca-fleet app-misc/hogsmeade-ssh-ca sys-firmware/sof-firmware sys-kernel/linux-firmware
 
 # make @world consistent with the desktop profile + new USE, so the owner's first `emerge -uDN @world` is a no-op for them
 RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \

@@ -1,13 +1,13 @@
 #!/bin/bash
 # HOGSMEADE private image build driver. Runs on the build host inside an agent-workdir lease:
-#   W/repo = git archive of the branch, W/overlay = canutethegreat-overlay checkout, W/priv = private payload (agent_authorized_keys, hostname).
+#   W/repo = git archive of the branch, W/overlay = canutethegreat-overlay checkout, W/ctgprivate = checkout of ctg-private-overlay (build-time copy; a read-only clone with the build host's own key, never baked), W/priv = private payload (agent_authorized_keys, hostname).
 #   START_AT=base|part1|part2|iso (default base). A later start reuses the images of the earlier stages (hsm-rootfs-gnome-light, hsm-kinstall,
 #   hsmfin-rootfs): use it when a change touches only the later layers. NOTE every commit changes the cargo app context, so START_AT=base
 #   re-runs the app build and with it every layer; part2 re-emerges horcrux-tools/hogsmeade-tools/comfyui/private from the CURRENT tree.
 set -euo pipefail
 W=$PWD; R=$W/repo; cd $R/build/live-iso; OUT=$W/out; mkdir -p $OUT; export JOBS=6 DOCKER_BUILDKIT=1
 D="sudo -E docker"
-ctx="--build-context hxgentoo=$R/gentoo --build-context hxgentoo2=$R/gentoo --build-context ctgoverlay=$W/overlay --build-context hsmprivate=$W/priv"
+ctx="--build-context hxgentoo=$R/gentoo --build-context hxgentoo2=$R/gentoo --build-context ctgoverlay=$W/overlay --build-context hsmprivate=$W/priv --build-context ctgprivate=$W/ctgprivate"
 HSM=$R/build/live-iso/project/variants/hogsmeade
 START_AT=${START_AT:-base}
 ord() { case "$1" in base) echo 1;; part1) echo 2;; part2) echo 3;; iso) echo 4;; *) echo "unknown START_AT=$1" >&2; exit 2;; esac; }
