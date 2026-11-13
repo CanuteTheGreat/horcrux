@@ -22,7 +22,9 @@ IUSE="X"
 #             LAST one, so an ssh/su login kept gnome-shell alive after a GNOME logout and supervise-daemon respawned it into the closed
 #             session: it grabbed the seat (mutter EBUSY) and the next login had no mouse and keyboard. Now the leader tears the services
 #             down when the session ends, a new session cleans up what an old one left, and gnome-shell only (re)starts while its session
-#             is alive (gnome-session-openrc-helper). Reported upstream (swagtoy/gnome-session-openrc issue tracker) with this patch.
+#             is alive (gnome-session-openrc-helper). The helper's activation-env also gives the user bus's D-Bus activation environment
+#             the session's XDG_CURRENT_DESKTOP & co. (from gnome-shell's start_pre), so xdg-desktop-portal picks its GNOME backend
+#             (ScreenCast / screen sharing). Upstream issue with this patch: https://github.com/swagtoy/gnome-session-openrc/issues/12
 COMMON_DEPEND="
 	>=dev-libs/glib-2.82.0:2
 	>=sys-auth/elogind-242
