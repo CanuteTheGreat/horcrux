@@ -132,7 +132,7 @@ body {
 /* Dropdown nav menus (Compute/Infrastructure/Operations/Monitoring) */
 .navbar-dropdown {
     position: relative;
-    display: inline-block;
+    display: flex;  /* the trigger is a flex item like the plain nav links, so every item sits on the same row box */
 }
 
 .dropdown-trigger {

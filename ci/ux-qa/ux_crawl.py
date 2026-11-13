@@ -105,8 +105,10 @@ FACTS_JS = r"""() => {
   const menu = nav && nav.querySelector('.navbar-menu');
   if (menu && vis(menu)) {
     const items = [...menu.querySelectorAll(':scope > .navbar-item, :scope > .navbar-dropdown > .navbar-item')].filter(vis);
-    const rows = new Set(items.map(i => Math.round(i.getBoundingClientRect().top / 8)));
-    if (rows.size > 1) navProblems.push('menu items sit on ' + rows.size + ' rows');
+    // rows by vertical centre: an inline trigger and a flex-item link differ in top by their padding, not in row
+    const mids = items.map(i => { const b = i.getBoundingClientRect(); return (b.top + b.bottom) / 2; });
+    const rows = { size: mids.length && Math.max(...mids) - Math.min(...mids) > 12 ? 2 : 1 };
+    if (rows.size > 1) navProblems.push('menu items sit on 2 rows');
     for (const i of items) {
       const r = i.getBoundingClientRect(), lh = parseFloat(getComputedStyle(i).lineHeight) || 24;
       const pad = parseFloat(getComputedStyle(i).paddingTop) + parseFloat(getComputedStyle(i).paddingBottom);
