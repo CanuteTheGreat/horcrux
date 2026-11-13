@@ -108,7 +108,19 @@ pub fn TasksPage() -> impl IntoView {
                     {move || {
                         let rows = tasks.get();
                         if rows.is_empty() {
-                            return view! { <tr><td colspan="7">"No tasks yet."</td></tr> }.into_view();
+                            // Empty state with the way forward: tasks are created by guest and storage
+                            // operations; a filtered empty list offers to show every task instead.
+                            return if filter.get().is_empty() {
+                                view! { <tr class="empty-tasks"><td colspan="7">
+                                    "No tasks yet. Starting, stopping, migrating or backing up a guest records a task here. "
+                                    <a href="/vms">"Go to Virtual Machines"</a>
+                                </td></tr> }.into_view()
+                            } else {
+                                view! { <tr class="empty-tasks"><td colspan="7">
+                                    "No tasks with this status. "
+                                    <a href="/tasks" on:click=move |_| { set_filter.set(String::new()); reload(); }>"Show all tasks"</a>
+                                </td></tr> }.into_view()
+                            };
                         }
                         rows.into_iter().map(|t| {
                             let upid = t.upid.clone();

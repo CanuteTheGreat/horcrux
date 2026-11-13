@@ -26,6 +26,8 @@ pub fn IscsiPage() -> impl IntoView {
     let (targets, set_targets) = create_signal(Vec::<IscsiTarget>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
+    // 424: the node has no iSCSI target framework (tgtadm); shown as an empty state, not an error.
+    let (unavailable, set_unavailable) = create_signal(None::<crate::api::Unavailable>);
     let (show_create, set_show_create) = create_signal(false);
 
     // Load targets
@@ -42,6 +44,12 @@ pub fn IscsiPage() -> impl IntoView {
                             set_targets.set(data);
                             set_error.set(None);
                         }
+                    } else if resp.status() == 424 {
+                        let status = resp.status();
+                        let body = resp.text().await.unwrap_or_default();
+                        set_unavailable.set(crate::api::parse_unavailable(
+                            &crate::api::error_text(status, &body),
+                        ));
                     } else {
                         set_error.set(Some("Failed to load iSCSI targets".to_string()));
                     }
@@ -90,7 +98,9 @@ pub fn IscsiPage() -> impl IntoView {
             </div>
 
             {move || {
-                if loading.get() {
+                if let Some(u) = unavailable.get() {
+                    view! { <crate::components::UnavailableState info=u on_retry=Callback::new(move |_: ()| { if let Some(w) = web_sys::window() { let _ = w.location().reload(); } })/> }.into_view()
+                } else if loading.get() {
                     view! { <p class="loading">"Loading iSCSI targets..."</p> }.into_view()
                 } else if let Some(err) = error.get() {
                     view! { <p class="error">"Error: " {err}</p> }.into_view()

@@ -19,7 +19,14 @@ pub fn UsersPage() -> impl IntoView {
     let (users, set_users) = create_signal(Vec::<NasUser>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
-    let (show_create, set_show_create) = create_signal(false);
+    // ?create=1 (the NAS dashboard's "Add User") opens the create form directly.
+    let query = leptos_router::use_query_map();
+    let (show_create, set_show_create) = create_signal(
+        query
+            .get_untracked()
+            .get("create")
+            .is_some_and(|v| v == "1"),
+    );
 
     // Load users
     create_effect(move |_| {

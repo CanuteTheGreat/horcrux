@@ -28,6 +28,13 @@ pub struct Dataset {
     pub snapshots: u32,
 }
 
+/// A 424 NOT_AVAILABLE answer of `resp` (the node lacks the tool this page needs), if it is one.
+async fn unavailable_of(resp: reqwasm::http::Response) -> Option<crate::api::Unavailable> {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    crate::api::parse_unavailable(&crate::api::error_text(status, &body))
+}
+
 #[component]
 pub fn PoolsPage() -> impl IntoView {
     let (pools, set_pools) = create_signal(Vec::<StoragePool>::new());
@@ -35,9 +42,25 @@ pub fn PoolsPage() -> impl IntoView {
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
     let (active_tab, set_active_tab) = create_signal("pools".to_string());
+    // Bumped after a create/delete so the lists reload.
+    let (reload, set_reload) = create_signal(0u32);
+    // Create Pool form (the button used to link to a /nas/pools/create route that does not exist).
+    let query = leptos_router::use_query_map();
+    let (show_form, set_show_form) = create_signal(
+        query
+            .get_untracked()
+            .get("create")
+            .is_some_and(|v| v == "1"),
+    );
+    let (f_name, set_f_name) = create_signal(String::new());
+    let (f_raid, set_f_raid) = create_signal("mirror".to_string());
+    let (f_devices, set_f_devices) = create_signal(String::new());
+    let (notice, set_notice) = create_signal(None::<(bool, String)>);
+    let (unavailable, set_unavailable) = create_signal(None::<crate::api::Unavailable>);
 
     // Load pools
     create_effect(move |_| {
+        reload.track();
         spawn_local(async move {
             set_loading.set(true);
 
@@ -45,9 +68,17 @@ pub fn PoolsPage() -> impl IntoView {
             match crate::api::authed::get("/api/nas/pools").send().await {
                 Ok(resp) => {
                     if resp.ok() {
+                        set_unavailable.set(None);
                         if let Ok(data) = resp.json::<Vec<StoragePool>>().await {
                             set_pools.set(data);
                         }
+                    } else if resp.status() == 424 {
+                        set_unavailable.set(unavailable_of(resp).await);
+                    } else {
+                        set_error.set(Some(format!(
+                            "Failed to load pools (HTTP {})",
+                            resp.status()
+                        )));
                     }
                 }
                 Err(e) => set_error.set(Some(format!("Network error: {}", e))),
@@ -86,8 +117,44 @@ pub fn PoolsPage() -> impl IntoView {
                 let _ = crate::api::authed::delete(&format!("/api/nas/pools/{}", pool_id))
                     .send()
                     .await;
+                set_reload.update(|n| *n += 1);
             });
         }
+    };
+
+    let create_pool = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let name = f_name.get().trim().to_string();
+        let devices: Vec<String> = f_devices
+            .get()
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|d| !d.is_empty())
+            .map(str::to_string)
+            .collect();
+        let confirmed = web_sys::window()
+            .and_then(|w| {
+                w.confirm_with_message(&format!(
+                    "Create pool {name} on {}? Everything on these disks is erased.",
+                    devices.join(", ")
+                ))
+                .ok()
+            })
+            .unwrap_or(false);
+        if !confirmed {
+            return;
+        }
+        let body =
+            serde_json::json!({ "name": name, "raid_level": f_raid.get(), "devices": devices });
+        spawn_local(async move {
+            match crate::api::post_json_no_response("/nas/pools", &body).await {
+                Ok(()) => {
+                    set_notice.set(Some((true, format!("Pool {name} created"))));
+                    set_show_form.set(false);
+                    set_reload.update(|n| *n += 1);
+                }
+                Err(e) => set_notice.set(Some((false, format!("Failed: {}", e.message)))),
+            }
+        });
     };
 
     view! {
@@ -95,9 +162,42 @@ pub fn PoolsPage() -> impl IntoView {
             <div class="page-header">
                 <h1>"Storage Pools"</h1>
                 <div class="header-actions">
-                    <a href="/nas/pools/create" class="btn btn-primary">"Create Pool"</a>
+                    <button class="btn btn-primary" id="nas-pool-create" on:click=move |_| set_show_form.set(true)>"Create Pool"</button>
                 </div>
             </div>
+            {move || notice.get().map(|(ok, m)| view! {
+                <div class=if ok { "alert-success" } else { "alert-error" } id="nas-pool-notice">{m}</div>
+            })}
+            <Show when=move || show_form.get()>
+                <form class="card nas-pool-form" id="nas-pool-form" on:submit=create_pool>
+                    <h2>"Create ZFS Pool"</h2>
+                    <div class="form-group">
+                        <label for="nas-pool-name">"Name"</label>
+                        <input id="nas-pool-name" required prop:value=f_name
+                            on:input=move |e| set_f_name.set(event_target_value(&e))/>
+                    </div>
+                    <div class="form-group">
+                        <label for="nas-pool-raid">"Layout"</label>
+                        <select id="nas-pool-raid" on:change=move |e| set_f_raid.set(event_target_value(&e))>
+                            <option value="mirror" selected=true>"Mirror"</option>
+                            <option value="raidz1">"RAID-Z1"</option>
+                            <option value="raidz2">"RAID-Z2"</option>
+                            <option value="raidz3">"RAID-Z3"</option>
+                            <option value="stripe">"Stripe (no redundancy)"</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="nas-pool-devices">"Disks"</label>
+                        <input id="nas-pool-devices" required placeholder="/dev/disk/by-id/ata-A /dev/disk/by-id/ata-B"
+                            prop:value=f_devices on:input=move |e| set_f_devices.set(event_target_value(&e))/>
+                        <p class="hint">"Separate disks with spaces or commas. "<a href="/storage/disks">"See the node's disks"</a></p>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">"Create"</button>
+                        <button type="button" class="btn" on:click=move |_| set_show_form.set(false)>"Cancel"</button>
+                    </div>
+                </form>
+            </Show>
 
             <div class="tabs">
                 <button
@@ -111,7 +211,9 @@ pub fn PoolsPage() -> impl IntoView {
             </div>
 
             {move || {
-                if loading.get() {
+                if let Some(u) = unavailable.get() {
+                    view! { <crate::components::UnavailableState info=u on_retry=Callback::new(move |_| set_reload.update(|n| *n += 1))/> }.into_view()
+                } else if loading.get() {
                     view! { <p class="loading">"Loading storage..."</p> }.into_view()
                 } else if let Some(err) = error.get() {
                     view! { <p class="error">"Error: " {err}</p> }.into_view()
@@ -122,6 +224,7 @@ pub fn PoolsPage() -> impl IntoView {
                             <div class="no-data">
                                 <p>"No storage pools configured."</p>
                                 <p>"Create a pool to start using NAS storage features."</p>
+                                <button class="btn btn-primary" on:click=move |_| set_show_form.set(true)>"Create Pool"</button>
                             </div>
                         }.into_view()
                     } else {

@@ -53,6 +53,19 @@ pub fn SchedulerPage() -> impl IntoView {
     let (active_tab, set_active_tab) = create_signal("jobs".to_string());
     let (show_create_job, set_show_create_job) = create_signal(false);
     let (selected_job_id, set_selected_job_id) = create_signal(None::<String>);
+    // The status cards link here with ?tab=jobs|history, ?state=enabled|running|failed and ?job=<id>.
+    let (job_state, set_job_state) = create_signal(String::new());
+    let query = leptos_router::use_query_map();
+    create_effect(move |_| {
+        let q = query.get();
+        if let Some(t) = q.get("tab") {
+            set_active_tab.set(t.clone());
+        }
+        set_job_state.set(q.get("state").cloned().unwrap_or_default());
+        if let Some(j) = q.get("job") {
+            set_selected_job_id.set(Some(j.clone()));
+        }
+    });
 
     // Form state for creating jobs
     let (new_job_name, set_new_job_name) = create_signal(String::new());
@@ -209,42 +222,39 @@ pub fn SchedulerPage() -> impl IntoView {
                     let scheduler_status_text = if st.running { "Running" } else { "Stopped" };
                     view! {
                         <div class="status-dashboard">
-                            <div class="stat-card">
+                            <a class="stat-card" href="/nas/services">
                                 <div class="stat-value">
                                     <span class={scheduler_status_class}>{scheduler_status_text}</span>
                                 </div>
                                 <div class="stat-label">"Scheduler"</div>
-                            </div>
-                            <div class="stat-card">
+                            </a>
+                            <a class="stat-card" href="/nas/scheduler?tab=jobs">
                                 <div class="stat-value">{st.total_jobs}</div>
                                 <div class="stat-label">"Total Jobs"</div>
-                            </div>
-                            <div class="stat-card">
+                            </a>
+                            <a class="stat-card" href="/nas/scheduler?tab=jobs&state=enabled">
                                 <div class="stat-value">{st.enabled_jobs}</div>
                                 <div class="stat-label">"Enabled"</div>
-                            </div>
-                            <div class="stat-card">
+                            </a>
+                            <a class="stat-card" href="/nas/scheduler?tab=jobs&state=running">
                                 <div class="stat-value">{st.running_jobs}</div>
                                 <div class="stat-label">"Running"</div>
-                            </div>
-                            <div class="stat-card stat-warning" class:attention=move || { st.recent_failures_24h > 0 }>
+                            </a>
+                            <a class="stat-card stat-warning" class:attention=move || { st.recent_failures_24h > 0 }
+                                href="/nas/scheduler?tab=history&state=failed">
                                 <div class="stat-value">{st.recent_failures_24h}</div>
                                 <div class="stat-label">"Failures (24h)"</div>
-                            </div>
+                            </a>
                             {st.next_scheduled.as_ref().map(|next| {
-                                let job_id_for_click = next.job_id.clone();
                                 view! {
-                                    <div
-                                        class="stat-card stat-info clickable"
-                                        on:click=move |_| {
-                                            set_selected_job_id.set(Some(job_id_for_click.clone()));
-                                            set_active_tab.set("history".to_string());
-                                        }
+                                    <a
+                                        class="stat-card stat-info"
+                                        href={format!("/nas/scheduler?tab=history&job={}", next.job_id)}
                                         title={format!("Job ID: {}", next.job_id)}
                                     >
                                         <div class="stat-value">{&next.job_name}</div>
                                         <div class="stat-label">"Next Run: " {format_timestamp(next.next_run)}</div>
-                                    </div>
+                                    </a>
                                 }
                             })}
                         </div>
@@ -271,7 +281,16 @@ pub fn SchedulerPage() -> impl IntoView {
                 } else if let Some(err) = error.get() {
                     view! { <p class="error">"Error: " {err}</p> }.into_view()
                 } else if active_tab.get() == "jobs" {
-                    let job_list = jobs.get();
+                    let state = job_state.get();
+                    let job_list: Vec<ScheduledJob> = jobs
+                        .get()
+                        .into_iter()
+                        .filter(|j| match state.as_str() {
+                            "enabled" => j.enabled,
+                            "running" => j.last_status.as_deref() == Some("running"),
+                            _ => true,
+                        })
+                        .collect();
                     view! {
                         <div class="tab-content">
                             <div class="tab-header">
@@ -384,7 +403,12 @@ pub fn SchedulerPage() -> impl IntoView {
                     }.into_view()
                 } else {
                     // History tab
-                    let history_list = history.get();
+                    let failed_only = job_state.get() == "failed";
+                    let history_list: Vec<JobHistory> = history
+                        .get()
+                        .into_iter()
+                        .filter(|h| !failed_only || matches!(h.status.to_lowercase().as_str(), "failed" | "failure" | "error"))
+                        .collect();
                     view! {
                         <div class="tab-content">
                             <div class="tab-header">

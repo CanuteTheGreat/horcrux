@@ -192,6 +192,16 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
         MIGRATION_027_VM_DISKS_LEGACY_BUS,
     )
     .await?;
+    // nas_shares (011) never had the owner_user column the share handlers read
+    // and write, so creating a share failed with "table nas_shares has no
+    // column named owner_user" and listing one returned nothing.
+    #[cfg(feature = "nas")]
+    run_migration(
+        pool,
+        "028_nas_shares_owner_user",
+        MIGRATION_028_NAS_SHARES_OWNER_USER,
+    )
+    .await?;
 
     Ok(())
 }
@@ -1101,6 +1111,10 @@ ALTER TABLE vms ADD COLUMN display TEXT NOT NULL DEFAULT '{}';
 const MIGRATION_026_ADD_VM_HARDWARE: &str = r#"
 ALTER TABLE vms ADD COLUMN hardware TEXT NOT NULL DEFAULT '{}';
 "#;
+
+#[cfg(feature = "nas")]
+const MIGRATION_028_NAS_SHARES_OWNER_USER: &str =
+    "ALTER TABLE nas_shares ADD COLUMN owner_user TEXT NOT NULL DEFAULT 'root';";
 
 pub(crate) const MIGRATION_027_VM_DISKS_LEGACY_BUS: &str = r#"
 UPDATE vms SET disks = (

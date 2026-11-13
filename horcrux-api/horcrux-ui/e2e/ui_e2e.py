@@ -761,6 +761,7 @@ def main():
         s3_gateway_checks(page)
         monitoring_dashboard_checks(page)
         users_edit_checks(page)
+        nas_share_checks(page)
         template_checks(page)
         vm_hardware_checks(page, vid)
         passthrough_checks(page, vid)
@@ -1651,6 +1652,38 @@ def users_edit_checks(page):
     expect(row).to_contain_text("edited from the UI", timeout=30000)
     _req("DELETE", "/api/users/e2e-edit-user", tok)
     print("UI E2E: users edit icon passed")
+
+
+def nas_share_checks(page):
+    """NAS > Shares: the dashboard's Create Share opens a working form (it linked to a route that did not
+    exist), a created share is listed (the list used to fail to parse and always said "No shares"), Edit
+    saves, Delete removes it."""
+    tok = token()
+    share_dir = "/tmp/e2e-nas-share"
+    for s in api_get("/api/nas/shares", tok):
+        if s["name"] == "e2e-share":
+            _req("DELETE", f"/api/nas/shares/{s['id']}", tok)
+    page.goto(f"{BASE}/nas")
+    page.get_by_role("link", name="Create Share").click()
+    expect(page.locator("#nas-share-form")).to_be_visible(timeout=30000)
+    page.locator("#nas-share-name").fill("e2e-share")
+    page.locator("#nas-share-path").fill(share_dir)
+    page.locator("#nas-share-desc").fill("from the UI")
+    page.locator("#nas-share-save").click()
+    row = page.locator("tr.nas-share-row[data-share='e2e-share']")
+    expect(row).to_contain_text("from the UI", timeout=30000)
+    assert os.path.isdir(share_dir), share_dir
+    row.locator(".nas-share-edit").click()
+    expect(page.locator("#nas-share-path")).to_be_disabled()
+    page.locator("#nas-share-desc").fill("edited")
+    page.locator("#nas-share-save").click()
+    expect(row).to_contain_text("edited", timeout=30000)
+    s = next(s for s in api_get("/api/nas/shares", tok) if s["name"] == "e2e-share")
+    assert s["description"] == "edited", s
+    row.locator(".nas-share-delete").click()  # confirm accepted by the page's dialog handler
+    expect(row).to_have_count(0, timeout=30000)
+    assert not any(s["name"] == "e2e-share" for s in api_get("/api/nas/shares", tok))
+    print("UI E2E: NAS shares create/edit/delete passed")
 
 
 def template_checks(page):

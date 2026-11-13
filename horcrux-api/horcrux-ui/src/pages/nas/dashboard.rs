@@ -119,8 +119,8 @@ pub fn NasDashboard() -> impl IntoView {
                             <div class="dashboard-card">
                                 <h3>"Quick Actions"</h3>
                                 <div class="quick-actions">
-                                    <a href="/nas/shares/create" class="action-btn">"Create Share"</a>
-                                    <a href="/nas/users/create" class="action-btn">"Add User"</a>
+                                    <a href="/nas/shares?create=1" class="action-btn">"Create Share"</a>
+                                    <a href="/nas/users?create=1" class="action-btn">"Add User"</a>
                                     <a href="/nas/pools" class="action-btn">"Manage Pools"</a>
                                     <a href="/nas/iscsi" class="action-btn">"iSCSI Targets"</a>
                                 </div>
