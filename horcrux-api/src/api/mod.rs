@@ -12,6 +12,7 @@ pub mod cluster_join;
 #[cfg(feature = "cluster")]
 pub mod ct_move;
 pub mod dashboards;
+pub mod declarative;
 #[cfg(feature = "cluster")]
 pub mod drain;
 pub mod esxi;

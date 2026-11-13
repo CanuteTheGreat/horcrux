@@ -21,6 +21,7 @@ mod backup_dedup_tests;
 mod backup_tests;
 mod cluster_tests;
 mod console_tests;
+mod declarative_e2e;
 mod depth_restart_crash;
 mod depth_upgrade;
 mod depth_vm_journey;
