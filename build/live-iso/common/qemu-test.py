@@ -1806,7 +1806,7 @@ class Runner:
         scr = vm.screen()
         vm.snap("console-menu")
         vm.shot("console-menu")
-        self.step("console-menu-shown", "console menu" in scr and "Assign interfaces" in scr and "Reset the admin password" in scr and "Web UI:" in scr,
+        self.step("console-menu-shown", "console menu" in scr and "Assign interfaces" in scr and ("Reset a user password" if P.get("web_user") else "Reset the admin password") in scr and "Web UI:" in scr,   # web_auth=pam products reword option 3
                   "header, interface list, web URL and the numbered options are on the serial console")
         t = self.opt(vm, "9")
         self.step("console-menu-status", "Web UI :" in t and "running" in t, re.sub(r"\s+", " ", t)[:120])

@@ -371,7 +371,7 @@ class RootpassStage(Stage):
                       validate=lambda v, a: _user_problem(v),
                       hint=f"A system account in the wheel + {ctx.p.get('web_admin_group', 'horcrux-admin')} groups: it signs in to the console and to the web UI (https, port {ctx.p.get('web_port', 8006)}). root cannot sign in to the web UI"),
                 Field("pw", "Password", "password", c["root_password"], width=40,
-                      hint="At least 12 characters, mixed. For this user and the console root login. Never the disk passphrase"),
+                      hint="At least 12 characters, mixed. Password of this administrator (console login, sudo, web UI). root stays locked. Never the disk passphrase"),
                 Field("pw2", "Confirm password", "password", c["root_password"], width=40),
                 Field("strength", "Strength", "info", lambda a: S.password_strength(a["pw"]) if a["pw"] else "-"),
                 Field("email", "E-mail (notifications)", "text", c["email"], validate=lambda v, a: S.email_problem(v), width=40,
@@ -400,9 +400,12 @@ class RootpassStage(Stage):
 
     def commit(self, ctx, v):
         c = ctx.c
-        c["root_password"] = v["pw"]
         if self._pam_web(ctx):
+            # root stays LOCKED (secretcheck: root and a user account never share a password); the administrator signs in and uses sudo
+            c["root_password"] = ""
             c["user_name"], c["user_fullname"], c["user_password"], c["user_hash"] = v["user"].strip(), v["user"].strip(), v["pw"], ""
+        else:
+            c["root_password"] = v["pw"]
         c["root_hash"] = ""
         c["email"] = v["email"].strip()
         c["ssh_keys"] = [v["key"].strip()] if v["key"].strip() else []
@@ -412,7 +415,7 @@ class RootpassStage(Stage):
         who = "password hash from the answer file" if c["root_hash"] else "the password you entered"
         if ctx.p.get("web_auth") == "pam" and c.get("user_name"):
             return [f"Create the administrator user {c['user_name']} (groups wheel + {ctx.p.get('web_admin_group', 'horcrux-admin')}): console and web UI login; no default account exists",
-                    f"Set the root console password ({who}); root cannot sign in to the web UI",
+                    "Keep root locked (no root password): the administrator uses sudo; root cannot sign in to the web UI",
                     "Install " + (f"{len(c['ssh_keys'])} SSH key(s) for root" if c["ssh_keys"] else "no SSH key (console login only)")]
         return [f"Set the root password ({who}); no default password exists",
                 "Install " + (f"{len(c['ssh_keys'])} SSH key(s) for root" if c["ssh_keys"] else "no SSH key (console login only)")]

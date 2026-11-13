@@ -95,9 +95,9 @@ class ZRun(qt.Runner):
             t.append('swap = "hibernate"')
         t += [
               f'passphrase = "{PASSPHRASE}"', "", "[network.management]", 'mode = "dhcp"', ""]
-        if self.z.desktop:
-            uh = subprocess.check_output(["openssl", "passwd", "-6", "-salt", "qemuuser1", USER_PW]).decode().strip()
-            t += ["[user]", 'name = "owner"', f'password_hash = "{uh}"', ""]
+        # desktop: the owner's login user; server: the web-UI administrator (the web UI signs in system users, so the installer requires one)
+        uh = subprocess.check_output(["openssl", "passwd", "-6", "-salt", "qemuuser1", USER_PW]).decode().strip()
+        t += ["[user]", "name = \"" + ("owner" if self.z.desktop else "hxadmin") + "\"", f'password_hash = "{uh}"', ""]
         return "\n".join(t)
 
     def run(self):

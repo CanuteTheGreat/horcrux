@@ -63,5 +63,30 @@ class RescueResetsSystemUsers(unittest.TestCase):
             self.assertEqual(ops.pam_admin_users(r), ["alice", "ron"])
 
 
+
+
+@unittest.skipUnless(_HORCRUX_TREE, "Horcrux repo tree only")
+class AdminFormKeepsRootLocked(unittest.TestCase):
+    """The guided installer's 'Administrator account' form (web_auth = pam) used to copy the typed password into root's too, which
+    secretcheck then refused ('root and the user account X must not share a password'): every guided server install failed (CI
+    qemu-bios-cdrom-tui-serial-xfs-static, 2026-11-13). Root stays locked; the administrator signs in and uses sudo."""
+
+    def test_commit_does_not_copy_the_password_to_root(self):
+        from liveinst import secretcheck, stages, system
+        prof = tomllib.load(open(PROFILE, "rb"))
+        c = system.default_config(prof)
+        ctx = stages.Ctx(prof, c)
+        st = stages.RootpassStage()
+        st._user_machine = lambda ctx: False
+        v = {"user": "hxadmin", "pw": "Correct-Horse-9-Battery", "pw2": "Correct-Horse-9-Battery", "email": "ops@example.test", "key": ""}
+        st.commit(ctx, v)
+        self.assertEqual(c["user_name"], "hxadmin")
+        self.assertEqual(c["user_password"], v["pw"])
+        self.assertEqual(c["root_password"], "")
+        self.assertFalse([e for e in secretcheck.reuse_problems(c) if "share a password" in e])
+        self.assertTrue(system.has_login_user(c))
+        self.assertIn("Keep root locked", " ".join(st.plan(ctx)))
+
+
 if __name__ == "__main__":
     unittest.main()
