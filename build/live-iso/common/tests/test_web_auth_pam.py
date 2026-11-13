@@ -14,6 +14,11 @@ from rescue import ops  # noqa: E402
 PROFILE = os.path.join(HERE, "..", "..", "project", "overlay", "etc", "live-installer", "profile.toml")
 
 
+# Horcrux-only: the vendored copy in Patronus has no build/live-iso tree and its profile.toml has no web_auth key.
+_HORCRUX_TREE = os.path.isdir(os.path.join(HERE, "..", "..", "..", "..", "build", "live-iso"))
+
+
+@unittest.skipUnless(_HORCRUX_TREE, "Horcrux repo tree only")
 class HorcruxProfile(unittest.TestCase):
     def setUp(self):
         self.p = tomllib.load(open(PROFILE, "rb"))
