@@ -215,6 +215,11 @@ def main():
         context = browser.new_context()
         page = context.new_page()
         page.on("console", lambda m: m.type == "error" and console_errors.append(m.text))
+        # An uncaught JS/wasm exception (e.g. WebAssembly.Table.grow RangeError from a
+        # mismatched wasm-bindgen build) leaves a BLANK page; fail on any of them.
+        js_exceptions = []
+        page.on("pageerror", lambda e: js_exceptions.append(str(e)))
+        context.on("page", lambda pg: pg.on("pageerror", lambda e: js_exceptions.append(str(e))))
         page.on(
             "response",
             lambda r: r.status == 404
@@ -749,6 +754,7 @@ def main():
 
         browser.close()
 
+    assert not js_exceptions, f"uncaught JS exceptions (blank UI?): {js_exceptions}"
     bad = [e for e in console_errors if "favicon" in e or "missing field" in e]
     assert not bad, f"console errors: {bad}"
     assert not missing_resources, f"page loads fetched missing resources (404): {sorted(set(missing_resources))}"
