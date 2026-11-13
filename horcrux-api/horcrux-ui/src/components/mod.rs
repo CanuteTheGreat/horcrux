@@ -1,2 +1,3 @@
-// Placeholder for reusable components
-// Future: Card, Table, Modal, etc.
+//! Reusable components.
+mod unavailable;
+pub use unavailable::UnavailableState;

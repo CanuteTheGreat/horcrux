@@ -12,6 +12,7 @@ pub fn FirewallObjectsPage() -> impl IntoView {
     let (opts, set_opts) = create_signal(None::<FwOptions>);
     let (log, set_log) = create_signal(Vec::<FwLogEntry>::new());
     let (error, set_error) = create_signal(None::<String>);
+    let (log_unavailable, set_log_unavailable) = create_signal(None::<api::Unavailable>);
     let (notice, set_notice) = create_signal(None::<String>);
     let (set_name, set_set_name) = create_signal(String::new());
     let (alias_name, set_alias_name) = create_signal(String::new());
@@ -33,10 +34,16 @@ pub fn FirewallObjectsPage() -> impl IntoView {
     let reload_log = move || {
         spawn_local(async move {
             match api::get_fw_log(200).await {
-                Ok(v) => set_log.set(v),
+                Ok(v) => {
+                    set_log_unavailable.set(None);
+                    set_log.set(v)
+                }
                 Err(e) => {
                     set_log.set(Vec::new());
-                    set_error.set(Some(e.message));
+                    match e.unavailable() {
+                        Some(u) => set_log_unavailable.set(Some(u)),
+                        None => set_error.set(Some(e.message)),
+                    }
                 }
             }
         });
@@ -241,7 +248,10 @@ pub fn FirewallObjectsPage() -> impl IntoView {
 
             <h2>"Log" <button class="btn btn-sm" on:click=move |_| reload_log()>"Refresh"</button></h2>
             <p class="form-help">"Packets matched by rules with logging on (kernel log, newest first)."</p>
-            <table class="vm-table" id="fwo-log-table">
+            {move || log_unavailable.get().map(|u| view! {
+                <crate::components::UnavailableState info=u on_retry=Callback::new(move |_| reload_log())/>
+            })}
+            <table class="vm-table" id="fwo-log-table" style:display=move || if log_unavailable.get().is_some() { "none" } else { "" }>
                 <thead><tr><th>"Time"</th><th>"In"</th><th>"Out"</th><th>"Source"</th><th>"Destination"</th><th>"Proto"</th><th>"Ports"</th></tr></thead>
                 <tbody>
                     {move || {

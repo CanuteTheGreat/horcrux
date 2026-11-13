@@ -6,6 +6,7 @@ pub fn ServicesPage() -> impl IntoView {
     let (services, set_services) = create_signal(Vec::<ServiceStatus>::new());
     let (loading, set_loading) = create_signal(false);
     let (error_message, set_error_message) = create_signal(None::<String>);
+    let (unavailable, set_unavailable) = create_signal(None::<Unavailable>);
     let (success_message, set_success_message) = create_signal(None::<String>);
     let (filter_status, set_filter_status) = create_signal("all".to_string());
     let (search_query, set_search_query) = create_signal(String::new());
@@ -16,8 +17,14 @@ pub fn ServicesPage() -> impl IntoView {
         set_error_message.set(None);
 
         match get_services_status().await {
-            Ok(service_list) => set_services.set(service_list),
-            Err(e) => set_error_message.set(Some(format!("Failed to load services: {}", e))),
+            Ok(service_list) => {
+                set_unavailable.set(None);
+                set_services.set(service_list)
+            }
+            Err(e) => match e.unavailable() {
+                Some(u) => set_unavailable.set(Some(u)),
+                None => set_error_message.set(Some(format!("Failed to load services: {}", e))),
+            },
         }
 
         set_loading.set(false);
@@ -179,7 +186,11 @@ pub fn ServicesPage() -> impl IntoView {
                 }
             })}
 
-            <div class="services-controls">
+            {move || unavailable.get().map(|u| view! {
+                <crate::components::UnavailableState info=u on_retry=Callback::new(move |_| load_services.dispatch(()))/>
+            })}
+
+            <div class="services-controls" style:display=move || if unavailable.get().is_some() { "none" } else { "" }>
                 <div class="controls-row">
                     <div class="search-box">
                         <input
@@ -205,7 +216,9 @@ pub fn ServicesPage() -> impl IntoView {
                 </div>
             </div>
 
-            {move || if loading.get() && services.get().is_empty() {
+            {move || if unavailable.get().is_some() {
+                ().into_view()
+            } else if loading.get() && services.get().is_empty() {
                 view! { <div class="loading">"Loading services..."</div> }.into_view()
             } else {
                 let filtered = filtered_services();

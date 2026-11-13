@@ -8,6 +8,7 @@ pub fn ImagesPage() -> impl IntoView {
     let (images, set_images) = create_signal(Vec::<api::ImageInfo>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
+    let (unavailable, set_unavailable) = create_signal(None::<api::Unavailable>);
     let (pull_name, set_pull_name) = create_signal(String::new());
     let (pull_tag, set_pull_tag) = create_signal("latest".to_string());
 
@@ -19,8 +20,12 @@ pub fn ImagesPage() -> impl IntoView {
                 Ok(list) => {
                     set_images.set(list);
                     set_error.set(None);
+                    set_unavailable.set(None);
                 }
-                Err(e) => set_error.set(Some(e.message)),
+                Err(e) => {
+                    set_unavailable.set(e.unavailable());
+                    set_error.set(Some(e.message));
+                }
             }
             set_loading.set(false);
         });
@@ -91,6 +96,8 @@ pub fn ImagesPage() -> impl IntoView {
             {move || {
                 if loading.get() {
                     view! { <p class="loading">"Loading images..."</p> }.into_view()
+                } else if let Some(u) = unavailable.get() {
+                    view! { <crate::components::UnavailableState info=u on_retry=Callback::new(move |_| reload())/> }.into_view()
                 } else if let Some(err) = error.get() {
                     view! { <p class="error">"Error: " {err}</p> }.into_view()
                 } else {

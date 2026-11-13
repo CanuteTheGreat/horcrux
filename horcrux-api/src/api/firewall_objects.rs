@@ -296,7 +296,7 @@ struct LogQuery {
 }
 
 /// The newest `limit` (default 200, max 2000) firewall log lines, from the
-/// kernel log (`journalctl -k`, else `dmesg`). 503 where the node cannot
+/// kernel log (`journalctl -k`, else `dmesg`). 424 `NOT_AVAILABLE` where the node cannot
 /// read it.
 async fn firewall_log(Query(q): Query<LogQuery>) -> Result<Json<Vec<LogEntry>>, ApiError> {
     let limit = q.limit.unwrap_or(200).clamp(1, 2000);
@@ -329,9 +329,7 @@ async fn firewall_log(Query(q): Query<LogQuery>) -> Result<Json<Vec<LogEntry>>, 
             Err(e) => last = format!("{cmd}: {e}"),
         }
     }
-    Err(ApiError::ServiceUnavailable(format!(
-        "cannot read the kernel log: {last}"
-    )))
+    Err(crate::api::unavailable::no_kernel_log(&last))
 }
 
 #[cfg(test)]

@@ -283,9 +283,7 @@ pub async fn list_services() -> Result<Vec<ServiceStatus>, ApiError> {
                 })
                 .collect())
         }
-        Init::None => Err(ApiError::ServiceUnavailable(
-            "no supported init system (OpenRC or systemd) is running on this host".into(),
-        )),
+        Init::None => Err(crate::api::unavailable::no_init_system()),
     }
 }
 

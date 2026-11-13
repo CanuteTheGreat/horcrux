@@ -7,6 +7,7 @@ pub fn SystemLogsPage() -> impl IntoView {
     let (logs, set_logs) = create_signal(Vec::<LogEntry>::new());
     let (loading, set_loading) = create_signal(false);
     let (error_message, set_error_message) = create_signal(None::<String>);
+    let (unavailable, set_unavailable) = create_signal(None::<Unavailable>);
     let (auto_refresh, set_auto_refresh) = create_signal(true);
     let (log_level, set_log_level) = create_signal("all".to_string());
     let (service_filter, set_service_filter) = create_signal("all".to_string());
@@ -39,8 +40,14 @@ pub fn SystemLogsPage() -> impl IntoView {
         };
 
         match get_system_logs(filters).await {
-            Ok(log_entries) => set_logs.set(log_entries),
-            Err(e) => set_error_message.set(Some(format!("Failed to load system logs: {}", e))),
+            Ok(log_entries) => {
+                set_unavailable.set(None);
+                set_logs.set(log_entries)
+            }
+            Err(e) => match e.unavailable() {
+                Some(u) => set_unavailable.set(Some(u)),
+                None => set_error_message.set(Some(format!("Failed to load system logs: {}", e))),
+            },
         }
 
         set_loading.set(false);
@@ -229,7 +236,11 @@ pub fn SystemLogsPage() -> impl IntoView {
                 <div class="alert alert-error">{msg}</div>
             })}
 
-            <div class="logs-controls">
+            {move || unavailable.get().map(|u| view! {
+                <crate::components::UnavailableState info=u on_retry=Callback::new(move |_| load_logs.dispatch(()))/>
+            })}
+
+            <div class="logs-controls" style:display=move || if unavailable.get().is_some() { "none" } else { "" }>
                 <div class="controls-row">
                     <div class="control-group">
                         <label class="control-label">
@@ -321,7 +332,9 @@ pub fn SystemLogsPage() -> impl IntoView {
                 </div>
             </div>
 
-            {move || if loading.get() && logs.get().is_empty() {
+            {move || if unavailable.get().is_some() {
+                ().into_view()
+            } else if loading.get() && logs.get().is_empty() {
                 view! { <div class="loading">"Loading system logs..."</div> }.into_view()
             } else if logs.get().is_empty() {
                 view! { <div class="empty-state">"No log entries found matching the current filters"</div> }.into_view()

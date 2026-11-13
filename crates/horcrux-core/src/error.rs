@@ -29,6 +29,11 @@ pub struct ErrorResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
 
+    /// Machine-readable reason code of a `NOT_AVAILABLE` answer (e.g.
+    /// `docker-missing`): the UI shows an empty state for it, not an error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+
     /// Timestamp when error occurred
     pub timestamp: String,
 }
@@ -41,6 +46,7 @@ impl ErrorResponse {
             message: message.into(),
             details: None,
             request_id: None,
+            reason: None,
             timestamp: chrono::Utc::now().to_rfc3339(),
         }
     }
@@ -87,6 +93,16 @@ pub enum ApiError {
 
     /// 429 Too Many Requests
     RateLimited(String),
+
+    /// 424 Failed Dependency: the feature itself works, but this node lacks
+    /// something it needs (Docker, nft, a log source, an init system). Not a
+    /// server fault: the UI answers with an empty state saying what is missing
+    /// (`message`), what to do (`hint`) and a stable `reason` code.
+    NotAvailable {
+        reason: &'static str,
+        message: String,
+        hint: String,
+    },
 }
 
 impl ApiError {
@@ -112,6 +128,15 @@ impl ApiError {
                 ErrorResponse::new(503, "SERVICE_UNAVAILABLE", msg)
             }
             ApiError::RateLimited(msg) => ErrorResponse::new(429, "RATE_LIMITED", msg),
+            ApiError::NotAvailable {
+                reason,
+                message,
+                hint,
+            } => {
+                let mut r = ErrorResponse::new(424, "NOT_AVAILABLE", message).with_details(hint);
+                r.reason = Some((*reason).to_string());
+                r
+            }
         }
     }
 }
@@ -241,6 +266,22 @@ mod tests {
         let response = api_err.to_error_response();
         assert_eq!(response.status, 404);
         assert_eq!(response.error, "NOT_FOUND");
+    }
+
+    #[test]
+    fn not_available_is_424_with_a_reason_code() {
+        let err = ApiError::NotAvailable {
+            reason: "docker-missing",
+            message: "Docker is not installed on this node".into(),
+            hint: "install app-containers/docker".into(),
+        };
+        let r = err.to_error_response();
+        assert_eq!(r.status, 424);
+        assert_eq!(r.error, "NOT_AVAILABLE");
+        assert_eq!(r.reason.as_deref(), Some("docker-missing"));
+        assert_eq!(r.details.as_deref(), Some("install app-containers/docker"));
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["reason"], "docker-missing");
     }
 
     #[test]

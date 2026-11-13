@@ -231,8 +231,8 @@ pub async fn read_logs(f: &Filters) -> Result<Vec<LogEntry>, ApiError> {
         v.reverse();
         v
     } else {
-        return Err(ApiError::ServiceUnavailable(
-            "no system log source: journald is not running and /var/log/messages (syslog) does not exist".into(),
+        return Err(crate::api::unavailable::no_log_source(
+            "journald is not running and /var/log/messages does not exist.",
         ));
     };
     entries = apply_filters(entries, f);

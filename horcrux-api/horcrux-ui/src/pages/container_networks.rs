@@ -12,6 +12,7 @@ pub fn ContainerNetworksPage() -> impl IntoView {
     let (networks, set_networks) = create_signal(Vec::<api::ContainerNetworkInfo>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
+    let (unavailable, set_unavailable) = create_signal(None::<api::Unavailable>);
     let (new_name, set_new_name) = create_signal(String::new());
 
     let reload = move || {
@@ -22,8 +23,12 @@ pub fn ContainerNetworksPage() -> impl IntoView {
                 Ok(list) => {
                     set_networks.set(list);
                     set_error.set(None);
+                    set_unavailable.set(None);
                 }
-                Err(e) => set_error.set(Some(e.message)),
+                Err(e) => {
+                    set_unavailable.set(e.unavailable());
+                    set_error.set(Some(e.message));
+                }
             }
             set_loading.set(false);
         });
@@ -88,6 +93,8 @@ pub fn ContainerNetworksPage() -> impl IntoView {
             {move || {
                 if loading.get() {
                     view! { <p class="loading">"Loading networks..."</p> }.into_view()
+                } else if let Some(u) = unavailable.get() {
+                    view! { <crate::components::UnavailableState info=u on_retry=Callback::new(move |_| reload())/> }.into_view()
                 } else if let Some(err) = error.get() {
                     view! { <p class="error">"Error: " {err}</p> }.into_view()
                 } else {

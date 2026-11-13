@@ -118,11 +118,44 @@ pub fn error_text(status: u16, body: &str) -> String {
         (None, None) if v.is_none() => body.trim().to_string(),
         (None, None) => String::new(),
     };
+    // 424 NOT_AVAILABLE: this node lacks something (Docker, a log source, ...).
+    // Keep the reason code in the text so pages can show an empty state
+    // (`ApiError::unavailable`); `message` is what is missing, `details` what to do.
+    if status == 424 {
+        if let (Some(reason), Some(msg)) = (field("reason"), field("message")) {
+            return format!(
+                "HTTP 424 [{}]: {}\n{}",
+                reason,
+                msg,
+                field("details").unwrap_or_default()
+            );
+        }
+    }
     if detail.is_empty() {
         format!("HTTP {}", status)
     } else {
         format!("HTTP {}: {}", status, detail)
     }
+}
+
+/// A 424 `NOT_AVAILABLE` answer: the node lacks something the page needs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Unavailable {
+    pub reason: String,
+    pub what: String,
+    pub todo: String,
+}
+
+/// Parse the text `error_text` builds for a 424 answer.
+pub fn parse_unavailable(text: &str) -> Option<Unavailable> {
+    let rest = text.strip_prefix("HTTP 424 [")?;
+    let (reason, rest) = rest.split_once("]: ")?;
+    let (what, todo) = rest.split_once('\n').unwrap_or((rest, ""));
+    Some(Unavailable {
+        reason: reason.to_string(),
+        what: what.trim().to_string(),
+        todo: todo.trim().to_string(),
+    })
 }
 
 /// Generic JSON fetch helper
@@ -142,9 +175,7 @@ pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> 
         })?;
         decode_body(&text)
     } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
+        Err(http_error(response).await)
     }
 }
 
@@ -304,6 +335,13 @@ pub async fn fetch_text(path: &str) -> Result<String, ApiError> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApiError {
     pub message: String,
+}
+
+impl ApiError {
+    /// `Some` when the server answered 424 `NOT_AVAILABLE` (see `Unavailable`).
+    pub fn unavailable(&self) -> Option<Unavailable> {
+        parse_unavailable(&self.message)
+    }
 }
 
 impl std::fmt::Display for ApiError {
@@ -5675,6 +5713,21 @@ mod tests {
         assert!(is_transport_error("Load failed"));
         assert!(!is_transport_error("stack e2e already exists"));
         assert!(!is_transport_error("HTTP 500: INTERNAL_ERROR"));
+    }
+
+    #[test]
+    fn a_424_not_available_answer_becomes_an_unavailable_state() {
+        let body = r#"{"status":424,"error":"NOT_AVAILABLE","message":"Docker isn't installed on this node.","details":"Install app-containers/docker.","reason":"docker-missing"}"#;
+        let text = error_text(424, body);
+        let u = ApiError { message: text }.unavailable().expect("parsed");
+        assert_eq!(u.reason, "docker-missing");
+        assert_eq!(u.what, "Docker isn't installed on this node.");
+        assert_eq!(u.todo, "Install app-containers/docker.");
+        // a plain 500 is still an error, not an empty state
+        let e = ApiError {
+            message: error_text(500, r#"{"message":"boom"}"#),
+        };
+        assert!(e.unavailable().is_none());
     }
 
     #[test]

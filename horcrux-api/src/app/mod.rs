@@ -3701,6 +3701,10 @@ async fn list_images(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
 ) -> Result<Json<Vec<container::image::ImageInfo>>, ApiError> {
+    crate::api::unavailable::container_engine(match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => "podman",
+        _ => "docker",
+    })?;
     let images = match parse_runtime(&q.runtime) {
         horcrux_common::ContainerRuntime::Podman => state.image_manager.podman.list_images().await,
         _ => state.image_manager.docker.list_images().await,
@@ -3832,6 +3836,10 @@ async fn list_volumes(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
 ) -> Result<Json<Vec<container::volume::VolumeInfo>>, ApiError> {
+    crate::api::unavailable::container_engine(match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => "podman",
+        _ => "docker",
+    })?;
     let volumes = match parse_runtime(&q.runtime) {
         horcrux_common::ContainerRuntime::Podman => {
             state.volume_manager.podman.list_volumes().await
@@ -3914,6 +3922,10 @@ async fn list_container_networks(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<RuntimeQuery>,
 ) -> Result<Json<Vec<container::cnetwork::NetworkInfo>>, ApiError> {
+    crate::api::unavailable::container_engine(match parse_runtime(&q.runtime) {
+        horcrux_common::ContainerRuntime::Podman => "podman",
+        _ => "docker",
+    })?;
     let nets = match parse_runtime(&q.runtime) {
         horcrux_common::ContainerRuntime::Podman => {
             state.container_network_manager.podman.list_networks().await

@@ -53,6 +53,7 @@ pub mod sdn_zones;
 pub mod storage_content;
 pub mod storage_volumes;
 pub mod system_admin;
+pub mod unavailable;
 pub mod tasks;
 pub mod tls;
 pub mod vm_devices;
