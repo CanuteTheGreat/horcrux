@@ -13,18 +13,26 @@ pub fn UnmanagedLibvirtBanner() -> impl IntoView {
     let (list, set_list) = create_signal(Vec::<(String, bool, libvirt::LvListed)>::new());
     let (pending, set_pending) = create_signal(Vec::<libvirt::CleanupOffer>::new());
     spawn_local(async move {
-        if let Ok(p) = libvirt::cleanup_pending().await {
-            set_pending.set(p);
-        }
+        let offers = libvirt::cleanup_pending().await.unwrap_or_default();
+        // A domain that is the recorded source of a completed import is in the cleanup offer
+        // (item kind `libvirt-domain`, path = domain name): it is never also "unmanaged".
+        let old_sources: Vec<String> = offers
+            .iter()
+            .flat_map(|o| o.items.iter())
+            .filter(|i| i.kind == "libvirt-domain")
+            .map(|i| i.path.clone())
+            .collect();
+        set_pending.set(offers);
         if let Ok(c) = libvirt::list_cluster().await {
             set_list.set(
                 c.nodes
                     .into_iter()
                     .flat_map(|n| {
                         let (name, local) = (n.node, n.local);
+                        let old = old_sources.clone();
                         n.domains
                             .into_iter()
-                            .filter(|d| d.imported_as.is_none())
+                            .filter(move |d| d.imported_as.is_none() && !old.contains(&d.domain))
                             .map(move |d| (name.clone(), local, d))
                     })
                     .collect(),
@@ -37,7 +45,7 @@ pub fn UnmanagedLibvirtBanner() -> impl IntoView {
             (!p.is_empty()).then(|| view! {
                 <div class="alert alert-info" id="import-cleanup-pending">
                     {format!("Old sources of imported VMs can be cleaned up ({}): ", p.iter().map(|o| format!("{} {}", o.vm_id, libvirt::human_bytes(o.total_bytes))).collect::<Vec<_>>().join(", "))}
-                    <A href="/vms/import-libvirt" class="btn">"Review"</A>
+                    <A href="/vms/import-libvirt#imported-sources" class="btn" attr:id="import-cleanup-review">"Review"</A>
                 </div>
             })
         }}
@@ -46,7 +54,7 @@ pub fn UnmanagedLibvirtBanner() -> impl IntoView {
             (!l.is_empty()).then(|| view! {
                 <div class="alert alert-warning" id="unmanaged-libvirt">
                     <strong>{format!("{} unmanaged libvirt VM(s) in this cluster, not managed by Horcrux: ", l.len())}</strong>
-                    {l.iter().map(|(node, local, d)| view! { <span class="unmanaged-vm">{if *local { format!("{} ({}) ", d.domain, d.state) } else { format!("{} ({}) on {} ", d.domain, d.state, node) }}</span> }).collect_view()}
+                    {l.iter().map(|(node, local, d)| view! { <span class="unmanaged-vm">{if *local { format!("{} ({}{}) ", d.domain, d.state, d.import_state.as_ref().map(|s| format!(", {s}")).unwrap_or_default()) } else { format!("{} ({}{}) on {} ", d.domain, d.state, d.import_state.as_ref().map(|s| format!(", {s}")).unwrap_or_default(), node) }}</span> }).collect_view()}
                     <A href="/vms/import-libvirt" class="btn btn-primary" attr:id="unmanaged-import">"Import into Horcrux"</A>
                 </div>
             })
@@ -57,7 +65,9 @@ pub fn UnmanagedLibvirtBanner() -> impl IntoView {
 /// The opt-in cleanup of an import's old source: lists exactly what goes, with
 /// sizes; nothing is removed before the button is clicked.
 #[component]
-pub fn ImportCleanup(vm_id: String) -> impl IntoView {
+pub fn ImportCleanup(vm_id: String, domain: String) -> impl IntoView {
+    let typed = create_rw_signal(String::new());
+    let want = domain.clone();
     let (offer, set_offer) = create_signal(None::<libvirt::CleanupOffer>);
     let (done, set_done) = create_signal(None::<libvirt::CleanupDone>);
     let (error, set_error) = create_signal(None::<String>);
@@ -73,11 +83,13 @@ pub fn ImportCleanup(vm_id: String) -> impl IntoView {
         });
     };
     let id = vm_id.clone();
+    let dom = domain.clone();
     let run = move |_| {
-        let id = id.clone();
+        let (id, dom) = (id.clone(), dom.clone());
         set_busy.set(true);
+        set_error.set(None);
         spawn_local(async move {
-            match libvirt::cleanup(&id).await {
+            match libvirt::cleanup(&id, &dom).await {
                 Ok(d) => {
                     set_done.set(Some(d));
                     set_offer.set(None);
@@ -91,7 +103,7 @@ pub fn ImportCleanup(vm_id: String) -> impl IntoView {
         <div class="import-cleanup" id="import-cleanup">
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="cleanup-error">{e}</div> })}
             {move || (offer.get().is_none() && done.get().is_none()).then(|| view! {
-                <button class="btn" id="cleanup-show" on:click=show.clone()>"Clean up the old source..."</button>
+                <button class="btn" id="cleanup-show" on:click=show.clone()>"Remove old source..."</button>
             })}
             {move || offer.get().map(|o| view! {
                 <div id="cleanup-offer" class="info-box">
@@ -103,7 +115,14 @@ pub fn ImportCleanup(vm_id: String) -> impl IntoView {
                         </li> }).collect_view()}
                     </ul>
                     <p>{format!("Total {} . The libvirt XML is backed up first. Default is to keep everything.", libvirt::human_bytes(o.total_bytes))}</p>
-                    <button class="btn btn-danger" id="cleanup-run" disabled=move || busy.get() on:click=run.clone()>"Remove these"</button>
+                    <p>"Before anything is removed the imported copy of each disk is checked against the old disk (qemu-img compare); a missing or different copy keeps everything. This can take a few minutes for a big disk."</p>
+                    <label for="cleanup-confirm-name">{format!("Type the domain name {want} to confirm: ")}</label>
+                    <input type="text" id="cleanup-confirm-name" autocomplete="off" prop:value=move || typed.get()
+                        on:input=move |ev| typed.set(event_target_value(&ev))/>
+                    <button class="btn btn-danger" id="cleanup-run" disabled={
+                        let want = want.clone();
+                        move || busy.get() || typed.get().trim() != want
+                    } on:click=run.clone()>{move || if busy.get() { "Verifying and removing...".to_string() } else { "Remove old source".to_string() }}</button>
                 </div>
             })}
             {move || done.get().map(|d| view! {
@@ -132,7 +151,22 @@ pub fn VmImportLibvirtPage() -> impl IntoView {
     let reload = move || {
         spawn_local(async move {
             match libvirt::list().await {
-                Ok(l) => set_list.set(Some(l)),
+                Ok(l) => {
+                    let has_imported = l.domains.iter().any(|d| d.imported_as.is_some());
+                    set_list.set(Some(l));
+                    // the dashboard's "Review" link lands on the old-sources section
+                    if has_imported
+                        && web_sys::window()
+                            .and_then(|w| w.location().hash().ok())
+                            .as_deref()
+                            == Some("#imported-sources")
+                    {
+                        gloo_timers::future::TimeoutFuture::new(100).await;
+                        if let Some(el) = document().get_element_by_id("imported-sources") {
+                            el.scroll_into_view();
+                        }
+                    }
+                }
                 Err(e) => set_error.set(Some(e.message)),
             }
         });
@@ -222,32 +256,55 @@ pub fn VmImportLibvirtPage() -> impl IntoView {
                 None => view! { <p class="loading">"Looking for libvirt domains..."</p> }.into_view(),
                 Some(l) if !l.available => view! { <p id="lv-none">"libvirt (virsh) is not installed on this host: nothing to import."</p> }.into_view(),
                 Some(l) if l.domains.is_empty() => view! { <p id="lv-none">"libvirt defines no domains on this host."</p> }.into_view(),
-                Some(l) => view! {
-                    <table class="data-table" id="lv-domains">
-                        <thead><tr><th>"Domain"</th><th>"State"</th><th>"CPUs"</th><th>"Memory"</th><th>"Horcrux VM"</th><th></th></tr></thead>
-                        <tbody>
-                            {l.domains.into_iter().map(|d| {
-                                let dom = d.domain.clone();
-                                let managed = d.imported_as.clone();
-                                view! {
-                                    <tr class="lv-domain">
-                                        <td>{d.domain.clone()}{d.problem.clone().map(|p| format!(" - {p}"))}</td>
-                                        <td>{d.state.clone()}</td>
-                                        <td>{d.cpus}</td>
-                                        <td>{format!("{} MB", d.memory_mb)}</td>
-                                        <td>{match &managed { Some(v) => v.clone(), None => "Unmanaged".to_string() }}</td>
-                                        <td>{match managed.clone() {
-                                            None => view! {
-                                                <button class="btn lv-preview" disabled=move || busy.get() on:click=move |_| do_preview(dom.clone())>"Import..."</button>
-                                            }.into_view(),
-                                            Some(v) => view! { <ImportCleanup vm_id=v/> }.into_view(),
-                                        }}</td>
-                                    </tr>
-                                }
-                            }).collect_view()}
-                        </tbody>
-                    </table>
-                }.into_view(),
+                Some(l) => {
+                    let (imported, rest): (Vec<_>, Vec<_>) = l.domains.into_iter().partition(|d| d.imported_as.is_some());
+                    view! {
+                        {(!imported.is_empty()).then(|| view! {
+                            <section id="imported-sources">
+                                <h3>"Imported: old sources to clean up"</h3>
+                                <p class="form-help">"These libvirt domains were imported into Horcrux; the Horcrux VM owns copies of their disks. The old definitions and disk files can be removed once you no longer need them."</p>
+                                <table class="data-table" id="lv-imported">
+                                    <thead><tr><th>"Domain"</th><th>"State"</th><th>"Horcrux VM"</th><th></th></tr></thead>
+                                    <tbody>
+                                        {imported.into_iter().map(|d| {
+                                            let vm = d.imported_as.clone().unwrap_or_default();
+                                            let href = format!("/vms/{vm}");
+                                            let label = vm.clone();
+                                            view! {
+                                                <tr class="lv-imported-domain">
+                                                    <td>{d.domain.clone()}</td>
+                                                    <td>{d.state.clone()}</td>
+                                                    <td>"Imported \u{2192} "<A href=href class="lv-vm-link">{label}</A></td>
+                                                    <td><ImportCleanup vm_id=vm.clone() domain=d.domain.clone()/></td>
+                                                </tr>
+                                            }
+                                        }).collect_view()}
+                                    </tbody>
+                                </table>
+                            </section>
+                        })}
+                        {(!rest.is_empty()).then(|| view! {
+                            <table class="data-table" id="lv-domains">
+                                <thead><tr><th>"Domain"</th><th>"State"</th><th>"CPUs"</th><th>"Memory"</th><th>"Horcrux VM"</th><th></th></tr></thead>
+                                <tbody>
+                                    {rest.into_iter().map(|d| {
+                                        let dom = d.domain.clone();
+                                        view! {
+                                            <tr class="lv-domain">
+                                                <td>{d.domain.clone()}{d.problem.clone().map(|p| format!(" - {p}"))}</td>
+                                                <td>{d.state.clone()}</td>
+                                                <td>{d.cpus}</td>
+                                                <td>{format!("{} MB", d.memory_mb)}</td>
+                                                <td>{match &d.import_state { Some(s) => format!("Unmanaged ({s})"), None => "Unmanaged".to_string() }}</td>
+                                                <td><button class="btn lv-preview" disabled=move || busy.get() on:click=move |_| do_preview(dom.clone())>"Import..."</button></td>
+                                            </tr>
+                                        }
+                                    }).collect_view()}
+                                </tbody>
+                            </table>
+                        })}
+                    }.into_view()
+                }
             }}
             {move || plan.get().map(|p| {
                 let pl = p.plan.clone();
@@ -299,7 +356,7 @@ pub fn VmImportLibvirtPage() -> impl IntoView {
                 <div class="alert alert-success" id="lv-done">
                     {format!("Imported as VM {} ({} disk(s)). XML backup: {}. libvirt still defines the domain (shut off); nothing was deleted. ", d.vm.id, d.vm.disks.len(), d.xml_backup)}
                     <A href=format!("/vms/{}/hardware", d.vm.id)>"Open its hardware"</A>
-                    {d.cleanup_offered.then(|| view! { <ImportCleanup vm_id=d.vm.id.clone()/> })}
+                    {d.cleanup_offered.then(|| view! { <ImportCleanup vm_id=d.vm.id.clone() domain=d.plan.domain.clone()/> })}
                 </div>
             })}
         </div>
