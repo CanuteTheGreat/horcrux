@@ -1,2 +1,2 @@
-# sys-apps/horcrux-release (os-release): machine layer gringotts on the GNOME (light) edition
-sys-apps/horcrux-release gnome-light gringotts
+# sys-apps/horcrux-release (os-release): the GNOME edition; the machine name is not part of os-release
+sys-apps/horcrux-release gnome-light

@@ -13,11 +13,10 @@ LICENSE="MIT"
 SLOT="0"
 KEYWORDS="amd64 arm64"
 
-# No variant flag = the headless Server. The image layer (project/variants/<v>/portage/package.use/horcrux-release) or the machine's own
-# package.use sets the edition (gnome-light) and at most one machine layer; the flags are part of the binary package, so a cached binpkg of
-# another variant is never reused.
-IUSE="gnome-light hogsmeade hogshead gringotts surface test-machine"
-REQUIRED_USE="?? ( hogsmeade hogshead gringotts surface test-machine )"
+# No variant flag = the headless Server. The image layer (project/variants/<v>/portage/package.use/horcrux-release) or the system's own
+# package.use sets the edition (gnome-light); the flag is part of the binary package, so a cached binpkg of another edition is never reused.
+# VARIANT/VARIANT_ID are the EDITION only: a machine/host name (hogsmeade, ...) never belongs in os-release.
+IUSE="gnome-light"
 
 RDEPEND="sys-apps/baselayout"
 
@@ -40,11 +39,10 @@ pkg_setup() {
 }
 
 src_install() {
-	local edition=server m machine=""
+	local edition=server
 	use gnome-light && edition=gnome-light
-	for m in hogsmeade hogshead gringotts surface test-machine; do use ${m} && machine=${m}; done
 
-	bash "${FILESDIR}"/render-os-release.sh "${PV}" "${edition}" "${machine}" > "${T}"/os-release || die
+	bash "${FILESDIR}"/render-os-release.sh "${PV}" "${edition}" > "${T}"/os-release || die
 	insinto /usr/lib
 	doins "${T}"/os-release
 

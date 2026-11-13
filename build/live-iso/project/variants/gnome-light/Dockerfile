@@ -50,7 +50,7 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults; \
     test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local && qfile -q /etc/portage/repos.conf/horcrux.conf; \
     # GATE: the os-release names this edition (sys-apps/horcrux-release[gnome-light]; the core layer built the Server one)
-    grep -qx 'VARIANT_ID=gnome-light' /usr/lib/os-release; ! grep -iE '^PRETTY_NAME=.*(live|installer)' /usr/lib/os-release; \
+    grep -qx 'VARIANT_ID=gnome' /usr/lib/os-release; ! grep -iE '^PRETTY_NAME=.*(live|installer)' /usr/lib/os-release; \
     # keyring PAM: one pam_gnome_keyring set (gdm-password), session after elogind; postinst of horcrux-gnome-defaults-1-r2 fixes pambase's duplicate. Fails the build on a stale base.
     /usr/libexec/horcrux-keyring-pam check && qfile -q /usr/libexec/horcrux-keyring-pam /usr/bin/horcrux-keyring-status; \
     # the shipped tree is a git checkout (snapshot of this build's overlay) so `emaint sync -r horcrux` fast-forwards it to the published overlay (sync-depth 1 = fetch + reset)\
