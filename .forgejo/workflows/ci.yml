@@ -112,6 +112,25 @@ jobs:
       # Public overlay files (shipped to end users, mirrored to GitHub) must not name the private Forgejo host.
       - run: python3 gentoo/ci/check-no-forgejo.py
 
+  ux-qa-static:
+    name: UX QA (static checkers)
+    # Owner rule 2026-11-04: a bug the owner finds by hand gets a check for its CLASS (docs/qa/owner-findings.md).
+    # No browser, no build: the checkers' self-tests, private URLs/host names in docs, os-release sanity of the
+    # package-owned renderer, and the owner-findings table pointing at real checks.
+    runs-on: linux-any
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s ci/ux-qa -p 'test_*.py'
+      - run: python3 ci/ux-qa/check_owner_findings.py
+      - run: python3 ci/ux-qa/check_public_text.py docs README.md --baseline ci/ux-qa/public-text-baseline.json
+      - name: os-release rendered by the package passes the installed-system rules
+        run: |
+          set -e
+          for e in server gnome-light xfce; do
+            bash gentoo/sys-apps/horcrux-release/files/render-os-release.sh 0.1.0_p202611122159 $e > /tmp/os-release.$e
+            python3 ci/ux-qa/check_os_release.py /tmp/os-release.$e
+          done
+
   check:
     name: Check
     # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
@@ -1276,6 +1295,16 @@ jobs:
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "UI offers every USE-flag feature of an all-features build"
           MODE=full /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
+
+      - name: UX crawl (every nav page, desktop + phone, light + dark; no JS errors, overlays, dead stat cards, private text)
+        # ci/ux-qa/ux_crawl.py: the owner kept finding these by hand (docs/qa/owner-findings.md). Known, tracked
+        # failures live in ci/ux-qa/ux-crawl-baseline.json; a NEW failure fails the job.
+        env:
+          BASE_URL: https://localhost:8006
+          ADMIN_PASSWORD: admin
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "UX crawl"
+          /tmp/pw/bin/python ci/ux-qa/ux_crawl.py --report /tmp/ux-crawl.json --shots /tmp/ux-shots
 
       - name: LXC browser E2E (real nested LXC behind the UI)
         # The API + this build's UI run in a privileged LXC sibling on this

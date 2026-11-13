@@ -1,0 +1,9 @@
+{
+ "unlinked-summary:/": "owner finding #2: dashboard stat cards not clickable; fix in flight (branch dash-links, e2e/dashboard_links_e2e.py). Remove when merged.",
+ "http-5xx:/containers/images": "lab container has no docker socket; API answers 500 instead of an empty/unavailable state -> UX bug 'API 5xx when the engine is absent' (see owner-findings #9)",
+ "http-5xx:/containers/volumes": "same as /containers/images",
+ "http-5xx:/containers/networks": "same as /containers/images",
+ "http-5xx:/network/firewall-objects": "503 when nft/journal is unavailable in a container; should be an empty state with a reason (owner-findings #9)",
+ "http-5xx:/system/services": "503 without an init system in a container (owner-findings #9)",
+ "http-5xx:/system/logs": "503 without journald/syslog in a container (owner-findings #9)"
+}

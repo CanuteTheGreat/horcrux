@@ -1,0 +1,14 @@
+{
+  "product": "horcrux",
+  "login_path": "/login",
+  "user_sel": "#login-username",
+  "pass_sel": "#login-password",
+  "submit_sel": "#login-submit",
+  "username": "admin",
+  "password_env": "ADMIN_PASSWORD",
+  "max_routes": 120,
+  "baseline": "ux-crawl-baseline.json",
+  "private_fail": ["git\\.canutethegreat\\.com", "canutethegreat\\.com", "redweek\\.(internal|com)", "\\b10\\.(66|1)\\.\\d+\\.\\d+\\b", "/home/canutethegreat"],
+  "private_warn": ["\\b(gringotts|hogshead|hogsmeade|madammalkins|crystalcave|ollivanders|azkaban|beauxbatons|rw-man-\\d+)\\b"],
+  "forbidden_names": ["\\bgnome[- ]light\\b", "\\blive[- ]?(installer|iso)\\b", "\\b(openrc|systemd)-(x86_64|aarch64)\\b", "\\bpqa:", "\\bforgejo\\b"]
+}
