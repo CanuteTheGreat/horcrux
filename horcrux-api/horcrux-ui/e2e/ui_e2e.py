@@ -231,6 +231,9 @@ def main():
             and r.url.startswith(BASE)
             and missing_resources.append(r.url),
         )
+        # The ONE dialog handler of this page (accepts confirm/prompt). Never add page.once("dialog", ...)
+        # next to it: both would accept the same dialog and Playwright raises "Dialog.accept: Cannot
+        # accept dialog which is already handled".
         page.on("dialog", lambda d: d.accept(d.default_value) if d.type == "prompt" else d.accept())
 
         # ---- login ---------------------------------------------------------
@@ -1390,7 +1393,6 @@ def storage_volume_checks(page, vid):
     row.locator(".pool-volume-grow-size").fill("2")
     row.locator(".pool-volume-grow").click()
     expect(vols.locator(".pool-volume-notice")).to_contain_text("is now 2.0 GB", timeout=30000)
-    page.once("dialog", lambda d: d.accept())
     row.locator(".pool-volume-delete").click()
     expect(row).to_have_count(0, timeout=30000)
     assert not os.path.exists(f"{pool_dir}/e2e-vol.qcow2")
@@ -1415,7 +1417,6 @@ def storage_volume_checks(page, vid):
     name = os.path.basename(d["path"])[: -len(".qcow2")]
     row = card.locator(f"tr.pool-volume[data-volume='{name}']")
     expect(row).to_have_count(1, timeout=30000)
-    page.once("dialog", lambda dl: dl.accept())
     row.locator(".pool-volume-delete").click()
     expect(card.locator(".pool-volume-error")).to_contain_text("is a disk of VM", timeout=30000)
     assert os.path.isfile(d["path"])
