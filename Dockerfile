@@ -52,6 +52,8 @@ RUN mkdir -p /var/db/repos/horcrux-overlay/{app-emulation,metadata,profiles} && 
 COPY gentoo/app-emulation /var/db/repos/horcrux-overlay/app-emulation
 # S3 gateway server + client (USE=s3-gateway)
 COPY gentoo/app-misc /var/db/repos/horcrux-overlay/app-misc
+# acct-group/horcrux-admin (horcrux's PAM login group, 25a90eb8): the ebuild's RDEPEND must resolve in this image build
+COPY gentoo/acct-group /var/db/repos/horcrux-overlay/acct-group
 RUN printf '[horcrux-overlay]\nlocation = /var/db/repos/horcrux-overlay\npriority = 50\n' \
     > /etc/portage/repos.conf/horcrux-overlay.conf
 
