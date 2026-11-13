@@ -37,6 +37,22 @@ class HorcruxProfile(unittest.TestCase):
         self.assertFalse(desktop.user_problem("canutethegreat"))
 
 
+class ProductAdminGroup(unittest.TestCase):
+    """a product that is not Horcrux (Patronus) names its own web-admin group in the profile"""
+
+    def test_default_and_override(self):
+        self.assertEqual(desktop.admin_group({}), "horcrux-admin")
+        self.assertEqual(desktop.admin_group({"web_admin_group": "patronus-admin"}), "patronus-admin")
+
+    def test_rescue_finds_admins_of_the_given_group(self):
+        with tempfile.TemporaryDirectory() as r:
+            os.makedirs(r + "/etc")
+            open(r + "/etc/group", "w").write("wheel:x:10:\npatronus-admin:x:990:alice\nhorcrux-admin:x:991:bob\n")
+            open(r + "/etc/passwd", "w").write("alice:x:1001:1001::/h:/bin/sh\nbob:x:1002:1002::/h:/bin/sh\n")
+            self.assertEqual(ops.pam_admin_users(r, "patronus-admin"), ["alice"])
+            self.assertEqual(ops.pam_admin_users(r), ["bob"])
+
+
 class RescueResetsSystemUsers(unittest.TestCase):
     def test_pam_admin_users_are_login_users_in_wheel_or_horcrux_admin(self):
         with tempfile.TemporaryDirectory() as r:

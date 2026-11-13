@@ -369,7 +369,7 @@ class RootpassStage(Stage):
             return [
                 Field("user", "Administrator user name", "text", c.get("user_name", ""), width=30,
                       validate=lambda v, a: _user_problem(v),
-                      hint="A system account in the wheel + horcrux-admin groups: it signs in to the console and to the web UI (https, port 8006). root cannot sign in to the web UI"),
+                      hint=f"A system account in the wheel + {ctx.p.get('web_admin_group', 'horcrux-admin')} groups: it signs in to the console and to the web UI (https, port {ctx.p.get('web_port', 8006)}). root cannot sign in to the web UI"),
                 Field("pw", "Password", "password", c["root_password"], width=40,
                       hint="At least 12 characters, mixed. For this user and the console root login. Never the disk passphrase"),
                 Field("pw2", "Confirm password", "password", c["root_password"], width=40),
@@ -411,7 +411,7 @@ class RootpassStage(Stage):
         c = ctx.c
         who = "password hash from the answer file" if c["root_hash"] else "the password you entered"
         if ctx.p.get("web_auth") == "pam" and c.get("user_name"):
-            return [f"Create the administrator user {c['user_name']} (groups wheel + horcrux-admin): console and web UI login; no default account exists",
+            return [f"Create the administrator user {c['user_name']} (groups wheel + {ctx.p.get('web_admin_group', 'horcrux-admin')}): console and web UI login; no default account exists",
                     f"Set the root console password ({who}); root cannot sign in to the web UI",
                     "Install " + (f"{len(c['ssh_keys'])} SSH key(s) for root" if c["ssh_keys"] else "no SSH key (console login only)")]
         return [f"Set the root password ({who}); no default password exists",

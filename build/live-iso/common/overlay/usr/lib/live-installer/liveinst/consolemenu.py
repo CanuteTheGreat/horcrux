@@ -197,7 +197,7 @@ class Console:
             link = "wifi" if n["wifi"] else ("up" if S.carrier(n["name"]) else "no link")
             self.say(f" {role:<4}{n['name']:<10}{link:<8}{ip}")
         self.say("")
-        self.say(f" Web UI: {self.web_url()}   (user: " + ("a system user in wheel/horcrux-admin" if self.p.get("web_auth") == "pam" else "admin") + ")")
+        self.say(f" Web UI: {self.web_url()}   (user: " + ("a system user in wheel/" + self.p.get("web_admin_group", "horcrux-admin") if self.p.get("web_auth") == "pam" else "admin") + ")")
         self.say("")
 
     MENU = [
@@ -550,7 +550,7 @@ class Console:
         self.say("Factory defaults restored; the web service was restarted." if up else
                  "Factory defaults restored, but the web service is NOT listening: check /var/log and run 'rc-service %s restart'." % self.web)
         if pam:
-            return self.say("Sign in to the web UI with your system user (wheel / horcrux-admin); there is no separate web account.")
+            return self.say(f"Sign in to the web UI with your system user (wheel / {self.p.get('web_admin_group', 'horcrux-admin')}); there is no separate web account.")
         self.say("Web admin password: " + (pw + "   (generated - note it now, it is not shown again)" if gen else "the one you just entered"))
 
     def reapply(self):

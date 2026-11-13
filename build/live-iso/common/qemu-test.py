@@ -27,11 +27,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import headless_gates as HG
 
 PROJECTS = {
-    "horcrux": dict(svc="horcrux-api", port=8006, web_user="hxadmin",   # the web UI signs in SYSTEM users (PAM): the installer-created user
+    "horcrux": dict(svc="horcrux-api", port=8006, web_user="hxadmin", pam="horcrux", admin_group="horcrux-admin",   # the web UI signs in SYSTEM users (PAM): the installer-created user
                      health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
                     seedfile="/etc/horcrux/admin-password",
                     services=["horcrux-api"], forward=False, dbfiles=[], logdirs=["/var/log/horcrux"]),
-    "patronus": dict(svc="patronus-web", port=8443, health=["/login"], pwfile="/var/lib/patronus/initial-admin-password", old_pw="patronus",
+    "patronus": dict(svc="patronus-web", port=8443, web_user="pxadmin", pam="patronus", admin_group="patronus-admin", health=["/login"], pwfile="/var/lib/patronus/initial-admin-password", old_pw="patronus",
                      seedfile="/var/lib/patronus/initial-admin-password",
                      services=["patronus-firewall", "patronus-applyd", "patronus-web"], forward=True,
                      dbfiles=["/var/lib/patronus/config.db"], dbuser="patronus", logdirs=["/var/log/patronus"]),
@@ -785,8 +785,8 @@ def answer_toml(a, pubkey, pwhash):
         lines += [f'zfs_raid = "{a.zfs_raid}"', 'disks = ["/dev/vda", "/dev/vdb"]' if a.zfs_raid == "mirror" else 'disks = ["/dev/vda"]']
     else:
         lines += ['disks = ["/dev/vda"]']
-    if p == "horcrux":
-        lines += ["", "[user]", 'name = "hxadmin"', f'password_hash = "{pwhash}"']      # web UI = system users: the installer creates this administrator
+    if PROJECTS[p].get("web_user"):
+        lines += ["", "[user]", f'name = "{PROJECTS[p]["web_user"]}"', f'password_hash = "{pwhash}"']      # web UI = system users: the installer creates this administrator
     lines += ["", "[hardening]", "ssh = true", "sysctl = true", "",
               "[use_flags]", 'preset = "minimal"', ""]          # answer-file use_flags: Minimal preset (checked against the Portage metadata)
     if p == "horcrux":
@@ -1161,8 +1161,8 @@ class Runner:
         shot("04b-target-disk-selected")
         kb.key("TAB"); kb.key("ENTER", 1)
         wait(r"Administrator account", "05-administrator-account")
-        if p == "horcrux":
-            kb.text(self.P["web_user"]); kb.key("TAB")      # the administrator user name (system account, wheel + horcrux-admin)
+        if self.P.get("web_user"):
+            kb.text(self.P["web_user"]); kb.key("TAB")      # the administrator user name (system account, wheel + the product's admin group)
         kb.text(PW); kb.key("TAB"); kb.text(PW)
         kb.key("TAB"); kb.text("ops@example.test")
         kb.key("TAB"); kb.key("SPACE")                     # 'Show advanced options' -> the SSH key row appears and takes the focus
@@ -1436,7 +1436,7 @@ class Runner:
         self.gnext(vm, "rootpass")
         # ---- password
         self.gshot(vm, "password", "Administrator account")
-        if self.a.project == "horcrux":
+        if self.P.get("web_user"):
             self.gtype(vm, self.P["web_user"])
             self.gkey(vm, "tab")
         self.gtype(vm, PW)
@@ -1729,8 +1729,8 @@ class Runner:
                 # no built-in admin, root and a wrong password are refused with the same 401; the old first-boot files do not exist
                 bad = {u: http(FWD_WEB, "/api/auth/login", "POST", {"username": u, "password": pw})[1]
                        for u, pw in (("admin", PW), ("root", PW), (P["web_user"], PW + "x"))}
-                rc, o = ssh(FWD_SSH, self.key, f"id {P['web_user']}; test -e {P['pwfile']} && echo PWFILE-PRESENT; test -e {P['seedfile']} && echo SEED-PRESENT; ls /etc/pam.d/horcrux")
-                self.step("web-no-admin-account-root-and-wrong-password-refused", all(c == 401 for c in bad.values()) and "PRESENT" not in o and "wheel" in o and "horcrux-admin" in o,
+                rc, o = ssh(FWD_SSH, self.key, f"id {P['web_user']}; test -e {P['pwfile']} && echo PWFILE-PRESENT; test -e {P['seedfile']} && echo SEED-PRESENT; ls /etc/pam.d/{P['pam']}")
+                self.step("web-no-admin-account-root-and-wrong-password-refused", all(c == 401 for c in bad.values()) and "PRESENT" not in o and "wheel" in o and P["admin_group"] in o,
                           f"admin/root/wrong password -> {bad}; {o.strip().splitlines()[0][:120] if o.strip() else o!r}")
             if a.flow != "auto":
                 rc, o = ssh(FWD_SSH, self.key, f"sleep 15; for f in {P['seedfile']} {P['pwfile']}; do test -e $f && echo present:$f || echo gone:$f; done")

@@ -43,14 +43,14 @@ def tty_run(cmd):
 # --------------------------------------------------------------------------
 # the admin password: the SAME argon2id path as the console menu (liveinst.consolemenu.argon2_encode)
 # --------------------------------------------------------------------------
-def pam_admin_users(root):
-    """web_auth = pam: the web UI admins are the login users in wheel / horcrux-admin of the system at `root`"""
+def pam_admin_users(root, group="horcrux-admin"):
+    """web_auth = pam: the web UI admins are the login users in wheel / the product's admin group of the system at `root`"""
     root = root.rstrip("/")
     members = set()
     try:
         for line in open(root + "/etc/group"):
             f = line.rstrip("\n").split(":")
-            if len(f) >= 4 and f[0] in ("wheel", "horcrux-admin"):
+            if len(f) >= 4 and f[0] in ("wheel", group):
                 members.update(m for m in f[3].split(",") if m)
     except OSError:
         return []
@@ -381,9 +381,10 @@ class Rescue:
         root = rec["root"]
         if self.p.get("web_auth") == "pam":
             # the web UI accounts are system users: reset the password of every administrator user (wheel / horcrux-admin)
-            users = pam_admin_users(root)
+            ag = self.p.get("web_admin_group", "horcrux-admin")
+            users = pam_admin_users(root, ag)
             if not users:
-                raise RescueError("no administrator user (wheel / horcrux-admin) found in that system")
+                raise RescueError(f"no administrator user (wheel / {ag}) found in that system")
             msg = ""
             for u in users:
                 rc, o = self.chroot_run(root, ["chpasswd"], input_=f"{u}:{pw}\n")

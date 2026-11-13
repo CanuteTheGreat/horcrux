@@ -14,6 +14,13 @@ MARKER = DIR + "/installed"
 SERVICES = DIR + "/services.list"
 GROUPS = ["wheel", "horcrux-admin", "audio", "video", "usb", "plugdev", "input", "render", "cdrom", "lp", "lpadmin",
           "libvirt", "kvm", "users", "pipewire"]
+
+
+def admin_group(p):
+    """the system group whose members are the web UI administrators (profile key web_admin_group: the product's own)"""
+    return (p or {}).get("web_admin_group", "horcrux-admin")
+
+
 # services of the server image that a desktop replaces (NetworkManager owns the network, see services.list)
 REPLACED = ["dhcpcd", "iwd"]
 
@@ -50,11 +57,13 @@ def create_user(inst):
         raise InstallError("a user account is needed: " + prob)
     if not (c.get("user_hash") or c.get("user_password")):
         raise InstallError("no password for " + name)
-    pam = getattr(inst, "p", {}).get("web_auth") == "pam"
-    for g in ("wheel", "horcrux-admin") if pam else ("wheel",):
-        inst.run(["groupadd", "-f", g] + (["-r"] if g == "horcrux-admin" else []), chroot=True, check=False)
+    prof = getattr(inst, "p", {})
+    pam = prof.get("web_auth") == "pam"
+    ag = admin_group(prof)
+    for g in ("wheel", ag) if pam else ("wheel",):
+        inst.run(["groupadd", "-f", g] + (["-r"] if g == ag else []), chroot=True, check=False)
     have = set(l.split(":")[0] for l in open(f"{T}/etc/group"))
-    groups = ",".join(g for g in GROUPS if g in have)
+    groups = ",".join(g for g in dict.fromkeys(ag if g == "horcrux-admin" else g for g in GROUPS) if g in have)
     # the home dataset is mounted above the root BE by zfsroot.mount()/mount_rest() (they fail the install
     # otherwise): a home created in the BE's own /home would be hidden by the empty home dataset at boot
     inst.run(["useradd", "-m", "-G", groups, "-s", "/bin/bash", "-c", c.get("user_fullname", name), name], chroot=True)
