@@ -25,6 +25,7 @@ import argparse, json, os, re, shutil, socket, ssl, struct, subprocess, uuid, sy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import headless_gates as HG
+import udisks_gate as UG
 
 PROJECTS = {
     "horcrux": dict(svc="horcrux-api", port=8006, web_user="hxadmin", pam="horcrux", admin_group="horcrux-admin",   # the web UI signs in SYSTEM users (PAM): the installer-created user
@@ -2130,6 +2131,7 @@ class Runner:
         self.step("ssh-key-login-accepted", rc == 0 and "KEYLOGIN-OK" in out, flat)
         HG.admin_tools_gate(lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step)
         HG.docker_forward_gate(lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step)
+        UG.gate(lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step, HG.b64)
         low = out.lower()
         # OpenSSH prints prohibit-password as either that or the old alias without-password
         rootlogin = re.search(r"permitrootlogin (\S+)", low)

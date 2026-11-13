@@ -1,0 +1,32 @@
+# Horcrux: keep internal system storage out of the desktop file managers (GNOME Files / Nautilus, XFCE Thunar, anything on udisks2/gvfs).
+# UDISKS_IGNORE=1 makes udisks2 drop the device, so no sidebar entry, no automount, no "Mount"/"Eject" prompt. The device is untouched
+# (still in lsblk, still usable with mount/zpool/cryptsetup). Pure udev: identical on OpenRC (eudev/udev) and systemd.
+#
+# Hidden:
+#   * every ZFS pool member (ID_FS_TYPE=zfs_member: rpool and any mirror/raidz member) and every zvol (zd*)
+#   * the installer's ESP / ESP2 / ESP3 ... and boot / boot2 / boot3 ... partitions (mirror copies of /boot and the ESP).
+#     Matched on filesystem type + label + GPT type/name, so a user's own USB stick with a vfat "ESP" label stays visible.
+#   * the encrypted hibernation swap (GPT name cryptswap, LUKS), its opened mapping hxswap and any swap partition
+# Escape hatch: a rules file that sorts before this one (e.g. /etc/udev/rules.d/70-expose.rules) setting ENV{HORCRUX_UDISKS_EXPOSE}="1"
+# on a device (e.g. a zvol you want to see) skips everything below.
+
+ACTION=="remove", GOTO="horcrux_udisks_end"
+SUBSYSTEM!="block", GOTO="horcrux_udisks_end"
+ENV{HORCRUX_UDISKS_EXPOSE}=="1", GOTO="horcrux_udisks_end"
+
+# ZFS pool members (whole disk or partition) and zvols
+ENV{ID_FS_TYPE}=="zfs_member", ENV{UDISKS_IGNORE}="1"
+KERNEL=="zd[0-9]*", ENV{UDISKS_IGNORE}="1"
+
+# installer-created ESPs: GPT type EFI System + GPT name ESP + FAT label ESP, ESP2, ESP3 ...
+ENV{ID_FS_TYPE}=="vfat", ENV{ID_PART_ENTRY_TYPE}=="c12a7328-f81f-11d2-ba4b-00a0c93ec93b", ENV{ID_PART_ENTRY_NAME}=="ESP", ENV{ID_FS_LABEL}=="ESP|ESP[0-9]*", ENV{UDISKS_IGNORE}="1"
+
+# installer-created /boot copies: GPT name boot + ext4 label boot, boot2, boot3 ...
+ENV{ID_FS_TYPE}=="ext4", ENV{ID_PART_ENTRY_NAME}=="boot", ENV{ID_FS_LABEL}=="boot|boot[0-9]*", ENV{UDISKS_IGNORE}="1"
+
+# swap: LUKS hibernation swap partition, its mapping, plain swap partitions
+ENV{ID_FS_TYPE}=="crypto_LUKS", ENV{ID_PART_ENTRY_NAME}=="cryptswap", ENV{UDISKS_IGNORE}="1"
+ENV{DM_NAME}=="hxswap", ENV{UDISKS_IGNORE}="1"
+ENV{ID_FS_TYPE}=="swap", ENV{UDISKS_IGNORE}="1"
+
+LABEL="horcrux_udisks_end"
