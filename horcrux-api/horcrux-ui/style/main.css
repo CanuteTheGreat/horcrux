@@ -106,12 +106,25 @@ body {
 
 .navbar-menu {
     display: flex;
+    /* Plain links (Dashboard, System Alerts) and the dropdown triggers are all block boxes of the same height,
+       centred on one line: an inline trigger inside an inline-block dropdown sat 5 px higher than a link. */
+    align-items: center;
     gap: 0.25rem;
     flex-wrap: nowrap;
     min-width: 0;
 }
 .navbar-brand { flex: none; }
 .navbar-brand h1 { white-space: nowrap; }
+.navbar-dropdown > .navbar-item { display: block; }
+/* Username + Log out: never shrinks under the menu (the menu used to overflow into it at 1280). */
+.navbar-user {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: none;
+    margin-left: 0.75rem;
+}
+.navbar-user .navbar-item { display: block; }
 /* The tagline only fits on wide screens; the nav must never wrap or clip (ci/ux-qa checks 1280 and 1440). */
 @media (max-width: 1500px) { .navbar-brand .tagline { display: none; } }
 @media (max-width: 1500px) { .navbar { padding: 0.75rem 1.25rem; } }
@@ -123,6 +136,11 @@ body {
     border-radius: 4px;
     white-space: nowrap;
     transition: background 0.2s;
+}
+/* 1101-1500 px: brand + one-line menu + user menu must fit side by side (ci/ux-qa nav-broken / nav-overlap). */
+@media (min-width: 1101px) and (max-width: 1500px) {
+    .navbar-menu { gap: 0.1rem; }
+    .navbar-menu .navbar-item, .navbar-user .navbar-item { padding: 0.45rem 0.5rem; font-size: 0.95rem; }
 }
 
 .navbar-item:hover {
@@ -688,7 +706,9 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
     }
     .navbar-brand .tagline { display: none; }
     .navbar-brand h1 { font-size: 1.2rem; }
+    .navbar-user { margin-left: auto; }
     .navbar-menu {
+        align-items: stretch;
         position: fixed; top: 0; left: 0; bottom: 0; width: min(300px, 85vw); z-index: 200;
         background: var(--dark); flex-direction: column; gap: 0; padding: 1rem 0; overflow-y: auto;
         transform: translateX(-100%); visibility: hidden; transition: transform 0.25s ease, visibility 0s linear 0.25s;

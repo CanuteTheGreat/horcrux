@@ -118,6 +118,14 @@ FACTS_JS = r"""() => {
     const tg = nav.querySelector('.tagline');
     if (tg && vis(tg) && tg.getBoundingClientRect().height > 2 * (parseFloat(getComputedStyle(tg).lineHeight) || 20)) navProblems.push('tagline wraps');
     if (nav.scrollWidth > nav.clientWidth + 1) navProblems.push('nav bar overflows by ' + (nav.scrollWidth - nav.clientWidth) + 'px');
+    // nothing in the bar overlaps anything else (the menu once ran under the username / Log out at 1280)
+    const parts = [...nav.querySelectorAll('.navbar-brand, .navbar-user, .navbar-menu > .navbar-item, .navbar-menu > .navbar-dropdown > .navbar-item')].filter(vis);
+    for (let x = 0; x < parts.length; x++) for (let y = x + 1; y < parts.length; y++) {
+      if (parts[x].contains(parts[y]) || parts[y].contains(parts[x])) continue;
+      const a = parts[x].getBoundingClientRect(), b = parts[y].getBoundingClientRect();
+      if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1)
+        navProblems.push("'" + parts[x].innerText.trim().split('\n')[0] + "' overlaps '" + parts[y].innerText.trim().split('\n')[0] + "'");
+    }
   }
   // empty states with no way forward
   const empty = [];
