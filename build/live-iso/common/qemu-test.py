@@ -1925,8 +1925,9 @@ class Runner:
             if vm.expect_raw("Password", 15):
                 vm.send(f"{pw}\r")
                 if expect_ok:
-                    if user != "root" and vm.expect_raw(r"\[sudo\] password", 60):
-                        vm.send(f"{pw}\r")     # the console menu runs as root through sudo (profile.d/console-menu.sh)
+                    if user != "root" and vm.expect_raw(r"(\[sudo\] password|\nPassword: )", 60):
+                        vm.send(f"{pw}\r")     # the console menu runs as root through sudo (profile.d/console-menu.sh); the prompt is "[sudo] password for u:" or, with the
+                        # lecture/plain-prompt build on this image, just "Password:" (live-iso runs 1034/1035: waited for [sudo], sudo timed out, retry loop)
                     # 25 -> 120 s: on a loaded runner (4 VMs, ZFS mirror) the console menu / shell can take longer than
                     # 25 s after the password; the old wait then fell through to a fresh "\r" and a second login round
                     # (run 1440 uefi-usb-auto-zfs-mirror-sshpw). Assertion unchanged.
