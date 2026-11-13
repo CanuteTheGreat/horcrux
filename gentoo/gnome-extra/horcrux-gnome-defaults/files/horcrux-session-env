@@ -58,7 +58,9 @@ fi
 "$UPDATE" "${OUT[@]}" || { echo "horcrux-session-env: $UPDATE failed" >&2; exit 1; }
 
 [ -n "$HX_NO_PORTAL" ] && exit 0
-pp=$(pgrep -u "$UIDN" -x xdg-desktop-portal 2>/dev/null | head -n1)
+# match the command line: the process name is cut to 15 characters ("xdg-desktop-por"), so `pgrep -x xdg-desktop-portal` never matched
+# and a portal activated before this update kept running without a GNOME backend (no ScreenCast; HOGSMEADE 2026-11-13)
+pp=$(pgrep -u "$UIDN" -f '^/usr/(lib|libexec)[^ ]*/xdg-desktop-portal( |$)' 2>/dev/null | head -n1)
 if [ -n "$pp" ] && ! tr '\0' '\n' < "$PROC/$pp/environ" 2>/dev/null | grep -q '^XDG_CURRENT_DESKTOP='; then
 	if rc-service -U xdg-desktop-portal status >/dev/null 2>&1; then
 		rc-service -U xdg-desktop-portal restart >/dev/null 2>&1

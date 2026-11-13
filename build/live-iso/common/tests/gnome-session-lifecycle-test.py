@@ -16,7 +16,9 @@ Per cycle it asserts:
   * after the login the new session is seat0's active session, and exactly one user gnome-shell runs, in THAT session;
   * no "Failed to take control of the session" in syslog since the cycle started (mutter EBUSY);
   * the input devices (/dev/input/event*) are open in the active session's compositor and in no other gnome-shell of the user;
-  * no duplicated user supervisors (two `supervise-daemon dbus` of the user, two `supervise-daemon user.USER`, ...).
+  * no duplicated user supervisors (two `supervise-daemon dbus` of the user, two `supervise-daemon user.USER`, ...);
+  * screen sharing works: xdg-desktop-portal answers org.freedesktop.portal.ScreenCast AvailableSourceTypes with a non-zero value (it only
+    has the GNOME backend when the session's XDG_CURRENT_DESKTOP & co. reached the user bus's D-Bus activation environment).
 
 Attach mode only: the VM must already run an installed GNOME edition (e.g. installed with qemu-test.py --flow auto and
 tests/data/gnome-session-answers.toml), reachable over ssh as root with --key, with a QMP socket for key events. The test sets the login user's
@@ -301,6 +303,18 @@ class Run:
                    f"active compositor holds {ev_mine or 'NO input devices'}; other gnome-shell holding input: {other_shells or 'none'}")
         dup = supervisors(vm, self.uid, a.user)
         self.check(n, "no-duplicate-supervisors", not dup, f"{dup or 'none'}")
+        # screen sharing: xdg-desktop-portal must have picked the GNOME backend, which needs XDG_CURRENT_DESKTOP & co. in the user bus's
+        # activation environment (HOGSMEADE 2026-11-13: no ScreenCast interface, OBS/browser screen sharing broken)
+        cast = self.wait(lambda: self.screencast_types() or None, 40, step=4)
+        self.check(n, "portal-screencast", bool(cast), f"org.freedesktop.portal.ScreenCast AvailableSourceTypes={cast or self.last_cast}")
+
+    def screencast_types(self):
+        o = self.vm.out(f"su - {self.a.user} -c 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{self.uid}/bus timeout 20 gdbus call --session "
+                        "-d org.freedesktop.portal.Desktop -o /org/freedesktop/portal/desktop -m org.freedesktop.DBus.Properties.Get "
+                        "org.freedesktop.portal.ScreenCast AvailableSourceTypes' 2>&1", timeout=60)
+        self.last_cast = o[-200:] or "(no output)"
+        m = re.search(r"uint32 (\d+)", o)
+        return int(m.group(1)) if m and int(m.group(1)) else 0
 
     def main(self):
         self.held = []

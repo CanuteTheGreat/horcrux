@@ -10,13 +10,17 @@ it grabbed the seat (mutter: "Failed to take control of the session: EBUSY") and
 * leader-openrc: records the logind session, runs preclean before starting and teardown (own setsid, bounded) when the session ends
 * gnome-shell-{wayland,x11}[.gnome-login]: command runs through the guard, so a supervise-daemon respawn after the session is
   gone fails instead of starting a compositor
+* activation-env: the session's desktop identity (XDG_CURRENT_DESKTOP, XDG_SESSION_TYPE/DESKTOP, DESKTOP_SESSION) and
+  WAYLAND_DISPLAY/DISPLAY go into the user bus's D-Bus activation environment (leader before the runlevel, gnome-session-init-*
+  once the compositor is up); without it xdg-desktop-portal had no GNOME backend and no ScreenCast (no screen sharing)
+
 ---
 diff --git a/data/gnome-session-openrc-helper b/data/gnome-session-openrc-helper
 new file mode 100755
-index 0000000..dba51a2
+index 0000000..4d61ecd
 --- /dev/null
 +++ b/data/gnome-session-openrc-helper
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,250 @@
 +#!/bin/sh
 +#
 +# Session scoping for the OpenRC user services of a GNOME session.
@@ -34,6 +38,14 @@ index 0000000..dba51a2
 +#   guard CMD  exec CMD only while the session that started the service is alive: supervise-daemon respawns the command
 +#              itself, so this is where "respawn only on a crash while the session is alive" is decided
 +#   alive ID   exit 0 while logind session ID exists and is not closing
++#   activation-env
++#              push the session's desktop identity (XDG_CURRENT_DESKTOP, XDG_SESSION_TYPE, XDG_SESSION_DESKTOP, DESKTOP_SESSION, plus
++#              WAYLAND_DISPLAY / DISPLAY once the compositor has made them) into the user bus's D-Bus ACTIVATION environment, what
++#              gnome-session does under systemd. The user's dbus-daemon is an OpenRC user service started before the session, so
++#              without this everything it activates (xdg-desktop-portal, GNOME Settings, Files) gets a bare environment: the portal
++#              picks no GNOME backend, there is no ScreenCast interface and screen sharing (OBS, browsers, Teams) is broken. Run by the
++#              leader before the session's services start and by gnome-session-init-* once gnome-shell is up; a portal that was
++#              activated without the desktop name is stopped so the next request activates it with the session's environment.
 +#
 +# Everything works on the caller's own XDG_RUNTIME_DIR and uid; nothing here touches another user's or another session's
 +# services.
@@ -183,12 +195,81 @@ index 0000000..dba51a2
 +	exec "$@"
 +}
 +
++# value of $1 for this session: own environment, else the leader's (the leader got the session environment from GDM)
++session_var() {
++	local v lp
++	eval "v=\${$1:-}"
++	if [ -z "$v" ]; then
++		lp=$(cat "$(leader_file pid)" 2>/dev/null)
++		[ -n "$lp" ] && v=$(tr '\0' '\n' <"/proc/$lp/environ" 2>/dev/null | sed -n "s/^$1=//p" | head -n1)
++	fi
++	printf '%s' "$v"
++}
++
++# the compositor's sockets: a Wayland socket in our runtime dir, an X display whose server (Xwayland) runs as this user
++wayland_socket() {
++	local s
++	for s in "${XDG_RUNTIME_DIR}"/wayland-[0-9]*; do
++		case "$s" in *.lock) continue ;; esac
++		[ -S "$s" ] && { echo "${s##*/}"; return; }
++	done
++}
++x_display() {
++	local l p n
++	for l in /tmp/.X[0-9]*-lock; do
++		[ -f "$l" ] || continue
++		p=$(tr -d ' \n' <"$l" 2>/dev/null)
++		[ -n "$p" ] && [ -d "/proc/$p" ] && [ "$(stat -c %u "/proc/$p" 2>/dev/null)" = "$(id -u)" ] || continue
++		n=${l#/tmp/.X}; echo ":${n%-lock}"; return
++	done
++}
++
++# this user's portal frontend (its comm name is cut to 15 characters, so match the command line, never pgrep -x)
++portal_pids() { pgrep -u "$(id -u)" -f '^/usr/(lib|libexec)[^ ]*/xdg-desktop-portal( |$)' 2>/dev/null; }
++
++cmd_activation_env() {
++	local bus v val set="" p
++	[ -n "$XDG_RUNTIME_DIR" ] || exit 0
++	# the OpenRC user bus, never a private bus GDM may have named in the environment
++	bus="${XDG_RUNTIME_DIR}/bus"
++	[ -S "$bus" ] || { log "activation-env: no user bus at $bus"; exit 0; }
++	for v in XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_CLASS XDG_SESSION_ID XDG_MENU_PREFIX; do
++		val=$(session_var "$v")
++		case "$v" in
++		XDG_CURRENT_DESKTOP) [ -n "$val" ] || val=GNOME ;;
++		XDG_SESSION_TYPE) case "$val" in ""|tty) val=wayland ;; esac ;;
++		XDG_SESSION_DESKTOP) [ -n "$val" ] || val=gnome ;;
++		esac
++		[ -n "$val" ] && set="$set $v=$val"
++	done
++	val=$(wayland_socket); [ -n "$val" ] && set="$set WAYLAND_DISPLAY=$val"
++	val=$(x_display); [ -n "$val" ] && set="$set DISPLAY=$val"
++	# the values are single words (desktop names, socket names, ids): word splitting is intended
++	if ! DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" timeout 10 dbus-update-activation-environment $set >/dev/null 2>&1; then
++		log "activation-env: dbus-update-activation-environment failed"
++		exit 0
++	fi
++	log "activation-env:$set"
++	# a portal activated before this update chose its backends without the desktop name: stop it, the next request re-activates it
++	for p in $(portal_pids); do
++		tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null | grep -q '^XDG_CURRENT_DESKTOP=.' && continue
++		log "activation-env: restarting xdg-desktop-portal $p (activated without the session environment)"
++		if rc-service -U xdg-desktop-portal status >/dev/null 2>&1; then
++			rc-service -U xdg-desktop-portal restart >/dev/null 2>&1
++		else
++			kill "$p" 2>/dev/null
++		fi
++	done
++	exit 0
++}
++
 +case "$1" in
 +	teardown) shift; cmd_teardown "$@" ;;
 +	preclean) shift; cmd_preclean "$@" ;;
 +	guard)    shift; cmd_guard "$@" ;;
 +	alive)    session_alive "$2" ;;
-+	*) echo "usage: ${0##*/} teardown|preclean [SESSION_ID] | guard CMD... | alive SESSION_ID" >&2; exit 2 ;;
++	activation-env) cmd_activation_env ;;
++	*) echo "usage: ${0##*/} teardown|preclean [SESSION_ID] | guard CMD... | alive SESSION_ID | activation-env" >&2; exit 2 ;;
 +esac
 diff --git a/data/meson.build b/data/meson.build
 index d21f1d5..20215a4 100644
@@ -208,6 +289,40 @@ index d21f1d5..20215a4 100644
  # Create services like gnome-session.{gnome,gnome-login,...}
  gnome_sessions = [ 'gnome', 'gnome-login', 'gnome-initial-setup' ]
  targets = [
+diff --git a/data/openrc/gnome-session-init-wayland b/data/openrc/gnome-session-init-wayland
+index 388199b..9b8e02c 100755
+--- a/data/openrc/gnome-session-init-wayland
++++ b/data/openrc/gnome-session-init-wayland
+@@ -10,6 +10,12 @@ command="/usr/libexec/gnome-session-ctl"
+ command_args="--signal-init"
+ pidfile="${XDG_RUNTIME_DIR}/gnome-session-init.pid"
+ 
++# the compositor is up: D-Bus-activated services (portals, Settings, Files) get the session environment incl. its display
++start_pre() {
++	/usr/libexec/gnome-session-openrc-helper activation-env
++	return 0
++}
++
+ depend() {
+ 	after gnome-shell-wayland
+ }
+diff --git a/data/openrc/gnome-session-init-x11 b/data/openrc/gnome-session-init-x11
+index bb61899..69a75c0 100755
+--- a/data/openrc/gnome-session-init-x11
++++ b/data/openrc/gnome-session-init-x11
+@@ -10,6 +10,12 @@ command="/usr/libexec/gnome-session-ctl"
+ command_args="--signal-init"
+ pidfile="${XDG_RUNTIME_DIR}/gnome-session-init.pid"
+ 
++# the compositor is up: D-Bus-activated services (portals, Settings, Files) get the session environment incl. its display
++start_pre() {
++	/usr/libexec/gnome-session-openrc-helper activation-env
++	return 0
++}
++
+ depend() {
+ 	after gnome-shell-x11
+ }
 diff --git a/data/openrc/gnome-shell-wayland b/data/openrc/gnome-shell-wayland
 index b478d00..531ae72 100755
 --- a/data/openrc/gnome-shell-wayland
@@ -277,7 +392,7 @@ index 4900b00..ac35115 100755
  
  pidfile="${XDG_RUNTIME_DIR}/gnome-shell-gdm.pid"
 diff --git a/src/leader-openrc.c b/src/leader-openrc.c
-index a000ee9..56e143a 100644
+index a000ee9..e572517 100644
 --- a/src/leader-openrc.c
 +++ b/src/leader-openrc.c
 @@ -26,6 +26,11 @@
@@ -357,7 +472,19 @@ index a000ee9..56e143a 100644
          pid_path = g_build_filename (g_get_user_runtime_dir (),
                                       "gnome-session-leader.pid",
                                       NULL);
-@@ -227,5 +276,8 @@ main (int argc, char **argv)
+@@ -201,6 +250,11 @@ main (int argc, char **argv)
+                 g_error("Couldn't write PID to file %s: %s", pid_path, error->message);
+         }
+ 
++        /* the user bus's activation environment gets the session's desktop identity before anything of the session can
++           D-Bus-activate a service (xdg-desktop-portal picks its backends from XDG_CURRENT_DESKTOP; without it there is no
++           ScreenCast portal). gnome-session-init-* runs it again once the compositor's WAYLAND_DISPLAY / DISPLAY exist. */
++        run_helper ("activation-env", NULL);
++
+         // No way that i'm aware of to enter a user runlevel from librc :/
+         gchar *rl_argv[] = { "/sbin/openrc", "-U", "gnome-session", NULL };
+         if (!async_run_cmd(rl_argv, &error))
+@@ -227,5 +281,8 @@ main (int argc, char **argv)
          g_unix_signal_add (SIGINT, leader_term_or_int_signal_cb, &ctx);
  
          g_main_loop_run (ctx.loop);
