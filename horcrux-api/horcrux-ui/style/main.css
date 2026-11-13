@@ -1033,3 +1033,8 @@ a.stat-card.stat-link .stat-value.alert-count { color: var(--danger); }
 a.stat-card.attention .stat-value { color: var(--danger); }
 a.stat-card.warning.attention .stat-value { color: var(--warning-text); }
 a.stat-card.healthy .stat-value { color: var(--success); }
+/* long host-data tables scroll inside their container, never the page */
+.packages-table-container, .users-table-container, .tests-table-container, .services-table-container, .table-container { overflow-x: auto; max-width: 100%; }
+.packages-table td, .packages-table th { vertical-align: top; }
+.packages-table td:nth-child(2), .packages-table td:nth-child(4), .packages-table td:nth-child(5) { overflow-wrap: anywhere; word-break: break-word; }
+.packages-table td:nth-child(7) { min-width: 14rem; max-width: 32rem; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
