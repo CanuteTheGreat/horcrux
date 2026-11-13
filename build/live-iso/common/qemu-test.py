@@ -1804,11 +1804,24 @@ class Runner:
 
     def console_menu_checks(self, vm):
         a, P = self.a, self.P
+        # The menu is redrawn after the first boot's getty/login output; reading the
+        # screen once raced that redraw (patronus 15256 / 14930, horcrux 14848: same
+        # step passed on the same tree in other runs). Poll until the markers show,
+        # and on failure put the screen tail in the step detail for the next root cause.
+        admin_pw = "Reset a user password" if P.get("web_user") else "Reset the admin password"   # web_auth=pam products reword option 3
+        def menu_ok(s):
+            return "console menu" in s and "Assign interfaces" in s and admin_pw in s and "Web UI:" in s
+        end = time.time() + T(90)
         scr = vm.screen()
+        while not menu_ok(scr) and time.time() < end:
+            time.sleep(2)
+            scr = vm.screen()
         vm.snap("console-menu")
         vm.shot("console-menu")
-        self.step("console-menu-shown", "console menu" in scr and "Assign interfaces" in scr and ("Reset a user password" if P.get("web_user") else "Reset the admin password") in scr and "Web UI:" in scr,   # web_auth=pam products reword option 3
-                  "header, interface list, web URL and the numbered options are on the serial console")
+        tail = "\n".join(l.rstrip() for l in scr.splitlines() if l.strip())[-900:]
+        self.step("console-menu-shown", menu_ok(scr),
+                  "header, interface list, web URL and the numbered options are on the serial console"
+                  + ("" if menu_ok(scr) else " | screen tail: " + tail.replace("\n", " / ")))
         t = self.opt(vm, "9")
         self.step("console-menu-status", "Web UI :" in t and "running" in t, re.sub(r"\s+", " ", t)[:120])
         t = self.opt(vm, "7", [("Host name or IP address to ping", "x;reboot")], done=r"Press Enter to return to the menu")
