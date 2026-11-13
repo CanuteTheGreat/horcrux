@@ -63,6 +63,7 @@ pub use state::AppState;
 // The API server (startup, router, HTTP handlers) and route modules
 pub mod api;
 pub mod app;
+pub mod declarative;
 #[cfg(feature = "lxc")]
 #[path = "api/lxc.rs"]
 pub mod lxc_api;

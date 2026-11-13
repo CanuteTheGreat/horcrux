@@ -140,6 +140,33 @@ enum Commands {
         #[command(subcommand)]
         command: NasCommands,
     },
+    /// Show what applying a declarative spec file would change (exit 2 = changes pending)
+    Plan {
+        /// Spec file (YAML/JSON), or - for stdin
+        #[arg(short, long)]
+        file: String,
+        /// Also plan the deletion of resources the spec doesn't list
+        #[arg(long)]
+        prune: bool,
+    },
+    /// Make the node match a declarative spec file
+    Apply {
+        /// Spec file (YAML/JSON), or - for stdin
+        #[arg(short, long)]
+        file: String,
+        /// Delete resources of managed sections that the spec doesn't list
+        #[arg(long)]
+        prune: bool,
+        /// Only print the plan
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Dump the node's live state as a declarative spec
+    Export {
+        /// Write to this file instead of stdout
+        #[arg(short, long)]
+        file: Option<String>,
+    },
     /// Generate shell completions
     Completions {
         /// Shell type
@@ -1242,6 +1269,17 @@ async fn main() -> Result<()> {
         }
         Commands::Nas { command } => {
             commands::nas::handle_nas_command(command, &api_client, &cli.output).await?
+        }
+        Commands::Plan { file, prune } => {
+            commands::declarative::plan(&api_client, &file, prune).await?
+        }
+        Commands::Apply {
+            file,
+            prune,
+            dry_run,
+        } => commands::declarative::apply(&api_client, &file, prune, dry_run).await?,
+        Commands::Export { file } => {
+            commands::declarative::export(&api_client, file.as_deref()).await?
         }
         Commands::Completions { shell } => {
             generate_completions(shell);

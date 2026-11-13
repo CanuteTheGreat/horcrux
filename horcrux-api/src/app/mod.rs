@@ -556,6 +556,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::storage_content::routes())
         .merge(api::resource_pools::routes())
         .merge(api::inventory::routes())
+        .merge(api::declarative::routes())
         .merge(api::firewall_objects::routes())
         .merge(api::sdn_cni::routes())
         .merge(api::host_net::routes(&state))

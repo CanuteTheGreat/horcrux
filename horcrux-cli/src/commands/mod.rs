@@ -5,6 +5,7 @@ pub mod clone;
 pub mod cluster;
 pub mod console;
 pub mod container;
+pub mod declarative;
 pub mod ha;
 pub mod migrate;
 pub mod monitor;
