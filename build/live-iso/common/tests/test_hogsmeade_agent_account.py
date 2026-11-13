@@ -19,7 +19,7 @@ USR = LR / "acct-user" / "hermes-agent" / "hermes-agent-0.ebuild"
 GRP = LR / "acct-group" / "hermes-agent" / "hermes-agent-0.ebuild"
 
 
-@unittest.skipUnless((REPO / "gentoo").is_dir(), "Horcrux repo tree only")
+@unittest.skipUnless((REPO / "build" / "live-iso" / "common").is_dir(), "Horcrux repo tree only")
 class HogsmeadeAgentAccount(unittest.TestCase):
     def setUp(self):
         if not ACC.is_file():

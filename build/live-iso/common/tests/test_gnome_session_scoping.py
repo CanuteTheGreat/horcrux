@@ -31,7 +31,7 @@ session\t\toptional\tpam_mail.so
 """
 
 
-@unittest.skipUnless((REPO / "gentoo").is_dir(), "Horcrux repo tree only")
+@unittest.skipUnless((REPO / "build" / "live-iso" / "common").is_dir(), "Horcrux repo tree only")
 class SessionScoping(unittest.TestCase):
     def ebuild(self, d, glob):
         e = sorted(d.glob(glob))
