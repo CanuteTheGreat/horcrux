@@ -120,11 +120,17 @@ fn save(rec: &TaskRecord) {
 }
 
 fn load(upid: &str) -> Option<TaskRecord> {
+    // Snapshot the registry BEFORE reading the record: a task inserts itself
+    // before its first save and leaves only after its final save, so "absent
+    // first, record still running after" really is a dead task. Checking the
+    // registry after the read called a task that finished in between
+    // "interrupted" (CI flake: system-admin e2e "update runs emerge --sync").
+    let in_registry = registry().running.lock().unwrap().contains_key(upid);
     let mut rec: TaskRecord =
         serde_json::from_slice(&std::fs::read(record_path(upid)).ok()?).ok()?;
     // A task still marked running that this process isn't running died with
     // the previous API process.
-    if rec.status == "running" && !registry().running.lock().unwrap().contains_key(upid) {
+    if rec.status == "running" && !in_registry {
         rec.status = "interrupted".into();
     }
     Some(rec)
