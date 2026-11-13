@@ -1,0 +1,112 @@
+#!/bin/bash
+# HOGSMEADE: the home folders live in OneDrive Personal, as they did on Windows (OneDrive "known folder move").
+#   ~/Desktop ~/Documents ~/Downloads ~/Music ~/Pictures ~/Videos ~/Templates ~/Public -> ~/OneDrive-Personal/<same name>
+#   ~/Screenshots -> ~/OneDrive-Personal/Pictures/Screenshots (GNOME writes there while XDG_PICTURES_DIR was unset)
+# and ~/.config/user-dirs.dirs names the OneDrive paths (user-dirs.conf enabled=False so xdg-user-dirs-update never resets them).
+#
+# Runs at every login (XDG autostart, as the user) and by hand: `hogsmeade-known-folders [--check]`.
+# It NEVER moves or deletes files. A folder that is still a real directory with content is reported and left alone: merge it into
+# OneDrive first (owner rule: no deletions). Only an EMPTY real directory (what GNOME/xdg-user-dirs-update creates at first login) is
+# replaced by the link. Nothing pops up on screen: findings go to ~/.local/state/hogsmeade-known-folders.log (and syslog via logger).
+set -u
+umask 077
+OD_NAME=OneDrive-Personal
+OD="${HOME}/${OD_NAME}"
+STATE="${XDG_STATE_HOME:-${HOME}/.local/state}"
+LOG="${STATE}/hogsmeade-known-folders.log"
+CHECK=0
+[[ ${1:-} == --check ]] && CHECK=1
+
+# home name | path inside OneDrive | XDG key ('-' = none)
+MAP=(
+	"Desktop|Desktop|DESKTOP"
+	"Downloads|Downloads|DOWNLOAD"
+	"Templates|Templates|TEMPLATES"
+	"Public|Public|PUBLICSHARE"
+	"Documents|Documents|DOCUMENTS"
+	"Music|Music|MUSIC"
+	"Pictures|Pictures|PICTURES"
+	"Videos|Videos|VIDEOS"
+	"Screenshots|Pictures/Screenshots|-"
+)
+
+note() {
+	local msg="hogsmeade-known-folders: $*"
+	echo "${msg}"
+	if [[ ${CHECK} == 0 ]]; then
+		mkdir -p "${STATE}" && printf '%s %s\n' "$(date '+%F %T')" "${msg}" >> "${LOG}"
+		command -v logger >/dev/null && logger -t hogsmeade-known-folders -- "$*"
+	fi
+	return 0
+}
+
+if [[ ! -d ${OD} ]]; then
+	note "${OD} does not exist yet (run 'onedrive-login personal' once): nothing changed"
+	exit 0
+fi
+
+bad=0
+for row in "${MAP[@]}"; do
+	IFS='|' read -r name sub _ <<< "${row}"
+	link="${HOME}/${name}"
+	want="${OD_NAME}/${sub}"
+	if [[ ${CHECK} == 0 && ! -d ${OD}/${sub} ]]; then
+		mkdir -p "${OD}/${sub}" || { note "cannot create ${OD}/${sub}"; bad=1; continue; }
+	fi
+	if [[ -L ${link} ]]; then
+		cur=$(readlink "${link}")
+		if [[ ${cur} != "${want}" && ${cur} != "${OD}/${sub}" ]]; then
+			note "WARNING: ${link} is a link to ${cur}, not ${want}: left alone"
+			bad=1
+		fi
+	elif [[ -d ${link} ]]; then
+		if [[ -z $(ls -A "${link}" 2>/dev/null) ]]; then
+			if [[ ${CHECK} == 1 ]]; then
+				note "${link} is an empty folder (would become a link to ${want})"
+				bad=1
+			else
+				# an empty folder holds no files: replace it with the link
+				rmdir "${link}" && ln -s "${want}" "${link}" && note "${link} -> ${want}" || { note "could not link ${link}"; bad=1; }
+			fi
+		else
+			note "WARNING: ${link} is a real folder with files: left alone (merge it into ${OD}/${sub}, then run hogsmeade-known-folders again)"
+			bad=1
+		fi
+	elif [[ -e ${link} ]]; then
+		note "WARNING: ${link} exists and is not a folder: left alone"
+		bad=1
+	elif [[ ${CHECK} == 1 ]]; then
+		note "${link} missing (would become a link to ${want})"
+		bad=1
+	else
+		ln -s "${want}" "${link}" && note "${link} -> ${want}" || { note "could not link ${link}"; bad=1; }
+	fi
+done
+
+cfg="${XDG_CONFIG_HOME:-${HOME}/.config}"
+dirs_new=$(
+	echo "# Written by hogsmeade-known-folders (app-misc/hogsmeade-microsoft): the home folders live in OneDrive Personal."
+	echo "# xdg-user-dirs-update is off for this user (user-dirs.conf), so these lines stay."
+	for row in "${MAP[@]}"; do
+		IFS='|' read -r _ sub key <<< "${row}"
+		[[ ${key} == - ]] && continue
+		echo "XDG_${key}_DIR=\"\$HOME/${OD_NAME}/${sub}\""
+	done
+)
+conf_new=$'# Written by hogsmeade-known-folders: user-dirs.dirs points at OneDrive Personal; do not let xdg-user-dirs-update rewrite it.\nenabled=False'
+
+put() { # file content: replace only when different; the first differing original is kept as <file>.hogsmeade-bak
+	local f=$1 c=$2
+	[[ -f ${f} && $(cat "${f}") == "${c}" ]] && return 0
+	if [[ ${CHECK} == 1 ]]; then
+		note "${f} is not the OneDrive version"
+		bad=1
+		return 0
+	fi
+	mkdir -p "${cfg}"
+	[[ -f ${f} && ! -e ${f}.hogsmeade-bak ]] && cp -p "${f}" "${f}.hogsmeade-bak"
+	printf '%s\n' "${c}" > "${f}.tmp.$$" && mv -f "${f}.tmp.$$" "${f}" && note "wrote ${f}"
+}
+put "${cfg}/user-dirs.conf" "${conf_new}"
+put "${cfg}/user-dirs.dirs" "${dirs_new}"
+exit "${bad}"
