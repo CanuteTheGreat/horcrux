@@ -3,8 +3,8 @@
 
 EAPI=8
 
-DESCRIPTION="Portage repos.conf entry that syncs the Horcrux overlay from its own git repository"
-HOMEPAGE="https://git.canutethegreat.com/CanuteTheGreat/horcrux-overlay"
+DESCRIPTION="Portage repos.conf entry that syncs the Horcrux overlay from its public GitHub mirror"
+HOMEPAGE="https://horcrux.errant.solutions/"
 S="${WORKDIR}"
 
 LICENSE="MIT"

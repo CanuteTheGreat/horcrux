@@ -6,7 +6,7 @@ EAPI=8
 inherit gnome2-utils
 
 DESCRIPTION="Horcrux Surface tablet desktop: XFCE + LightDM, touch/pen, on-screen keyboard, power policy, media keys"
-HOMEPAGE="https://git.canutethegreat.com/CanuteTheGreat/horcrux"
+HOMEPAGE="https://horcrux.errant.solutions/"
 S="${WORKDIR}"
 
 LICENSE="GPL-2"

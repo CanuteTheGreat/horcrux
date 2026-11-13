@@ -109,6 +109,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 gentoo/ci/check-manifests.py
+      # Public overlay files (shipped to end users, mirrored to GitHub) must not name the private Forgejo host.
+      - run: python3 gentoo/ci/check-no-forgejo.py
 
   check:
     name: Check
