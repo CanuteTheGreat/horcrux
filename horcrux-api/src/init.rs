@@ -125,6 +125,12 @@ pub struct OpenRcBackend<R: CommandRunner = SystemRunner> {
     root: PathBuf,
 }
 
+impl Default for OpenRcBackend<SystemRunner> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpenRcBackend<SystemRunner> {
     pub fn new() -> Self {
         Self {
@@ -218,6 +224,12 @@ impl<R: CommandRunner> InitBackend for OpenRcBackend<R> {
 pub struct SystemdBackend<R: CommandRunner = SystemRunner> {
     runner: R,
     root: PathBuf,
+}
+
+impl Default for SystemdBackend<SystemRunner> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SystemdBackend<SystemRunner> {
