@@ -204,7 +204,7 @@ def clock_gate(sh, step, host_now=time.time, timeout=480, label="months-off-rtc-
 DOCKER_FWD_CHECK = r'''
 cfg=0; grep -Eq '"ip-forward-no-drop"[[:space:]]*:[[:space:]]*true' /etc/docker/daemon.json 2>/dev/null && cfg=1
 echo "CFG $cfg"
-if ! command -v dockerd >/dev/null 2>&1; then echo "DOCKER-ABSENT"; echo "FWD-DONE"; exit 0; fi
+if ! command -v dockerd >/dev/null 2>&1; then echo "DOCKER-ABSENT"; ls -d /var/db/pkg/sys-apps/horcrux-core-* >/dev/null 2>&1 || echo "NO-HORCRUX-CORE"; echo "FWD-DONE"; exit 0; fi
 rc-service docker status >/dev/null 2>&1 || rc-service docker start >/dev/null 2>&1
 n=0; until docker info >/dev/null 2>&1 || [ $n -ge 60 ]; do n=$((n+1)); sleep 1; done
 docker info >/dev/null 2>&1 && echo "DOCKER-UP" || echo "DOCKER-DOWN"
@@ -239,6 +239,8 @@ def docker_forward_gate(sh, step):
     o = (o or "").replace("\r", "")
     cfg = re.search(r"(?m)^CFG 1$", o) is not None
     absent = "DOCKER-ABSENT" in o
-    ok = "FWD-DONE" in o and cfg and (absent or ("DOCKER-UP" in o and "NETNS-PING-OK" in o and "NETNS-PING-AFTER-RESTART-OK" in o and not re.search(r"(?mi)^POLICY(-AFTER-RESTART)? .*drop", o)))
-    step("docker-does-not-break-vm-nat-forwarding", ok, re.sub(r"\s+", " ", o.strip())[-300:] if not absent or not ok else "docker not installed in this image; daemon.json ip-forward-no-drop shipped")
+    # a product that ships neither Docker nor horcrux-core (Patronus) has no daemon.json to check: nothing to prove
+    not_applicable = absent and "NO-HORCRUX-CORE" in o
+    ok = "FWD-DONE" in o and (not_applicable or cfg and (absent or ("DOCKER-UP" in o and "NETNS-PING-OK" in o and "NETNS-PING-AFTER-RESTART-OK" in o and not re.search(r"(?mi)^POLICY(-AFTER-RESTART)? .*drop", o))))
+    step("docker-does-not-break-vm-nat-forwarding", ok, re.sub(r"\s+", " ", o.strip())[-300:] if not absent or not ok else "not applicable: neither docker nor horcrux-core in this image" if not_applicable else "docker not installed in this image; daemon.json ip-forward-no-drop shipped")
     return ok

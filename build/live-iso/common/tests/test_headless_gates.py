@@ -138,6 +138,8 @@ class DockerForwardGate(unittest.TestCase):
         self.assertFalse(self.run_gate("CFG 1\nDOCKER-UP\nNETNS-PING-OK\nPOLICY-AFTER-RESTART policy drop\nNETNS-PING-AFTER-RESTART-FAIL\nFWD-DONE\n")[1])  # restart after the VM bridge exists broke it
         self.assertFalse(self.run_gate("CFG 1\nDOCKER-DOWN\nNETNS-PING-OK\nFWD-DONE\n")[1])    # docker installed but not running = not proven
         self.assertFalse(self.run_gate("CFG 0\nDOCKER-ABSENT\nFWD-DONE\n")[1])                  # option missing from daemon.json
+        self.assertTrue(self.run_gate("CFG 0\nDOCKER-ABSENT\nNO-HORCRUX-CORE\nFWD-DONE\n")[1])   # Patronus: no docker, no horcrux-core, nothing to prove
+        self.assertFalse(self.run_gate("CFG 0\nDOCKER-UP\nNO-HORCRUX-CORE\nNETNS-PING-OK\nNETNS-PING-AFTER-RESTART-OK\nFWD-DONE\n")[1])  # docker present: config still required
         self.assertFalse(self.run_gate("")[1])                                                     # script did not finish = FAIL
 
     def test_script_is_valid_shell_and_core_ships_the_option(self):

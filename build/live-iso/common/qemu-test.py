@@ -1696,7 +1696,11 @@ class Runner:
                     self.late_link_up(vm, netnames, ok)
                 vm.shot("login-prompt")
                 self.serial_login(vm, P["old_pw"], expect_ok=False)
-                self.step("serial-root-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True), "lands in the console menu")
+                # guided (TUI/GUI) installs of a web_auth=pam product keep root LOCKED: the chosen password belongs to the administrator user
+                # (stages.RootpassStage.commit); only an answer file carries a root hash
+                adm = P["web_user"] if P.get("web_user") and a.flow != "auto" else "root"
+                self.step("serial-root-login-with-chosen-password" if adm == "root" else "serial-admin-login-with-chosen-password",
+                          self.serial_login(vm, PW, expect_ok=True, user=adm), "lands in the console menu" if adm == "root" else f"{adm} signs in on the console")
             deadline = time.time() + T(300)
             got = None
             while time.time() < deadline:
@@ -1914,12 +1918,12 @@ class Runner:
         rc, o = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep '[c]onsole-menu'")
         self.step("console-menu-on-vga-tty1", rc == 0 and "tty1" in o, o.strip()[:100])
 
-    def serial_login(self, vm, pw, expect_ok):
+    def serial_login(self, vm, pw, expect_ok, user="root"):
         for _ in range(6):
             vm.send("\r")
             if not vm.expect_raw("login:", 20):
                 continue
-            vm.send("root\r")
+            vm.send(f"{user}\r")
             if vm.expect_raw("Password", 15):
                 vm.send(f"{pw}\r")
                 if expect_ok:
