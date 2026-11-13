@@ -19,6 +19,8 @@ DEV=(--device /dev/net/tun)
 if [ -e /dev/kvm ] && [ "${HX_NO_KVM:-0}" != 1 ]; then DEV+=(--device /dev/kvm); echo "KVM: yes"; else echo "KVM: no (TCG)"; fi
 docker run -d --name "$NAME" --hostname gsnode --privileged "${DEV[@]}" \
   --memory 4g "$IMAGE" sleep 7200 >/dev/null
+# Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
+bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 curl -sfL --retry 3 -o /tmp/$NAME-cirros.img "$CIRROS_URL"
 docker exec "$NAME" mkdir -p /hx /var/lib/hx/images /var/lib/hx/vms
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api

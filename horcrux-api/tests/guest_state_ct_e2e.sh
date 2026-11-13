@@ -26,6 +26,8 @@ trap cleanup EXIT
 
 docker run -d --init --name "$NAME" --privileged --cgroupns=private --memory 3g --memory-swap 3g \
   "$IMAGE" sleep 7200 >/dev/null
+# Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
+bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$HERE/guest_state_ct_e2e.py" "$NAME":/tmp/guest_state_ct_e2e.py
 

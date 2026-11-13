@@ -118,6 +118,8 @@ docker run -d --name "$name" --privileged --network "$net" --memory 2g \
     "$K3S_IMAGE" server \
     --disable=traefik,metrics-server,servicelb,local-storage \
     --write-kubeconfig-mode 644 >/dev/null
+# Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
+bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$name"
 [ -n "${GITHUB_ENV:-}" ] && echo "HORCRUX_CI_K3S=$name" >>"$GITHUB_ENV"
 
 ready=

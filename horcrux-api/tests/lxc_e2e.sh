@@ -78,6 +78,8 @@ fi
 # finishing.
 docker run -d --init --name "$NAME" --privileged --cgroupns=private --memory 3g --memory-swap 3g \
   "${NET_ARGS[@]}" "$IMAGE" sleep 7200 >/dev/null
+# Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
+bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$HERE/lxc_e2e.py" "$NAME":/tmp/lxc_e2e.py
 # LXC_E2E_PY: another scenario that imports the helpers from lxc_e2e.py.

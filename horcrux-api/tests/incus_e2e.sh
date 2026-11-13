@@ -82,6 +82,8 @@ fi
 
 docker run -d --init --name "$NAME" --privileged --cgroupns=private --memory 6g --memory-swap 6g \
   "${NET_ARGS[@]}" "${DEV_ARGS[@]}" "$IMAGE" sleep 7200 >/dev/null
+# Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
+bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$HERE/incus_e2e.py" "$NAME":/tmp/incus_e2e.py
 if [ "$MODE" = serve ]; then

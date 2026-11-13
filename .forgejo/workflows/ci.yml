@@ -420,6 +420,13 @@ jobs:
           docker info --format 'docker {{.ServerVersion}} on {{.OperatingSystem}}'
           docker pull -q busybox:latest
 
+      - name: Record host AppArmor sysctls (privileged e2e containers must not change them)
+        # kernel.apparmor_restrict_unprivileged_{userns,unconfined} are host-global; the
+        # privileged incus/k3s/lxc siblings are hardened (ci/sysctl-guard.sh) and the
+        # assert step below fails the job if the host values moved.
+        if: ${{ !cancelled() }}
+        run: bash "$GITHUB_WORKSPACE/ci/sysctl-guard.sh" snapshot
+
       - name: Start k3s + local chart repo (Helm contract test)
         # The UI contract test drives the Kubernetes > Helm pages' routes
         # against a real cluster: a throwaway k3s sibling container plus a
@@ -590,6 +597,10 @@ jobs:
           echo "UI contract test binary: ${contract:-<none>}"
           test -n "$contract"
           bash horcrux-api/tests/incus_e2e.sh ct target/debug/horcrux-api "$contract"
+
+      - name: Assert host AppArmor sysctls unchanged
+        if: ${{ !cancelled() }}
+        run: bash "$GITHUB_WORKSPACE/ci/sysctl-guard.sh" assert
 
       - name: Run tests (no default features)
         # Unit tests of the minimal build. The integration/contract tests
@@ -1332,6 +1343,13 @@ jobs:
           for i in $(seq 1 60); do curl -sf --cacert /tmp/horcrux-ca.pem -o /dev/null https://localhost:8006/api/health && break; sleep 1; done
           /tmp/pw/bin/python ci/ux-qa/ux_crawl.py --report /tmp/ux-crawl.json --shots /tmp/ux-shots
 
+      - name: Record host AppArmor sysctls (privileged e2e containers must not change them)
+        # kernel.apparmor_restrict_unprivileged_{userns,unconfined} are host-global; the
+        # privileged incus/k3s/lxc siblings are hardened (ci/sysctl-guard.sh) and the
+        # assert step below fails the job if the host values moved.
+        if: ${{ !cancelled() }}
+        run: bash "$GITHUB_WORKSPACE/ci/sysctl-guard.sh" snapshot
+
       - name: LXC browser E2E (real nested LXC behind the UI)
         # The API + this build's UI run in a privileged LXC sibling on this
         # job's docker network (lxc_e2e.sh serve writes its HTTPS URL and CA);
@@ -1366,6 +1384,10 @@ jobs:
           fi
           bash horcrux-api/tests/incus_e2e.sh stop
           exit $rc
+
+      - name: Assert host AppArmor sysctls unchanged
+        if: ${{ !cancelled() }}
+        run: bash "$GITHUB_WORKSPACE/ci/sysctl-guard.sh" assert
 
       - name: Dump horcrux-api log
         if: always()
