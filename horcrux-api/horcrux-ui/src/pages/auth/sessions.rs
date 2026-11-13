@@ -227,18 +227,18 @@ pub fn SessionsPage() -> impl IntoView {
                     let (total, unique_users, expiring) = session_stats();
                     view! {
                         <div class="stats-grid">
-                            <div class="stat-card">
+                            <a class="stat-card stat-link" href="#sessions-container">
                                 <div class="stat-value">{total}</div>
                                 <div class="stat-label">"Active Sessions"</div>
-                            </div>
-                            <div class="stat-card">
+                            </a>
+                            <a class="stat-card stat-link" href="/auth/users">
                                 <div class="stat-value">{unique_users}</div>
                                 <div class="stat-label">"Unique Users"</div>
-                            </div>
-                            <div class="stat-card" class:warning=move || { expiring > 0 }>
+                            </a>
+                            <a class="stat-card stat-link" class:warning=move || { expiring > 0 } href="#sessions-container">
                                 <div class="stat-value">{expiring}</div>
                                 <div class="stat-label">"Expiring Soon"</div>
-                            </div>
+                            </a>
                         </div>
                     }
                 }}
@@ -271,7 +271,7 @@ pub fn SessionsPage() -> impl IntoView {
                 </div>
             </div>
 
-            <div class="sessions-container">
+            <div class="sessions-container" id="sessions-container">
                 {move || if loading.get() && sessions.get().is_empty() {
                     view! {
                         <div class="loading-container">

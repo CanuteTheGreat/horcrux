@@ -13,6 +13,7 @@ sys.path.insert(0, HERE)
 import check_os_release as osr  # noqa: E402
 import check_public_text as pub  # noqa: E402
 import check_owner_findings as of  # noqa: E402
+import ux_crawl as uc  # noqa: E402
 
 GOOD = '''NAME="Horcrux"
 ID=horcrux
@@ -89,6 +90,26 @@ class PublicText(unittest.TestCase):
                 t.addfile(ti, io.BytesIO(data))
             hits = pub.scan_paths([f"{d}/p.tar.gz"], pub.default_rules(), allow=[], baseline={})
             self.assertTrue(any(h["sev"] == "fail" and "etc/x.conf" in h["file"] for h in hits))
+
+
+class CrawlRules(unittest.TestCase):
+    def test_zero_in_red_is_caught_but_not_green_or_normal(self):
+        self.assertTrue(uc.is_red("rgb(198, 45, 18)"))
+        self.assertTrue(uc.is_red("rgb(255, 107, 107)"))
+        self.assertFalse(uc.is_red("rgb(45, 122, 32)"))
+        self.assertFalse(uc.is_red("rgb(74, 85, 180)"))
+        self.assertFalse(uc.is_red("rgb(255, 255, 255)"))
+        for z in ("0", " 0 ", "0%", "0 B", "None"):
+            self.assertTrue(uc.is_zero(z), z)
+        for n in ("1", "10", "36.5%", "3"):
+            self.assertFalse(uc.is_zero(n), n)
+
+    def test_duplicate_titles_need_three_distinct_routes(self):
+        pg = lambda r, t: {"route": r, "title": t}  # noqa: E731
+        same = [pg("/a", "X"), pg("/b?x=1", "X"), pg("/b", "X"), pg("/c", "Y"), pg("/d", "Y")]
+        self.assertEqual(uc.duplicate_titles(same), {})  # /b twice counts once -> X on 2 routes
+        same.append(pg("/e", "X"))
+        self.assertEqual(list(uc.duplicate_titles(same)), ["X"])
 
 
 class OwnerFindings(unittest.TestCase):

@@ -172,7 +172,7 @@ pub fn MaintenancePage() -> impl IntoView {
     };
 
     view! {
-        <div class="maintenance-page">
+        <div class="maintenance-page ha-page p-6">
             <div class="page-header"><h1>"Maintenance & Rebalance"</h1></div>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="maint-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="maint-error">{e}</div> })}
@@ -264,7 +264,7 @@ pub fn MaintenancePage() -> impl IntoView {
                     {move || {
                         let h = history.get();
                         if h.is_empty() {
-                            view! { <tr><td colspan="5" class="no-data">"No guest has been moved yet."</td></tr> }.into_view()
+                            view! { <tr><td colspan="5" class="no-data">"No guest has been moved yet." " " <button class="btn btn-primary btn-sm" type="button" on:click=move |_| crate::components::focus::focus_id("rebalance-now")>"Rebalance now"</button></td></tr> }.into_view()
                         } else {
                             h.into_iter().map(|m| view! {
                                 <tr class="move-history">

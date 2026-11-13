@@ -157,7 +157,7 @@ pub fn MetricServersPage() -> impl IntoView {
                     }).collect_view()}
                 </tbody>
             </table>
-            {move || servers.get().is_empty().then(|| view! { <p class="form-help" id="ms-empty">"No metric server configured."</p> })}
+            {move || servers.get().is_empty().then(|| view! { <p class="form-help" id="ms-empty">"No metric server configured. " <button class="btn btn-primary btn-sm" type="button" on:click=move |_| crate::components::focus::focus_id("ms-add-influx")>"Add a metric server"</button></p> })}
 
             {move || form.get().map(|s| view! {
                 <fieldset class="form-section" id="ms-form">

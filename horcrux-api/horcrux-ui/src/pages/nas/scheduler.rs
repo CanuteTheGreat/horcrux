@@ -227,7 +227,7 @@ pub fn SchedulerPage() -> impl IntoView {
                                 <div class="stat-value">{st.running_jobs}</div>
                                 <div class="stat-label">"Running"</div>
                             </div>
-                            <div class="stat-card stat-warning">
+                            <div class="stat-card stat-warning" class:attention=move || { st.recent_failures_24h > 0 }>
                                 <div class="stat-value">{st.recent_failures_24h}</div>
                                 <div class="stat-label">"Failures (24h)"</div>
                             </div>

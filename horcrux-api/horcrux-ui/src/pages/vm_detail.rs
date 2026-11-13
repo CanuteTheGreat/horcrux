@@ -29,6 +29,7 @@ pub fn VmDetailPage() -> impl IntoView {
         spawn_local(async move {
             match api::get_vm(&vid).await {
                 Ok(v) => {
+                    crate::titles::set_subject(&v.name);
                     set_vm.set(Some(v));
                     set_error.set(None);
                 }

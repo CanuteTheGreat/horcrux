@@ -10,11 +10,13 @@ One deterministic, no-LLM check for the classes of defect the owner kept finding
   bad-text          'undefined', 'NaN', '[object Object]', 'missing field', 'panicked' printed to the user
   private-text      a private URL / private host / owner machine name visible in the UI
   internal-name     build-internal vocabulary shown to users (see forbidden_names in the config)
-  overflow          the page scrolls sideways (phone: fail, desktop: warn)
+  overflow          the page scrolls sideways (fail at every width)
   canvas-overlay    a visible positioned element covers a canvas/iframe/video (VNC console buttons over the guest)
-  unlinked-summary  a stat/summary card that is not a link and has no link inside (dead dashboard counts)
-  empty-no-action   an empty state ("No X found") with no button or link to do something about it  (warn)
-  same-title        document.title does not identify the page on >= 5 routes                     (warn)
+  unlinked-summary  a stat/summary card that is not a link and has no link inside, on ANY page (dead counts)
+  empty-no-action   an empty state ("No X found") with no button or link to do something about it
+  same-title        one document.title shared by >= 3 routes (each page needs its own title)
+  nav-broken        at 1280 and 1440px a nav item is wrapped onto two lines, clipped off the right edge, or the bar overflows
+  zero-red          a stat card showing 0 / none is painted red: red is only for > 0 (owner rule)
 
 Usage:
   BASE_URL=https://host:8006 ADMIN_PASSWORD=... ux_crawl.py [--config ux-crawl.json] [--static DIR] [--report out.json]
@@ -37,10 +39,32 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from playwright.sync_api import sync_playwright
+
+def is_red(rgb):
+    """True for a clearly red text colour ('rgb(198, 45, 18)'): the colour of a problem."""
+    m = re.match(r"rgba?\((\d+),\s*(\d+),\s*(\d+)", rgb or "")
+    if not m:
+        return False
+    r, g, b = map(int, m.groups())
+    return r >= 150 and r - max(g, b) >= 70
+
+
+def is_zero(text):
+    """'0', '0%', 'None', '-' style values: the count of nothing."""
+    return bool(re.fullmatch(r"\s*(0+(\.0+)?\s*[%a-zA-Z/]{0,4}|none|no)\s*", text or "", re.I))
+
+
+def duplicate_titles(pages, min_routes=3):
+    """{title: sorted routes} for titles shared by >= min_routes distinct routes (query strings ignored)."""
+    titles = {}
+    for pg in pages:
+        titles.setdefault(pg["title"], set()).add(pg["route"].split("?")[0])
+    return {t: sorted(rs) for t, rs in titles.items() if len(rs) >= min_routes}
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VIEWPORTS = {"desktop": (1280, 800), "phone": (390, 844)}
+VIEWPORTS = {"desktop": (1280, 800), "wide": (1440, 900), "phone": (390, 844)}
+NAV_WIDTHS = ("desktop", "wide")  # nav must fit on one line at both
 
 # Runs in the page: facts the rules need.  Kept as one evaluate so a page costs one round trip.
 FACTS_JS = r"""() => {
@@ -68,6 +92,31 @@ FACTS_JS = r"""() => {
     if (el.closest('a[href]') || el.querySelector('a[href]') || el.getAttribute('role') === 'link' || el.hasAttribute('onclick')) continue;
     unlinked.push((el.id || el.className || el.tagName) + ': ' + (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 50));
   }
+  // stat cards showing nothing in the colour of a problem
+  const zeroRed = [];
+  for (const el of document.querySelectorAll('.stat-card, [class*="summary-card"]')) {
+    if (!vis(el)) continue;
+    const v = el.querySelector('.stat-value, [class*="value"]') || el;
+    zeroRed.push([getComputedStyle(v).color, (v.innerText || '').trim().slice(0, 12), (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 40)]);
+  }
+  // nav: every item on one row, one line each, inside the viewport (only when the bar is not the phone drawer)
+  const navProblems = [];
+  const nav = document.querySelector('nav.navbar');
+  const menu = nav && nav.querySelector('.navbar-menu');
+  if (menu && vis(menu)) {
+    const items = [...menu.querySelectorAll(':scope > .navbar-item, :scope > .navbar-dropdown > .navbar-item')].filter(vis);
+    const rows = new Set(items.map(i => Math.round(i.getBoundingClientRect().top / 8)));
+    if (rows.size > 1) navProblems.push('menu items sit on ' + rows.size + ' rows');
+    for (const i of items) {
+      const r = i.getBoundingClientRect(), lh = parseFloat(getComputedStyle(i).lineHeight) || 24;
+      const pad = parseFloat(getComputedStyle(i).paddingTop) + parseFloat(getComputedStyle(i).paddingBottom);
+      if (r.height > lh + pad + 4) navProblems.push("'" + i.innerText.trim() + "' wraps onto " + Math.round((r.height - pad) / lh) + ' lines');
+      if (r.right > window.innerWidth + 0.5) navProblems.push("'" + i.innerText.trim() + "' is clipped off the right edge");
+    }
+    const tg = nav.querySelector('.tagline');
+    if (tg && vis(tg) && tg.getBoundingClientRect().height > 2 * (parseFloat(getComputedStyle(tg).lineHeight) || 20)) navProblems.push('tagline wraps');
+    if (nav.scrollWidth > nav.clientWidth + 1) navProblems.push('nav bar overflows by ' + (nav.scrollWidth - nav.clientWidth) + 'px');
+  }
   // empty states with no way forward
   const empty = [];
   const emptyRe = /^(no|there are no|nothing|none)\b[^.]{0,60}\b(found|yet|configured|available|defined|to show|to display|here)\b/i;
@@ -82,7 +131,7 @@ FACTS_JS = r"""() => {
   const root = document.documentElement;
   return {
     textLen: text.trim().length, text: text.slice(0, 60000), title: document.title,
-    overflowX: root.scrollWidth - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), empty: empty.slice(0, 3),
+    overflowX: root.scrollWidth - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), zeroRed, navProblems, empty: empty.slice(0, 3),
     h1: ((document.querySelector('main h1, h1, main h2, h2') || {}).innerText || '').trim().slice(0, 60),
   };
 }"""
@@ -95,7 +144,6 @@ def load_config(path):
     cfg.setdefault("login_path", "/login")
     cfg.setdefault("max_routes", 120)
     cfg.setdefault("forbidden_names", [])
-    cfg.setdefault("summary_fail_routes", ["/"])  # the landing dashboard; stat cards elsewhere are filters/summaries -> warn
     cfg.setdefault("private_fail", [])
     cfg.setdefault("private_warn", [])
     return cfg
@@ -140,7 +188,7 @@ def main():
     ap.add_argument("--config", default=os.path.join(HERE, "ux-crawl.json"))
     ap.add_argument("--report")
     ap.add_argument("--shots")
-    ap.add_argument("--widths", default="desktop,phone")
+    ap.add_argument("--widths", default="desktop,wide,phone")  # wide (1440) only re-checks the first routes: the nav is the same everywhere
     ap.add_argument("--schemes", default="light,dark")
     ap.add_argument("--routes", help="comma separated routes instead of discovering them from the nav")
     ap.add_argument("--max-routes", type=int)
@@ -191,6 +239,8 @@ def main():
         seen.add(key)
         findings.append({"id": f"{kind}:{route.split('?')[0]}", "kind": kind, "sev": sev, "route": route, "viewport": vp, "scheme": scheme, "detail": detail})
 
+    from playwright.sync_api import sync_playwright  # imported late so the pure helpers are unit-testable without it
+
     widths = [w for w in a.widths.split(",") if w]
     schemes = [s for s in a.schemes.split(",") if s]
     t0 = time.time()
@@ -219,7 +269,7 @@ def main():
                             if r and r not in routes:
                                 routes.append(r)
                 queue, done = list(routes), set()
-                limit = a.max_routes or cfg["max_routes"]
+                limit = 4 if vp == "wide" else (a.max_routes or cfg["max_routes"])
                 while queue and len(done) < limit:
                     route = queue.pop(0)
                     if route in done:
@@ -255,13 +305,19 @@ def main():
                         if m:
                             add("internal-name", "fail", route, vp, scheme, f"internal name '{m.group(0)}' visible")
                     if f["overflowX"] > 1:
-                        add("overflow", "fail" if vp == "phone" else "warn", route, vp, scheme, f"scrolls sideways by {f['overflowX']}px")
+                        add("overflow", "fail", route, vp, scheme, f"scrolls sideways by {f['overflowX']}px")
                     for o in f["overlays"]:
                         add("canvas-overlay", "fail", route, vp, scheme, o)
                     for u in f["unlinked"]:
-                        add("unlinked-summary", "fail" if route.split("?")[0] in cfg["summary_fail_routes"] else "warn", route, vp, scheme, u)
+                        add("unlinked-summary", "fail", route, vp, scheme, u)
                     for e in f["empty"]:
-                        add("empty-no-action", "warn", route, vp, scheme, e)
+                        add("empty-no-action", "fail", route, vp, scheme, e)
+                    for color, val, label in f["zeroRed"]:
+                        if is_zero(val) and is_red(color):
+                            add("zero-red", "fail", route, vp, scheme, f"'{label}' shows {val} in red {color}")
+                    if vp in NAV_WIDTHS:
+                        for n in f["navProblems"]:
+                            add("nav-broken", "fail", route, vp, scheme, n)
                     # follow the page's own links (one level, same origin): cards/rows that point somewhere are pages too
                     for href, _t, in_nav in page.evaluate(LINKS_JS):
                         r = norm_route(href, base)
@@ -276,12 +332,8 @@ def main():
                             add("screenshot", "warn", route, vp, scheme, str(e)[:120])
                 ctx.close()
         browser.close()
-    titles = {}
-    for pg in pages:
-        titles.setdefault(pg["title"], set()).add(pg["route"].split("?")[0])
-    for t, rs in titles.items():
-        if len(rs) >= 5:
-            add("same-title", "warn", "*", "all", "all", f"document.title '{t}' on {len(rs)} routes")
+    for t, rs in duplicate_titles(pages).items():
+        add("same-title", "fail", "*", "all", "all", f"document.title '{t}' on {len(rs)} routes: {', '.join(rs[:4])}")
 
     new_fail = [x for x in findings if x["sev"] == "fail" and x["id"] not in baseline]
     known = sorted({x["id"] for x in findings if x["sev"] == "fail" and x["id"] in baseline})

@@ -394,7 +394,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
     };
 
     view! {
-        <div class="p-6">
+        <div class="ha-page p-6">
             <div class="flex justify-between items-center mb-6">
                 <div>
                     <h1 class="text-2xl font-bold">"Cluster Management"</h1>

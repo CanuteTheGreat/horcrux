@@ -177,7 +177,7 @@ pub fn GuestPowerPage() -> impl IntoView {
                 <tbody>
                     {move || match ov.get() {
                         None => view! { <tr><td colspan="9" class="no-data">"Loading..."</td></tr> }.into_view(),
-                        Some(o) if o.guests.is_empty() => view! { <tr><td colspan="9" class="no-data">"No guests yet."</td></tr> }.into_view(),
+                        Some(o) if o.guests.is_empty() => view! { <tr><td colspan="9" class="no-data">"No guests yet." " " <a class="btn btn-primary btn-sm" href="/vms/create">"Create VM"</a> " " <a class="btn btn-secondary btn-sm" href="/vms/import-libvirt">"Import from libvirt"</a></td></tr> }.into_view(),
                         Some(o) => o.guests.into_iter().map(|g| view! {
                             <GuestPowerRow g=g set_notice set_error reload/>
                         }).collect_view(),

@@ -205,7 +205,7 @@ pub fn Dashboard() -> impl IntoView {
 
                 <A href="/alerts" class="stat-card stat-link" attr:id="stat-active-alerts">
                     <h3>"Active Alerts"</h3>
-                    <div class="stat-value alert-count">
+                    <div class="stat-value" class:alert-count=move || !active_alerts.get().is_empty()>
                         {stat(alerts_access, Signal::derive(move || active_alerts.get().len().to_string()))}
                     </div>
                 </A>

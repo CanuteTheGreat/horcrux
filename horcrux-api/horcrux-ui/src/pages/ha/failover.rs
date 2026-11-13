@@ -120,7 +120,7 @@ pub fn HaFailoverPage() -> impl IntoView {
     };
 
     view! {
-        <div class="p-6 space-y-6" data-testid="ha-failover-page">
+        <div class="ha-page p-6 space-y-6" data-testid="ha-failover-page">
             <h1 class="text-2xl font-bold">"Cluster, fencing and HA events"</h1>
             {move || error.get().map(|e| view! { <div class="bg-red-100 text-red-800 p-3 rounded" data-testid="ha-error">{e}</div> })}
             {move || info.get().map(|e| view! { <div class="bg-green-100 text-green-800 p-3 rounded">{e}</div> })}

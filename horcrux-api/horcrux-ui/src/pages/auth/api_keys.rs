@@ -243,18 +243,18 @@ pub fn ApiKeysPage() -> impl IntoView {
                     let (total, active, expired) = token_stats();
                     view! {
                         <div class="stats-grid">
-                            <div class="stat-card">
+                            <a class="stat-card stat-link" href="#token-list">
                                 <div class="stat-value">{total}</div>
                                 <div class="stat-label">"Total Tokens"</div>
-                            </div>
-                            <div class="stat-card">
+                            </a>
+                            <a class="stat-card stat-link" href="#token-list">
                                 <div class="stat-value">{active}</div>
                                 <div class="stat-label">"Active Tokens"</div>
-                            </div>
-                            <div class="stat-card" class:warning=move || { expired > 0 }>
+                            </a>
+                            <a class="stat-card stat-link" class:warning=move || { expired > 0 } href="#token-list">
                                 <div class="stat-value">{expired}</div>
                                 <div class="stat-label">"Expired Tokens"</div>
-                            </div>
+                            </a>
                         </div>
                     }
                 }}
@@ -292,7 +292,7 @@ pub fn ApiKeysPage() -> impl IntoView {
                 view! {}.into_view()
             }}
 
-            <div class="tokens-container">
+            <div class="tokens-container" id="token-list">
                 {move || if loading.get() {
                     view! {
                         <div class="loading-container">

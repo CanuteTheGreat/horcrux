@@ -215,16 +215,16 @@ pub fn BackupDashboard() -> impl IntoView {
             </div>
 
             <div class="stats-grid">
-                <div class="stat-card">
+                <a class="stat-card stat-link" href="#backup-archives">
                     <h3>"Backups"</h3>
                     <div class="stat-value" id="backup-count">{move || backups.get().len()}</div>
-                </div>
-                <div class="stat-card">
+                </a>
+                <a class="stat-card stat-link" href="#backup-archives">
                     <h3>"Total size"</h3>
                     <div class="stat-value">
                         {move || bk::format_bytes(backups.get().iter().map(|b| b.size).sum())}
                     </div>
-                </div>
+                </a>
                 <div class="stat-card">
                     <h3>"Jobs"</h3>
                     <div class="stat-value">
@@ -342,7 +342,7 @@ pub fn BackupDashboard() -> impl IntoView {
             })}
 
             <div class="dashboard-section">
-                <h2>"Backup archives"</h2>
+                <h2 id="backup-archives">"Backup archives"</h2>
                 <div class="form-group">
                     <input id="backup-filter" type="text" placeholder="Filter by guest id or name"
                         prop:value=move || filter.get() on:input=move |ev| set_filter.set(event_target_value(&ev))/>

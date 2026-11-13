@@ -13,6 +13,14 @@ pub fn SmartMonitoringPage() -> impl IntoView {
     let (test_type, set_test_type) = create_signal("short".to_string());
     let (running_test, set_running_test) = create_signal(false);
     let (filter_status, set_filter_status) = create_signal("all".to_string());
+    // stat cards link to /storage/smart?status=warning etc.
+    let query = leptos_router::use_query_map();
+    create_effect(move |_| {
+        let st = query
+            .with(|q| q.get("status").cloned())
+            .unwrap_or_else(|| "all".to_string());
+        set_filter_status.set(st);
+    });
 
     // Load SMART data
     create_effect(move |_| {
@@ -120,34 +128,34 @@ pub fn SmartMonitoringPage() -> impl IntoView {
             // Overview Statistics
             <div class="smart-overview">
                 <div class="overview-stats">
-                    <div class="stat-card total">
+                    <a class="stat-card stat-link total" href="/storage/smart?status=all">
                         <span class="stat-icon">"[D]"</span>
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().0}</span>
                             <span class="stat-label">"Total Disks"</span>
                         </div>
-                    </div>
-                    <div class="stat-card healthy">
+                    </a>
+                    <a class="stat-card stat-link healthy" href="/storage/smart?status=healthy">
                         <span class="stat-icon">"[OK]"</span>
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().1}</span>
                             <span class="stat-label">"Healthy"</span>
                         </div>
-                    </div>
-                    <div class="stat-card warning">
+                    </a>
+                    <a class="stat-card stat-link warning" href="/storage/smart?status=warning" class:attention=move || { disk_counts().2 > 0 }>
                         <span class="stat-icon">"[!]"</span>
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().2}</span>
                             <span class="stat-label">"Warning"</span>
                         </div>
-                    </div>
-                    <div class="stat-card critical">
+                    </a>
+                    <a class="stat-card stat-link critical" href="/storage/smart?status=critical" class:attention=move || { disk_counts().3 > 0 }>
                         <span class="stat-icon">"[X]"</span>
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().3}</span>
                             <span class="stat-label">"Critical"</span>
                         </div>
-                    </div>
+                    </a>
                 </div>
             </div>
 

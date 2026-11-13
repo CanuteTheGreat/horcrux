@@ -16,6 +16,7 @@ pub mod api;
 mod components;
 pub mod features;
 pub mod pages;
+pub mod titles;
 pub mod utils;
 mod webauthn;
 mod websocket;
@@ -43,6 +44,9 @@ pub fn App() -> impl IntoView {
     // pages of the others are hidden (see features.rs).
     let features = provide_features();
 
+    // Per-page <title> ("VMs · Horcrux"); detail pages add the object's name via titles::set_subject.
+    titles::provide_subject();
+
     // Phone layout: the nav is an off-canvas drawer opened by the hamburger, closed by a tap on a link,
     // a tap outside (backdrop) or Escape.
     let (nav_open, set_nav_open) = create_signal(false);
@@ -53,10 +57,10 @@ pub fn App() -> impl IntoView {
     });
 
     view! {
-        <Title text="Horcrux - Virtualization Management"/>
         <Meta name="description" content="Horcrux Virtualization Management Platform"/>
 
         <Router>
+            <titles::PageTitle/>
             <div class="nav-backdrop" class:open=move || nav_open.get() on:click=move |_| set_nav_open.set(false)></div>
             <nav class="navbar" class:nav-open=move || nav_open.get() data-features-loaded=move || features.loaded().to_string()>
                 <button class="menu-toggle" type="button" aria-label="Open menu"

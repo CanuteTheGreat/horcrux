@@ -8,16 +8,32 @@ use leptos::*;
 fn links(reason: &str) -> Vec<(&'static str, &'static str, bool)> {
     match reason {
         "docker-missing" => vec![
-            ("Docker on the Gentoo wiki", "https://wiki.gentoo.org/wiki/Docker", true),
+            (
+                "Docker on the Gentoo wiki",
+                "https://wiki.gentoo.org/wiki/Docker",
+                true,
+            ),
             ("Use LXC containers instead", "/containers", false),
         ],
         "docker-not-running" => vec![("Open Node Services", "/system/services", false)],
         "podman-missing" => vec![
-            ("Podman on the Gentoo wiki", "https://wiki.gentoo.org/wiki/Podman", true),
+            (
+                "Podman on the Gentoo wiki",
+                "https://wiki.gentoo.org/wiki/Podman",
+                true,
+            ),
             ("Use LXC containers instead", "/containers", false),
         ],
-        "no-log-source" => vec![("Syslog-ng on the Gentoo wiki", "https://wiki.gentoo.org/wiki/Syslog-ng", true)],
-        "no-kernel-log" => vec![("Nftables on the Gentoo wiki", "https://wiki.gentoo.org/wiki/Nftables", true)],
+        "no-log-source" => vec![(
+            "Syslog-ng on the Gentoo wiki",
+            "https://wiki.gentoo.org/wiki/Syslog-ng",
+            true,
+        )],
+        "no-kernel-log" => vec![(
+            "Nftables on the Gentoo wiki",
+            "https://wiki.gentoo.org/wiki/Nftables",
+            true,
+        )],
         "no-init-system" => vec![("Open Node Health", "/system/health", false)],
         _ => vec![],
     }

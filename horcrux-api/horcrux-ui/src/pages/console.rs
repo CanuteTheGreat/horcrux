@@ -68,6 +68,7 @@ pub fn VmConsole() -> impl IntoView {
         spawn_local(async move {
             match api::fetch_json::<VmConfig>(&format!("/vms/{}", urlencoding::encode(&id))).await {
                 Ok(config) => {
+                    crate::titles::set_subject(&config.name);
                     // Open the console the VM is actually configured for.
                     set_console_type.set(
                         if config.hypervisor != horcrux_common::VmHypervisor::Qemu {
