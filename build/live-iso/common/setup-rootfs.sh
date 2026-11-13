@@ -32,13 +32,18 @@ printf 'hostname="%s"\n' "${PROJECT}" > /etc/conf.d/hostname
 # no stock serial getty: the live-serial service owns the console UART (stage3 ships s0:/ttyS0 on x86 and
 # f0:/ttyAMA0 on arm64; a second getty on the same UART steals input and prints stray login prompts)
 sed -i -E '/^#?[a-z][0-9a-z]*:[0-9]*:respawn:\/sbin\/agetty .*tty(S|AMA|AML|MXC|USB)[0-9]+ /d' /etc/inittab
-cat > /etc/os-release <<OSR
+# /usr/lib/os-release: Horcrux's is owned by sys-apps/horcrux-release (installed by the core layer / the machine meta packages; name, version, build id, variant).
+# Products without such a package yet (Patronus) get this installed-system file written here: never "live/installer" (the live session marks itself at boot,
+# /usr/libexec/live-os-release); the URLs are the product's pages on the Errant Solutions site (never the Forgejo).
+if [ "${PROJECT}" != "horcrux" ]; then
+cat > /usr/lib/os-release <<OSR
 NAME="${PROJECT_TITLE}"
 ID=${PROJECT}
 ID_LIKE=gentoo
-PRETTY_NAME="${PROJECT_TITLE} (Gentoo-based live/installer)"
-HOME_URL="https://git.canutethegreat.com/CanuteTheGreat/${PROJECT}"
+PRETTY_NAME="${PROJECT_TITLE}"
+$( [ "${PROJECT}" = patronus ] && printf 'HOME_URL="https://patronus.errant.solutions/"\nDOCUMENTATION_URL="https://patronus.errant.solutions/docs/"' )
 OSR
+fi
 echo "${PROJECT}-live" > /etc/live-iso-label
 echo "${ISO_LABEL}" > /etc/live-iso-volid
 

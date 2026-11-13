@@ -43,6 +43,8 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     rm -f /usr/share/horcrux/prebuilt/horcrux-manager-*.tar.zst; rmdir /usr/share/horcrux/prebuilt 2>/dev/null || true; \
     qfile -q /usr/sbin/horcrux-time-config /usr/libexec/horcrux-timesync /etc/init.d/horcrux-timesync /etc/init.d/horcrux-firstboot /usr/libexec/horcrux-firstboot \
               /etc/NetworkManager/dispatcher.d/20-horcrux-chrony /etc/portage/package.use/horcrux-core /etc/portage/repos.conf/horcrux.conf /usr/sbin/ctg-restic /usr/share/horcrux/core-release; \
+    # GATE: the os-release is package-owned (sys-apps/horcrux-release), names a variant and a build, and says nothing about live/installer on an installed system
+    qfile -q /usr/lib/os-release | grep -qx sys-apps/horcrux-release; grep -q '^VARIANT_ID=' /usr/lib/os-release; grep -q '^ID_LIKE=gentoo' /usr/lib/os-release; ! grep -iE '^PRETTY_NAME=.*(live|installer)' /usr/lib/os-release; grep -q '^BUILD_ID=' /usr/lib/os-release; ! grep -q 'git.canutethegreat.com' /usr/lib/os-release; \
     # services: time sync + first boot + cron (the backup job) in the image's default runlevel; the installer enables them on the installed system too (profile.toml)
     for s in chronyd horcrux-timesync horcrux-firstboot cronie; do rc-update add $s default; done; \
     # the shipped overlay tree is a git checkout (snapshot of this build) so `emaint sync -r horcrux` fast-forwards it to the published overlay

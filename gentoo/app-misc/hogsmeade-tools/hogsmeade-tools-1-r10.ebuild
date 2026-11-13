@@ -26,6 +26,14 @@ RDEPEND="
 "
 
 src_install() {
+
+	# the Horcrux os-release (sys-apps/horcrux-release) names this layer: its flags are read from package.use. Shipped here, so the
+	# installed system keeps its variant on every update (a USE dependency would stop `emerge -u` on a host that lacks the flags).
+	insinto /etc/portage/package.use
+	newins - horcrux-release-machine <<-EOF3
+		# owned by this package
+		sys-apps/horcrux-release hogsmeade
+	EOF3
 	dobin "${FILESDIR}"/{prime-run,hogsmeade-verify,hogsmeade-install,hogsmeade-remote}
 	exeinto /usr/libexec
 	doexe "${FILESDIR}"/hogsmeade-firstboot-net

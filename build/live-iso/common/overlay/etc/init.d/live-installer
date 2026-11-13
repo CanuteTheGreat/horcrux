@@ -43,6 +43,7 @@ unattended_guard() {
 
 start() {
 	grep -q 'rd.live.image' /proc/cmdline || return 0
+	/usr/libexec/live-os-release
 	p=$(proj)
 	serial=no; /usr/libexec/live-serial-dev >/dev/null && serial=yes
 	dmesg -n 1 2>/dev/null

@@ -269,6 +269,9 @@ class Tests:
                             break
                         time.sleep(3)
                     self.step(f"mode-{name}", ok and re.search(r"MODE=gui\b", out) and re.search(r"CAGE=\d+", out), what)
+                    if ok:
+                        rc, osr = self.run(vm, "grep ^PRETTY_NAME= /etc/os-release")
+                        self.step(f"live-os-release-says-live-{name}", bool(re.search(r"PRETTY_NAME=.*Live", osr)), osr.strip()[:100])
                 else:
                     ok = vm.expect_raw(pat, T(300))
                     self.step(f"mode-{name}", ok, what)

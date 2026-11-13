@@ -1,0 +1,9 @@
+#!/bin/sh
+# Live session only (called by the live-installer service when the system booted from the ISO): marks the RUNNING system's os-release as live.
+# The file itself is the installed system's, owned by sys-apps/horcrux-release (an installed system never says live/installer); the live root is an
+# overlay, so this edit lives in RAM and never reaches the squashfs the installer copies.
+#   PRETTY_NAME="Horcrux 0.1 (GNOME Light)"  ->  PRETTY_NAME="Horcrux 0.1 (GNOME Light, Live)"
+f=${1:-/usr/lib/os-release}
+[ -f "$f" ] || exit 0
+grep -q '^PRETTY_NAME=.*Live' "$f" && exit 0
+sed -i -E '/^PRETTY_NAME="/{s/\)"$/, Live)"/;t;s/"$/ (Live)"/}' "$f"

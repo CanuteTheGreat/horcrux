@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person"><email>ron@errant.solutions</email><name>Errant Solutions</name></maintainer>
+	<use>
+		<flag name="gnome-light">GNOME (light) desktop edition (default without it: Server)</flag>
+		<flag name="hogsmeade">Machine layer: Hogsmeade</flag>
+		<flag name="hogshead">Machine layer: Hogshead</flag>
+		<flag name="gringotts">Machine layer: Gringotts</flag>
+		<flag name="surface">Machine layer: Surface</flag>
+		<flag name="test-machine">Machine layer: lab test machine</flag>
+	</use>
+</pkgmetadata>

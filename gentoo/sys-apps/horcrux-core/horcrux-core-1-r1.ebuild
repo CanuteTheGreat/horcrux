@@ -17,6 +17,7 @@ KEYWORDS="amd64 arm64"
 #   machine layers  the owner's own machines (gringotts, hogshead, surface, hogsmeade) add their apps on top of an edition
 # Every fix that applies to every Horcrux install belongs here (or in a package listed here), never in an edition: the 2026-11-03 gringotts fixes (clock
 # hook, first-boot network wait, kept dev files, zfs dist-kernel USE) had been attached to the GNOME package and a server install would have missed them.
+# sys-apps/horcrux-release: the package-owned /usr/lib/os-release (name, version, build id, variant); every Horcrux install has it.
 # dev-util/pahole:
 #   an installed system must be able to build an out-of-tree kernel module (zfs-kmod after every dist-kernel update, DKMS-style drivers) against its running kernel:
 #   gentoo-kernel-bin modules carry BTF, which `make modules` finishes with pahole. It used to be on an image only when the zfs-kmod binary package of the day happened
@@ -38,6 +39,7 @@ RDEPEND="
 	sys-kernel/dracut
 	sys-kernel/installkernel
 	dev-util/pahole
+	sys-apps/horcrux-release
 "
 
 src_install() {

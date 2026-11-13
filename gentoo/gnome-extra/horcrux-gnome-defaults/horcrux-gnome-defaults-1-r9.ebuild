@@ -33,6 +33,14 @@ RDEPEND="
 BDEPEND="gnome-base/dconf"
 
 src_install() {
+
+	# the Horcrux os-release (sys-apps/horcrux-release) names this layer: its flags are read from package.use. Shipped here, so the
+	# installed system keeps its variant on every update (a USE dependency would stop `emerge -u` on a host that lacks the flags).
+	insinto /etc/portage/package.use
+	newins - horcrux-release-edition <<-EOF3
+		# owned by this package
+		sys-apps/horcrux-release gnome-light
+	EOF3
 	# GNOME has no tray without AppIndicator: Nextcloud and friends were invisible. A SYSTEM dconf db (not per-user gsettings), so the default
 	# holds for every account; a user's own choice (user-db) still wins. The compiled db is part of the package (dconf compile), no `dconf update` needed.
 	insinto /etc/dconf/profile

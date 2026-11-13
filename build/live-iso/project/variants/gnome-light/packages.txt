@@ -36,3 +36,5 @@ net-dns/avahi
 # --- laptop hardware: Intel SOF audio firmware (no sound on recent Intel laptops without it); microcode comes with the base image
 sys-firmware/sof-firmware
 sys-firmware/intel-microcode
+# the os-release is rebuilt for this edition (the core layer built the Server one)
+sys-apps/horcrux-release

@@ -1,0 +1,2 @@
+# sys-apps/horcrux-release (the os-release): this image is the GNOME (light) edition; also shipped by gnome-extra/horcrux-gnome-defaults for installed systems
+sys-apps/horcrux-release gnome-light

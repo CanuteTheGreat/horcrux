@@ -35,3 +35,10 @@ sed -e "s/^HORCRUX_MANAGER_SHA256_x86_64=\"\"/HORCRUX_MANAGER_SHA256_x86_64=\"$s
     -e "s/^HORCRUX_MANAGER_SHA256_aarch64=\"\"/HORCRUX_MANAGER_SHA256_aarch64=\"$sa\"/" "$base" > "$out"
 echo "created $out"
 (cd "$dir" && ls horcrux-bin-0.1.0_p[0-9]*.ebuild | sort | head -n -"$keep" | xargs -r rm -v)
+# the os-release moves with every manager build: VERSION/BUILD_ID come from the horcrux-release ebuild's PV (sys-apps/horcrux-release)
+rel="$dir/../../sys-apps/horcrux-release"
+if [ -f "$rel/horcrux-release-0.1.0.ebuild" ]; then
+  cp "$rel/horcrux-release-0.1.0.ebuild" "$rel/horcrux-release-0.1.0_p$stamp.ebuild"
+  echo "created $rel/horcrux-release-0.1.0_p$stamp.ebuild"
+  (cd "$rel" && ls horcrux-release-0.1.0_p[0-9]*.ebuild | sort | head -n -"$keep" | xargs -r rm -v)
+fi
