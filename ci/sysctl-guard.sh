@@ -11,6 +11,9 @@
 #         (removed if the image ships it)
 #       (A read-only bind of the two /proc/sys files was tried and rejected:
 #       it makes `incusd forkstart` fail, so Incus containers don't start.)
+#   ci/sysctl-guard.sh harden-self          same, for the job container itself when the runner makes it
+#                                           privileged (live-ISO jobs: their `apt-get install` of the QEMU
+#                                           packages applied 10-apparmor.conf to the host, rw-userns-guard 06:30)
 #   ci/sysctl-guard.sh snapshot             record the host values, start a sampler
 #   ci/sysctl-guard.sh assert               fail if the host values changed
 #
@@ -41,6 +44,13 @@ if [ -d /etc/dpkg ]; then
 fi
 rm -f /usr/lib/sysctl.d/10-apparmor.conf /etc/sysctl.d/10-apparmor.conf
 EOS
+  ;;
+harden-self)
+  [ -d /usr/sbin ] && printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d
+  mkdir -p /etc/dpkg/dpkg.cfg.d
+  echo 'path-exclude=/usr/lib/sysctl.d/10-apparmor.conf' > /etc/dpkg/dpkg.cfg.d/90-no-host-apparmor-sysctl
+  rm -f /usr/lib/sysctl.d/10-apparmor.conf /etc/sysctl.d/10-apparmor.conf
+  echo "sysctl-guard: policy-rc.d + dpkg path-exclude for 10-apparmor.conf installed in this job container"
   ;;
 snapshot)
   read_host > "$BEFORE" || { echo "::error::cannot read host sysctls"; exit 1; }
@@ -89,5 +99,5 @@ assert)
   [ $rc = 0 ] && echo "host sysctls unchanged: $(echo $after)"
   exit $rc
   ;;
-*) echo "usage: $0 harden <container>|snapshot|assert" >&2; exit 2 ;;
+*) echo "usage: $0 harden <container>|harden-self|snapshot|assert" >&2; exit 2 ;;
 esac

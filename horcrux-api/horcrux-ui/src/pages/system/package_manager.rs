@@ -469,7 +469,7 @@ pub fn PackageManagerPage() -> impl IntoView {
                                                     {size}
                                                 </td>
                                                 <td class="package-description">
-                                                    <span class="description-text">{description}</span>
+                                                    <span class="description-text" data-foreign-text="package-description">{description}</span>
                                                 </td>
                                                 <td class="package-actions">
                                                     <div class="action-buttons">

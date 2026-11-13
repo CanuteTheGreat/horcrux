@@ -71,6 +71,13 @@ FACTS_JS = r"""() => {
   const vis = el => { const cs = getComputedStyle(el); if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) return false;
                       const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
   const text = document.body ? document.body.innerText : '';
+  // Text that comes from the system, not from our code (package descriptions: libubsan1 is really
+  // "UBSan -- undefined behaviour sanitizer"): marked data-foreign-text, skipped by the bad-text rule only.
+  const foreign = [...document.querySelectorAll('[data-foreign-text]')];
+  const prevDisplay = foreign.map(e => e.style.display);
+  foreign.forEach(e => { e.style.display = 'none'; });
+  const ownText = document.body ? document.body.innerText : '';
+  foreign.forEach((e, i) => { e.style.display = prevDisplay[i]; });
   // canvas / iframe / video overlays
   const overlays = [];
   for (const c of document.querySelectorAll('canvas, iframe, video')) {
@@ -140,7 +147,7 @@ FACTS_JS = r"""() => {
   }
   const root = document.documentElement;
   return {
-    textLen: text.trim().length, text: text.slice(0, 60000), title: document.title,
+    textLen: text.trim().length, text: text.slice(0, 60000), ownText: ownText.slice(0, 60000), title: document.title,
     overflowX: root.scrollWidth - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), zeroRed, navProblems, empty: empty.slice(0, 3),
     h1: ((document.querySelector('main h1, h1, main h2, h2') || {}).innerText || '').trim().slice(0, 60),
   };
@@ -299,7 +306,7 @@ def main():
                         add("blank", "fail", route, vp, scheme, "page body empty")
                     if notfound.search(f["text"][:2000]):
                         add("not-found", "fail", route, vp, scheme, "page says 404/not found")
-                    m = bad_text.search(f["text"])
+                    m = bad_text.search(f["ownText"])
                     if m:
                         add("bad-text", "fail", route, vp, scheme, f"'{m.group(0)}' shown to the user")
                     for rx in pfail:

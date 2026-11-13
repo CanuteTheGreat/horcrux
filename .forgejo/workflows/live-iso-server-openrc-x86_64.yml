@@ -67,6 +67,9 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Keep the host's AppArmor sysctls alone (policy-rc.d + dpkg path-exclude)
+        run: bash ci/sysctl-guard.sh harden-self
+
       - name: Build, test, publish
         env:
           FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
