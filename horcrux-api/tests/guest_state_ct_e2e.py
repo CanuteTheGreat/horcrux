@@ -120,13 +120,13 @@ def counter_start(ct):
 
 
 login()
-log("--- setup: alpine template + a privileged container (CRIU can't dump user-namespaced ones)")
+log("--- setup: alpine template + a privileged container (CRIU can't dump user-namespaced ones) with the checkpoint feature (no console/ttys)")
 _, cat = req("GET", "/lxc/templates/catalog?arch=amd64")
 rel = max([e for e in cat if e["distro"] == "alpine" and e["variant"] == "default"
            and re.fullmatch(r"\d+\.\d+", e["release"])], key=lambda e: tuple(int(x) for x in e["release"].split(".")))["release"]
 req("POST", "/lxc/templates", {"distro": "alpine", "release": rel})
 req("POST", "/containers", {"id": "gsct", "name": "gsct", "runtime": "lxc", "memory": 256, "cpus": 1,
-                            "rootfs": f"alpine/{rel}", "status": "stopped", "lxc": {"unprivileged": False}})
+                            "rootfs": f"alpine/{rel}", "status": "stopped", "lxc": {"unprivileged": False, "features": {"checkpoint": True}}})
 req("POST", "/containers/gsct/start", {})
 pid, c0 = counter_start("gsct")
 log(f"counter pid {pid} at {c0}")
@@ -167,7 +167,8 @@ if "Looks good" not in chk:
     sys.exit(0)
 time.sleep(32)
 g, ov = guest("gsct")
-check(ov["capabilities"]["criu"]["available"] and g["can_save"], "API sees CRIU and the container can save state")
+check(ov["capabilities"]["criu"]["available"] and g["can_save"],
+      f"API sees CRIU and the container can save state (criu={ov['capabilities']['criu']}, blocker={g['save_blocker']})")
 pid, c0 = counter_start("gsct")
 st, saved = req("POST", "/containers/gsct/save-state", {}, expect=None)
 if st != 200:
