@@ -14,6 +14,7 @@ KEYWORDS="amd64 arm64"
 # would be shadowed), so every default extension of the machine is listed here, in the one compiled db.
 IUSE="awcc"
 
+# -r10: x11-themes/gentoo-xcursors (::gentoo) as an extra cursor theme on every desktop edition; Adwaita stays the default, nothing selects it.
 # -r8: appindicator >= 66-r1 (this overlay): Chromium/Electron 43+ tray icons (Slack, Signal, Docker Desktop) are dropped by ::gentoo's 64/66
 # ('error occurred in Get' on the unique bus name); see gnome-shell-extension-appindicator-66-r1.ebuild and the sni-chromium gate.
 # DESKTOP EDITION, layered on the server core: sys-apps/horcrux-core carries everything every Horcrux install needs (chrony + the clock rules +
@@ -29,6 +30,7 @@ RDEPEND="
 	gnome-extra/gnome-shell-extensions
 	gnome-base/gnome-keyring[pam]
 	app-crypt/libsecret
+	x11-themes/gentoo-xcursors
 "
 BDEPEND="gnome-base/dconf"
 

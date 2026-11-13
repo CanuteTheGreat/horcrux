@@ -23,6 +23,7 @@ RDEPEND="
 	sys-apps/horcrux-live-data
 	sys-apps/horcrux-release
 	xfce-base/xfce4-meta
+	x11-themes/gentoo-xcursors
 	xfce-base/xfce4-power-manager
 	xfce-extra/xfce4-screensaver
 	xfce-extra/xfce4-pulseaudio-plugin
