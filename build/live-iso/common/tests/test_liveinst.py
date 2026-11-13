@@ -631,7 +631,10 @@ class SshdHardeningIsADropIn(unittest.TestCase):
 
     def test_image_builders_do_not_edit_sshd_config(self):
         for rel in ("../setup-rootfs.sh", "../../../../gentoo/t2/live/setup-rootfs.sh"):
-            src = open(os.path.join(HERE, rel)).read()
+            path = os.path.join(HERE, rel)
+            if not os.path.exists(path):      # the vendored copy (Patronus) has no Horcrux t2 tree
+                continue
+            src = open(path).read()
             self.assertNotRegex(src, r"(sed -i[^\n]*|>>\s*)/etc/ssh/sshd_config(\s|$)", rel)
 
 
