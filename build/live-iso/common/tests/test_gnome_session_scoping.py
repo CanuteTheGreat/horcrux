@@ -98,8 +98,9 @@ class SessionScoping(unittest.TestCase):
         # the leader pushes before it enters the gnome-session runlevel (before anything can activate the portal)
         self.assertLess(p4.index('run_helper ("activation-env", NULL)'), p4.index('"/sbin/openrc", "-U", "gnome-session"'))
         for kind in ("wayland", "x11"):
-            self.assertRegex(p4, rf"diff --git a/data/openrc/gnome-session-init-{kind} [^\n]*\n(?:[^d][^\n]*\n)*?\+\t/usr/libexec/"
-                                 r"gnome-session-openrc-helper activation-env")
+            for svc in (f"gnome-session-init-{kind}", f"gnome-shell-{kind}"):
+                self.assertRegex(p4, rf"diff --git a/data/openrc/{svc} [^\n]*\n(?:[^d][^\n]*\n)*?\+\t/usr/libexec/"
+                                     r"gnome-session-openrc-helper activation-env")
         # run the helper's activation-env with a fake dbus-update-activation-environment
         lines, on = [], False
         for line in p4.splitlines():
