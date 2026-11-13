@@ -1696,11 +1696,8 @@ class Runner:
                     self.late_link_up(vm, netnames, ok)
                 vm.shot("login-prompt")
                 self.serial_login(vm, P["old_pw"], expect_ok=False)
-                # guided (TUI/GUI) installs of a web_auth=pam product keep root LOCKED: the chosen password belongs to the administrator user
-                # (stages.RootpassStage.commit); only an answer file carries a root hash
-                adm = P["web_user"] if P.get("web_user") and a.flow != "auto" else "root"
-                self.step("serial-root-login-with-chosen-password" if adm == "root" else "serial-admin-login-with-chosen-password",
-                          self.serial_login(vm, PW, expect_ok=True, user=adm), "lands in the console menu" if adm == "root" else f"{adm} signs in on the console")
+                # web_auth=pam products keep root LOCKED: the installer's administrator signs in and reaches the menu through sudo
+                self.step("serial-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True, user=P.get("web_user", "root")), "lands in the console menu")
             deadline = time.time() + T(300)
             got = None
             while time.time() < deadline:
@@ -1910,7 +1907,8 @@ class Runner:
         """VGA-only run (no serial): log in on tty1 by keyboard; the console menu must be what runs there."""
         kb = Kbd(vm, True)
         vm.shot("vga-console-login")
-        for t in ("root\n", PW + "\n"):
+        pam = self.P.get("web_user")
+        for t in ((pam or "root") + "\n", PW + "\n") + ((PW + "\n",) if pam else ()):     # pam: root is locked, the administrator signs in, sudo asks again
             kb.text(t)
             time.sleep(4)
         time.sleep(4)
@@ -1923,10 +1921,12 @@ class Runner:
             vm.send("\r")
             if not vm.expect_raw("login:", 20):
                 continue
-            vm.send(f"{user}\r")
+            vm.send(user + "\r")
             if vm.expect_raw("Password", 15):
                 vm.send(f"{pw}\r")
                 if expect_ok:
+                    if user != "root" and vm.expect_raw(r"\[sudo\] password", 60):
+                        vm.send(f"{pw}\r")     # the console menu runs as root through sudo (profile.d/console-menu.sh)
                     # 25 -> 120 s: on a loaded runner (4 VMs, ZFS mirror) the console menu / shell can take longer than
                     # 25 s after the password; the old wait then fell through to a fresh "\r" and a second login round
                     # (run 1440 uefi-usb-auto-zfs-mirror-sshpw). Assertion unchanged.

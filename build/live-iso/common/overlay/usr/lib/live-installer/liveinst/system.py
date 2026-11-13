@@ -1137,6 +1137,9 @@ class Installer:
         self.write("/etc/live-installer/install-type", c["install_type"] + "\n")
         self.write("/etc/motd", self.motd())
         self.write("/etc/live-installer/installed", time.strftime("%FT%TZ", time.gmtime()) + "\n")
+        if c.get("install_type", "server") != "desktop" and not c["root_hash"] and not c["root_password"] and has_login_user(c):
+            # root stays locked: the console menu is reached by the administrator through sudo (etc/profile.d/console-menu.sh)
+            self.write("/etc/live-installer/root-locked", "1\n")
         self.hw_profile, self.hw_model = (None, None)
         if c.get("hw", "auto") != "none":
             hp, hm = hwprofile.detect()

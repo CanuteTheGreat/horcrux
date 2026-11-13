@@ -88,5 +88,23 @@ class AdminFormKeepsRootLocked(unittest.TestCase):
         self.assertIn("Keep root locked", " ".join(st.plan(ctx)))
 
 
+class LockedRootConsoleMenu(unittest.TestCase):
+    """With root locked, nobody can log in as root on tty1/serial, so the console menu (profile.d) must be reachable by the wheel
+    administrator through sudo, and only when the installer wrote /etc/live-installer/root-locked."""
+
+    def test_profile_script_has_sudo_branch_guarded_by_marker(self):
+        sh = open(os.path.join(HERE, "..", "overlay", "etc", "profile.d", "console-menu.sh")).read()
+        self.assertIn("/etc/live-installer/root-locked", sh)
+        self.assertIn("sudo /usr/bin/console-menu", sh)
+        self.assertIn("grep -qx wheel", sh)
+
+    def test_installer_writes_marker_only_when_root_has_no_password_and_a_user_exists(self):
+        src = open(os.path.join(HERE, "..", "overlay", "usr", "lib", "live-installer", "liveinst", "system.py")).read()
+        i = src.index("/etc/live-installer/root-locked")
+        ctx = src[i - 400:i]
+        for need in ('not c["root_hash"]', 'not c["root_password"]', "has_login_user(c)", '!= "desktop"'):
+            self.assertIn(need, ctx)
+
+
 if __name__ == "__main__":
     unittest.main()

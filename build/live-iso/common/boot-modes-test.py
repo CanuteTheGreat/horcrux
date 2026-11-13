@@ -366,7 +366,7 @@ class Tests:
         end = time.time() + wait
         port = port or qt.FWD_WEB
         while True:
-            sc, code, resp = http(port, "/api/auth/login", "POST", {"username": "admin", "password": pw})
+            sc, code, resp = http(port, "/api/auth/login", "POST", {"username": self.P.get("web_user", "admin"), "password": pw})
             if code in (200, 401, 403) or time.time() >= end:
                 return code
             time.sleep(5)

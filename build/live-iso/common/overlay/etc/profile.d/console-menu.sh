@@ -8,3 +8,12 @@ if [ -n "$_cm_i" ] && [ -z "$CONSOLE_MENU_INNER" ] && [ "$(id -u)" = 0 ] \
 		/dev/tty1|/dev/ttyS[0-9]*|/dev/ttyAMA[0-9]*|/dev/hvc0) CONSOLE_MENU_INNER=1; export CONSOLE_MENU_INNER; /usr/bin/console-menu; exit 0 ;;
 	esac
 fi
+# Root locked (the installer created an administrator instead): that administrator (wheel) signing in on the console reaches the
+# same menu through sudo (their own password), so a fresh install is not left without its console menu.
+if [ -n "$_cm_i" ] && [ -z "$CONSOLE_MENU_INNER" ] && [ "$(id -u)" != 0 ] \
+   && [ -e /etc/live-installer/installed ] && [ -e /etc/live-installer/root-locked ] && [ ! -e /etc/live-installer/no-console-menu ] \
+   && id -nG 2>/dev/null | tr ' ' '\n' | grep -qx wheel; then
+	case "$(tty 2>/dev/null)" in
+		/dev/tty1|/dev/ttyS[0-9]*|/dev/ttyAMA[0-9]*|/dev/hvc0) sudo /usr/bin/console-menu; exit 0 ;;
+	esac
+fi
