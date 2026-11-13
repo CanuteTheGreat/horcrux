@@ -40,6 +40,12 @@ restic backup --tag hogsmeade --exclude-caches \
     "${paths[@]}" && date +%s > $D/last-backup-ok && \
 restic forget --tag hogsmeade --group-by host,tags --keep-within 30d --prune --max-unused 5% >/dev/null
 rc=$?
+# Rustinion's backup monitor reads the ctg-restic state files (epoch of the last success; the generic ctg-restic cron of
+# sys-apps/horcrux-backup is a no-op here, so without these the HOGSMEADE job reads "no successful backup" forever).
+# Written only on success, same contract as /usr/sbin/ctg-restic.
+S=/var/lib/ctg-backup
+mkdir -p "$S" 2>/dev/null
+if [ "$rc" = 0 ]; then date +%s > "$S/last-backup-ok"; date +%s > "$S/last-prune-ok"; fi
 # weekly integrity sample (5 % of the pack data read back)
-[ "$(date +%u)" = 7 ] && restic check --read-data-subset=5% >/dev/null 2>&1 || true
+if [ "$(date +%u)" = 7 ] && restic check --read-data-subset=5% >/dev/null 2>&1; then date +%s > "$S/last-check-ok"; fi
 exit $rc
