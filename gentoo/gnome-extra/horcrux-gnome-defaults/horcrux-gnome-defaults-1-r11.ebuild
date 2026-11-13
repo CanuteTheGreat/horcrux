@@ -12,8 +12,12 @@ SLOT="0"
 KEYWORDS="amd64 arm64"
 # awcc: also enable the Alienware control extension (app-misc/awccd). The system db REPLACES the gschema default of the same key (an awccd gschema override
 # would be shadowed), so every default extension of the machine is listed here, in the one compiled db.
-IUSE="awcc"
+IUSE="awcc systemd"
 
+# -r11: GNOME on OpenRC comes from gnome-base/gnome-session-openrc-49.2-r2::horcrux (the gsd/PipeWire/user-bus fixes that were /etc/portage/patches in
+# the images, plus session-scoped user services: a GNOME logout stops the session's gnome-shell & co. even while an ssh login of the user keeps the OpenRC
+# user runlevel alive, and no supervise-daemon respawn into a closed session). ::gentoo's copies are masked here (package.mask/horcrux-gnome-session-openrc),
+# so an `emerge -u` can never swap the fixed package for an unpatched newer ::gentoo version; this overlay carries each version we ship.
 # -r10: x11-themes/gentoo-xcursors (::gentoo) as an extra cursor theme on every desktop edition; Adwaita stays the default, nothing selects it.
 # -r8: appindicator >= 66-r1 (this overlay): Chromium/Electron 43+ tray icons (Slack, Signal, Docker Desktop) are dropped by ::gentoo's 64/66
 # ('error occurred in Get' on the unique bus name); see gnome-shell-extension-appindicator-66-r1.ebuild and the sni-chromium gate.
@@ -31,10 +35,17 @@ RDEPEND="
 	gnome-base/gnome-keyring[pam]
 	app-crypt/libsecret
 	x11-themes/gentoo-xcursors
+	!systemd? ( >=gnome-base/gnome-session-openrc-49.2-r2 )
 "
 BDEPEND="gnome-base/dconf"
 
 src_install() {
+	insinto /etc/portage/package.mask
+	newins - horcrux-gnome-session-openrc <<-'EOF4'
+		# owned by gnome-extra/horcrux-gnome-defaults: GNOME on OpenRC is gnome-base/gnome-session-openrc::horcrux (session-scoped user services,
+		# gsd/PipeWire/user-bus fixes); an unpatched ::gentoo version must never replace it on update
+		gnome-base/gnome-session-openrc::gentoo
+	EOF4
 
 	# the Horcrux os-release (sys-apps/horcrux-release) names this layer: its flags are read from package.use. Shipped here, so the
 	# installed system keeps its variant on every update (a USE dependency would stop `emerge -u` on a host that lacks the flags).

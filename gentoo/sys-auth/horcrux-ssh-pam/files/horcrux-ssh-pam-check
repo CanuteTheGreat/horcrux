@@ -1,0 +1,20 @@
+#!/bin/sh
+# horcrux-ssh-pam-check: is /etc/pam.d/sshd-horcrux still pambase's system-login session stack minus pam_openrc, and does sshd use it?
+# Exit 0 = OK. Run by pkg_postinst and the image gates; prints what drifted (e.g. a pambase update added a session module).
+root="${1:-}"
+norm() { sed -e 's/#.*//' -e 's/^-//' -e 's/[[:space:]]\+/ /g' -e 's/^ //' -e 's/ $//' | awk '$1=="session"' | grep -v '^$' | sort -u; }
+want=$(norm < "${root}/etc/pam.d/system-login" | grep -v pam_openrc.so | grep -v '^session include system-auth$')
+have=$(norm < "${root}/etc/pam.d/sshd-horcrux" | grep -v '^session include system-auth$' | grep -v pam_systemd.so)
+missing=$(printf '%s\n' "$want" | grep -vxF -e "$have" -e '' || true)
+rc=0
+if [ -n "$missing" ]; then
+	echo "horcrux-ssh-pam: /etc/pam.d/system-login has session lines /etc/pam.d/sshd-horcrux lacks (update sys-auth/horcrux-ssh-pam):"
+	printf '  %s\n' "$missing"
+	rc=1
+fi
+if sed 's/#.*//' "${root}/etc/pam.d/sshd-horcrux" | grep -q 'pam_openrc'; then echo "horcrux-ssh-pam: sshd-horcrux must not load pam_openrc"; rc=1; fi
+if [ -z "$root" ] && command -v sshd >/dev/null 2>&1; then
+	svc=$(sshd -T 2>/dev/null | awk 'tolower($1)=="pamservicename"{print $2}')
+	[ -z "$svc" ] || [ "$svc" = sshd-horcrux ] || { echo "horcrux-ssh-pam: sshd uses PAM service '$svc', not sshd-horcrux (an earlier PAMServiceName wins)"; rc=1; }
+fi
+exit $rc

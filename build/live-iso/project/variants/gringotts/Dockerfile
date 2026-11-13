@@ -56,12 +56,13 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 # this variant's local overlay is copied only now (editing it must not invalidate the long header/app layers above)
 COPY project/variants/gringotts/repo/ /var/db/repos/horcrux-gringotts/
 
-# GNOME under OpenRC: the gsd meta services declare supervisor=supervise-daemon without a command, so openrc refuses to start them and the session
-# never comes up (the hogshead first-login failure). Same one-line patch as the hogshead image, applied by rebuilding the (tiny) package from source.
-COPY project/variants/gnome-light/portage/patches/gnome-base/ /etc/portage/patches/gnome-base/
+# GNOME under OpenRC: gnome-base/gnome-session-openrc-49.2-r2::horcrux carries the fixes that used to be /etc/portage/patches here (gsd meta services without a
+# supervisor = the hogshead first-login failure, gsd audio after PipeWire, gnome-shell on the user bus) plus session-scoped user services (a GNOME logout stops
+# the session's services even while an ssh login of the user is open). Rebuilt from source (the overlay is the [horcrux] repo copied above).
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
-    emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n gnome-base/gnome-session-openrc; \
+    emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n '>=gnome-base/gnome-session-openrc-49.2-r2'; \
+    test -x /usr/libexec/gnome-session-openrc-helper || { echo 'session-scoping patch not applied'; exit 1; }; \
     if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd patch not applied'; exit 1; fi; \
     grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio patch not applied'; exit 1; }; \
     grep -q 'DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"' /etc/user/init.d/gnome-shell-wayland || { echo 'shell user-bus patch not applied'; exit 1; }
