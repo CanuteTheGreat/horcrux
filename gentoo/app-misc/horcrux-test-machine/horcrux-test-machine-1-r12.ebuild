@@ -136,6 +136,16 @@ pkg_postinst() {
 	for c in "${d}"/._cfg????_horcrux-test-machine; do
 		[[ -f ${c} ]] && mv -f "${c}" "${d}"/horcrux-test-machine
 	done
+	# Lab laptops carry hand-made, EMPTY repo directories from early installs (ctg-private, local, horcrux-desktop): Portage warns
+	# "Repository X is missing masters attribute in metadata/layout.conf" on every run. A repo that later syncs/gets populated brings its
+	# own layout.conf (all three declare masters = gentoo at their source); only a directory that has none gets one here.
+	local r
+	for r in ctg-private local horcrux-desktop; do
+		r=${EROOT}/var/db/repos/${r}
+		if [[ -d ${r} && ! -e ${r}/metadata/layout.conf ]]; then
+			mkdir -p "${r}/metadata" && printf 'masters = gentoo\nthin-manifests = true\n' > "${r}/metadata/layout.conf"
+		fi
+	done
 	use gnome && has_version gnome-base/dconf && dconf update
 	if [[ -z ${ROOT} || ${ROOT} == / ]]; then
 		local s
