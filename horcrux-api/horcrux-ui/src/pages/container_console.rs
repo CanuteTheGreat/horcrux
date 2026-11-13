@@ -199,11 +199,16 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
                     <button id="console-connect" class="btn btn-primary" on:click=move |_| connect(())>
                         {move || if connected.get() { "Reconnect" } else { "Connect" }}
                     </button>
-                    <span>{move || if connected.get() { "● connected" } else { "○ disconnected" }}</span>
+                    <span
+                        id="console-status"
+                        class=move || format!("console-status {}", if connected.get() { "connected" } else { "disconnected" })
+                    >
+                        {move || if connected.get() { "● connected" } else { "○ disconnected" }}
+                    </span>
                 </div>
             </div>
 
-            <pre id="console-output" style="background:#111;color:#0f0;padding:1em;height:400px;overflow:auto;white-space:pre-wrap;">
+            <pre id="console-output" class="console-output">
                 {move || output.get()}
             </pre>
 

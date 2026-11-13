@@ -89,6 +89,68 @@ pub fn VmConsole() -> impl IntoView {
         });
     });
 
+    // Connection indicator of the embedded noVNC page (it posts its state to
+    // this window; same origin only).
+    let (vnc_state, set_vnc_state) =
+        create_signal(("connecting".to_string(), "Connecting...".to_string()));
+    let on_message = Closure::wrap(Box::new(move |e: MessageEvent| {
+        let own = web_sys::window().and_then(|w| w.location().origin().ok());
+        if own.as_deref() != Some(e.origin().as_str()) {
+            return;
+        }
+        let data = e.data();
+        let get = |k: &str| {
+            js_sys::Reflect::get(&data, &JsValue::from_str(k))
+                .ok()
+                .and_then(|v| v.as_string())
+        };
+        if get("horcruxConsole").as_deref() == Some("status") {
+            set_vnc_state.set((
+                get("state").unwrap_or_default(),
+                get("text").unwrap_or_default(),
+            ));
+        }
+    }) as Box<dyn FnMut(MessageEvent)>);
+    if let Some(w) = web_sys::window() {
+        let _ = w.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref());
+    }
+    on_message.forget();
+
+    // The console buttons live in this page's toolbar; they drive the noVNC
+    // iframe by message so nothing is drawn on top of the guest's screen.
+    let frame_action = move |action: &str, text: Option<String>| {
+        let msg = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&msg, &"horcruxConsole".into(), &action.into());
+        if let Some(t) = text {
+            let _ = js_sys::Reflect::set(&msg, &"text".into(), &t.into());
+        }
+        let win = web_sys::window();
+        let frame = win
+            .as_ref()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("console-frame"));
+        if let (Some(w), Some(frame)) = (win, frame) {
+            if let Ok(cw) = js_sys::Reflect::get(&frame, &"contentWindow".into()) {
+                if let Ok(post) = js_sys::Reflect::get(&cw, &"postMessage".into())
+                    .and_then(|f| f.dyn_into::<js_sys::Function>())
+                {
+                    let origin = w.location().origin().unwrap_or_default();
+                    let _ = post.call2(&cw, &msg, &JsValue::from_str(&origin));
+                }
+            }
+        }
+    };
+    let send_cad = move |_| frame_action("ctrl-alt-del", None);
+    let paste_text = move |_| {
+        if let Some(t) = web_sys::window()
+            .and_then(|w| w.prompt_with_message("Paste text:").ok())
+            .flatten()
+        {
+            frame_action("paste", Some(t));
+        }
+    };
+    // Fullscreen shows only the noVNC page: its own auto-hiding bar (pointer
+    // at the top edge) takes over the toolbar's buttons there.
     let toggle_fullscreen = move |_| {
         if let Some(elem) = web_sys::window()
             .and_then(|w| w.document())
@@ -126,11 +188,18 @@ pub fn VmConsole() -> impl IntoView {
                             "Serial"
                         </option>
                     </select>
-                    {move || (console_type.get() == ConsoleType::Vnc).then(|| view! {
-                        <button class="btn btn-secondary" on:click=toggle_fullscreen>
+                    {move || (console_type.get() == ConsoleType::Vnc && !instance_vm()).then(|| view! {
+                        <button id="console-cad" class="btn btn-secondary" title="Send Ctrl+Alt+Del" on:click=send_cad>
+                            "Ctrl+Alt+Del"
+                        </button>
+                        <button id="console-paste" class="btn btn-secondary" title="Send text to the guest" on:click=paste_text>
+                            "Paste"
+                        </button>
+                        <button id="console-fullscreen" class="btn btn-secondary" on:click=toggle_fullscreen>
                             "Fullscreen"
                         </button>
                         <a
+                            id="console-popout"
                             class="btn btn-secondary"
                             href=api::novnc_page_url(&vm_id())
                             target="_blank"
@@ -138,6 +207,14 @@ pub fn VmConsole() -> impl IntoView {
                         >
                             "Open in new window"
                         </a>
+                        <span
+                            id="console-status"
+                            class=move || format!("console-status {}", vnc_state.get().0)
+                            title=move || vnc_state.get().1
+                        >
+                            <span class="dot"></span>
+                            {move || vnc_state.get().1}
+                        </span>
                     })}
                 </div>
             </div>
@@ -164,7 +241,7 @@ pub fn VmConsole() -> impl IntoView {
                 })
             })}
 
-            <div class="console-container">
+            <div class="console-container console-stage">
                 {move || {
                     let id = vm_id();
                     if id.is_empty() {
@@ -184,8 +261,7 @@ pub fn VmConsole() -> impl IntoView {
                             <iframe
                                 id="console-frame"
                                 class="console-iframe"
-                                style="width:100%;height:75vh;border:0;background:#000;"
-                                src=api::novnc_page_url(&id)
+                                src=format!("{}?embed=1", api::novnc_page_url(&id))
                                 allowfullscreen=true
                             />
                         }
@@ -332,17 +408,22 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
 
     view! {
         <div class="serial-container">
-            <div class="console-controls">
-                <span>{move || status.get()}</span>
+            <div class="console-controls console-bar">
+                <span
+                    id="serial-status"
+                    class=move || format!(
+                        "console-status {}",
+                        if connected.get() { "connected" } else { "connecting" }
+                    )
+                >
+                    <span class="dot"></span>
+                    {move || status.get()}
+                </span>
                 <button class="btn btn-sm btn-secondary" on:click=move |_| connect(vm_id.clone())>
                     "Reconnect"
                 </button>
             </div>
-            <pre
-                id="serial-output"
-                class="serial-output"
-                style="background:#111;color:#0f0;padding:1em;height:60vh;overflow:auto;white-space:pre-wrap;"
-            >
+            <pre id="serial-output" class="serial-output console-output">
                 {move || output.get()}
             </pre>
             <div class="serial-input-container">

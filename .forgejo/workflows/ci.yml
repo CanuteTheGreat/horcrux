@@ -1215,6 +1215,19 @@ jobs:
           /tmp/pw/bin/pip install -q playwright
           sudo /tmp/pw/bin/playwright install-deps chromium
           /tmp/pw/bin/playwright install chromium
+          sudo /tmp/pw/bin/playwright install-deps firefox
+          /tmp/pw/bin/playwright install firefox
+
+      - name: VM console overlay check (Firefox; nothing covers the VNC canvas)
+        # The noVNC page the API serves is dumped by a unit test and loaded in
+        # Firefox with a stubbed noVNC library (no VM needed): the canvas fills
+        # the window, no visible element intersects it, the guest's top 40 px
+        # hit the canvas, the pop-out bar auto-hides at the top edge.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "VM console overlay check"
+          NOVNC_DUMP=/tmp/novnc.html cargo test -p horcrux-vm --lib novnc_page_dump
+          test -s /tmp/novnc.html
+          /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/console_overlay_e2e.py /tmp/novnc.html
 
       - name: Start horcrux-api serving the built UI
         run: |

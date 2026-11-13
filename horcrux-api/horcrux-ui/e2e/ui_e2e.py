@@ -708,6 +708,18 @@ def main():
         page.goto(f"{BASE}/vms/{vid}/console")
         expect(page.frame_locator("iframe.console-iframe").locator("#status")).to_have_text(
             "Connected", timeout=90000)
+        # The console controls sit in the page toolbar above the screen: the
+        # indicator shows the state and nothing covers the guest's top rows.
+        expect(page.locator("#console-status")).to_contain_text("Connected", timeout=30000)
+        for bid in ("#console-cad", "#console-paste", "#console-fullscreen", "#console-popout"):
+            expect(page.locator(bid)).to_be_visible()
+        vnc_frame = next(f for f in page.frames if f != page.main_frame and "/novnc" in f.url)
+        vnc_hits = vnc_frame.evaluate("""() => {
+            const c = document.querySelector('canvas').getBoundingClientRect();
+            return [[5, 5], [5, 39], [c.width - 5, 5], [c.width / 2, 20]].map(
+                ([x, y]) => (document.elementFromPoint(c.left + x, c.top + y) || {}).tagName);
+        }""")
+        assert vnc_hits == ["CANVAS"] * 4, f"something covers the guest's top rows: {vnc_hits}"
 
         # Back to SPICE: stop, switch in the console page, start; the SPICE
         # panel shows the endpoint and the .vv download works with the
