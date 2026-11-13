@@ -64,10 +64,10 @@ pub use state::AppState;
 pub mod api;
 pub mod app;
 pub mod declarative;
+pub mod init;
 #[cfg(feature = "lxc")]
 #[path = "api/lxc.rs"]
 pub mod lxc_api;
-pub mod init;
 pub mod persistence;
 pub mod static_ui;
 pub mod vm_console_api;
