@@ -26,10 +26,20 @@ class FakeZfs:
         self.clones = {}  # be -> origin 'be@snap'
         self.n = 0
         self.calls = []
+        self.pins = set()  # 'be@snap' / 'be' carrying horcrux:pin=yes
 
     def run(self, cmd, **kw):
         self.calls.append(cmd)
         ok = types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["zfs", "get"]:
+            ok.stdout = "".join(f"rpool/ROOT/{n}\tyes\n" for n in sorted(self.pins))
+            return ok
+        if cmd[:2] == ["zfs", "set"] and cmd[2] == "horcrux:pin=yes":
+            self.pins.add(cmd[3].split("/ROOT/")[-1])
+            return ok
+        if cmd[:2] == ["zfs", "inherit"]:
+            self.pins.discard(cmd[3].split("/ROOT/")[-1])
+            return ok
         if cmd[:2] == ["zfs", "snapshot"]:
             be, _, name = cmd[2].partition("@")
             be = be.split("/")[-1]

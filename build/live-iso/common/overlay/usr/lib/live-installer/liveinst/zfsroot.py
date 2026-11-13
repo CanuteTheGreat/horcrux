@@ -86,7 +86,10 @@ def datasets(with_docker=False):
          ("var", ["canmount=off", "mountpoint=/var"]),
          ("var/log", []),
          ("var/lib", ["canmount=off"]),
-         ("var/lib/libvirt", ["recordsize=64K"])]       # qcow2 clusters are 64 KiB
+         ("var/lib/libvirt", ["recordsize=64K"]),       # qcow2 clusters are 64 KiB
+         # Horcrux's own VM disks (config paths.vm_storage = /var/lib/horcrux/vms): a boot-environment rollback must never touch them
+         ("var/lib/horcrux", ["canmount=off"]),
+         ("var/lib/horcrux/vms", ["recordsize=64K"])]
     if with_docker:
         d.append(("var/lib/docker", []))
     return d

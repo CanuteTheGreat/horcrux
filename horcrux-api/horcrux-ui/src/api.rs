@@ -7586,3 +7586,69 @@ pub async fn get_task_log(upid: &str) -> Result<TaskLog, ApiError> {
 pub async fn stop_task(upid: &str) -> Result<(), ApiError> {
     delete_json(&format!("/tasks/{}", upid)).await
 }
+
+// ---------------------------------------------------------------- Boot environments (ZFS)
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct BootEnv {
+    pub name: String,
+    pub active: bool,
+    pub running: bool,
+    #[serde(default)]
+    pub kernel: String,
+    #[serde(default)]
+    pub pinned: bool,
+    pub created: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct BootSnapshot {
+    pub be: String,
+    pub name: String,
+    pub created: i64,
+    #[serde(default)]
+    pub kernel: String,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub auto: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct BootDataPath {
+    pub path: String,
+    pub dataset: Option<String>,
+    pub safe: bool,
+    pub why: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct BootEnvInfo {
+    pub running: Option<String>,
+    pub active: Option<String>,
+    pub keep: u32,
+    pub environments: Vec<BootEnv>,
+    pub snapshots: Vec<BootSnapshot>,
+    #[serde(default)]
+    pub data: Vec<BootDataPath>,
+    #[serde(default)]
+    pub preserved: Vec<String>,
+}
+
+pub async fn get_boot_environments() -> Result<BootEnvInfo, ApiError> {
+    fetch_json("/system/boot-environments").await
+}
+
+/// POST an action; the answer's `message` is shown to the user.
+pub async fn boot_env_action(path: &str, body: serde_json::Value) -> Result<String, ApiError> {
+    let v: serde_json::Value =
+        post_json(&format!("/system/boot-environments{path}"), &body).await?;
+    Ok(v.get("message")
+        .and_then(|m| m.as_str())
+        .unwrap_or("done")
+        .to_string())
+}
+
+pub async fn delete_boot_environment(path: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/system/boot-environments{path}")).await
+}

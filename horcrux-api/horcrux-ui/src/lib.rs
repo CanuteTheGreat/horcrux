@@ -118,6 +118,7 @@ pub fn App() -> impl IntoView {
                             <A href="/audit" class="dropdown-item">"Audit Log"</A>
                             <A href="/system/logs" class="dropdown-item">"System Log"</A>
                             <A href="/system/packages" class="dropdown-item">"Packages"</A>
+                            <A href="/system/boot-environments" class="dropdown-item">"Boot Environments"</A>
                             <A href="/system/diagnostics" class="dropdown-item">"Diagnostics"</A>
                             <A href="/tasks" class="dropdown-item">"Tasks"</A>
                             <A href="/gpu" class="dropdown-item">"GPU / PCI Passthrough"</A>
@@ -217,6 +218,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/audit" view=crate::pages::AuditLogPage/>
                     <Route path="/system/logs" view=crate::pages::system::logs::SystemLogsPage/>
                     <Route path="/system/packages" view=crate::pages::system::package_manager::PackageManagerPage/>
+                    <Route path="/system/boot-environments" view=crate::pages::system::boot_environments::BootEnvironmentsPage/>
                     <Route path="/system/diagnostics" view=crate::pages::system::diagnostics::DiagnosticsPage/>
                     <Route path="/tasks" view=crate::pages::system::tasks::TasksPage/>
                     <Route path="/containers" view=ContainerList/>

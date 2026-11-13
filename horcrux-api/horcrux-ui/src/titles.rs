@@ -72,6 +72,7 @@ fn exact(path: &str) -> Option<&'static str> {
         "/system/shell" => "Node Shell",
         "/system/logs" => "System Log",
         "/system/packages" => "Packages",
+        "/system/boot-environments" => "Boot Environments",
         "/system/diagnostics" => "Diagnostics",
         "/system/certificates" => "Certificates",
         "/audit" => "Audit Log",
