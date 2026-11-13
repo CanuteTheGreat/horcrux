@@ -47,7 +47,7 @@ GUI_APPS = [
 ]
 CLI_APPS = [
     ("docker", "docker --version && docker compose version && docker buildx version"),
-    ("mosh", "mosh --version | head -1"), ("nmap", "nmap --version | head -1"), ("tmux", "tmux -V"), ("vim", "vim --version | head -1"),
+    ("mosh", "mosh --version | head -1"), ("nmap", "nmap --version | head -1"), ("rustscan", "rustscan --version"), ("tmux", "tmux -V"), ("vim", "vim --version | head -1"),
     ("clamav", "clamscan --version"), ("wireguard-tools", "wg --version"),
     ("rustinion", "rustinion --version"), ("fprintd", "qlist -Iv sys-auth/fprintd sys-auth/libfprint"),
     ("nmtui", "test -x /usr/bin/nmtui && echo nmtui present"),
@@ -55,7 +55,7 @@ CLI_APPS = [
 APP_ATOMS = ["www-client/firefox-bin", "net-im/discord", "app-containers/docker", "app-containers/docker-cli",
              "app-containers/docker-buildx", "app-containers/docker-compose", "net-vpn/proton-vpn-gtk-app",
              "net-misc/remmina", "app-emulation/virt-viewer", "media-gfx/gimp", "media-gfx/geeqie", "media-video/vlc", "net-misc/mosh",
-             "net-analyzer/nmap", "net-analyzer/wireshark", "app-antivirus/clamav", "net-misc/nextcloud-client", "x11-terms/terminator",
+             "net-analyzer/nmap", "net-analyzer/rustscan", "net-analyzer/wireshark", "app-antivirus/clamav", "net-misc/nextcloud-client", "x11-terms/terminator",
              "app-misc/tmux", "app-editors/vim", "app-admin/rustinion-agent", "sys-auth/fprintd", "sys-auth/libfprint", "sys-firmware/sof-firmware",
              "sys-firmware/intel-microcode", "sys-kernel/linux-firmware", "net-vpn/wireguard-tools", "sys-fs/zfs", "sys-kernel/gentoo-kernel-bin"]
 

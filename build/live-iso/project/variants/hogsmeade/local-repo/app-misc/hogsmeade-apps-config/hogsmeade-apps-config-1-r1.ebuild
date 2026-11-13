@@ -37,6 +37,8 @@ src_install() {
 		net-analyzer/caido-bin ~amd64
 		media-libs/iir1 ~amd64
 		net-misc/onedrive ~amd64
+		# rustscan is paired with nmap (owner rule 2026-11-12); ::gentoo keywords it ~amd64 only
+		net-analyzer/rustscan ~amd64
 		# geesefs (app-misc/hogsmeade-b2-mounts)
 		net-fs/geesefs ~amd64
 		# NOT a hogsmeade-apps dependency (fetch-restricted: the zip must be in /var/cache/distfiles); emerged by hand, kept in @world

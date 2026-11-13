@@ -57,6 +57,7 @@ net-misc/mosh
 net-misc/sshpass
 net-analyzer/wireshark
 net-analyzer/nmap
+net-analyzer/rustscan
 sys-cluster/keepalived
 # the owner's private image packages (private SSH-key bundle, restore tool, private config)
 app-misc/gringotts-*

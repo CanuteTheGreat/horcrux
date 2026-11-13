@@ -81,7 +81,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,shar
     [ -d /var/db/repos/canutethegreat-overlay/.git ] || { rm -rf /var/db/repos/canutethegreat-overlay; git clone -q --depth 1 https://github.com/CanuteTheGreat/canutethegreat-overlay.git /var/db/repos/canutethegreat-overlay; }; \
     emerge --update --newuse --usepkg --getbinpkg --keep-going \
         app-containers/docker app-containers/docker-compose app-containers/docker-buildx \
-        net-misc/remmina media-gfx/gimp media-gfx/geeqie net-misc/mosh net-analyzer/nmap \
+        net-misc/remmina media-gfx/gimp media-gfx/geeqie net-misc/mosh net-analyzer/nmap net-analyzer/rustscan \
         $(grep -v '^#' /tmp/packages-owner.txt | tr '\n' ' ') sys-cluster/keepalived net-misc/sshpass dev-util/rustup\
         net-im/discord net-vpn/proton-vpn-gtk-app app-admin/rustinion-agent sys-apps/t2fanrd sys-apps/tiny-dfr net-misc/horcrux-chrony-nm \
         sys-firmware/edk2-bin app-admin/sudo sys-process/cronie app-portage/portage-utils app-portage/eix \

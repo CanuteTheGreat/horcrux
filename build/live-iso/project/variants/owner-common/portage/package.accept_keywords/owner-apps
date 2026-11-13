@@ -1,1 +1,3 @@
 dev-util/rustup ~amd64
+# rustscan is paired with nmap (owner rule 2026-11-12); ::gentoo keywords it ~amd64 only
+net-analyzer/rustscan ~amd64
