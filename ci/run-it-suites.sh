@@ -21,7 +21,11 @@ for s in $suites; do
     names=$(echo "$list" | awk -F': ' -v pre="$s::" '$2 == "test" && index($1, pre) == 1 { print $1 }')
     echo "::group::integration suite $s ($(echo "$names" | wc -l) tests)"
     # shellcheck disable=SC2086 # one argument per test name
-    cargo test "$@" -p horcrux-api --test it -- --exact $names || failed="$failed $s"
+    # A suite that hangs (run 15251: two alert_silence tests ran for 2.5 h) must fail
+    # alone instead of holding the job; timeout signals the whole process group, so
+    # the servers the tests spawned die with it.
+    timeout -k 30 "${HX_SUITE_TIMEOUT:-20m}" \
+        cargo test "$@" -p horcrux-api --test it -- --exact $names || failed="$failed $s"
     echo "::endgroup::"
 done
 if [ -n "$failed" ]; then

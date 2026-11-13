@@ -51,6 +51,7 @@ jobs:
   plan:
     name: Plan (what needs to run)
     runs-on: linux-any
+    timeout-minutes: 15  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     outputs:
       heavy: ${{ steps.p.outputs.heavy }}
       dup: ${{ steps.p.outputs.dup }}
@@ -97,6 +98,7 @@ jobs:
   mobile-theme:
     name: Mobile theme (light/dark)
     runs-on: linux-any
+    timeout-minutes: 15  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     steps:
       - uses: actions/checkout@v4
       - run: python3 horcrux-mobile/tests/check_theme.py
@@ -106,6 +108,7 @@ jobs:
     # Thin Manifest (DIST lines) must be committed for every gentoo/ ebuild that fetches a distfile; a gitignored
     # Manifest twice shipped uninstallable ebuilds ('VERIFY FAILED: Insufficient data for checksum verification').
     runs-on: linux-any
+    timeout-minutes: 15  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     steps:
       - uses: actions/checkout@v4
       - run: python3 gentoo/ci/check-manifests.py
@@ -118,6 +121,7 @@ jobs:
     # No browser, no build: the checkers' self-tests, private URLs/host names in docs, os-release sanity of the
     # package-owned renderer, and the owner-findings table pointing at real checks.
     runs-on: linux-any
+    timeout-minutes: 15  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s ci/ux-qa -p 'test_*.py'
@@ -136,6 +140,7 @@ jobs:
     # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
     # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
     runs-on: linux-any
+    timeout-minutes: 45  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -221,6 +226,7 @@ jobs:
   test:
     name: Test
     runs-on: linux-cross-x86_64
+    timeout-minutes: 90  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -641,6 +647,7 @@ jobs:
   build:
     name: Build
     runs-on: linux-cross-x86_64
+    timeout-minutes: 30  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -743,6 +750,7 @@ jobs:
     # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
     # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
     runs-on: linux-any
+    timeout-minutes: 20  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -848,6 +856,7 @@ jobs:
     # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
     # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
     runs-on: linux-any
+    timeout-minutes: 20  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -934,6 +943,7 @@ jobs:
   gentoo-docker-build:
     name: Gentoo Docker Build
     runs-on: linux-cross-x86_64
+    timeout-minutes: 100  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
@@ -1069,6 +1079,7 @@ jobs:
     # linux-any: arch-independent (fmt/clippy/cargo check/audit/wasm), served by the arm64 hosts and
     # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
     runs-on: linux-any
+    timeout-minutes: 45  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     container: catthehacker/ubuntu:act-latest
     needs: [check, plan]
     if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
@@ -1478,6 +1489,7 @@ jobs:
   ui-theme:
     name: Web UI theme (light/dark)
     runs-on: linux-any
+    timeout-minutes: 15  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
     steps:
       - uses: actions/checkout@v4
       # Owner rule 2026-10-30: the UI follows the device's light/dark setting (palette + contrast of both).

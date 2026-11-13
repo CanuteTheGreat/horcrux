@@ -160,7 +160,10 @@ impl Server {
     pub async fn wait_healthy(&mut self) {
         for _ in 0..240 {
             // Rebuilt each time: the CA file appears once the server is up.
-            let c = self.client();
+            // Short per-probe timeout: a server that accepts the connection but
+            // never answers must cost 5 s per try, not the 600 s of `client()`
+            // (240 tries x 600 s let a stuck probe hang a CI job for hours).
+            let c = http_client(Some(&self.dir.join("ssl")), Duration::from_secs(5));
             if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
                 panic!("horcrux-api exited early ({status}):\n{}", self.log_text());
             }
