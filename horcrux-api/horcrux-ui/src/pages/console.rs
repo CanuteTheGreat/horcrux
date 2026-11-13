@@ -112,10 +112,22 @@ pub fn VmConsole() -> impl IntoView {
             ));
         }
     }) as Box<dyn FnMut(MessageEvent)>);
+    // The listener lives on `window`, which outlives this page: remove it (and only
+    // then drop the closure) when the page is left. Leaking it let a stale listener
+    // set a disposed signal and panic, after which wasm-bindgen reported every later
+    // message as "closure invoked recursively or after being dropped".
     if let Some(w) = web_sys::window() {
         let _ = w.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref());
     }
-    on_message.forget();
+    on_cleanup(move || {
+        if let Some(w) = web_sys::window() {
+            let _ = w.remove_event_listener_with_callback(
+                "message",
+                on_message.as_ref().unchecked_ref(),
+            );
+        }
+        drop(on_message);
+    });
 
     // The console buttons live in this page's toolbar; they drive the noVNC
     // iframe by message so nothing is drawn on top of the guest's screen.
