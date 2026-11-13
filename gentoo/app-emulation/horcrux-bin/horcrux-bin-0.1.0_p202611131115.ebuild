@@ -28,14 +28,17 @@ HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 # installed. The plain 0.1.0 stays as the fallback for a tree without a stamped ebuild (image builds from a local tarball).
 # The two HORCRUX_MANAGER_SHA256_* values are filled in by the bump script (empty here): a tarball FETCHED by URL must match the build
 # this version was cut for (a replaced daily asset fails loudly instead of installing under the wrong version).
-HORCRUX_MANAGER_SHA256_x86_64="5436489a0963aadbd6bfebcee9a9edb4acfc496aad62e69aeaf52ccd1e3e0ff3"
-HORCRUX_MANAGER_SHA256_aarch64="4a0a469f5392316c3fa9c76722a05f134222c597930655f683d36efac42a7303"
+HORCRUX_MANAGER_SHA256_x86_64="8e973e8b6e3450730bbb3918fc55bfc50b44c577950db656122fd2fd604acf6d"
+HORCRUX_MANAGER_SHA256_aarch64="59ecad4db7a7c6e1b0267e7b4ca49a0ce7a2f81934e5d63c1e5fbe621599db05"
 RESTRICT="network-sandbox mirror strip"    # tarball fetch at src_unpack; the binaries are already stripped/cross built
 LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="amd64 arm64 riscv"
 
+# qemu[zstd]: qcow2 images with zstd compression (libvirt / virt-manager default on some distros) are imported with qemu-img; without
+# USE=zstd qemu-img answers "unknown compression type: 1" and the VM importer cannot read the disk (HOGSMEADE 2026-11-12).
 RDEPEND="
+	acct-group/horcrux-admin
 	acct-group/kvm
 	app-arch/zstd
 	app-emulation/libvirt[qemu]
@@ -118,5 +121,8 @@ pkg_postinst() {
 	fi
 	elog "Horcrux manager installed. It is NOT started by default on a desktop edition (the server profile enables it):"
 	elog "  rc-update add libvirtd default; rc-update add horcrux-api default; rc-service horcrux-api start    # web UI https://<host>:8006"
-	elog "Cluster: the first admin password is in /var/lib/horcrux/initial-admin-password (or /etc/horcrux/admin-password from the installer)."
+	elog "Web UI login: sign in with a SYSTEM user (PAM service /etc/pam.d/horcrux) who is in the horcrux-admin or wheel group; there is no 'admin' account."
+	elog "  gpasswd -a <user> horcrux-admin     # on every node: each node authenticates against its own users (or a shared SSSD/LDAP directory)"
+	elog "  root cannot log in to the web UI unless [auth] allow_root = true in /etc/horcrux/config.toml; see docs/WEB-LOGIN-PAM.md"
+	elog "MIGRATION: old Horcrux-only accounts keep working for this release (read-only); the legacy 'admin' is disabled by the first PAM administrator login."
 }
