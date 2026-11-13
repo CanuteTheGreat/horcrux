@@ -13,6 +13,9 @@ pub struct LvListed {
     /// Horcrux VM that already uses the domain's disk.
     pub imported_as: Option<String>,
     pub problem: Option<String>,
+    /// `import in progress (n%)` / `last import failed: ...`.
+    #[serde(default)]
+    pub import_state: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -64,6 +67,7 @@ pub struct LvPreview {
 #[derive(Debug, Clone, Deserialize)]
 pub struct LvImported {
     pub vm: horcrux_common::VmConfig,
+    pub plan: LvPlan,
     pub warnings: Vec<String>,
     pub cleanup_offered: bool,
     pub xml_backup: String,
@@ -182,10 +186,10 @@ pub async fn cleanup_preview(vm_id: &str) -> Result<CleanupOffer, ApiError> {
     .await
 }
 
-pub async fn cleanup(vm_id: &str) -> Result<CleanupDone, ApiError> {
+pub async fn cleanup(vm_id: &str, domain: &str) -> Result<CleanupDone, ApiError> {
     post_json(
         "/vms/import/cleanup",
-        &serde_json::json!({ "vm_id": vm_id, "confirm": true }),
+        &serde_json::json!({ "vm_id": vm_id, "confirm": true, "confirm_domain": domain }),
     )
     .await
 }

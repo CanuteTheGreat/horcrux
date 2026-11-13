@@ -480,6 +480,10 @@ struct ListedDomain {
     imported_as: Option<String>,
     /// Why it cannot be imported (the domain's XML is unusable).
     problem: Option<String>,
+    /// An import of this domain is running or its last one failed (accurate
+    /// state instead of plain "unmanaged"); `None` otherwise.
+    #[serde(default)]
+    import_state: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -514,7 +518,10 @@ struct ClusterList {
 
 impl PartialEq for ListedDomain {
     fn eq(&self, o: &Self) -> bool {
-        self.domain == o.domain && self.uuid == o.uuid && self.imported_as == o.imported_as
+        self.domain == o.domain
+            && self.uuid == o.uuid
+            && self.imported_as == o.imported_as
+            && self.import_state == o.import_state
     }
 }
 impl std::fmt::Debug for ListedDomain {
@@ -621,6 +628,8 @@ async fn list_local(state: &Arc<AppState>) -> Result<ListResponse, ApiError> {
         });
     };
     let vms = state.vm_manager.list_vms().await;
+    let vm_ids: std::collections::HashSet<String> = vms.iter().map(|v| v.id.clone()).collect();
+    let sources = recorded_sources(state);
     let mut domains = Vec::new();
     for n in names.lines().map(str::trim).filter(|n| !n.is_empty()) {
         let st = virsh(&["domstate", n])
@@ -639,6 +648,7 @@ async fn list_local(state: &Arc<AppState>) -> Result<ListResponse, ApiError> {
             disks: vec![],
             imported_as: None,
             problem: None,
+            import_state: import_job_state(n),
         };
         match domain_xml(n)
             .await
@@ -656,12 +666,102 @@ async fn list_local(state: &Arc<AppState>) -> Result<ListResponse, ApiError> {
             }
             Err(err) => e.problem = Some(format!("{err:?}")),
         }
+        // The disks of a finished import are Horcrux's own copies, so the path match above misses
+        // the old source: the importer's own records say which domain became which VM.
+        if e.imported_as.is_none() {
+            e.imported_as = source_owner(&sources, &vm_ids, &e.domain, &e.uuid);
+        }
+        if e.imported_as.is_some() {
+            e.import_state = None;
+        }
         domains.push(e);
     }
     Ok(ListResponse {
         available: true,
         domains,
     })
+}
+
+/// A libvirt domain that an import recorded as its source.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RecordedSource {
+    pub vm_id: String,
+    /// Domain name (cleanup record) or `None` when only the XML backup is known.
+    pub name: Option<String>,
+    /// Domain UUID (the XML saved by the import) or `None` for an older record.
+    pub uuid: Option<String>,
+}
+
+/// Every source the importer recorded: the cleanup records (`import-cleanup/<vm>.json`, names)
+/// and the saved XML of each import (`libvirt-import/<vm>.xml`, UUID + name).
+pub(crate) fn recorded_sources(state: &AppState) -> Vec<RecordedSource> {
+    let mut out: Vec<RecordedSource> = Vec::new();
+    for rec in crate::api::import_cleanup::list_records(state) {
+        for it in rec.items.iter().filter(|i| i.kind == "libvirt-domain") {
+            out.push(RecordedSource {
+                vm_id: rec.vm_id.clone(),
+                name: Some(it.path.clone()),
+                uuid: None,
+            });
+        }
+    }
+    let bdir = state.config.paths.data_dir.join("libvirt-import");
+    if let Ok(rd) = std::fs::read_dir(bdir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            let Some(vm_id) = n.strip_suffix(".xml") else {
+                continue;
+            };
+            let Ok(xml) = std::fs::read_to_string(e.path()) else {
+                continue;
+            };
+            if let Ok(d) = parse_xml(&xml) {
+                out.push(RecordedSource {
+                    vm_id: vm_id.to_string(),
+                    name: d.child_text("name"),
+                    uuid: d.child_text("uuid").filter(|u| !u.is_empty()),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// The Horcrux VM that `domain` (name + UUID) was imported as, if a recorded source matches and
+/// that VM still exists (pure, tested). A UUID match wins; a name match is accepted only when the
+/// record has no UUID to contradict it.
+pub(crate) fn source_owner(
+    sources: &[RecordedSource],
+    live_vm_ids: &std::collections::HashSet<String>,
+    domain: &str,
+    uuid: &str,
+) -> Option<String> {
+    sources
+        .iter()
+        .filter(|s| live_vm_ids.contains(&s.vm_id))
+        .find(|s| match (&s.uuid, &s.name) {
+            (Some(u), _) if !uuid.is_empty() => u == uuid,
+            (_, Some(n)) => n == domain,
+            _ => false,
+        })
+        .map(|s| s.vm_id.clone())
+}
+
+/// `importing (42%)` / `last import failed: ...` for a domain with an import job on record.
+fn import_job_state(domain: &str) -> Option<String> {
+    let j = jobs().lock().ok()?;
+    let mut mine: Vec<&Job> = j.values().filter(|x| x.domain == domain).collect();
+    mine.sort_by_key(|x| x.seq);
+    if let Some(r) = mine.iter().find(|x| x.state == "running") {
+        return Some(format!("import in progress ({:.0}%)", r.percent));
+    }
+    match mine.last() {
+        Some(x) if x.state == "failed" => Some(format!(
+            "last import failed: {}",
+            x.error.as_deref().unwrap_or("unknown error")
+        )),
+        _ => None,
+    }
 }
 
 #[derive(Serialize)]
@@ -746,6 +846,12 @@ pub struct Job {
     pub message: String,
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
+    /// The libvirt domain this job imports.
+    #[serde(skip)]
+    pub domain: String,
+    /// Start order (newest = highest).
+    #[serde(skip)]
+    pub seq: u64,
 }
 
 fn jobs() -> &'static std::sync::Mutex<std::collections::HashMap<String, Job>> {
@@ -776,12 +882,42 @@ async fn status(Json(req): Json<StatusRequest>) -> Result<Json<Job>, ApiError> {
         .ok_or_else(|| ApiError::NotFound(format!("no import job {}", req.job)))
 }
 
+/// The VM this domain was already imported as (recorded source, by UUID when known, else name).
+async fn already_imported_as(state: &AppState, domain: &str, uuid: &str) -> Option<String> {
+    let ids: std::collections::HashSet<String> = state
+        .vm_manager
+        .list_vms()
+        .await
+        .into_iter()
+        .map(|v| v.id)
+        .collect();
+    source_owner(&recorded_sources(state), &ids, domain, uuid)
+}
+
+/// 409 at request time (before a job exists) when the domain's UUID/name is a recorded source.
+async fn refuse_imported_source(state: &AppState, domain: &str) -> Result<(), ApiError> {
+    let uuid = match domain_xml(domain).await {
+        Ok(x) => parse_xml(&x)
+            .ok()
+            .and_then(|d| d.child_text("uuid"))
+            .unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+    match already_imported_as(state, domain, &uuid).await {
+        Some(vm) => Err(ApiError::Conflict(format!(
+            "libvirt domain {domain} was already imported as VM {vm}: remove the old source with the cleanup offer instead"
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Starts the import and returns at once (202 `{job}`); poll `status`.
 async fn import(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ImportRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     check_domain_name(&req.domain)?;
+    refuse_imported_source(&state, &req.domain).await?;
     let job = format!("lv-{:016x}", rand::random::<u64>());
     {
         let mut j = jobs()
@@ -798,6 +934,11 @@ async fn import(
             Job {
                 state: "running".into(),
                 message: "starting".into(),
+                domain: req.domain.clone(),
+                seq: {
+                    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                    SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                },
                 ..Default::default()
             },
         );
@@ -1003,6 +1144,11 @@ async fn run_import(
     }
     let xml = domain_xml(dom).await?;
     let plan = plan_from_domain(&xml, &swtpm_root()).map_err(ApiError::BadRequest)?;
+    if let Some(vm) = already_imported_as(state, dom, &plan.uuid).await {
+        return Err(ApiError::Conflict(format!(
+            "libvirt domain {dom} was already imported as VM {vm}: remove the old source with the cleanup offer instead"
+        )));
+    }
     let mut warnings = plan.warnings.clone();
 
     let id = match req.id.as_deref().map(str::trim).filter(|i| !i.is_empty()) {
@@ -1520,6 +1666,7 @@ mod tests {
             disks: vec![],
             imported_as: imp.map(String::from),
             problem: None,
+            import_state: None,
         };
         let local = ListResponse {
             available: true,
@@ -1542,6 +1689,94 @@ mod tests {
         assert_eq!(r.nodes[1].domains[0].domain, "c");
         assert_eq!(r.nodes[2].error.as_deref(), Some("connection refused"));
         assert_eq!(r.unmanaged, 2);
+    }
+
+    #[test]
+    fn a_recorded_import_source_is_not_unmanaged() {
+        let ids: std::collections::HashSet<String> = ["100".to_string(), "101".to_string()].into();
+        let sources = vec![
+            // cleanup record (name only), VM 100 exists
+            RecordedSource {
+                vm_id: "100".into(),
+                name: Some("captainjacksparrow".into()),
+                uuid: None,
+            },
+            // saved XML (uuid + name), VM 101 exists
+            RecordedSource {
+                vm_id: "101".into(),
+                name: Some("redweek-win11".into()),
+                uuid: Some("uuid-win11".into()),
+            },
+            // import whose VM is gone (failed/rolled back/deleted): not a source any more
+            RecordedSource {
+                vm_id: "102".into(),
+                name: Some("gone".into()),
+                uuid: Some("uuid-gone".into()),
+            },
+        ];
+        let o = |d: &str, u: &str| source_owner(&sources, &ids, d, u);
+        assert_eq!(o("captainjacksparrow", "any").as_deref(), Some("100"));
+        assert_eq!(
+            o("renamed-in-libvirt", "uuid-win11").as_deref(),
+            Some("101")
+        );
+        // the same name with a different UUID is a different domain
+        assert_eq!(o("redweek-win11", "uuid-other"), None);
+        assert_eq!(o("gone", "uuid-gone"), None);
+        assert_eq!(o("genuinely-unmanaged", "uuid-x"), None);
+        // and so it does not count as unmanaged in the cluster list
+        let dom = |n: &str, imp: Option<String>| ListedDomain {
+            domain: n.into(),
+            uuid: n.into(),
+            state: "shut off".into(),
+            cpus: 1,
+            memory_mb: 1,
+            disks: vec![],
+            imported_as: imp,
+            problem: None,
+            import_state: None,
+        };
+        let list = ListResponse {
+            available: true,
+            domains: vec![
+                dom("captainjacksparrow", o("captainjacksparrow", "u")),
+                dom("genuinely-unmanaged", o("genuinely-unmanaged", "u")),
+            ],
+        };
+        assert_eq!(merge_cluster("n1", list, vec![]).unmanaged, 1);
+    }
+
+    #[test]
+    fn import_job_state_reports_running_and_failed_imports() {
+        let mk = |state: &str, seq: u64, err: Option<&str>| Job {
+            state: state.into(),
+            percent: 42.0,
+            domain: "uxqa-state-dom".into(),
+            seq,
+            error: err.map(String::from),
+            ..Default::default()
+        };
+        assert_eq!(import_job_state("uxqa-state-dom"), None);
+        jobs()
+            .lock()
+            .unwrap()
+            .insert("t1".into(), mk("failed", 1, Some("no space")));
+        assert_eq!(
+            import_job_state("uxqa-state-dom").as_deref(),
+            Some("last import failed: no space")
+        );
+        jobs()
+            .lock()
+            .unwrap()
+            .insert("t2".into(), mk("running", 2, None));
+        assert_eq!(
+            import_job_state("uxqa-state-dom").as_deref(),
+            Some("import in progress (42%)")
+        );
+        jobs()
+            .lock()
+            .unwrap()
+            .retain(|_, j| j.domain != "uxqa-state-dom");
     }
 
     #[test]

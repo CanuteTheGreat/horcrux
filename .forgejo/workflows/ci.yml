@@ -1335,6 +1335,11 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "UI offers every USE-flag feature of an all-features build"
           MODE=full /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
 
+      - name: Dashboard banner lists only genuinely unmanaged libvirt domains
+        env:
+          BASE_URL: https://localhost:8006
+        run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/unmanaged_libvirt_banner_e2e.py
+
       - name: UX crawl (every nav page, desktop + phone, light + dark; no JS errors, overlays, dead stat cards, private text)
         # ci/ux-qa/ux_crawl.py: the owner kept finding these by hand (docs/qa/owner-findings.md). Known, tracked
         # failures live in ci/ux-qa/ux-crawl-baseline.json; a NEW failure fails the job.

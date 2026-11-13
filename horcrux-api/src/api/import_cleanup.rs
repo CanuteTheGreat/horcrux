@@ -67,6 +67,17 @@ pub fn write_record(state: &AppState, rec: &Record) -> std::io::Result<()> {
     )
 }
 
+/// Every pending record (unreadable files are skipped).
+pub fn list_records(state: &AppState) -> Vec<Record> {
+    let Ok(rd) = std::fs::read_dir(dir(state)) else {
+        return vec![];
+    };
+    rd.flatten()
+        .filter_map(|e| std::fs::read(e.path()).ok())
+        .filter_map(|b| serde_json::from_slice::<Record>(&b).ok())
+        .collect()
+}
+
 fn read_record(state: &AppState, vm_id: &str) -> Result<Record, ApiError> {
     crate::validation::validate_vm_id(vm_id)?;
     let b = std::fs::read(record_path(state, vm_id))
@@ -169,6 +180,37 @@ pub fn evaluate(
         .collect()
 }
 
+/// The disk copies a removal depends on: each source disk file about to go is compared
+/// (`qemu-img compare`) with the Horcrux copy it requires. Firmware stores (`.efivars`) are converted
+/// copies and are only checked for existence by `evaluate`.
+fn disk_pairs(rec: &Record, items: &[Planned]) -> Vec<(String, String)> {
+    rec.items
+        .iter()
+        .zip(items)
+        .filter(|(it, p)| it.kind == "file" && p.kind == "file" && p.remove)
+        .filter_map(|(it, _)| it.requires.as_ref().map(|r| (it.path.clone(), r.clone())))
+        .filter(|(_, copy)| !copy.contains(".efivars"))
+        .collect()
+}
+
+async fn verify_copies(rec: &Record, items: &[Planned]) -> Result<(), ApiError> {
+    for (src, copy) in disk_pairs(rec, items) {
+        if !FsPath::new(&copy).is_file() {
+            return Err(ApiError::Conflict(format!(
+                "the imported copy {copy} does not exist: the old source {src} is kept"
+            )));
+        }
+        crate::api::vm_import::qemu_img(&["compare", "-f", "qcow2", "-F", "qcow2", &src, &copy])
+            .await
+            .map_err(|e| {
+                ApiError::Conflict(format!(
+                    "the imported copy {copy} is not identical to {src} ({e:?}): nothing was removed"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
 async fn domain_state(name: &str) -> Option<String> {
     virsh(&["domstate", name])
         .await
@@ -213,6 +255,10 @@ struct VmRequest {
     vm_id: String,
     #[serde(default)]
     confirm: bool,
+    /// The libvirt domain name the user typed to confirm; when present it must be one of the
+    /// record's `libvirt-domain` items.
+    #[serde(default)]
+    confirm_domain: Option<String>,
 }
 
 async fn pending(State(state): State<Arc<AppState>>) -> Result<Json<Vec<Offer>>, ApiError> {
@@ -267,6 +313,21 @@ async fn cleanup(
         ));
     }
     let (rec, items) = plan(&state, &req.vm_id).await?;
+    if let Some(typed) = req.confirm_domain.as_deref() {
+        if !rec
+            .items
+            .iter()
+            .any(|i| i.kind == "libvirt-domain" && i.path == typed)
+        {
+            return Err(ApiError::BadRequest(format!(
+                "the typed name {typed:?} is not the old source of VM {}",
+                rec.vm_id
+            )));
+        }
+    }
+    // 0. the imported copy must exist and be identical to the source disk BEFORE anything goes:
+    //    nothing is removed when any copy is missing or differs
+    verify_copies(&rec, &items).await?;
     // 1. back up the libvirt XML before anything goes
     let mut xml_backup = None;
     for it in items
@@ -428,6 +489,30 @@ mod tests {
         ]);
         let p = evaluate(&r, &[vm(disk.to_str().unwrap())], &|_| None);
         assert!(p.iter().all(|i| !i.remove), "{p:?}");
+    }
+
+    #[test]
+    fn only_disk_copies_are_compared_before_removal() {
+        let r = rec(vec![
+            item("libvirt-domain", "dom", None),
+            item("file", "/v/l/a.qcow2", Some("/h/a.qcow2")),
+            item("file", "/v/n/dom_VARS.fd", Some("/h/a.qcow2.efivars.qcow2")),
+        ]);
+        let planned: Vec<Planned> = r
+            .items
+            .iter()
+            .map(|i| Planned {
+                kind: i.kind.clone(),
+                path: i.path.clone(),
+                bytes: 0,
+                remove: true,
+                reason: None,
+            })
+            .collect();
+        assert_eq!(
+            disk_pairs(&r, &planned),
+            vec![("/v/l/a.qcow2".to_string(), "/h/a.qcow2".to_string())]
+        );
     }
 
     #[test]

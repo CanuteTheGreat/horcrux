@@ -1804,6 +1804,7 @@ class Runner:
 
     def console_menu_checks(self, vm):
         a, P = self.a, self.P
+        vm.expect_screen(r"Assign interfaces", 30)     # the menu may still be drawing after the login returned
         scr = vm.screen()
         vm.snap("console-menu")
         vm.shot("console-menu")
@@ -1918,6 +1919,7 @@ class Runner:
 
     def serial_login(self, vm, pw, expect_ok, user="root"):
         for _ in range(6):
+            time.sleep(2)     # agetty flushes the tty input when it restarts after "Login incorrect"/a timeout; text typed into that gap is lost (runs 2469/2491: the password went to the login prompt)
             vm.send("\r")
             if not vm.expect_raw("login:", 20):
                 continue
@@ -1925,8 +1927,9 @@ class Runner:
             if vm.expect_raw("Password", 15):
                 vm.send(f"{pw}\r")
                 if expect_ok:
-                    if user != "root" and vm.expect_raw(r"\[sudo\] password", 60):
-                        vm.send(f"{pw}\r")     # the console menu runs as root through sudo (profile.d/console-menu.sh)
+                    if user != "root" and vm.expect_raw(r"(\[sudo\] password|\nPassword: )", 60):
+                        vm.send(f"{pw}\r")     # the console menu runs as root through sudo (profile.d/console-menu.sh); the prompt is "[sudo] password for u:" or, with the
+                        # lecture/plain-prompt build on this image, just "Password:" (live-iso runs 1034/1035: waited for [sudo], sudo timed out, retry loop)
                     # 25 -> 120 s: on a loaded runner (4 VMs, ZFS mirror) the console menu / shell can take longer than
                     # 25 s after the password; the old wait then fell through to a fresh "\r" and a second login round
                     # (run 1440 uefi-usb-auto-zfs-mirror-sshpw). Assertion unchanged.
@@ -1937,6 +1940,7 @@ class Runner:
                 else:
                     r = vm.expect_raw(r"(Login incorrect|#|\$ )", 20)
                     self.step("old-default-root-password-rejected", bool(r) and b"incorrect" in r.group(0), "Login incorrect" if r else "no answer")
+                    vm.expect_raw("login:", 30)     # let the fresh login prompt appear (and be consumed) before the next login starts
                     return False
         return False
 

@@ -5,3 +5,5 @@
 # the owner's overlay carries a newer proton-vpn-gtk-app that needs proton-vpn-daemon, which needs systemd: on this OpenRC machine the GURU
 # version stays (without this mask every world update printed a skipped-update / masked-dependency block once the overlay had synced)
 net-vpn/proton-vpn-gtk-app::canutethegreat-overlay
+# OBS (app-misc/hogsmeade-obs, owner-only): obs-studio[vlc] needs libvlc 3
+>=media-video/vlc-4.0
