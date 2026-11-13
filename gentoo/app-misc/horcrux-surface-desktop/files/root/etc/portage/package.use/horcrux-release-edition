@@ -1,0 +1,2 @@
+# sys-apps/horcrux-release (os-release): this machine runs XFCE, so its edition is XFCE (never GNOME); a host name is not an edition
+sys-apps/horcrux-release xfce

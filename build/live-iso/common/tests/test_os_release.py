@@ -26,9 +26,9 @@ def parse(t):
 
 @unittest.skipUnless(HAVE, "no horcrux-release package")
 class OsRelease(unittest.TestCase):
-    CASES = [("server",), ("gnome-light",)]
+    CASES = [("server",), ("gnome-light",), ("xfce",)]
     MACHINES = ("hogsmeade", "hogshead", "gringotts", "surface", "test-machine", "test machine", "ollivanders")
-    LABELS = {"server": ("Server", "server"), "gnome-light": ("GNOME", "gnome")}
+    LABELS = {"server": ("Server", "server"), "gnome-light": ("GNOME", "gnome"), "xfce": ("XFCE", "xfce")}
 
     def test_every_variant_is_complete_and_clean(self):
         for c in self.CASES:
@@ -65,8 +65,8 @@ class OsRelease(unittest.TestCase):
     def test_no_machine_use_flags(self):
         for f in ("horcrux-release-0.1.0.ebuild", sorted(x for x in os.listdir(PKG) if "_p" in x)[-1]):
             e = open(os.path.join(PKG, f)).read()
-            self.assertRegex(e, r'(?m)^IUSE="gnome-light"$')
-            self.assertNotIn("REQUIRED_USE", e)
+            self.assertRegex(e, r'(?m)^IUSE="gnome-light xfce"$')
+            self.assertRegex(e, r"(?m)^REQUIRED_USE=\"\?\? \( gnome-light xfce \)\"$")
         for r, _, fs in os.walk(os.path.join(REPO, "gentoo")):
             for f in fs:
                 if f.endswith(".ebuild"):
@@ -90,6 +90,21 @@ class OsRelease(unittest.TestCase):
             t = open(os.path.join(v, var, "portage", "package.use", "horcrux-release")).read()
             flags = [l.split()[1:] for l in t.splitlines() if l.startswith("sys-apps/horcrux-release ")]
             self.assertEqual(flags, [["gnome-light"]], var)
+
+    def test_xfce_machine_is_xfce_never_gnome(self):
+        # madammalkins (the Surface profile) runs XFCE: its os-release edition must be XFCE, never GNOME
+        sd = os.path.join(REPO, "gentoo", "app-misc", "horcrux-surface-desktop")
+        use = open(os.path.join(sd, "files", "root", "etc", "portage", "package.use", "horcrux-release-edition")).read()
+        flags = [l.split()[1:] for l in use.splitlines() if l.startswith("sys-apps/horcrux-release ")]
+        self.assertEqual(flags, [["xfce"]])
+        eb = sorted(x for x in os.listdir(sd) if x.endswith(".ebuild"))[-1]
+        e = open(os.path.join(sd, eb)).read()
+        self.assertIn("xfce-base/xfce4-meta", e)
+        self.assertNotRegex(e, r"gnome-base/gnome|gnome-light")
+        kv = parse(render(PV, "xfce"))
+        self.assertEqual((kv["VARIANT"], kv["VARIANT_ID"], kv["PRETTY_NAME"]), ("XFCE", "xfce", "Horcrux 0.1 (XFCE)"))
+        # no other edition may carry the xfce flag, and the surface layer must not set the gnome one
+        self.assertNotIn("gnome-light", use)
 
     def test_no_forgejo_url_in_the_package(self):
         for r, _, fs in os.walk(PKG):

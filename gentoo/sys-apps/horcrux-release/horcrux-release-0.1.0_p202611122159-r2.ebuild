@@ -14,9 +14,10 @@ SLOT="0"
 KEYWORDS="amd64 arm64"
 
 # No variant flag = the headless Server. The image layer (project/variants/<v>/portage/package.use/horcrux-release) or the system's own
-# package.use sets the edition (gnome-light); the flag is part of the binary package, so a cached binpkg of another edition is never reused.
+# package.use sets the edition (gnome-light = GNOME, xfce); the flag is part of the binary package, so a cached binpkg of another edition is never reused.
 # VARIANT/VARIANT_ID are the EDITION only: a machine/host name (hogsmeade, ...) never belongs in os-release.
-IUSE="gnome-light"
+IUSE="gnome-light xfce"
+REQUIRED_USE="?? ( gnome-light xfce )"
 
 RDEPEND="sys-apps/baselayout"
 
@@ -41,6 +42,7 @@ pkg_setup() {
 src_install() {
 	local edition=server
 	use gnome-light && edition=gnome-light
+	use xfce && edition=xfce
 
 	bash "${FILESDIR}"/render-os-release.sh "${PV}" "${edition}" > "${T}"/os-release || die
 	insinto /usr/lib

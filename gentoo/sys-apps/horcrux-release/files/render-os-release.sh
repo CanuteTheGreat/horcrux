@@ -1,6 +1,6 @@
 #!/bin/bash
 # Prints the Horcrux /usr/lib/os-release (os-release(5)) on stdout.
-#   render-os-release.sh <PV> <edition: server|gnome-light>
+#   render-os-release.sh <PV> <edition: server|gnome-light|xfce>
 # VARIANT/VARIANT_ID are the edition only; machine/host names never appear.
 # PV is the package version, 0.1.0 or 0.1.0_p<YYYYMMDDHHMM> (the stamp = the build id; it moves with every horcrux-bin bump).
 # This is the INSTALLED system's file: it never says live/installer (the live session marks itself at boot, see live-os-release).
@@ -12,6 +12,7 @@ short=$(echo "$ver" | cut -d. -f1,2)
 case "$edition" in
 	server) elabel="Server"; vid=server ;;
 	gnome-light) elabel="GNOME"; vid=gnome ;;  # "light" is an internal build-variant name, not user-facing
+	xfce) elabel="XFCE"; vid=xfce ;;
 	*) echo "unknown edition: $edition" >&2; exit 2 ;;
 esac
 vlabel=$elabel; detail=$elabel

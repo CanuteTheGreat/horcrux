@@ -21,6 +21,7 @@ RDEPEND="
 	sys-kernel/horcrux-unlock
 	sys-apps/horcrux-tools
 	sys-apps/horcrux-live-data
+	sys-apps/horcrux-release
 	xfce-base/xfce4-meta
 	xfce-base/xfce4-power-manager
 	xfce-extra/xfce4-screensaver
