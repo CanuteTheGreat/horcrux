@@ -2,6 +2,7 @@
 
 use crate::api::{self, delete_json, fetch_json, post_json, PoolVolume};
 use leptos::*;
+use leptos_router::use_query_map;
 use serde::Serialize;
 
 /// Storage pool (adapter over the API's `storage::StoragePool`).
@@ -17,6 +18,10 @@ struct AddStoragePoolReq {
 /// Storage Management Page Component
 #[component]
 pub fn StorageManagement() -> impl IntoView {
+    // `?pool=<id>`: the dashboard links to one pool; its card is highlighted
+    // and scrolled into view.
+    let query = use_query_map();
+    let focus_pool = move || query.with(|q| q.get("pool").cloned().unwrap_or_default());
     let (pools, set_pools) = create_signal(Vec::<StoragePool>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
@@ -204,7 +209,8 @@ pub fn StorageManagement() -> impl IntoView {
                             };
 
                             view! {
-                                <div class={format!("storage-card status-{}", pool.status.to_lowercase())}>
+                                <div class={format!("storage-card status-{}{}", pool.status.to_lowercase(), if focus_pool() == pool.id { " pool-focus" } else { "" })}
+                                    id={format!("pool-{}", pool.id)}>
                                     <div class="storage-header">
                                         <div class="storage-info">
                                             <h3>{&pool.name}</h3>

@@ -3,6 +3,7 @@
 //! task can be stopped.
 use crate::api::*;
 use leptos::*;
+use leptos_router::use_query_map;
 
 fn fmt_time(t: i64) -> String {
     let d = web_sys::js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(t as f64 * 1000.0));
@@ -28,8 +29,17 @@ fn status_class(s: &str) -> &'static str {
 pub fn TasksPage() -> impl IntoView {
     let (tasks, set_tasks) = create_signal(Vec::<TaskRecord>::new());
     let (error, set_error) = create_signal(None::<String>);
-    let (filter, set_filter) = create_signal(String::new());
-    let (selected, set_selected) = create_signal(None::<String>);
+    // `?status=running` / `?upid=...`: the dashboard links to a filtered list
+    // and to one task's log.
+    let query = use_query_map();
+    let init_status = query
+        .get_untracked()
+        .get("status")
+        .cloned()
+        .filter(|s| matches!(s.as_str(), "running" | "ok" | "error" | "stopped"))
+        .unwrap_or_default();
+    let (filter, set_filter) = create_signal(init_status);
+    let (selected, set_selected) = create_signal(query.get_untracked().get("upid").cloned());
     let (log, set_log) = create_signal(Vec::<String>::new());
 
     let reload = move || {
@@ -77,11 +87,11 @@ pub fn TasksPage() -> impl IntoView {
                         prop:value=filter
                         on:change=move |ev| set_filter.set(event_target_value(&ev))
                     >
-                        <option value="">"All"</option>
-                        <option value="running">"Running"</option>
-                        <option value="ok">"Succeeded"</option>
-                        <option value="error">"Failed"</option>
-                        <option value="stopped">"Stopped"</option>
+                        <option value="" selected=move || filter.get() == "">"All"</option>
+                        <option value="running" selected=move || filter.get() == "running">"Running"</option>
+                        <option value="ok" selected=move || filter.get() == "ok">"Succeeded"</option>
+                        <option value="error" selected=move || filter.get() == "error">"Failed"</option>
+                        <option value="stopped" selected=move || filter.get() == "stopped">"Stopped"</option>
                     </select>
                     <button class="btn btn-secondary" on:click=move |_| reload()>"Refresh"</button>
                 </div>

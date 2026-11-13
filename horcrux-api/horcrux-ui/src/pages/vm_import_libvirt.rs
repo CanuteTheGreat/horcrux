@@ -45,7 +45,7 @@ pub fn UnmanagedLibvirtBanner() -> impl IntoView {
             let l = list.get();
             (!l.is_empty()).then(|| view! {
                 <div class="alert alert-warning" id="unmanaged-libvirt">
-                    <strong>{format!("{} unmanaged libvirt VM(s) in this cluster, not shown above: ", l.len())}</strong>
+                    <strong>{format!("{} unmanaged libvirt VM(s) in this cluster, not managed by Horcrux: ", l.len())}</strong>
                     {l.iter().map(|(node, local, d)| view! { <span class="unmanaged-vm">{if *local { format!("{} ({}) ", d.domain, d.state) } else { format!("{} ({}) on {} ", d.domain, d.state, node) }}</span> }).collect_view()}
                     <A href="/vms/import-libvirt" class="btn btn-primary" attr:id="unmanaged-import">"Import into Horcrux"</A>
                 </div>

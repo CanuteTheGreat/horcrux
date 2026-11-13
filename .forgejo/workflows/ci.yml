@@ -1288,6 +1288,14 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run browser E2E"
           /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_e2e.py
 
+      - name: Dashboard cards and rows are real links (Firefox, desktop + phone)
+        env:
+          BASE_URL: https://localhost:8006
+          HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Dashboard links e2e"
+          /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/dashboard_links_e2e.py
+
       - name: UI offers every USE-flag feature of an all-features build
         env:
           BASE_URL: https://localhost:8006

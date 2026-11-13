@@ -3,8 +3,23 @@ use horcrux_common::VmConfig;
 use leptos::*;
 use leptos_router::*;
 
+/// Does a VM status pass the `?state=` filter of the list? The dashboard's
+/// "Running VMs" / "Stopped VMs" cards link here; an empty or unknown
+/// filter shows everything.
+pub fn vm_state_matches(filter: &str, status: &horcrux_common::VmStatus) -> bool {
+    use horcrux_common::VmStatus::*;
+    match filter {
+        "running" => matches!(status, Running),
+        "stopped" => matches!(status, Stopped),
+        "paused" => matches!(status, Paused),
+        _ => true,
+    }
+}
+
 #[component]
 pub fn VmList() -> impl IntoView {
+    let query = use_query_map();
+    let state_filter = move || query.with(|q| q.get("state").cloned().unwrap_or_default());
     let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
@@ -182,6 +197,12 @@ pub fn VmList() -> impl IntoView {
                 <A href="/vms/import-libvirt" class="btn">"Import from libvirt"</A>
             </div>
             <crate::pages::UnmanagedLibvirtBanner/>
+            <nav class="filter-links" id="vm-state-filter" aria-label="Filter by state">
+                <A href="/vms" class="filter-link" attr:id="vm-filter-all">"All"</A>
+                <A href="/vms?state=running" class="filter-link" attr:id="vm-filter-running">"Running"</A>
+                <A href="/vms?state=stopped" class="filter-link" attr:id="vm-filter-stopped">"Stopped"</A>
+                <A href="/vms?state=paused" class="filter-link" attr:id="vm-filter-paused">"Paused"</A>
+            </nav>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="vm-notice">{n}</div> })}
 
             {move || {
@@ -190,8 +211,12 @@ pub fn VmList() -> impl IntoView {
                 } else if let Some(err) = error.get() {
                     view! { <p class="error">"Error: " {err}</p> }.into_view()
                 } else {
-                    let vm_list = vms.get();
-                    if vm_list.is_empty() {
+                    let filter = state_filter();
+                    let total = vms.get().len();
+                    let vm_list: Vec<VmConfig> = vms.get().into_iter().filter(|v| vm_state_matches(&filter, &v.status)).collect();
+                    if vm_list.is_empty() && total > 0 {
+                        view! { <p class="no-data" id="vm-filter-empty">{format!("No {} VMs. ", filter)}<A href="/vms">"Show all VMs"</A></p> }.into_view()
+                    } else if vm_list.is_empty() {
                         view! { <p class="no-data">"No virtual machines found. Create one to get started!"</p> }.into_view()
                     } else {
                         view! {
@@ -345,5 +370,24 @@ pub fn VmList() -> impl IntoView {
                 </div>
             })}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::vm_state_matches;
+    use horcrux_common::VmStatus::*;
+
+    #[test]
+    fn state_filter_selects_the_right_subset() {
+        assert!(vm_state_matches("running", &Running));
+        assert!(!vm_state_matches("running", &Stopped));
+        assert!(vm_state_matches("stopped", &Stopped));
+        assert!(!vm_state_matches("stopped", &Paused));
+        assert!(vm_state_matches("paused", &Paused));
+        for s in [Running, Stopped, Paused, Unknown] {
+            assert!(vm_state_matches("", &s));
+            assert!(vm_state_matches("bogus", &s));
+        }
     }
 }

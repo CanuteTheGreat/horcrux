@@ -1,6 +1,8 @@
 use crate::api;
 use crate::features::IfFeature;
+use horcrux_common::VmStatus;
 use leptos::*;
+use leptos_router::A;
 
 /// Whether this user may read a panel's data.
 #[derive(Clone, Copy, PartialEq)]
@@ -47,7 +49,10 @@ pub fn Dashboard() -> impl IntoView {
     let (node_metrics, set_node_metrics) = create_signal(None::<api::NodeMetrics>);
     let (cluster_nodes, set_cluster_nodes) = create_signal(Vec::<api::ClusterNode>::new());
     let (active_alerts, set_active_alerts) = create_signal(Vec::<api::ActiveAlert>::new());
-    let (vm_count, set_vm_count) = create_signal(0);
+    let (vms, set_vms) = create_signal(Vec::<horcrux_common::VmConfig>::new());
+    let (containers, set_containers) = create_signal(None::<Vec<api::Container>>);
+    let (pools, set_pools) = create_signal(None::<Vec<api::StoragePoolInfo>>);
+    let (tasks, set_tasks) = create_signal(None::<Vec<api::TaskRecord>>);
     // Per-panel permission: a non-admin (e.g. a VM user) gets 403 for node
     // metrics, cluster nodes and alerts. Those panels say "No permission"
     // instead of a fake 0 under a "could not reach the backend" banner.
@@ -107,8 +112,20 @@ pub fn Dashboard() -> impl IntoView {
                 set_alerts_access.set(Access::Denied);
             }
             match api::get_vms().await {
-                Ok(vms) => set_vm_count.set(vms.len()),
+                Ok(list) => set_vms.set(list),
                 Err(e) => failed(e, set_vms_access),
+            }
+            // Containers, storage pools and tasks are optional panels: a
+            // runtime that isn't built in or a role without access shows "--"
+            // rather than the backend-error banner.
+            if let Ok(c) = api::get_containers().await {
+                set_containers.set(Some(c));
+            }
+            if let Ok(p) = api::get_storage_pools().await {
+                set_pools.set(Some(p));
+            }
+            if let Ok(t) = api::list_tasks("").await {
+                set_tasks.set(Some(t));
             }
         });
     });
@@ -125,6 +142,10 @@ pub fn Dashboard() -> impl IntoView {
         }
     };
 
+    let count_of =
+        move |f: fn(&VmStatus) -> bool| vms.get().iter().filter(|v| f(&v.status)).count();
+    let opt_len = |n: Option<usize>| n.map(|n| n.to_string()).unwrap_or_else(|| "--".to_string());
+
     view! {
         <div class="dashboard">
             <h1>"Dashboard"</h1>
@@ -133,31 +154,70 @@ pub fn Dashboard() -> impl IntoView {
                 <p class="error">"Could not reach the backend for one or more panels: " {err}</p>
             })}
 
+            <crate::pages::UnmanagedLibvirtBanner/>
+
+            // Every card is a real link (middle-click, keyboard, new tab) to
+            // the page behind the number, pre-filtered where the page can.
             <div class="stats-grid">
-                <div class="stat-card" id="stat-vms">
+                <A href="/vms" class="stat-card stat-link" attr:id="stat-vms">
                     <h3>"Virtual Machines"</h3>
                     <div class="stat-value">
-                        {stat(vms_access, Signal::derive(move || vm_count.get().to_string()))}
+                        {stat(vms_access, Signal::derive(move || vms.get().len().to_string()))}
                     </div>
-                </div>
+                </A>
+
+                <A href="/vms?state=running" class="stat-card stat-link" attr:id="stat-vms-running">
+                    <h3>"Running VMs"</h3>
+                    <div class="stat-value">
+                        {stat(vms_access, Signal::derive(move || count_of(|s| matches!(s, VmStatus::Running)).to_string()))}
+                    </div>
+                </A>
+
+                <A href="/vms?state=stopped" class="stat-card stat-link" attr:id="stat-vms-stopped">
+                    <h3>"Stopped VMs"</h3>
+                    <div class="stat-value">
+                        {stat(vms_access, Signal::derive(move || count_of(|s| matches!(s, VmStatus::Stopped)).to_string()))}
+                    </div>
+                </A>
+
+                <A href="/containers" class="stat-card stat-link" attr:id="stat-containers">
+                    <h3>"Containers"</h3>
+                    <div class="stat-value">
+                        {move || opt_len(containers.get().map(|c| c.len()))}
+                    </div>
+                </A>
 
                 <IfFeature feature="cluster">
-                    <div class="stat-card" id="stat-cluster-nodes">
+                    <A href="/ha/cluster" class="stat-card stat-link" attr:id="stat-cluster-nodes">
                         <h3>"Cluster Nodes"</h3>
                         <div class="stat-value">
                             {stat(nodes_access, Signal::derive(move || cluster_nodes.get().len().to_string()))}
                         </div>
-                    </div>
+                    </A>
                 </IfFeature>
 
-                <div class="stat-card" id="stat-active-alerts">
+                <A href="/storage" class="stat-card stat-link" attr:id="stat-storage-pools">
+                    <h3>"Storage Pools"</h3>
+                    <div class="stat-value">
+                        {move || opt_len(pools.get().map(|p| p.len()))}
+                    </div>
+                </A>
+
+                <A href="/alerts" class="stat-card stat-link" attr:id="stat-active-alerts">
                     <h3>"Active Alerts"</h3>
                     <div class="stat-value alert-count">
                         {stat(alerts_access, Signal::derive(move || active_alerts.get().len().to_string()))}
                     </div>
-                </div>
+                </A>
 
-                <div class="stat-card" id="stat-cpu">
+                <A href="/tasks?status=running" class="stat-card stat-link" attr:id="stat-tasks-running">
+                    <h3>"Running Tasks"</h3>
+                    <div class="stat-value">
+                        {move || opt_len(tasks.get().map(|t| t.iter().filter(|t| t.status == "running").count()))}
+                    </div>
+                </A>
+
+                <A href="/monitoring" class="stat-card stat-link" attr:id="stat-cpu">
                     <h3>"CPU Usage"</h3>
                     <div class="stat-value">
                         {stat(metrics_access, Signal::derive(move || {
@@ -167,7 +227,7 @@ pub fn Dashboard() -> impl IntoView {
                                 .unwrap_or_else(|| "--".to_string())
                         }))}
                     </div>
-                </div>
+                </A>
             </div>
 
             <div class="dashboard-section">
@@ -176,19 +236,113 @@ pub fn Dashboard() -> impl IntoView {
                     view! { <p class="no-data">"No permission to view node status"</p> }.into_view()
                 } else {
                     node_metrics.get().map(|metrics| view! {
-                        <div class="system-info">
-                            <p><strong>"Hostname:"</strong> " " {&metrics.hostname}</p>
+                        <A href="/system/health" class="system-info dash-link" attr:id="dash-system-status">
+                            <p><strong>"Hostname:"</strong> " " {metrics.hostname.clone()}</p>
                             <p><strong>"Memory:"</strong> " " {format!("{} / {} GB",
                                 metrics.memory_used / 1024 / 1024 / 1024,
                                 metrics.memory_total / 1024 / 1024 / 1024
                             )}</p>
                             <p><strong>"Uptime:"</strong> " " {format_uptime(metrics.uptime_seconds)}</p>
-                        </div>
+                        </A>
                     }).into_view()
                 }}
             </div>
 
-            <div class="dashboard-section">
+            <div class="dashboard-section" id="dash-vms">
+                <h2>"Virtual Machines"</h2>
+                {move || {
+                    let list = vms.get();
+                    if list.is_empty() {
+                        view! { <p class="no-data">"No virtual machines yet"</p> }.into_view()
+                    } else {
+                        view! {
+                            <ul class="dash-list">
+                                {list.into_iter().take(8).map(|vm| view! {
+                                    <li>
+                                        <A href=format!("/vms/{}", vm.id) class="dash-link dash-item">
+                                            <strong>{vm.name.clone()}</strong>
+                                            <span class=format!("dash-meta status-{}", vm.status)>{vm.status.to_string()}</span>
+                                        </A>
+                                    </li>
+                                }).collect_view()}
+                            </ul>
+                            <A href="/vms" class="dash-more">"All virtual machines \u{2192}"</A>
+                        }.into_view()
+                    }
+                }}
+            </div>
+
+            <IfFeature feature="cluster">
+                <div class="dashboard-section" id="dash-nodes">
+                    <h2>"Nodes"</h2>
+                    {move || {
+                        let list = cluster_nodes.get();
+                        if nodes_access.get() == Access::Denied {
+                            view! { <p class="no-data">"No permission to view nodes"</p> }.into_view()
+                        } else if list.is_empty() {
+                            view! { <p class="no-data">"No cluster nodes"</p> }.into_view()
+                        } else {
+                            view! {
+                                <ul class="dash-list">
+                                    {list.into_iter().map(|n| view! {
+                                        <li>
+                                            <A href="/ha/cluster" class="dash-link dash-item">
+                                                <strong>{n.name.clone()}</strong>
+                                                <span class=format!("dash-meta node-{}", n.status)>{n.status.clone()}</span>
+                                            </A>
+                                        </li>
+                                    }).collect_view()}
+                                </ul>
+                            }.into_view()
+                        }
+                    }}
+                </div>
+            </IfFeature>
+
+            <div class="dashboard-section" id="dash-pools">
+                <h2>"Storage"</h2>
+                {move || match pools.get() {
+                    Some(list) if !list.is_empty() => view! {
+                        <ul class="dash-list">
+                            {list.into_iter().map(|p| {
+                                let pct = (p.used_bytes * 100).checked_div(p.total_bytes).unwrap_or(0);
+                                view! {
+                                    <li>
+                                        <A href=format!("/storage?pool={}", p.id) class="dash-link dash-item">
+                                            <strong>{p.name.clone()}</strong>
+                                            <span class="dash-meta">{format!("{} \u{b7} {}% used", p.pool_type, pct)}</span>
+                                        </A>
+                                    </li>
+                                }
+                            }).collect_view()}
+                        </ul>
+                    }.into_view(),
+                    _ => view! { <p class="no-data">"No storage pools"</p> }.into_view(),
+                }}
+            </div>
+
+            <div class="dashboard-section" id="dash-tasks">
+                <h2>"Recent Tasks"</h2>
+                {move || match tasks.get() {
+                    Some(list) if !list.is_empty() => view! {
+                        <ul class="dash-list">
+                            {list.into_iter().take(5).map(|t| view! {
+                                <li>
+                                    <A href=format!("/tasks?upid={}", t.upid) class="dash-link dash-item">
+                                        <strong>{t.task_type.clone()}</strong>
+                                        {t.target.clone().map(|x| format!(" {x}"))}
+                                        <span class=format!("dash-meta task-{}", t.status)>{t.status.clone()}</span>
+                                    </A>
+                                </li>
+                            }).collect_view()}
+                        </ul>
+                        <A href="/tasks" class="dash-more">"All tasks \u{2192}"</A>
+                    }.into_view(),
+                    _ => view! { <p class="no-data">"No recent tasks"</p> }.into_view(),
+                }}
+            </div>
+
+            <div class="dashboard-section" id="dash-alerts">
                 <h2>"Recent Alerts"</h2>
                 {move || {
                     let alerts = active_alerts.get();
@@ -201,11 +355,13 @@ pub fn Dashboard() -> impl IntoView {
                             <ul class="alert-list">
                                 {alerts.into_iter().take(5).map(|alert| view! {
                                     <li class={format!("alert-item severity-{}", alert.severity.to_lowercase())}>
-                                        <strong>{&alert.rule_name}</strong>
-                                        " - "
-                                        {&alert.target}
-                                        " - "
-                                        {&alert.message}
+                                        <A href="/alerts" class="dash-link">
+                                            <strong>{alert.rule_name.clone()}</strong>
+                                            " - "
+                                            {alert.target.clone()}
+                                            " - "
+                                            {alert.message.clone()}
+                                        </A>
                                     </li>
                                 }).collect_view()}
                             </ul>
