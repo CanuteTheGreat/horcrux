@@ -1312,6 +1312,24 @@ jobs:
           ADMIN_PASSWORD: admin
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "UX crawl"
+          # The crawl judges the product, not this runner: the job container sees the runner host's real Docker
+          # daemon (other jobs' containers, CI rootfs images named after live ISOs, a registry on the Forgejo host),
+          # which showed up as 'internal name' / 'private text' findings that no Horcrux node would have. Restart
+          # the server on the same data (everything the E2E steps created) with Docker pointed at a socket that
+          # does not exist, so the container pages show the node's own 424 "Docker not available" state.
+          kill "$(cat /tmp/horcrux-e2e.pid)" 2>/dev/null || true
+          for i in $(seq 1 30); do curl -sfk -o /dev/null https://127.0.0.1:8006/api/health || break; sleep 1; done
+          HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 \
+          HORCRUX_DATA_DIR=/tmp/e2e-data \
+          HORCRUX_CNI_BIN_DIR=/tmp/e2e-cni/bin HORCRUX_CNI_CONF_DIR=/tmp/e2e-cni/conf.d \
+          HORCRUX_DATABASE_URL="sqlite:///tmp/e2e-data/horcrux.db" \
+          HORCRUX_UI_DIR="$PWD/horcrux-api/horcrux-ui/dist" \
+          HORCRUX_SSL_DIR=/tmp/e2e-data/ssl \
+          DOCKER_HOST=unix:///tmp/ux-crawl-no-docker.sock \
+          ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \
+          nohup ./target/debug/horcrux-api >> /tmp/horcrux-e2e.log 2>&1 &
+          echo $! > /tmp/horcrux-e2e.pid
+          for i in $(seq 1 60); do curl -sf --cacert /tmp/horcrux-ca.pem -o /dev/null https://localhost:8006/api/health && break; sleep 1; done
           /tmp/pw/bin/python ci/ux-qa/ux_crawl.py --report /tmp/ux-crawl.json --shots /tmp/ux-shots
 
       - name: LXC browser E2E (real nested LXC behind the UI)
