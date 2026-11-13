@@ -394,12 +394,12 @@ fn export_metrics(node: serde_json::Value, vms: serde_json::Value) {
                     chrono::Utc::now().format("%Y%m%d-%H%M%S")
                 ),
             );
-            if let Some(body) = doc.body() {
-                let _ = body.append_child(&a);
-                if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&a) {
-                    el.click();
-                }
-                let _ = body.remove_child(&a);
+            // Click a DETACHED anchor: one appended to <body> bubbles the synthetic click to
+            // Leptos' delegated window click handler while that handler is still running
+            // the Export button's own on:click, and wasm-bindgen throws "closure invoked
+            // recursively or after being dropped" (failed UI E2E on every run).
+            if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&a) {
+                el.click();
             }
         }
     }
