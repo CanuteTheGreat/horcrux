@@ -73,14 +73,20 @@ jobs:
           echo "Dropped; waiting for the watcher (polls every 10s)..."
           for i in $(seq 1 54); do
             sleep 10
-            rsync -I -e "$RSH" "$DEST:status-horcrux-site.json" /tmp/status.json 2>/dev/null || continue
+            if ! rsync -I -e "$RSH" "$DEST:status-horcrux-site.json" /tmp/status.json 2>/tmp/status.err; then
+              # Show why (this used to be silent: run 2376 waited 19 min although the watcher had finished in 10 s).
+              [ $((i % 6)) = 1 ] && echo "status poll $i: rsync failed: $(tail -n 2 /tmp/status.err | tr '\n' ' ')" >&2
+              continue
+            fi
             if [ "$(jq -r .sha /tmp/status.json 2>/dev/null)" = "${{ github.sha }}" ]; then
               if [ "$(jq -r .status /tmp/status.json)" = "ok" ]; then echo "Watcher reports success."; exit 0; fi
               echo "Watcher reports failure: $(jq -r .reason /tmp/status.json)" >&2; exit 1
             fi
           done
-          echo "Timed out waiting for the watcher (horcrux-site-deploy-watcher.timer on ollivanders)." >&2
-          exit 1
+          # The status file could not be read (or never carried this sha). Do not fail on that alone: the next step
+          # checks that the live site serves this exact commit, and fails if it does not.
+          echo "::warning::No status for ${{ github.sha }} from the watcher in 9 min; the live-site check below decides." >&2
+          exit 0
       - name: Verify the live site serves this commit
         run: |
           # The tunnel can answer 502 for a short while after a container swap: retry ~3 min.
