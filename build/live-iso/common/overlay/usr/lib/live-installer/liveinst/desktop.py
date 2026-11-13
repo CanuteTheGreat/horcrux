@@ -21,6 +21,22 @@ def admin_group(p):
     return (p or {}).get("web_admin_group", "horcrux-admin")
 
 
+EXTRA_GROUPS = DIR + "/extra-groups.list"
+
+
+def extra_groups(root, name):
+    """machine-specific groups a package ships in EXTRA_GROUPS ('user <name>' header, then one group per line); only for that user.
+    Absent in every public image."""
+    try:
+        lines = [l.strip() for l in open(os.path.join(root, EXTRA_GROUPS.lstrip("/")))]
+    except OSError:
+        return []
+    lines = [l for l in lines if l and not l.startswith("#")]
+    if not lines or lines[0] != "user " + name:
+        return []
+    return [l for l in lines[1:] if re.fullmatch(r"[a-z_][a-z0-9_-]*", l)]
+
+
 # services of the server image that a desktop replaces (NetworkManager owns the network, see services.list)
 REPLACED = ["dhcpcd", "iwd"]
 
@@ -63,7 +79,8 @@ def create_user(inst):
     for g in ("wheel", ag) if pam else ("wheel",):
         inst.run(["groupadd", "-f", g] + (["-r"] if g == ag else []), chroot=True, check=False)
     have = set(l.split(":")[0] for l in open(f"{T}/etc/group"))
-    groups = ",".join(g for g in dict.fromkeys(ag if g == "horcrux-admin" else g for g in GROUPS) if g in have)
+    wanted = [ag if g == "horcrux-admin" else g for g in GROUPS + extra_groups(T, name)]
+    groups = ",".join(g for g in dict.fromkeys(wanted) if g in have)
     # the home dataset is mounted above the root BE by zfsroot.mount()/mount_rest() (they fail the install
     # otherwise): a home created in the BE's own /home would be hidden by the empty home dataset at boot
     inst.run(["useradd", "-m", "-G", groups, "-s", "/bin/bash", "-c", c.get("user_fullname", name), name], chroot=True)

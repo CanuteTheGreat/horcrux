@@ -34,4 +34,5 @@ sys-auth/proton-authenticator-bin
 net-analyzer/caido-bin
 media-video/davinci-resolve
 app-misc/hogsmeade-sudo
+app-misc/hogsmeade-user-groups
 app-misc/hogsmeade-b2-mounts
