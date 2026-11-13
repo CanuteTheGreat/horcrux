@@ -3,6 +3,8 @@
 
 EAPI=8
 
+inherit systemd
+
 DESCRIPTION="TEST machine profile: disk encryption OFF (unattended boot) and power saving OFF (no lid/idle sleep, no Wi-Fi power save)"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 S="${WORKDIR}"
@@ -87,6 +89,8 @@ src_install() {
 	newinitd "${FILESDIR}"/horcrux-test-power.initd horcrux-test-power
 	newinitd "${FILESDIR}"/horcrux-test-klog.initd horcrux-test-klog
 	newinitd "${FILESDIR}"/horcrux-test-netwatch.initd horcrux-test-netwatch
+	newexe "${FILESDIR}"/horcrux-test-power horcrux-test-power
+	systemd_dounit "${FILESDIR}"/horcrux-test-{watchdog,power,klog,netwatch}.service
 	exeinto /usr/libexec
 	newexe "${FILESDIR}"/horcrux-test-netwatch.sh horcrux-test-netwatch
 	if use smallram; then

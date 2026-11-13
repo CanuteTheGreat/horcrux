@@ -168,7 +168,7 @@ if [ "$result" = pass ]; then
     # patronus runs 726/747): longer hard deadline for those entries (qemu-test.py scales the installer wait to match)
     dl=$DL_QEMU
     if [ "$DL_QEMU" = 5400 ]; then case "$args" in *"--fs zfs"*|*"--mem 8192"*) dl=12600 ;; esac; fi
-    with_deadline $dl python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" $args --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+    with_deadline $dl python3 -u "$HERE/qemu-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" --init "$INIT" $args --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img

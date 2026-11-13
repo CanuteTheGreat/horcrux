@@ -1,0 +1,13 @@
+[Unit]
+Description=test machine: Wi-Fi power save off, no power-saver profile, Wake-on-LAN armed on the wired NICs
+After=NetworkManager.service iwd.service power-profiles-daemon.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# one copy of the logic (shared with the OpenRC script): arm WoL + Wi-Fi power save off at start, WoL again at stop (just before poweroff)
+ExecStart=/usr/libexec/horcrux-test-power start
+ExecStop=/usr/libexec/horcrux-test-power stop
+
+[Install]
+WantedBy=multi-user.target

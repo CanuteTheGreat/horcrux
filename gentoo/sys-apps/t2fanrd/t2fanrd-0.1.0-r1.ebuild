@@ -35,7 +35,7 @@ CRATES="
 
 COMMIT="48baf962697ec3d4d969c74cf601ee8e15b7aeaa"
 
-inherit cargo
+inherit cargo systemd
 
 DESCRIPTION="Simple fan daemon for Apple T2 Macs (needs the t2linux applesmc patches)"
 HOMEPAGE="https://github.com/GnomedDev/T2FanRD"
@@ -56,4 +56,5 @@ QA_FLAGS_IGNORED="usr/bin/t2fanrd"
 src_install() {
 	cargo_src_install
 	newinitd "${FILESDIR}/t2fanrd.initd" t2fanrd
+	systemd_dounit "${FILESDIR}/t2fanrd.service"
 }

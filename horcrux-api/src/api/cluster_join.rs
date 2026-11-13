@@ -47,24 +47,17 @@ fn check_address(address: &str) -> Result<(), ApiError> {
 /// hard reset the node stayed unmanaged until a human started `horcrux-api`).
 /// Desktop editions install the manager without enabling it; creating or
 /// joining a cluster is the moment it becomes a member, so enable it then.
-/// OpenRC only, best effort (no init script or no `rc-update` = nothing to do).
+/// Works on OpenRC and systemd (`crate::init`); best effort (no script/unit or no init system = nothing to do).
 async fn enable_boot_start() {
-    if !std::path::Path::new("/etc/init.d/horcrux-api").exists() {
+    let Some(init) = crate::init::backend() else {
+        return;
+    };
+    if !init.exists("horcrux-api") {
         return;
     }
-    match tokio::process::Command::new("rc-update")
-        .args(["add", "horcrux-api", "default"])
-        .output()
-        .await
-    {
-        Ok(o) if o.status.success() => {
-            tracing::info!("cluster member: horcrux-api enabled at boot")
-        }
-        Ok(o) => tracing::warn!(
-            "cluster member: could not enable horcrux-api at boot: {}",
-            String::from_utf8_lossy(&o.stderr).trim()
-        ),
-        Err(e) => tracing::debug!("cluster member: no rc-update ({e}): boot start left as is"),
+    match init.enable("horcrux-api").await {
+        Ok(()) => tracing::info!("cluster member: horcrux-api enabled at boot"),
+        Err(e) => tracing::warn!("cluster member: could not enable horcrux-api at boot: {e}"),
     }
 }
 

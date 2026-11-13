@@ -1,0 +1,15 @@
+[Unit]
+Description=test machine: follow the kernel ring buffer into /var/log/kernel-test.log
+# persistent kernel log; rotated by /etc/logrotate.d/horcrux-test-machine
+After=local-fs.target
+Before=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/bin/dmesg --follow --time-format iso --kernel
+StandardOutput=append:/var/log/kernel-test.log
+StandardError=append:/var/log/kernel-test.log
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

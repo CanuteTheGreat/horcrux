@@ -3,6 +3,8 @@
 
 EAPI=8
 
+inherit systemd
+
 DESCRIPTION="Horcrux clock rules: chrony steps a months-off clock (makestep 1 -1), rtcsync, UTC hardware clock, sources re-resolved when any network comes up"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 S="${WORKDIR}"
@@ -14,7 +16,7 @@ KEYWORDS="amd64 arm64"
 RDEPEND="
 	net-misc/chrony
 	sys-apps/iproute2
-	sys-apps/openrc
+	|| ( sys-apps/openrc sys-apps/systemd )
 "
 
 src_install() {
@@ -22,6 +24,7 @@ src_install() {
 	doexe "${FILESDIR}"/horcrux-timesync
 	dosbin "${FILESDIR}"/horcrux-time-config
 	newinitd "${FILESDIR}"/horcrux-timesync.initd horcrux-timesync
+	systemd_dounit "${FILESDIR}"/horcrux-timesync.service
 }
 
 pkg_postinst() {

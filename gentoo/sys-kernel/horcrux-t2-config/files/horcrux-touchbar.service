@@ -1,0 +1,13 @@
+[Unit]
+Description=Touch Bar display attach (USB configuration 2 + reset + appletbdrm)
+After=local-fs.target systemd-udevd.service systemd-modules-load.service
+Before=tiny-dfr.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# the attach logic lives in one place (shared with the OpenRC script): /usr/libexec/horcrux-touchbar
+ExecStart=/usr/libexec/horcrux-touchbar
+
+[Install]
+WantedBy=multi-user.target

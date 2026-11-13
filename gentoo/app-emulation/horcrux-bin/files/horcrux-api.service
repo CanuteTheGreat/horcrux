@@ -1,0 +1,33 @@
+[Unit]
+Description=Horcrux API server and web UI (https://:8006)
+Documentation=https://horcrux.errant.solutions/docs/
+After=network-online.target local-fs.target libvirtd.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/lib/horcrux
+Environment=HORCRUX_HOST=0.0.0.0
+Environment=HORCRUX_PORT=8006
+Environment=HORCRUX_DATA_DIR=/var/lib/horcrux
+Environment=HORCRUX_DATABASE_URL=sqlite:///var/lib/horcrux/horcrux.db
+Environment=HORCRUX_SSL_DIR=/etc/horcrux/ssl
+Environment=HORCRUX_UI_DIR=/usr/share/horcrux/ui
+# optional overrides (HORCRUX_ADMIN_GROUPS, HORCRUX_ALLOW_ROOT_LOGIN, HORCRUX_HA_* ...): the same KEY=value file the OpenRC script sources.
+# There is no admin account: the web UI signs in system users (PAM).
+EnvironmentFile=-/etc/conf.d/horcrux-api
+# the pre-PAM installer left a plaintext first-boot password here: never keep it. `mkdir -p` keeps the modes the package set (ssl is 0700).
+ExecStartPre=/usr/bin/mkdir -p /var/lib/horcrux /var/log/horcrux /etc/horcrux /etc/horcrux/ssl
+ExecStartPre=/usr/bin/rm -f /etc/horcrux/admin-password /var/lib/horcrux/initial-admin-password
+ExecStart=/usr/bin/horcrux-api
+# supervised, like the OpenRC script (supervise-daemon): the manager IS the HA supervisor of its node, a crash is undone within seconds;
+# `systemctl stop` keeps a deliberate stop stopped.
+Restart=always
+RestartSec=2s
+LimitNOFILE=65536
+StandardOutput=append:/var/log/horcrux/horcrux-api.log
+StandardError=append:/var/log/horcrux/horcrux-api.log
+
+[Install]
+WantedBy=multi-user.target

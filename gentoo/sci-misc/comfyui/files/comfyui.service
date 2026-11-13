@@ -1,0 +1,23 @@
+[Unit]
+Description=ComfyUI (GPU render server)
+After=local-fs.target network.target zfs-mount.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=comfyui
+Group=comfyui
+# COMFYUI_PORT / COMFYUI_DATA / COMFYUI_EXTRA_ARGS / COMFYUI_LISTEN, same file the OpenRC script reads. Machine-local settings
+# (COMFYUI_LISTEN, ordering after a firewall service: a drop-in with After=) live in /etc/conf.d/comfyui.local and comfyui.service.d/.
+EnvironmentFile=-/etc/conf.d/comfyui
+EnvironmentFile=-/etc/conf.d/comfyui.local
+LogsDirectory=comfyui
+LogsDirectoryMode=0750
+# the data dirs (models output input user custom_nodes), owned by comfyui, created when the data dir exists (OpenRC start_pre does the same)
+ExecStartPre=+/bin/sh -c 'd="${COMFYUI_DATA:-/var/lib/comfyui}"; [ -d "$d" ] || exit 0; for s in models output input user custom_nodes; do install -d -o comfyui -g comfyui -m 0750 "$d/$s" || exit 1; done'
+ExecStart=/usr/libexec/comfyui-launch
+StandardOutput=append:/var/log/comfyui/comfyui.log
+StandardError=append:/var/log/comfyui/comfyui.err
+
+[Install]
+WantedBy=multi-user.target

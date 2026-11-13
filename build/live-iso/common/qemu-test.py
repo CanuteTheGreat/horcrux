@@ -21,6 +21,7 @@ address), plus file system / host name / time zone / ZFS mirror state.
 Python stdlib + qemu + openssh-client (+ sshpass, mke2fs) only.
 Exit 0 = every step passed; evidence (serial logs, screens/, PNGs, result.json) goes to --out.
 """
+import init_cmds
 import argparse, json, os, re, shutil, socket, ssl, struct, subprocess, uuid, sys, tempfile, threading, time, urllib.error, urllib.request, zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -817,7 +818,7 @@ def serial_tail(vm, n=12):
 
 # Every entry point (qemu-test.py main, boot-modes-test.py, zfs-enc-test.py, surface tests) builds its own args namespace: an option added to
 # the CLI later (--headless-gates) must not raise AttributeError in a script that never defines it. Runner fills in what is missing.
-ARG_DEFAULTS = {"headless_gates": False}
+ARG_DEFAULTS = {"headless_gates": False, "init": "openrc"}
 
 
 def with_arg_defaults(a):
@@ -1052,7 +1053,7 @@ class Runner:
                 vm.send("s")                        # the serial-console submenu: same entries, kernel console on the UART too
                 time.sleep(1.5)
                 vm.send({"tui": "2", "auto": "4", "gui": "1"}[a.flow])
-                self.step("kernel-boot-started", vm.expect_raw(r"(Linux version|Booting|OpenRC)", 90))
+                self.step("kernel-boot-started", vm.expect_raw(init_cmds.BOOT_RE, 90))
             if a.flow == "auto":
                 ok = vm.expect_raw(r"AUTOINSTALL-START", 420)
                 self.step("live-userland-up", ok, "live system booted, answer file found")
@@ -1362,7 +1363,7 @@ class Runner:
         mirror = a.fs == "zfs" and a.zfs_raid == "mirror"
         # the graphical session came up on the VGA head; the root shell is on the serial console
         self.step("gui-grub-menu", True, "default entry = Graphical install; serial-console variant picked for the test shell")
-        ok = vm.expect_raw(r"(Linux version|OpenRC)", 120)
+        ok = vm.expect_raw(init_cmds.BOOT_RE, 120)
         end = time.time() + 480
         up = False
         while time.time() < end and not up:
@@ -1878,7 +1879,7 @@ class Runner:
         err3 = self.login_err
         c2 = self.web_login_code(PW2) if not self.P.get("web_user") else 401
         if c3 != 200:
-            rc, o = ssh(FWD_SSH, self.key, f"rc-service {self.P['svc']} status; ls -la /var/lib/{a.project}; tail -n 8 /var/log/{a.project}/web-error.log; nft list ruleset 2>&1 | grep -n {P['port']} | head -5; ss -ltn | grep {P['port']}")
+            rc, o = ssh(FWD_SSH, self.key, f"{init_cmds.service_status_cmd(self.a.init, self.P['svc'])}; ls -la /var/lib/{a.project}; tail -n 8 /var/log/{a.project}/web-error.log; nft list ruleset 2>&1 | grep -n {P['port']} | head -5; ss -ltn | grep {P['port']}")
             print("[DIAG] " + o.replace("\n", "\n[DIAG] "))
             diag = " [no answer: " + err3 + "; " + re.sub(r"\s+", " ", o)[:200] + "]" if c3 == 0 else ""
         else:
@@ -1956,8 +1957,7 @@ class Runner:
 
     def health_script(self, check_logs=True):
         P = self.P
-        sh = [f'for s in {" ".join(P["services"])}; do st=$(rc-service $s status 2>&1); case "$st" in *started*) ;; *) echo "BAD service $s: $st";; esac; done',
-              'c=$(rc-status --crashed 2>/dev/null); [ -z "$c" ] || echo "BAD crashed services: $c"']
+        sh = init_cmds.services_health_sh(self.a.init, P["services"])
         if P.get("forward"):
             sh += ['[ "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || echo "BAD net.ipv4.ip_forward=$(cat /proc/sys/net/ipv4/ip_forward)"',
                    '[ "$(cat /proc/sys/net/ipv6/conf/all/forwarding)" = 1 ] || echo "BAD net.ipv6.conf.all.forwarding=$(cat /proc/sys/net/ipv6/conf/all/forwarding)"',
@@ -2172,7 +2172,7 @@ class Runner:
                 break
             time.sleep(15)
         else:
-            _, dg = ssh(FWD_SSH, self.key, "rc-status -a 2>&1 | grep -iE 'zram|stopped|crashed'; dmesg 2>/dev/null | grep -i zram | tail -5; zramctl 2>&1; cat /proc/swaps")
+            _, dg = ssh(FWD_SSH, self.key, init_cmds.boot_diag_cmd(self.a.init))
             print("[INFO] zram diagnostics: " + re.sub(r"\s+", " ", dg)[:400])
         sec, cur = {}, None
         for ln in sw.replace("\r", "").splitlines():
@@ -2265,6 +2265,7 @@ def main():
     ap.add_argument("--restarts", type=int, default=0, help="after the install checks: boot the installed disk again and restart it N times from inside the guest, asserting service health after each boot")
     ap.add_argument("--headless-gates", action="store_true", help="headless-first gates (headless_gates.py): every boot starts with an RTC months off, the installed system boots with the NIC links down until the login prompt, no GUI stack, no empty password/autologin, chrony steps the clock after the late network")
     ap.add_argument("--disk-gb", type=int, default=24)
+    ap.add_argument("--init", choices=init_cmds.INITS, default="openrc", help="init system of the image under test (its INIT, common/image-name.sh): selects the service checks run in the guest")
     args = ap.parse_args()
     ARCH = args.arch
     args.fs_default = args.fs == "default"

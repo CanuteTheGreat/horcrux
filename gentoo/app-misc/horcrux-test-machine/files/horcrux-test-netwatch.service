@@ -1,0 +1,13 @@
+[Unit]
+Description=test machine: reload the Wi-Fi driver when the link is up but there is no connectivity for 5 minutes
+# NetworkManager connectivity watchdog (see /usr/libexec/horcrux-test-netwatch)
+Requires=NetworkManager.service
+After=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/horcrux-test-netwatch
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -67,6 +67,7 @@ pub mod declarative;
 #[cfg(feature = "lxc")]
 #[path = "api/lxc.rs"]
 pub mod lxc_api;
+pub mod init;
 pub mod persistence;
 pub mod static_ui;
 pub mod vm_console_api;

@@ -1,0 +1,20 @@
+[Unit]
+Description=Alienware Command Center replacement daemon (D-Bus org.horcrux.Awcc1)
+Requires=dbus.service
+# power-profiles-daemon restores its own last profile when it starts: awccd must come after it so the configured default wins
+# deterministically (soft dependency: PPD is optional)
+After=dbus.service systemd-udevd.service systemd-logind.service power-profiles-daemon.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/conf.d/awccd
+RuntimeDirectory=awccd
+RuntimeDirectoryMode=0755
+ExecStart=/usr/sbin/awccd
+# the daemon restores profile/boost/lighting itself on SIGTERM; this covers a crash (state.json survives)
+ExecStopPost=-/usr/sbin/awccd --restore-state
+StandardOutput=append:/var/log/awccd.log
+StandardError=append:/var/log/awccd.log
+
+[Install]
+WantedBy=multi-user.target
