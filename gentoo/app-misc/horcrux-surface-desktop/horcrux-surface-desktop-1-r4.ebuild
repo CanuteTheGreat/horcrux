@@ -60,7 +60,7 @@ RDEPEND="
 src_install() {
 	cp -a "${FILESDIR}/root/." "${ED}/" || die
 	local f
-	for f in "${ED}"/usr/bin/* "${ED}"/etc/local.d/*.start; do fperms 0755 "${f#"${ED}"}"; done
+	for f in "${ED}"/usr/bin/*; do fperms 0755 "${f#"${ED}"}"; done
 }
 
 pkg_postinst() {
