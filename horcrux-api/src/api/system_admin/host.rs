@@ -470,9 +470,7 @@ async fn applied_methods(state: &Arc<AppState>) -> std::collections::HashMap<Str
 async fn list_interfaces(State(state): State<Arc<AppState>>) -> Res<Vec<NetworkInterface>> {
     let addr = ip_json(&["addr", "show"]).await;
     if addr.is_null() {
-        return Err(ApiError::ServiceUnavailable(
-            "`ip` (iproute2) is not available on this host".into(),
-        ));
+        return Err(crate::api::unavailable::iproute2());
     }
     let routes = ip_json(&["route", "show"]).await;
     Ok(Json(interfaces_from_ip(

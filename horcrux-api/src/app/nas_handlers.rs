@@ -553,7 +553,7 @@ pub async fn nas_remove_group_member(
 pub async fn nas_list_pools(
     State(_state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    crate::api::unavailable::zfs_missing()?;
+    crate::api::unavailable::zfs()?;
     let manager = StorageManager::new();
     match manager.list_zfs_pools().await {
         Ok(pools) => {
@@ -1649,7 +1649,7 @@ pub async fn nas_list_nfs_clients(
 pub async fn nas_list_iscsi_targets(
     State(_state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    crate::api::unavailable::iscsi_target_missing()?;
+    crate::api::unavailable::iscsi_target()?;
     let manager = IscsiTargetManager::new();
     match manager.list_targets().await {
         Ok(targets) => {

@@ -87,59 +87,65 @@ pub fn no_kernel_log(detail: &str) -> ApiError {
     }
 }
 
-/// A NAS feature whose userland tool is not installed on this node (no `zpool`, no iSCSI
-/// target daemon): 424 with what to install, never a 500 from a failed spawn.
-pub fn nas_tool_missing(
+/// A node tool a page needs (`zpool`, `tgtadm`, `ip`) is not installed: 424, never a 500.
+pub fn missing_tool(
+    bin: &str,
     reason: &'static str,
     what: &str,
-    package: &str,
-    present: impl Fn(&str) -> bool,
-    tools: &[&str],
+    todo: &str,
 ) -> Result<(), ApiError> {
-    if tools.iter().any(|t| present(t)) {
-        return Ok(());
+    if in_path(bin) {
+        Ok(())
+    } else {
+        Err(ApiError::NotAvailable {
+            reason,
+            message: what.into(),
+            hint: todo.into(),
+        })
     }
-    Err(ApiError::NotAvailable {
-        reason,
-        message: format!("{what} isn't installed on this node."),
-        hint: format!("Install {package} on the host, then reload this page."),
-    })
 }
 
-pub fn zfs_missing() -> Result<(), ApiError> {
-    nas_tool_missing("zfs-missing", "ZFS", "sys-fs/zfs", in_path, &["zpool"])
-}
-
-pub fn iscsi_target_missing() -> Result<(), ApiError> {
-    nas_tool_missing(
-        "iscsi-target-missing",
-        "An iSCSI target service",
-        "sys-block/tgt (or targetcli-fb)",
-        in_path,
-        &["tgtadm", "targetcli"],
+pub fn zfs() -> Result<(), ApiError> {
+    missing_tool(
+        "zpool",
+        "zfs-missing",
+        "ZFS isn't installed on this node (no zpool command), so there are no NAS pools.",
+        "Install sys-fs/zfs (and the zfs kernel module), then check again.",
     )
 }
 
+pub fn iscsi_target() -> Result<(), ApiError> {
+    missing_tool(
+        "tgtadm",
+        "iscsi-target-missing",
+        "The iSCSI target framework (tgtadm) isn't installed on this node.",
+        "Install sys-block/tgt and start the tgtd service, then check again.",
+    )
+}
+
+pub fn iproute2() -> ApiError {
+    ApiError::NotAvailable {
+        reason: "iproute2-missing",
+        message: "The ip command (iproute2) isn't available on this node, so its interfaces can't be listed.".into(),
+        hint: "Install sys-apps/iproute2, then check again.".into(),
+    }
+}
+
 #[cfg(test)]
-mod nas_tool_tests {
+mod tests {
     use super::*;
 
     #[test]
-    fn missing_tool_is_424_not_500() {
-        let e = nas_tool_missing("zfs-missing", "ZFS", "sys-fs/zfs", |_| false, &["zpool"])
-            .unwrap_err();
-        match e {
-            ApiError::NotAvailable { reason, message, hint } => {
-                assert_eq!(reason, "zfs-missing");
-                assert!(message.contains("ZFS"));
-                assert!(hint.contains("sys-fs/zfs"));
-            }
+    fn a_missing_tool_is_a_424_not_a_500() {
+        match missing_tool(
+            "horcrux-no-such-tool-xyz",
+            "x-missing",
+            "X is missing.",
+            "Install X.",
+        ) {
+            Err(ApiError::NotAvailable { reason, .. }) => assert_eq!(reason, "x-missing"),
             other => panic!("expected NotAvailable, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn any_listed_tool_present_is_ok() {
-        assert!(nas_tool_missing("x", "X", "p", |t| t == "targetcli", &["tgtadm", "targetcli"]).is_ok());
+        assert!(missing_tool("sh", "sh-missing", "", "").is_ok());
     }
 }

@@ -6,6 +6,7 @@ use web_sys::MouseEvent;
 #[component]
 pub fn SystemConfigurationPage() -> impl IntoView {
     let (system_config, set_system_config) = create_signal(None::<SystemConfiguration>);
+    let (net_unavailable, set_net_unavailable) = create_signal(None::<crate::api::Unavailable>);
     let (network_interfaces, set_network_interfaces) =
         create_signal(Vec::<NetworkInterface>::new());
     let (dns_config, set_dns_config) = create_signal(None::<DnsConfiguration>);
@@ -59,6 +60,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
 
         match get_network_interfaces().await {
             Ok(interfaces) => set_network_interfaces.set(interfaces),
+            // 424: the node can't list interfaces (no iproute2): an empty state in the section
+            Err(e) if e.unavailable().is_some() => set_net_unavailable.set(e.unavailable()),
             Err(e) => {
                 set_error_message.set(Some(format!("Failed to load network interfaces: {}", e)))
             }
@@ -429,6 +432,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
 
                                 {move || if loading.get() {
                                     view! { <div class="loading">"Loading network interfaces..."</div> }.into_view()
+                                } else if let Some(u) = net_unavailable.get() {
+                                    view! { <crate::components::UnavailableState info=u on_retry=Callback::new(move |_: ()| { if let Some(w) = web_sys::window() { let _ = w.location().reload(); } })/> }.into_view()
                                 } else if network_interfaces.get().is_empty() {
                                     view! { <div class="empty-state">"No network interfaces configured"</div> }.into_view()
                                 } else {

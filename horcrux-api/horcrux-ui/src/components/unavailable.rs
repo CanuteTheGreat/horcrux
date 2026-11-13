@@ -35,6 +35,16 @@ fn links(reason: &str) -> Vec<(&'static str, &'static str, bool)> {
             true,
         )],
         "no-init-system" => vec![("Open Node Health", "/system/health", false)],
+        "zfs-missing" => vec![
+            (
+                "ZFS on the Gentoo wiki",
+                "https://wiki.gentoo.org/wiki/ZFS",
+                true,
+            ),
+            ("Use Storage pools instead", "/storage", false),
+        ],
+        "iscsi-target-missing" => vec![("Open Node Services", "/system/services", false)],
+        "iproute2-missing" => vec![("Open Node Health", "/system/health", false)],
         _ => vec![],
     }
 }
