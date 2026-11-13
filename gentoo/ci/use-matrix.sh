@@ -103,6 +103,8 @@ run_set() {
 }
 
 # Requests every set sends; the expectations differ per USE set.
+# A compiled-in engine that the build sandbox simply doesn't run answers 424 NOT_AVAILABLE (docker-missing /
+# podman-missing); only 422 NOT_COMPILED / 404 mean "not compiled in".
 PROBES=(
     /api/nas/shares /api/k8s/clusters /api/containers /api/templates
     /api/backups /api/backup-jobs /api/cluster/status /api/cluster/nodes /api/ha/status
@@ -145,8 +147,8 @@ expect '^GET /api/cluster/nodes 200' "USE=cluster: /api/cluster/nodes not served
 expect '^GET /api/ha/status 200' "USE=cluster: /api/ha/status not served"
 expect '^GET /api/ha/groups 200' "USE=cluster: /api/ha/groups not served"
 expect '^GET /api/stacks 200' "USE=docker: /api/stacks not served"
-expect '^GET /api/images\?runtime=docker [^4]' "USE=docker: docker images refused"
-expect '^GET /api/images\?runtime=podman [^4]' "USE=podman: podman images refused"
+expect '^GET /api/images\?runtime=docker ([^4]|424)' "USE=docker: docker images refused"
+expect '^GET /api/images\?runtime=podman ([^4]|424)' "USE=podman: podman images refused"
 # -qemu: a QEMU VM is refused as not compiled in; incus is compiled in, so
 # the refusal (no incus on the builder) must be the host check instead.
 expect '^POST /api/vms 422 NOT_COMPILED' "USE=-qemu: QEMU VM create not refused as not compiled in"
@@ -198,7 +200,7 @@ expect '^GET /api/ha/status 200' "USE=cluster: /api/ha/status not served"
 expect '^GET /api/backups 404' "USE=-backup: /api/backups still compiled in"
 expect '^GET /api/stacks 200' "USE=podman: /api/stacks not served"
 expect '^GET /api/images\?runtime=docker 422 NOT_COMPILED' "USE=-docker: docker images not refused"
-expect '^GET /api/images\?runtime=podman [^4]' "USE=podman: podman images refused"
+expect '^GET /api/images\?runtime=podman ([^4]|424)' "USE=podman: podman images refused"
 expect '^POST /api/containers 422 NOT_COMPILED' "USE=-docker: docker container create not refused"
 
 ebuild "$EBUILD" clean >/dev/null
