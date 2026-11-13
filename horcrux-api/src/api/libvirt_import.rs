@@ -572,17 +572,28 @@ async fn list_cluster(State(state): State<Arc<AppState>>) -> Result<Json<Cluster
         .unwrap_or_else(|_| "localhost".to_string());
     let local = list_local(&state).await?;
     let all = state.cluster_manager.list_nodes().await;
-    let mut peers = Vec::new();
-    for n in super::drain::peer_nodes(&all, &local_name) {
-        let r = super::drain::call_peer::<_, ListResponse>(
-            &state,
-            &n,
-            "/api/ha/peer/libvirt/list",
-            &serde_json::json!({}),
-        )
-        .await;
-        peers.push((n.name.clone(), r));
-    }
+    // Peers are asked over the cluster peer API, which only exists in a `cluster` build; a build
+    // without it is a one-node list.
+    #[cfg(feature = "cluster")]
+    let peers = {
+        let mut peers = Vec::new();
+        for n in super::drain::peer_nodes(&all, &local_name) {
+            let r = super::drain::call_peer::<_, ListResponse>(
+                &state,
+                &n,
+                "/api/ha/peer/libvirt/list",
+                &serde_json::json!({}),
+            )
+            .await;
+            peers.push((n.name.clone(), r));
+        }
+        peers
+    };
+    #[cfg(not(feature = "cluster"))]
+    let peers: Vec<(String, Result<ListResponse, String>)> = {
+        let _ = &all;
+        Vec::new()
+    };
     Ok(Json(merge_cluster(&local_name, local, peers)))
 }
 
