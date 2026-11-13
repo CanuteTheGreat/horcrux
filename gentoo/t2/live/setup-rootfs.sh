@@ -30,9 +30,9 @@ for t in tty1 tty2 tty3 ttyS0 console; do grep -qx $t /etc/securetty 2>/dev/null
 # --- ssh keys (PUBLIC keys of the owner) + sshd config (first match wins: neutralise stock defaults)
 mkdir -p /root/.ssh; chmod 700 /root/.ssh
 [ -f /tmp/priv/authorized_keys ] && install -m 0600 /tmp/priv/authorized_keys /root/.ssh/authorized_keys
-grep -q 'sshd_config.d' /etc/ssh/sshd_config || sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
-sed -i -E 's/^#?(PermitRootLogin|PasswordAuthentication).*//' /etc/ssh/sshd_config
-printf 'PermitRootLogin prohibit-password\nPasswordAuthentication no\n' >> /etc/ssh/sshd_config
+# the hardening lives in the overlay drop-in sshd_config.d/10-hogshead.conf; the openssh-owned sshd_config stays stock
+# (editing it became a ._cfg0000_sshd_config conflict on every openssh update)
+grep -q 'sshd_config.d' /etc/ssh/sshd_config || { echo "FATAL: stock sshd_config lost its sshd_config.d Include"; exit 1; }
 # --- private: Apple firmware
 mkdir -p /etc/hogshead /lib/firmware/brcm
 if [ -d /tmp/priv/fw ]; then cp -a /tmp/priv/fw/. /lib/firmware/brcm/; fi

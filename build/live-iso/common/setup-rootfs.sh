@@ -51,9 +51,11 @@ echo "${ISO_LABEL}" > /etc/live-iso-volid
 # No default password anywhere: root is LOCKED on the live image (consoles autologin, see
 # live-installer service; sshd is off). The installer sets the real password / SSH key.
 passwd -l root >/dev/null
-sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/; s/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-grep -q '^PermitRootLogin prohibit-password' /etc/ssh/sshd_config || echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config
-grep -q '^PasswordAuthentication no' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config
+mkdir -p /etc/ssh/sshd_config.d
+# a drop-in, never an edit of the openssh-owned sshd_config (edits became a ._cfg0000_sshd_config conflict on every openssh
+# update of installed systems); the installer overwrites this same file with the install choice (liveinst SSHD_DROPIN)
+printf '# live image default (the installer rewrites this file)\nPermitRootLogin prohibit-password\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitEmptyPasswords no\n' > /etc/ssh/sshd_config.d/00-horcrux-installer.conf
+grep -q '^Include "\?/etc/ssh/sshd_config.d/\*.conf' /etc/ssh/sshd_config || { echo "stock sshd_config lost its sshd_config.d Include" >&2; exit 1; }
 mkdir -p /etc/sudoers.d && echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel && chmod 440 /etc/sudoers.d/wheel
 for t in ttyS0 ttyS1 ttyAMA0 hvc0; do grep -qx $t /etc/securetty 2>/dev/null || echo $t >> /etc/securetty 2>/dev/null || true; done
 # Wi-Fi is handled by iwd (it also does DHCP for wlan), wired NICs by dhcpcd

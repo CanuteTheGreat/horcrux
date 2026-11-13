@@ -594,6 +594,47 @@ class ServerHasNoSwapPartition(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(base, "conf.d", "zram-swap")))
 
 
+class SshdHardeningIsADropIn(unittest.TestCase):
+    """The installer must never edit the openssh-owned /etc/ssh/sshd_config (that left a ._cfg0000_sshd_config conflict on every
+    openssh update); the install choice goes into an 00- drop-in and package drop-ins stay untouched."""
+
+    STOCK = '#PermitRootLogin prohibit-password\n#PasswordAuthentication yes\nSubsystem sftp internal-sftp\nInclude "/etc/ssh/sshd_config.d/*.conf"\n'
+    PKG = "PermitRootLogin prohibit-password\nPasswordAuthentication no\n"
+
+    def _run(self, password_auth):
+        with tempfile.TemporaryDirectory() as t:
+            os.makedirs(f"{t}/etc/ssh/sshd_config.d")
+            open(f"{t}/etc/ssh/sshd_config", "w").write(self.STOCK)
+            open(f"{t}/etc/ssh/sshd_config.d/10-variant.conf", "w").write(self.PKG)
+            inst = object.__new__(S.Installer)
+            inst.c = dict(S.default_config(PROFILE), ssh_password_auth=password_auth, sysctl_hardening=False)
+            inst.p, inst.efi, inst.target = PROFILE, True, t
+            inst.run = lambda cmd, **k: 0
+            inst.cfg_hardening()
+            self.assertEqual(open(f"{t}/etc/ssh/sshd_config").read(), self.STOCK, "sshd_config must stay the stock openssh file")
+            self.assertEqual(open(f"{t}/etc/ssh/sshd_config.d/10-variant.conf").read(), self.PKG, "package drop-ins stay untouched")
+            drop = S.SSHD_DROPIN
+            self.assertTrue(os.path.basename(drop).startswith("00-"), "first match wins: the installer drop-in must sort first")
+            return open(t + drop).read()
+
+    def test_key_only_default(self):
+        d = self._run(False)
+        self.assertIn("PermitRootLogin prohibit-password\n", d)
+        self.assertIn("PasswordAuthentication no\n", d)
+        self.assertIn("PermitEmptyPasswords no\n", d)
+
+    def test_password_opt_in(self):
+        d = self._run(True)
+        self.assertIn("PermitRootLogin yes\n", d)
+        self.assertIn("PasswordAuthentication yes\n", d)
+        self.assertIn("PermitEmptyPasswords no\n", d)
+
+    def test_image_builders_do_not_edit_sshd_config(self):
+        for rel in ("../setup-rootfs.sh", "../../../../gentoo/t2/live/setup-rootfs.sh"):
+            src = open(os.path.join(HERE, rel)).read()
+            self.assertNotRegex(src, r"(sed -i[^\n]*|>>\s*)/etc/ssh/sshd_config(\s|$)", rel)
+
+
 class ShellScriptsParse(unittest.TestCase):
     """init scripts and session programs are shell: a bad merge breaks the boot, so parse every one with sh -n"""
 

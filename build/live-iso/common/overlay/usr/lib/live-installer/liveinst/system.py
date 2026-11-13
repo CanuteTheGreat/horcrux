@@ -1102,21 +1102,11 @@ class Installer:
     def cfg_hardening(self):
         c, T = self.c, self.target
         # ---- sshd: key-only unless the operator opted in ----
-        cfgp = f"{T}/etc/ssh/sshd_config"
-        txt = open(cfgp).read() if os.path.exists(cfgp) else ""
-        txt = re.sub(r"(?m)^\s*#?\s*(PermitRootLogin|PasswordAuthentication|KbdInteractiveAuthentication|PermitEmptyPasswords)\b.*\n", "", txt)
-        if c["ssh_password_auth"]:
-            hard = "PermitRootLogin yes\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nPermitEmptyPasswords no\n"
-        else:
-            hard = "PermitRootLogin prohibit-password\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitEmptyPasswords no\n"
-        # first match wins in sshd_config: put ours at the very top
-        open(cfgp, "w").write("# set by live-installer\n" + hard + txt)
-        os.makedirs(f"{T}/etc/ssh/sshd_config.d", exist_ok=True)
-        for f in os.listdir(f"{T}/etc/ssh/sshd_config.d"):
-            fp = f"{T}/etc/ssh/sshd_config.d/{f}"
-            body = open(fp).read()
-            if re.search(r"(?im)^\s*(PermitRootLogin|PasswordAuthentication)\b", body):
-                open(fp, "w").write(re.sub(r"(?im)^\s*(PermitRootLogin|PasswordAuthentication)\b.*$", r"# \g<0>", body))
+        # A drop-in, never an edit of /etc/ssh/sshd_config: that file belongs to net-misc/openssh, and editing it left a
+        # ._cfg0000_sshd_config conflict on every openssh update. Gentoo's stock sshd_config only Includes sshd_config.d/*.conf
+        # (no active directives of its own) and the first match wins, so SSHD_DROPIN (00-...) beats every package drop-in;
+        # package-owned drop-ins are left untouched.
+        self.write(SSHD_DROPIN, sshd_hardening(c["ssh_password_auth"]))
         self.run(["rc-update", "add" if c["ssh_enabled"] else "del", "sshd", "default"], chroot=True, check=False)
         if c["sysctl_hardening"]:
             self.write("/etc/sysctl.d/90-live-installer-hardening.conf", SYSCTL_HARDENING)
@@ -1422,6 +1412,20 @@ def plain_fstab_text(fs, root_uuid, boot_uuid, esp_uuid, efi=True):
 
 
 TYPE_KEEP_GUI = {"server": False, "workstation": True, "desktop": True}
+
+SSHD_DROPIN = "/etc/ssh/sshd_config.d/00-horcrux-installer.conf"
+
+
+def sshd_hardening(password_auth):
+    """sshd settings of the install choice, written as a drop-in (sshd: first match wins, 00- sorts before every package drop-in)."""
+    if password_auth:
+        hard = "PermitRootLogin yes\nPasswordAuthentication yes\n"
+    else:
+        hard = "PermitRootLogin prohibit-password\nPasswordAuthentication no\n"
+    return ("# written by live-installer (install choice: SSH password login "
+            + ("on" if password_auth else "off") + "); /etc/ssh/sshd_config stays the stock openssh file\n"
+            + hard + "KbdInteractiveAuthentication no\nPermitEmptyPasswords no\n")
+
 
 SYSCTL_HARDENING = """# live-installer: Server hardening (not applied to a Workstation install)
 kernel.kptr_restrict = 2
