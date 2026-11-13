@@ -1,0 +1,5 @@
+# Horcrux full GNOME edition (variant `gnome`): everything gnome-base/gnome installs, on top of the gnome-light layer (variants/gnome-light, `requires`).
+# gnome-base/gnome is built with USE=-extras (portage/package.use/horcrux-gnome); its extras come from gnome-extra/horcrux-gnome-extras, which leaves out
+# Epiphany (the browser is Firefox) and the apps that cannot work on Gentoo/OpenRC (see that ebuild for the skipped list).
+gnome-base/gnome
+gnome-extra/horcrux-gnome-extras

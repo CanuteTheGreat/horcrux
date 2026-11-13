@@ -11,8 +11,13 @@ personal application. The owner's own picks are added by the machine layers (`gr
 A machine Dockerfile does `COPY project/variants/owner-common/portage/ /etc/portage/`, `COPY project/variants/owner-common/overlay/ /` and emerges
 `packages.txt`. `project/public-forbidden.txt` lists what must never appear in a public image; the core/desktop Dockerfiles and the QEMU gates enforce it.
 
+## Full GNOME (owner rule 2026-11-12)
+Every non-server owner machine (hogsmeade, hogshead, gringotts) runs FULL GNOME: `gnome-base/gnome` + `gnome-extra/horcrux-gnome-extras` (variant `gnome`,
+`variants/gnome/packages.txt`, installed by the gringotts/hogshead app steps and hogsmeade's desktop step (NOT listed in this directory's `packages.txt`: a public edition is not an owner app and the test-machine denylist covers that file); USE `gnome-base/gnome -extras` so Epiphany and the systemd-only apps stay out). The public
+`gnome-light` edition is unchanged. The Surface/madammalkins image runs XFCE and never takes GNOME or this layer (tests: common/tests/test_full_gnome.py).
+
 ## Test machines never use this layer (owner order 2026-11-05)
-gringotts, hogshead and madammalkins are TEST machines while they are used for testing: they get the PUBLIC editions (gnome-light, the XFCE
+gringotts, hogshead and madammalkins are TEST machines while they are used for testing: they get the PUBLIC editions (gnome-light or the full gnome edition, the XFCE
 small-device profile) + `app-misc/horcrux-test-machine` + their machine HARDWARE enablement (hogshead: T2 kernel/Touch Bar/fans + the private
 `app-misc/hogshead-machine` firmware meta package; Surface: `horcrux-surface-config`), and NO app from this directory. `app-misc/horcrux-test-machine`
 ships the guard: `horcrux-test-machine-check` (denylist of personal packages/paths + an ALLOWLIST for the world file, policy in

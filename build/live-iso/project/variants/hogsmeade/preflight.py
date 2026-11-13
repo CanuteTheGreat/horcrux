@@ -250,9 +250,10 @@ for df, body in runs:
         check_atom(df, tok)
 
 # packages files copied into the image + portage config
-pfiles = [f"{CTX}/project/variants/gnome-light/packages.txt"]
+pfiles = [f"{CTX}/project/variants/gnome-light/packages.txt", f"{CTX}/project/variants/gnome/packages.txt"]
 pfiles += glob.glob(f"{HSM}/portage/package.*/*")
 pfiles += glob.glob(f"{CTX}/project/variants/gnome-light/portage/package.*/*")
+pfiles += glob.glob(f"{CTX}/project/variants/gnome/portage/package.*/*")
 pfiles += glob.glob(f"{CTX}/project/variants/owner-common/portage/package.accept_keywords/*")
 pfiles += glob.glob(f"{CTX}/project/variants/owner-common/portage/package.use/*")
 for pf in pfiles:

@@ -1,1 +1,4 @@
 net-misc/nextcloud-client -dolphin
+
+# full GNOME: gnome-extra/horcrux-gnome-extras replaces gnome-extra-apps (no Epiphany, nothing that needs systemd); same line as variants/gnome
+gnome-base/gnome -extras

@@ -1,0 +1,2 @@
+# Full GNOME edition: no gnome-extra-apps (gnome-extra/horcrux-gnome-extras replaces it: same apps minus Epiphany and the ones that need systemd)
+gnome-base/gnome -extras

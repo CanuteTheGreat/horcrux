@@ -73,6 +73,8 @@ media-sound/alsa-utils
 # --- public desktop editions
 gnome-base/gdm
 gnome-base/gnome-light
+# the FULL GNOME edition (variant gnome; owner rule 2026-11-12). Its extras meta is covered by gnome-extra/horcrux-* above.
+gnome-base/gnome
 gnome-extra/gnome-tweaks
 gnome-extra/gnome-shell-extension*
 media-video/pipewire

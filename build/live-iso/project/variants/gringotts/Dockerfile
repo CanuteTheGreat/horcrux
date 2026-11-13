@@ -32,6 +32,8 @@ RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=
 
 COPY project/variants/gringotts/packages.txt /tmp/packages-gringotts.txt
 COPY project/variants/owner-common/packages.txt /tmp/packages-owner.txt
+# FULL GNOME (owner rule 2026-11-12): gnome-base/gnome + gnome-extra/horcrux-gnome-extras (the Horcrux overlay copy is in the image), same list as variants/gnome
+COPY project/variants/gnome/packages.txt /tmp/packages-gnome.txt
 
 # the Desktop layer deleted /usr/include, the LLVM headers/tools and static libs to fit the ISO; the apps compile (python/C/go): put the headers back by
 # re-installing the packages that own them (same cat/pkg:slot, binary packages), then slim again at the end (the final slimming removes them again)
@@ -48,7 +50,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
-    emerge --update --newuse --deep $(cat /tmp/packages-gringotts.txt /tmp/packages-owner.txt | grep -v '^#' | tr '\n' ' '); \
+    emerge --update --newuse --deep $(cat /tmp/packages-gringotts.txt /tmp/packages-owner.txt /tmp/packages-gnome.txt | grep -v '^#' | tr '\n' ' '); \
     rm -rf /var/db/repos/horcrux-desktop /etc/portage/repos.conf/horcrux-desktop.conf
 
 # this variant's local overlay is copied only now (editing it must not invalidate the long header/app layers above)

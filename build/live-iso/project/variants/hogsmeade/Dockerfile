@@ -15,6 +15,9 @@ COPY --from=hxgentoo / /var/db/repos/horcrux/
 COPY --from=ctgoverlay / /var/db/repos/canutethegreat/
 COPY project/variants/hogsmeade/local-repo/ /var/db/repos/local/
 COPY project/variants/gnome-light/packages.txt /tmp/packages-desktop.txt
+# FULL GNOME on top of the gnome-light set (variants/gnome; gnome-extra/horcrux-gnome-extras comes from the hxgentoo overlay copy above)
+COPY project/variants/gnome/packages.txt /tmp/packages-gnome.txt
+COPY project/variants/gnome/portage/package.use/horcrux-gnome /etc/portage/package.use/horcrux-gnome
 # sys-apps/horcrux-tools is a fetch-restricted, build-made tarball (see Dockerfile.part2): make it BEFORE `ebuild manifest` and keep a copy in the layer
 # (/opt/hxt-dist) because the distfiles cache mount is not part of the image
 COPY common/overlay/usr/lib/live-installer /tmp/hxt/usr/lib/live-installer
@@ -71,7 +74,7 @@ FROM hsm-prep AS hsm-desktop
 RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
-    pk=$(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' '); \
+    pk=$(cat /tmp/packages-desktop.txt /tmp/packages-gnome.txt | grep -v '^#' | tr '\n' ' '); \
     emerge --update --newuse $pk || { rc=$?; \
       echo "== desktop emerge failed (rc=$rc): failing build logs (BuildKit truncates the real compiler error)"; \
       for f in $(ls -t /var/tmp/portage/*/*/temp/build.log 2>/dev/null | head -3); do echo "=== $f"; grep -n -E 'FAILED:|error:|Killed|signal|internal compiler|No space' "$f" | tail -15; tail -30 "$f"; done; free -m | head -2; \

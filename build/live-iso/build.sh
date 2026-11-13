@@ -73,6 +73,13 @@ CHAIN=$(echo "${VARIANT:-}" | tr ',' ' ' | sed 's/\bserver\b//g')
 # (the Surface image is its own base with its own overlay checkout + chrony/backup in its meta package: it takes the core as a dependency of its meta package in a later
 # revision, not as an image layer; the layer would clash with its `rm -rf /var/db/repos/horcrux`)
 case " $CHAIN " in *" surface-kernel "*|*" surface "*) NO_CORE=${NO_CORE:-1};; esac
+# a variant that extends another one lists it in project/variants/<v>/requires (gnome = the gnome-light layer + the full GNOME apps); the required
+# layer goes first and is not repeated
+_chain=""
+for _v in $CHAIN; do
+  for _r in $(cat "project/variants/$_v/requires" 2>/dev/null) $_v; do case " $_chain " in *" $_r "*) ;; *) _chain="$_chain $_r";; esac; done
+done
+CHAIN=$(echo $_chain)
 [ -z "${NO_CORE:-}" ] && [ -f project/variants/core/Dockerfile ] && CHAIN="core $CHAIN"
 if [ -n "$(echo $CHAIN)" ]; then
   for v in $CHAIN; do
