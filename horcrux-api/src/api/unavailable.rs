@@ -86,3 +86,60 @@ pub fn no_kernel_log(detail: &str) -> ApiError {
         ),
     }
 }
+
+/// A NAS feature whose userland tool is not installed on this node (no `zpool`, no iSCSI
+/// target daemon): 424 with what to install, never a 500 from a failed spawn.
+pub fn nas_tool_missing(
+    reason: &'static str,
+    what: &str,
+    package: &str,
+    present: impl Fn(&str) -> bool,
+    tools: &[&str],
+) -> Result<(), ApiError> {
+    if tools.iter().any(|t| present(t)) {
+        return Ok(());
+    }
+    Err(ApiError::NotAvailable {
+        reason,
+        message: format!("{what} isn't installed on this node."),
+        hint: format!("Install {package} on the host, then reload this page."),
+    })
+}
+
+pub fn zfs_missing() -> Result<(), ApiError> {
+    nas_tool_missing("zfs-missing", "ZFS", "sys-fs/zfs", in_path, &["zpool"])
+}
+
+pub fn iscsi_target_missing() -> Result<(), ApiError> {
+    nas_tool_missing(
+        "iscsi-target-missing",
+        "An iSCSI target service",
+        "sys-block/tgt (or targetcli-fb)",
+        in_path,
+        &["tgtadm", "targetcli"],
+    )
+}
+
+#[cfg(test)]
+mod nas_tool_tests {
+    use super::*;
+
+    #[test]
+    fn missing_tool_is_424_not_500() {
+        let e = nas_tool_missing("zfs-missing", "ZFS", "sys-fs/zfs", |_| false, &["zpool"])
+            .unwrap_err();
+        match e {
+            ApiError::NotAvailable { reason, message, hint } => {
+                assert_eq!(reason, "zfs-missing");
+                assert!(message.contains("ZFS"));
+                assert!(hint.contains("sys-fs/zfs"));
+            }
+            other => panic!("expected NotAvailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn any_listed_tool_present_is_ok() {
+        assert!(nas_tool_missing("x", "X", "p", |t| t == "targetcli", &["tgtadm", "targetcli"]).is_ok());
+    }
+}
