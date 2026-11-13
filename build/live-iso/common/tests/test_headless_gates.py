@@ -122,5 +122,36 @@ class WiredIntoTheHarness(unittest.TestCase):
             self.assertIn(needle, src, needle)
 
 
+class DockerForwardGate(unittest.TestCase):
+    """Docker's FORWARD DROP killed libvirt NAT VMs (HOGSMEADE 2026-11-12): horcrux-core ships daemon.json ip-forward-no-drop, the gate proves it"""
+
+    def run_gate(self, out):
+        steps = []
+        HG.docker_forward_gate(lambda cmd, timeout=60: (0, out), lambda n, ok, i="": steps.append((n, ok)))
+        return steps[-1]
+
+    def test_decisions(self):
+        n, ok = self.run_gate("CFG 1\nDOCKER-ABSENT\nFWD-DONE\n")
+        self.assertEqual((n, ok), ("docker-does-not-break-vm-nat-forwarding", True))
+        self.assertTrue(self.run_gate("CFG 1\nDOCKER-UP\nPOLICY policy accept\nNETNS-PING-OK\nPOLICY-AFTER-RESTART policy accept\nNETNS-PING-AFTER-RESTART-OK\nFWD-DONE\n")[1])
+        self.assertFalse(self.run_gate("CFG 1\nDOCKER-UP\nPOLICY policy drop\nNETNS-PING-FAIL\nFWD-DONE\n")[1])
+        self.assertFalse(self.run_gate("CFG 1\nDOCKER-UP\nNETNS-PING-OK\nPOLICY-AFTER-RESTART policy drop\nNETNS-PING-AFTER-RESTART-FAIL\nFWD-DONE\n")[1])  # restart after the VM bridge exists broke it
+        self.assertFalse(self.run_gate("CFG 1\nDOCKER-DOWN\nNETNS-PING-OK\nFWD-DONE\n")[1])    # docker installed but not running = not proven
+        self.assertFalse(self.run_gate("CFG 0\nDOCKER-ABSENT\nFWD-DONE\n")[1])                  # option missing from daemon.json
+        self.assertFalse(self.run_gate("")[1])                                                     # script did not finish = FAIL
+
+    def test_script_is_valid_shell_and_core_ships_the_option(self):
+        subprocess.run(["sh", "-n"], input=HG.DOCKER_FWD_CHECK, text=True, check=True)
+        gentoo = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(ROOT)))), "gentoo", "sys-apps", "horcrux-core")
+        if os.path.isdir(gentoo):
+            import json
+            self.assertIs(json.load(open(os.path.join(gentoo, "files", "docker-daemon.json")))["ip-forward-no-drop"], True)
+            eb = "".join(open(os.path.join(gentoo, f)).read() for f in os.listdir(gentoo) if f.endswith(".ebuild"))
+            self.assertIn("daemon.json", eb)
+
+    def test_wired_into_the_harness(self):
+        self.assertIn("HG.docker_forward_gate(", open(os.path.join(ROOT, "qemu-test.py")).read())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -21,6 +21,12 @@ KEYWORDS="amd64 arm64"
 #   an installed system must be able to build an out-of-tree kernel module (zfs-kmod after every dist-kernel update, DKMS-style drivers) against its running kernel:
 #   gentoo-kernel-bin modules carry BTF, which `make modules` finishes with pahole. It used to be on an image only when the zfs-kmod binary package of the day happened
 #   to be built from source (QEMU gate kernel-module-builds-against-running-kernel failed on a server rebuilt from the package cache, 2026-11-04).
+# /etc/docker/daemon.json ("ip-forward-no-drop"):
+#   Docker >= 28 sets the iptables FORWARD policy to DROP when it enables IP forwarding. nftables evaluates EVERY base chain a packet hits, so that DROP
+#   also kills traffic libvirt/Horcrux already accepted in its own table: every NAT-network VM (virbr0, vmbr*) lost the internet whenever dockerd ran
+#   (HOGSMEADE 2026-11-12: captainjacksparrow could not reach ProtonVPN). With this option Docker leaves the policy alone; it still isolates its own
+#   bridges (DOCKER-FORWARD / DOCKER-ISOLATION / per-network DROP of unpublished ports). The file is harmless where Docker is not installed
+#   (QEMU gate docker-does-not-break-vm-nat-forwarding checks it everywhere and does the netns forwarding test where Docker exists).
 RDEPEND="
 	net-misc/chrony
 	net-misc/horcrux-time
@@ -37,6 +43,8 @@ RDEPEND="
 src_install() {
 	insinto /etc/portage/package.use
 	newins "${FILESDIR}"/package.use horcrux-core
+	insinto /etc/docker
+	newins "${FILESDIR}"/docker-daemon.json daemon.json
 	# marker: this is a Horcrux install (the installer, the QEMU gates and `horcrux-time-config` read it)
 	insinto /usr/share/horcrux
 	newins - core-release <<-EOF

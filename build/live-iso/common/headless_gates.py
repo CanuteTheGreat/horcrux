@@ -196,3 +196,49 @@ def clock_gate(sh, step, host_now=time.time, timeout=480, label="months-off-rtc-
     off_days = (int(host_now()) - first) // 86400 if first else "?"
     step(label, ok, f"clock was {off_days} days off at the first look, after {int(time.time() - t0)} s the offset is {delta} s | {cfg} | " + re.sub(r"\s+", " ", ch)[:160])
     return ok
+
+
+# Docker (>= 28) sets the iptables FORWARD policy to DROP; every other base chain also sees forwarded packets, so libvirt/Horcrux NAT VMs lost the internet
+# (HOGSMEADE 2026-11-12). horcrux-core ships /etc/docker/daemon.json {"ip-forward-no-drop": true}. The netns stands in for a NAT-network VM: a veth with
+# its own accept+masquerade nft table (what libvirt installs for virbr0) must reach the outside (10.0.2.2, the QEMU user-net gateway) WHILE dockerd runs.
+DOCKER_FWD_CHECK = r'''
+cfg=0; grep -Eq '"ip-forward-no-drop"[[:space:]]*:[[:space:]]*true' /etc/docker/daemon.json 2>/dev/null && cfg=1
+echo "CFG $cfg"
+if ! command -v dockerd >/dev/null 2>&1; then echo "DOCKER-ABSENT"; echo "FWD-DONE"; exit 0; fi
+rc-service docker status >/dev/null 2>&1 || rc-service docker start >/dev/null 2>&1
+n=0; until docker info >/dev/null 2>&1 || [ $n -ge 60 ]; do n=$((n+1)); sleep 1; done
+docker info >/dev/null 2>&1 && echo "DOCKER-UP" || echo "DOCKER-DOWN"
+echo "POLICY $( (nft list chain ip filter FORWARD 2>/dev/null || iptables -S FORWARD 2>/dev/null) | grep -Eo 'policy [a-z]+|-P FORWARD [A-Z]+' | head -1)"
+cleanup() { ip netns del hxfwdt 2>/dev/null; ip link del hxfwdt-h 2>/dev/null; nft delete table ip hxfwdtest 2>/dev/null; }
+cleanup
+echo 1 > /proc/sys/net/ipv4/ip_forward
+ip netns add hxfwdt && ip link add hxfwdt-h type veth peer name hxfwdt-n && ip link set hxfwdt-n netns hxfwdt \
+ && ip addr add 192.168.251.1/24 dev hxfwdt-h && ip link set hxfwdt-h up \
+ && ip -n hxfwdt addr add 192.168.251.2/24 dev hxfwdt-n && ip -n hxfwdt link set hxfwdt-n up && ip -n hxfwdt link set lo up \
+ && ip -n hxfwdt route add default via 192.168.251.1
+nft -f - <<NFT
+table ip hxfwdtest {
+  chain hxfwd_forward { type filter hook forward priority 0; policy accept; iifname "hxfwdt-h" accept; oifname "hxfwdt-h" ct state established,related accept; }
+  chain hxfwd_nat { type nat hook postrouting priority 100; ip saddr 192.168.251.0/24 oifname != "hxfwdt-h" masquerade; }
+}
+NFT
+ip netns exec hxfwdt ping -c 3 -W 3 10.0.2.2 >/dev/null 2>&1 && echo "NETNS-PING-OK" || echo "NETNS-PING-FAIL"
+# the other order: dockerd (re)started AFTER the VM bridge exists (a restart, a Docker upgrade) must not drop it either
+rc-service docker restart >/dev/null 2>&1
+n=0; until docker info >/dev/null 2>&1 || [ $n -ge 60 ]; do n=$((n+1)); sleep 1; done
+echo "POLICY-AFTER-RESTART $( (nft list chain ip filter FORWARD 2>/dev/null || iptables -S FORWARD 2>/dev/null) | grep -Eo 'policy [a-z]+|-P FORWARD [A-Z]+' | head -1)"
+ip netns exec hxfwdt ping -c 3 -W 3 10.0.2.2 >/dev/null 2>&1 && echo "NETNS-PING-AFTER-RESTART-OK" || echo "NETNS-PING-AFTER-RESTART-FAIL"
+cleanup
+echo "FWD-DONE"
+'''
+
+
+def docker_forward_gate(sh, step):
+    """horcrux-core's daemon.json keeps Docker from dropping forwarded traffic; with Docker installed a NAT-style netns still reaches the outside"""
+    rc, o = sh(b64("sh", DOCKER_FWD_CHECK), 180)
+    o = (o or "").replace("\r", "")
+    cfg = re.search(r"(?m)^CFG 1$", o) is not None
+    absent = "DOCKER-ABSENT" in o
+    ok = "FWD-DONE" in o and cfg and (absent or ("DOCKER-UP" in o and "NETNS-PING-OK" in o and "NETNS-PING-AFTER-RESTART-OK" in o and not re.search(r"(?mi)^POLICY(-AFTER-RESTART)? .*drop", o)))
+    step("docker-does-not-break-vm-nat-forwarding", ok, re.sub(r"\s+", " ", o.strip())[-300:] if not absent or not ok else "docker not installed in this image; daemon.json ip-forward-no-drop shipped")
+    return ok
