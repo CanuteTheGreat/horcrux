@@ -9,7 +9,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = Path(HERE).parents[3]
 LIVE = REPO / "build" / "live-iso"
 HSM = LIVE / "project" / "variants" / "hogsmeade"
-EB = HSM / "local-repo" / "app-misc" / "hogsmeade-obs" / "hogsmeade-obs-1.ebuild"
+EB = HSM / "local-repo" / "app-misc" / "hogsmeade-obs" / "hogsmeade-obs-1-r1.ebuild"
 
 
 @unittest.skipUnless(EB.parent.parent.parent.parent.is_dir() or (REPO / "gentoo").is_dir(), "Horcrux repo tree only")
@@ -20,8 +20,15 @@ class HogsmeadeObs(unittest.TestCase):
         self.t = EB.read_text()
 
     def test_package_is_the_set_and_owns_the_config(self):
-        for dep in ("media-video/obs-studio[nvenc,screencast,v4l]", "media-video/ffmpeg[opus,x264,nvenc]", "media-plugins/obs-pipewire-audio-capture", "media-video/v4l2loopback"):
+        for dep in ("media-video/obs-studio[alsa,browser,decklink,fdk,jack,lua,mpegts,nvenc,pulseaudio,python,qsv,screencast,speex,truetype,v4l,vlc,wayland,websocket]",
+                    "media-video/ffmpeg[opus,x264,x265,nvenc,qsv,vaapi,svt-av1,vpx,fdk,srt,rist]", "media-plugins/obs-pipewire-audio-capture",
+                    "media-plugins/obs-vkcapture[X,wayland]", "media-video/v4l2loopback"):
             self.assertIn(dep, self.t)
+        # libfdk-aac is nonfree: the licences are accepted by the package, ffmpeg is never a binhost package
+        self.assertIn("media-video/ffmpeg all-rights-reserved", self.t)
+        self.assertIn("media-libs/fdk-aac FraunhoferFDK", self.t)
+        self.assertIn(">=media-video/vlc-4.0", self.t)
+        self.assertIn(">=media-video/vlc-4.0", (HSM / "portage" / "package.mask" / "hogsmeade").read_text())
         for f in ("package.accept_keywords", "package.use", "/etc/modprobe.d", "/etc/modules-load.d"):
             self.assertIn(f, self.t)
         self.assertIn("devices=1 video_nr=10", self.t)
@@ -37,7 +44,9 @@ class HogsmeadeObs(unittest.TestCase):
         self.assertIn("media-video/obs-studio ~amd64", kw)
         self.assertIn("media-plugins/obs-pipewire-audio-capture ~amd64", kw)
         use = (HSM / "portage" / "package.use" / "zzz-hogsmeade").read_text()
-        self.assertIn("media-video/ffmpeg opus x264 nvenc", use)
+        self.assertIn("media-video/ffmpeg opus x264 x265 nvenc qsv vaapi svt-av1 vpx fdk srt rist", use)
+        self.assertIn("media-video/obs-studio alsa browser decklink fdk jack lua mpegts nvenc pulseaudio python qsv screencast speex truetype v4l vlc wayland websocket", use)
+        self.assertIn("media-plugins/obs-vkcapture ~amd64", kw)
 
     def test_not_in_any_other_machine_or_public_layer(self):
         pat = re.compile(r"obs-studio|hogsmeade-obs|v4l2loopback")

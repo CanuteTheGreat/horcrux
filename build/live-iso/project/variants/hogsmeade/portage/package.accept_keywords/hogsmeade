@@ -25,5 +25,6 @@ net-misc/horcrux-chrony-nm ~amd64
 # OBS (app-misc/hogsmeade-obs, owner-only)
 media-video/obs-studio ~amd64
 media-plugins/obs-pipewire-audio-capture ~amd64
+media-plugins/obs-vkcapture ~amd64
 # the private overlay (ctg-ops, ctg-ssh-ca-fleet): ~arch owner packages
 */*::ctg-private ~amd64

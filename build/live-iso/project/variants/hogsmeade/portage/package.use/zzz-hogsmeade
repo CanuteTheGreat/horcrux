@@ -13,8 +13,9 @@ sys-apps/smartmontools -systemd
 dev-libs/libdbusmenu gtk3
 gnome-extra/horcrux-gnome-defaults awcc
 # OBS (app-misc/hogsmeade-obs, owner-only)
-media-video/ffmpeg opus x264 nvenc
-media-video/obs-studio nvenc screencast v4l
+media-video/ffmpeg opus x264 x265 nvenc qsv vaapi svt-av1 vpx fdk srt rist
+media-video/obs-studio alsa browser decklink fdk jack lua mpegts nvenc pulseaudio python qsv screencast speex truetype v4l vlc wayland websocket
+media-plugins/obs-vkcapture X wayland
 media-video/v4l2loopback dist-kernel
 # Nextcloud client (app-misc/hogsmeade-nextcloud, owner-only)
 net-misc/nextcloud-client nautilus
