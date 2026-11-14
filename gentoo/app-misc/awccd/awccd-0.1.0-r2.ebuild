@@ -5,7 +5,7 @@ EAPI=8
 
 PYTHON_COMPAT=( python3_{12..14} )
 
-inherit python-single-r1 udev
+inherit python-single-r1 udev systemd
 
 DESCRIPTION="Linux replacement for Alienware Command Center: thermal profiles, fans, AlienFX lighting daemon + GNOME extension"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
@@ -37,6 +37,7 @@ src_install() {
 	python_fix_shebang "${ED}/usr/sbin/awccd" "${ED}/usr/bin/awccctl"
 	newinitd "${FILESDIR}/awccd.initd" awccd
 	newconfd "${FILESDIR}/awccd.confd" awccd
+	systemd_dounit "${FILESDIR}/awccd.service"
 	insinto /etc
 	newins "${FILESDIR}/awccd.toml" awccd.toml
 	insinto /usr/share/dbus-1/system.d

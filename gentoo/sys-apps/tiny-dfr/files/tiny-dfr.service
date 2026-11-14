@@ -1,0 +1,16 @@
+[Unit]
+Description=Touch Bar daemon (tiny-dfr)
+# function-key/media-key row (AsahiLinux/tiny-dfr) on T2 Macs: needs hid_appletb_kbd + appletbdrm
+After=local-fs.target systemd-udevd.service systemd-modules-load.service systemd-logind.service
+
+[Service]
+Type=simple
+ExecStartPre=-/sbin/modprobe -q uinput
+ExecStartPre=-/sbin/modprobe -q appletbdrm
+ExecStartPre=-/sbin/modprobe -q hid_appletb_kbd
+ExecStart=/usr/bin/tiny-dfr
+Restart=always
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

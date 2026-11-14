@@ -1,0 +1,20 @@
+[Unit]
+Description=Horcrux first boot: wait for a network (no time limit), machine hooks, Portage tree sync (once)
+# the installed system only: the live ISO and a finished first boot skip it (the OpenRC script does the same checks)
+ConditionKernelCommandLine=!rd.live.image
+ConditionPathExists=!/var/lib/horcrux/firstboot-done
+After=network.target chronyd.service horcrux-timesync.service sshd.service
+Wants=network.target
+
+[Service]
+# never blocks boot: the worker waits for the network itself, with no limit (/usr/libexec/horcrux-firstboot)
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p /var/lib/horcrux
+ExecStart=/usr/libexec/horcrux-firstboot
+StandardOutput=append:/var/log/horcrux-firstboot.log
+StandardError=append:/var/log/horcrux-firstboot.log
+# the worker backgrounds the tree sync: do not kill its leftovers when the main process ends
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

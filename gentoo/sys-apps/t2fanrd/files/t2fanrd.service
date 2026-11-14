@@ -1,0 +1,15 @@
+[Unit]
+Description=T2 Mac fan daemon
+After=local-fs.target systemd-modules-load.service systemd-udevd.service
+
+[Service]
+Type=simple
+# applesmc binds to the ACPI device APP0001 and appears several seconds after udev settles (about 19 s on a MacBookPro16,2): wait for
+# its fan nodes instead of failing the service at boot. t2fanrd globs the same path.
+ExecStartPre=/bin/sh -c 'i=0; while [ $i -lt 60 ]; do set -- /sys/devices/pci*/*/*/*/APP0001:00/fan*_manual; [ -e "$1" ] && exit 0; sleep 1; i=$((i+1)); done; echo "no applesmc fan interface after 60 s (T2 kernel applesmc missing?)" >&2; exit 1'
+ExecStart=/usr/bin/t2fanrd
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

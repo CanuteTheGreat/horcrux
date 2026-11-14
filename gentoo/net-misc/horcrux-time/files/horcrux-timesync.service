@@ -1,0 +1,13 @@
+[Unit]
+Description=Horcrux: re-resolve chrony's sources when the network comes up (headless servers have no NetworkManager hook)
+After=local-fs.target chronyd.service network.target
+Wants=chronyd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/horcrux-timesync
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

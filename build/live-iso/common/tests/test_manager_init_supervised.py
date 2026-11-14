@@ -18,7 +18,7 @@ class ManagerSupervised(unittest.TestCase):
 
     def test_cluster_create_and_join_enable_boot_start(self):
         s = open(os.path.join(ROOT, "horcrux-api/src/api/cluster_join.rs")).read()
-        self.assertIn('"rc-update"', s)
+        self.assertIn('init.enable("horcrux-api")', s)  # crate::init: OpenRC rc-update / systemctl enable
         self.assertEqual(len(re.findall(r"enable_boot_start\(\)\.await;", s)), 2, "create AND join must enable the manager at boot")
 
 

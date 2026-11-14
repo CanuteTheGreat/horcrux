@@ -94,6 +94,8 @@ src_install() {
 	rm -f "${ED}"/etc/init.d/horcrux-ha-fence
 	newinitd "${FILESDIR}"/horcrux-ha-fence.initd horcrux-ha-fence
 	systemd_dounit "${FILESDIR}"/horcrux-ha-fence.service
+	# the manager and the guest save/resume service: the image tarball carries only the OpenRC scripts, so the units come from files/
+	systemd_dounit "${FILESDIR}"/horcrux-api.service "${FILESDIR}"/horcrux-guests.service
 	keepdir /etc/horcrux/ssl /var/lib/horcrux /var/log/horcrux
 	fperms 0700 /etc/horcrux/ssl
 	# PAM realm (host accounts): the "horcrux" PAM service, same as the source ebuild

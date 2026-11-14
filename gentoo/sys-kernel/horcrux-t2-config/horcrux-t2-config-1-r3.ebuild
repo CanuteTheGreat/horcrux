@@ -3,6 +3,8 @@
 
 EAPI=8
 
+inherit systemd
+
 T2_COMMIT="e16720782ee30fac38486b6c58d32443899c136a"
 
 DESCRIPTION="Apple T2 Mac support for sys-kernel/gentoo-kernel: t2linux patch set, kernel config, initramfs config"
@@ -63,7 +65,10 @@ src_install() {
 		options hid_appletb_kbd mode=2 fntoggle=1
 	EOF
 	# Touch Bar graphical mode (tiny-dfr): attach the display before the daemon starts (see the init script)
+	exeinto /usr/libexec
+	doexe "${FILESDIR}/horcrux-touchbar"
 	newinitd "${FILESDIR}/horcrux-touchbar.initd" horcrux-touchbar
+	systemd_dounit "${FILESDIR}/horcrux-touchbar.service"
 	insinto /etc/conf.d
 	newins - tiny-dfr <<-'EOF'
 		# Horcrux T2: the Touch Bar display must be attached (config 2 + USB reset) before tiny-dfr starts

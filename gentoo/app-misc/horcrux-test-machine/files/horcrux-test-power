@@ -1,0 +1,34 @@
+#!/bin/bash
+# app-misc/horcrux-test-machine: runtime power saving off at every boot (Wi-Fi power_save, power-saver profile), Wake-on-LAN armed on the wired
+# NICs. Shared by the OpenRC script and the systemd unit. Usage: horcrux-test-power start|stop
+arm_wol() {
+	command -v ethtool >/dev/null 2>&1 || return 0
+	local d i
+	for d in /sys/class/net/*/device; do
+		i=${d%/device}; i=${i##*/}
+		[ -d "/sys/class/net/${i}/wireless" ] && continue
+		[ "${i}" = "lo" ] && continue
+		ethtool -s "${i}" wol g >/dev/null 2>&1
+		[ -w "${d}/power/wakeup" ] && echo enabled > "${d}/power/wakeup" 2>/dev/null
+	done
+	return 0
+}
+
+power_start() {
+	arm_wol
+	for d in /sys/class/net/*/wireless; do
+		[ -d "$d" ] || continue
+		i=${d%/wireless}; i=${i##*/}
+		iw dev "$i" set power_save off 2>/dev/null
+	done
+	if command -v powerprofilesctl >/dev/null 2>&1 && [ "$(powerprofilesctl get 2>/dev/null)" = "power-saver" ]; then
+		powerprofilesctl set balanced 2>/dev/null
+	fi
+	return 0
+}
+case "$1" in
+	start) power_start ;;
+	stop) arm_wol ;;
+	*) echo "usage: $0 start|stop" >&2; exit 2 ;;
+esac
+exit 0

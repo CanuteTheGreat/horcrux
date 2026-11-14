@@ -5,7 +5,7 @@ EAPI=8
 
 PYTHON_COMPAT=( python3_13 )
 
-inherit python-single-r1
+inherit python-single-r1 systemd
 
 DESCRIPTION="ComfyUI node-based diffusion UI/server (private venv with PyTorch cu130 wheels) (listens on COMFYUI_LISTEN, default 127.0.0.1)"
 HOMEPAGE="https://github.com/Comfy-Org/ComfyUI"
@@ -52,6 +52,7 @@ src_install() {
 
 	newinitd "${FILESDIR}/comfyui.initd" comfyui
 	newconfd "${FILESDIR}/comfyui.confd" comfyui
+	systemd_dounit "${FILESDIR}/comfyui.service"
 	insinto /etc/comfyui
 	doins "${FILESDIR}/extra_model_paths.yaml"
 	dosbin "${FILESDIR}/comfyui-fetch-models"

@@ -291,11 +291,10 @@ pub async fn is_active(name: &str) -> Result<bool, String> {
     if !valid_service_name(name) {
         return Err("bad service name".into());
     }
-    match init_system() {
-        Init::Systemd => Ok(run("systemctl", &["is-active", name]).await.is_ok()),
-        Init::OpenRc => Ok(run("rc-service", &[name, "status"]).await.is_ok()),
-        Init::None => Err("no init system".into()),
-    }
+    let Some(b) = crate::init::backend() else {
+        return Err("no init system".into());
+    };
+    Ok(b.state(name).await? == crate::init::ServiceState::Active)
 }
 
 /// Do `action` on `name` with the host's init system.
@@ -303,18 +302,18 @@ pub async fn service_action(name: &str, action: &str) -> Result<String, String> 
     if !valid_service_name(name) || !ACTIONS.contains(&action) {
         return Err("bad service name or action".into());
     }
-    match init_system() {
-        Init::Systemd => run("systemctl", &[action, name])
-            .await
-            .map(|_| format!("{action} {name}")),
-        Init::OpenRc => match action {
-            "enable" => run("rc-update", &["add", name, "default"]).await,
-            "disable" => run("rc-update", &["del", name]).await,
-            a => run("rc-service", &[name, a]).await,
-        }
-        .map(|_| format!("{action} {name}")),
-        Init::None => Err("no supported init system is running".into()),
+    let Some(b) = crate::init::backend() else {
+        return Err("no supported init system is running".into());
+    };
+    match action {
+        "start" => b.start(name).await,
+        "stop" => b.stop(name).await,
+        "restart" => b.restart(name).await,
+        "enable" => b.enable(name).await,
+        "disable" => b.disable(name).await,
+        _ => Err("bad service name or action".into()),
     }
+    .map(|_| format!("{action} {name}"))
 }
 
 /// The API itself: stopping or disabling it would end the session managing it.

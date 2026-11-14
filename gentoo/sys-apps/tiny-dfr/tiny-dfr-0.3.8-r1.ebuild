@@ -157,7 +157,7 @@ CRATES="
 	zerocopy@0.8.48
 "
 
-inherit cargo udev
+inherit cargo udev systemd
 
 DESCRIPTION="Dynamic function row (Touch Bar) daemon for Apple T2 / Apple Silicon Macs"
 HOMEPAGE="https://github.com/AsahiLinux/tiny-dfr"
@@ -190,4 +190,5 @@ src_install() {
 	doins -r share/tiny-dfr/.
 	udev_dorules etc/udev/rules.d/99-touchbar-seat.rules
 	newinitd "${FILESDIR}/tiny-dfr.initd" tiny-dfr
+	systemd_dounit "${FILESDIR}/tiny-dfr.service"
 }
