@@ -51,6 +51,12 @@ pub struct StoragePool {
     pub available: u64, // Available space in GB
     pub total: u64,     // Total space in GB
     pub enabled: bool,
+    /// Remote export a network file system pool was added with
+    /// (`server:/export`). Such a pool's `path` is the local mount point
+    /// the API keeps it mounted on, so volumes, capacity and listings use
+    /// the same directory code as a directory pool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// (total, available) GB of the filesystem holding `path`, via statvfs(2).
@@ -297,7 +303,24 @@ impl StorageManager {
                 .load_values::<StoragePool>(kinds::STORAGE_POOL)
                 .await?
             {
-                Self::refresh_capacity(mgr.probe_for(&pool.storage_type), &mut pool);
+                if let Some(src) = pool.source.clone() {
+                    // Remount in the background (the server may be briefly
+                    // down at boot); a pool that isn't mounted is never
+                    // measured: statvfs of the empty mount point would
+                    // report the local disk.
+                    let dir = pool.path.clone();
+                    tokio::spawn(async move {
+                        if let Ok(cfg) = nfs::NfsConfig::parse(&src) {
+                            let _ = tokio::time::timeout(
+                                std::time::Duration::from_secs(60),
+                                nfs::NfsManager::new().ensure_mounted(&cfg, &dir),
+                            )
+                            .await;
+                        }
+                    });
+                } else {
+                    Self::refresh_capacity(mgr.probe_for(&pool.storage_type), &mut pool);
+                }
                 pools.insert(pool.id.clone(), pool);
             }
             tracing::info!("Loaded {} storage pool(s) from database", pools.len());
@@ -349,6 +372,7 @@ impl StorageManager {
                         || matches!(p.storage_type, StorageType::Zfs)
                 })
                 .filter(|p| only.is_none_or(|id| p.id == id))
+                .filter(|p| p.source.is_none() || nfs::is_mounted(&p.path))
                 .map(|p| {
                     (
                         p.id.clone(),
@@ -477,6 +501,15 @@ impl StorageManager {
         // was), so every volume create in a directory pool failed with
         // "Not enough space ... Available: 0GB".
         let mut pool = pool;
+        if pool.storage_type == StorageType::Nfs && pool.source.is_none() {
+            // `server:/export` is not a directory: keep the export mounted
+            // under the data dir and let the pool's path be that mount.
+            let cfg = nfs::NfsConfig::parse(&pool.path)?;
+            let dir = nfs::mount_dir(&pool.id);
+            self.nfs.ensure_mounted(&cfg, &dir).await?;
+            pool.source = Some(pool.path.clone());
+            pool.path = dir;
+        }
         Self::refresh_capacity(self.probe_for(&pool.storage_type), &mut pool);
 
         config_store::put_opt(&self.store, kinds::STORAGE_POOL, &pool.id, &pool).await?;
@@ -496,7 +529,15 @@ impl StorageManager {
             )));
         }
         config_store::delete_opt(&self.store, kinds::STORAGE_POOL, id).await?;
-        pools.remove(id);
+        if let Some(p) = pools.remove(id) {
+            if p.source.is_some() && p.storage_type == StorageType::Nfs {
+                if let Err(e) = self.nfs.unmount_export(&p.path).await {
+                    tracing::warn!("Storage pool {}: unmounting {}: {}", id, p.path, e);
+                } else {
+                    let _ = tokio::fs::remove_dir(&p.path).await;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -509,6 +550,20 @@ impl StorageManager {
         size_gb: u64,
     ) -> Result<String> {
         check_names(&[volume_name])?;
+        // A network pool whose mount was lost (reboot, server restart)
+        // is mounted again before anything is measured or written.
+        let remote = {
+            let pools = self.pools.read().await;
+            pools
+                .get(pool_id)
+                .and_then(|p| p.source.clone().map(|s| (s, p.path.clone())))
+        };
+        if let Some((src, dir)) = remote {
+            if !nfs::is_mounted(&dir) {
+                let cfg = nfs::NfsConfig::parse(&src)?;
+                self.nfs.ensure_mounted(&cfg, &dir).await?;
+            }
+        }
         // The space check below must see the space free now.
         self.refresh_pools(Some(pool_id)).await;
         let pools = self.pools.read().await;
@@ -1045,6 +1100,7 @@ mod tests {
             available: 0,
             total: 0,
             enabled: true,
+            source: None,
         }
     }
 

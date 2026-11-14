@@ -5164,6 +5164,7 @@ async fn add_storage_pool(
         available: 0, // Will be updated by backend
         total: 0,     // Will be updated by backend
         enabled: true,
+        source: None,
     };
 
     let pool = state

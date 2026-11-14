@@ -540,6 +540,15 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Snapshot schedules"
           bash horcrux-api/tests/snapshot_schedule_e2e.sh target/debug/horcrux-api
 
+      - name: "NFS storage pool (real NFSv4 server, kernel client, volume on the export)"
+        # nfs_storage_e2e.sh adds a pool by server:/export against nfs-ganesha
+        # in a sibling container, checks real capacity, creates/refuses/deletes
+        # a volume and finds its file on the server's export, and that removing
+        # the pool unmounts the export.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "NFS storage pool"
+          bash horcrux-api/tests/nfs_storage_e2e.sh target/debug/horcrux-api
+
       - name: "VM advanced hardware (serial, virtiofs, ivshmem, SMBIOS, NUMA, hotplug, hookscript, real QEMU)"
         # vm_advanced_e2e.sh boots a VM with two extra serial ports (a socket
         # and a host tty), a real virtiofsd share, ivshmem, SMBIOS strings, a
