@@ -212,15 +212,24 @@ class Tests:
         vm = self.boot("menu")
         try:
             self.step("grub-menu-reached", self.menu_ready(vm))
-            scr = vm.screen()
-            vm.shot("grub-menu")
             want = ["Graphical install", "Install (text mode)", "Advanced (expert) install", "Automated install", "Rescue mode",
                     "Rescue (forensic, no-touch", "Try it live (no install", "Try it live with persistence", "Safe graphics (nomodeset)", "Serial console"]
             if self.a.project and not self.a.no_memtest:
                 want.append("Memory test")
             norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
+            # Snapshot the screen the moment every entry is on it, not a fixed 1.5 s after the last line arrived: GRUB's 6 s countdown keeps running,
+            # and under TCG (aarch64: the EDK2 console is 100x31 and the redraws are slow) a late read caught a blank/redrawn screen (Live ISO run 1124,
+            # all 10 entries 'missing' although grub-menu-reached had seen the last menu line). The assertion below is unchanged, it just reads
+            # the first complete screen (or, after the wait, the last one, so a really missing entry still fails).
+            scr = vm.screen()
+            end = time.time() + T(20)
+            while any(norm(w) not in norm(scr) for w in want) and time.time() < end:
+                time.sleep(0.1)
+                scr = vm.screen()
+            vm.send(" ")                                   # any key cancels GRUB's countdown: the VGA checks below must not race the default entry booting
+            vm.shot("grub-menu")
             missing = [w for w in want if norm(w) not in norm(scr)]
-            self.step("serial-menu-lists-every-entry", not missing, f"missing: {missing}" if missing else f"{len(want)} entries on the serial console")
+            self.step("serial-menu-lists-every-entry", not missing, f"missing: {missing}; screen was: {' / '.join(l.strip() for l in scr.splitlines() if l.strip())[:700]!r}" if missing else f"{len(want)} entries on the serial console")
             self.step("menu-is-branded", self.title in scr, f"'{self.title} - ...' entries")
             self.step("graphical-install-is-first-and-default", re.search(r"Graphical install", scr) is not None and scr.find("Graphical install") < scr.find("Install (text mode)"))
             ppm = vm.grab() or b""
