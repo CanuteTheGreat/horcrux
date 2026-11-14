@@ -160,6 +160,23 @@ if [ "$result" = pass ]; then
   # DL_MODES under TCG: boot-modes = 8 menu-mode boots + a ~1900 s base install + forensic + rescue boots; it hit the old 6000 s deadline on a loaded
   # arm64 runner (patronus run 783: all asserts passed up to 'rescue', then hard-deadline). Only the deadline moved; the job cap is 420 min.
   with_deadline() { local s=$1; shift; QEMU_TEST_DEADLINE=$s timeout -k 30 $((s+180)) "$@"; }
+  # zfs-enc-test.py with its hard deadline. A run that dies by SIGKILL (rc 137: exit status of a process killed from OUTSIDE the harness, which prints
+  # [FAIL] hard-deadline and exits 124 on its own deadline/SIGTERM and prints a [FAIL]/FAILED STEPS line on every assertion) says nothing about the image:
+  # gnome-light run 2726 (rw-man-06, elastic kvm lane) lost the whole 60-min test ~27 min in, during the boot2 passphrase wait, with no [FAIL] at all, while
+  # the identical hibernate/resume flow had passed 5 h earlier on the same image code. Such a kill is infrastructure (a runner/host action on the job's
+  # processes): print what the job container's cgroup saw, then run the test ONCE more on a fresh disk. Assertion failures and deadline hits are never retried.
+  zfs_enc_run() {
+    local n=$1; shift
+    local attempt
+    for attempt in 1 2; do
+      with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$n" "$@" 2>&1 | tee "$EVI/test-$n.log" | tail -60
+      rc=${PIPESTATUS[0]}
+      [ "$rc" = 137 ] || return 0
+      echo "::warning::qemu-$n attempt $attempt was SIGKILLed from outside the harness (rc 137, no [FAIL] line): $(uptime | sed 's/.*load/load/'); memory.events: $(tr '\n' ' ' < /sys/fs/cgroup/memory.events 2>/dev/null) memory.peak: $(cat /sys/fs/cgroup/memory.peak 2>/dev/null)"
+      rm -rf "$EVI/$n"; pkill -x qemu-system-x86_64 2>/dev/null; sleep 5
+    done
+    return 0
+  }
   failed_list=""
   for entry in "${MATRIX[@]}"; do
     name=${entry%%|*}; args=${entry#*|}
@@ -179,8 +196,7 @@ if [ "$result" = pass ]; then
     # rollback, then the portable hibernate flow (one passphrase, hibernate, power off, boot, resume: marker + process survive, scrub clean)
     name=zfs-enc-desktop-hibernate
     echo "::group::QEMU test $name"
-    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --desktop --hibernate --public 2>&1 | tee "$EVI/test-$name.log" | tail -60
-    rc=${PIPESTATUS[0]}
+    zfs_enc_run "$name" --desktop --hibernate --public
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
@@ -196,8 +212,7 @@ if [ "$result" = pass ]; then
     ovl=""
     if [ "${GITHUB_REF_TYPE:-}" = branch ] && [ -n "${GITHUB_REF_NAME:-}" ] && [ "${GITHUB_REF_NAME}" != main ]; then ovl="--overlay-dir $(cd "$HERE/../../.." && pwd)/gentoo"; fi
     echo "::group::QEMU test $name"
-    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --server --public --late-network ${SERVER_LATE_NET_S:-90} $ovl 2>&1 | tee "$EVI/test-$name.log" | tail -70
-    rc=${PIPESTATUS[0]}
+    zfs_enc_run "$name" --server --public --late-network ${SERVER_LATE_NET_S:-90} $ovl
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
