@@ -49,8 +49,8 @@ class HogsmeadeDownloadsSort(unittest.TestCase):
 
     def run_sort(self, *args, timeout=120):
         env = {"HOME": str(self.home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
-        return subprocess.run(["python3", str(SCRIPT), *args, "--settle-quiet", "1"], env=env, capture_output=True, text=True,
-                              timeout=timeout)
+        return subprocess.run(["python3", str(SCRIPT), *args, "--settle-quiet", "1", "--start-quiet", "1"], env=env, capture_output=True,
+                              text=True, timeout=timeout)
 
     def snapshot(self):
         return {str(p.relative_to(self.dl)): (p.read_bytes(), p.stat().st_mtime) for p in self.dl.rglob("*") if p.is_file()}
@@ -192,6 +192,37 @@ class HogsmeadeDownloadsSort(unittest.TestCase):
         r = self.run_sort("apply", "--onedrive-log", str(log), "--onedrive-status", str(status))
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
         self.assertTrue((self.dl / "doc.pdf").is_file())
+
+    def test_online_leftover_defers(self):
+        """An interrupted earlier run left ./Downloads/Documents/old online (created, never deleted): moving a local 'old'
+        folder onto that path would collide online, so it waits; once the client deletes the leftover, it moves."""
+        fake = self.home / "onedrive"
+        os.symlink("/bin/sleep", fake)
+        proc = subprocess.Popen([str(fake), "300"])
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        status = self.home / "monitor-status.json"
+        status.write_text(json.dumps({"pid": proc.pid, "process": {"state": "idle"}}))
+        (self.dl / "Documents").mkdir()
+        log = self.home / "od.log"
+        log.write_text("ERROR: an old error that is not this run's\n"
+                       "Successfully created the remote directory ./Downloads/Documents/old on Microsoft OneDrive\n"
+                       "Successfully created the remote directory ./Downloads/Documents/gone on Microsoft OneDrive\n"
+                       "Deleting item from Microsoft OneDrive: ./Downloads/Documents/gone\n")
+        self.put("old/a.pdf", b"a")
+        self.put("gone/b.pdf", b"b")
+        args = ("apply", "--onedrive-log", str(log), "--onedrive-status", str(status))
+        r = self.run_sort(*args)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("deferred 1", r.stdout)
+        self.assertIn("onedrive error lines 0", r.stdout)
+        self.assertTrue((self.dl / "old" / "a.pdf").is_file())
+        self.assertTrue((self.dl / "Documents" / "gone" / "b.pdf").is_file())
+        with open(log, "a") as fh:
+            fh.write("Deleting item from Microsoft OneDrive: ./Downloads/Documents/old\n")
+        r = self.run_sort(*args)
+        self.assertIn("deferred 0", r.stdout)
+        self.assertTrue((self.dl / "Documents" / "old" / "a.pdf").is_file())
 
     def test_script_never_deletes(self):
         code = "\n".join(l for l in SCRIPT.read_text().splitlines() if not l.lstrip().startswith("#"))

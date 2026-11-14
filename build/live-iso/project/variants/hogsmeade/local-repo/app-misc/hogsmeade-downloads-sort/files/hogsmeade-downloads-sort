@@ -314,6 +314,7 @@ class OneDriveLog:
     ERR = re.compile(r"(ERROR|error:|failed|Failed|FAILED|unable to|Unable to|HTTP 4\d\d|HTTP 5\d\d)")
     NEW_DATA = re.compile(r"^(New directories to create on Microsoft OneDrive|New items to upload to Microsoft OneDrive|Uploading new file): ?(.*)$")
     CREATED = re.compile(r"^Successfully created the remote directory (.+) on Microsoft OneDrive\s*$")
+    DELETED = re.compile(r"^Deleting item from Microsoft OneDrive: (.+?)\s*$")
 
     def __init__(self, path, status=None, sync_root=None):
         self.path = path if path and os.path.isfile(path) else None
@@ -324,6 +325,12 @@ class OneDriveLog:
         self.created = set()
         self.new_data = []
         self.recent = []  # created/uploaded lines since the last reset (one batch)
+        self.last = {}  # rel path -> "created" | "deleted": the client's last word on that online path
+
+    def online_leftover(self, p):
+        """An online item at this path that the client created and never deleted, while nothing is there locally (left by an
+        interrupted earlier run). Moving something onto that path now would collide online, so such moves wait."""
+        return self.last.get(self.rel(p)) == "created" and not os.path.lexists(p)
 
     def read_all(self):
         """Learn every folder the client ever reported created (folders made by an earlier, interrupted run)."""
@@ -333,6 +340,7 @@ class OneDriveLog:
         self.pos = max(self.pos, pos)
         self.recent = []
         self.new_data = []
+        self.errors = []  # only errors from now on count for this run
 
     def rel(self, p):
         return "./" + os.path.relpath(p, self.sync_root) if self.sync_root else p
@@ -353,11 +361,17 @@ class OneDriveLog:
             m = self.CREATED.match(line.strip())
             if m:
                 self.created.add(m.group(1))
+                self.last[m.group(1)] = "created"
                 self.recent.append(line.strip())
             m = self.NEW_DATA.match(line.strip())
             if m:
                 self.new_data.append(line.strip())
                 self.recent.append(line.strip())
+                if m.group(1) == "Uploading new file":
+                    self.last[re.sub(r" \.\.\. .*$", "", m.group(2))] = "created"
+            m = self.DELETED.match(line.strip())
+            if m:
+                self.last[m.group(1)] = "deleted"
         return data
 
     def busy(self):
@@ -381,6 +395,11 @@ class OneDriveLog:
         except (OSError, ValueError, TypeError):
             return False
 
+    # the monitor loop's own heartbeat lines: not work in progress
+    IDLE = re.compile(r"^(Received \d+ signal|Attempting to contact the Microsoft OneDrive Service|Successfully reached the Microsoft "
+                      r"OneDrive Service|Starting a sync with|Syncing changes from|Sync with Microsoft OneDrive is complete|Fetching items "
+                      r"from the OneDrive API|Processed \d+ applicable JSON items|No changes or items that can be applied|Using IPv|$)")
+
     def settle(self, quiet=20, max_wait=1800, log=print):
         """Wait until the client is idle and its log has been quiet for `quiet` s (it has processed our changes)."""
         if not self.path:
@@ -389,7 +408,8 @@ class OneDriveLog:
         t0 = time.time()
         last = time.time()
         while time.time() - t0 < max_wait:
-            if self.read_new().strip() or self.busy():
+            work = [l for l in self.read_new().splitlines() if not self.IDLE.match(l.strip())]
+            if work or self.busy():
                 last = time.time()
             if time.time() - last >= quiet:
                 return True
@@ -492,7 +512,7 @@ def cmd_apply(a):
     odl = OneDriveLog(a.onedrive_log, a.onedrive_status, a.sync_root)
     progress = os.path.join(a.state, "progress.log")
     pending_f = os.path.join(a.state, "pending-dirs.json")
-    done = failed = 0
+    done = failed = deferred = 0
 
     def log(msg):
         with open(progress, "a") as fh:
@@ -505,18 +525,18 @@ def cmd_apply(a):
     if odl.client_running() is False:
         log("onedrive client is set up but not running; nothing moved (moving now would turn into re-uploads at its next start)")
         return 3
-    if not odl.settle(quiet=a.settle_quiet, max_wait=a.max_wait, log=log):
+    if not odl.settle(quiet=max(a.start_quiet, a.settle_quiet), max_wait=a.max_wait, log=log):
         log("onedrive client busy; nothing moved (next run retries)")
         return 3
     pending = set(json.load(open(pending_f))) if os.path.exists(pending_f) else set()
+    if odl.path:
+        odl.read_all()
     for d in sorted({os.path.dirname(p[2]) for p in plan}, key=lambda x: (x.count("/"), x)):
         if not os.path.isdir(d):
             os.makedirs(d)
             pending.add(d)
     if pending:
         json.dump(sorted(pending), open(pending_f, "w"))
-        if odl.path:
-            odl.read_all()
         if not odl.wait_created(pending, max_wait=a.max_wait, log=log):
             log("destination folders not online yet; nothing moved (next run retries)")
             return 3
@@ -543,6 +563,10 @@ def cmd_apply(a):
                 st = os.lstat(src)
                 if kind == "file" and (time.time() - st.st_mtime < a.keep_days * 86400 or not os.path.isfile(src)):
                     log(f"skip (changed since plan): {src}")
+                    continue
+                if odl.online_leftover(dst):
+                    deferred += 1
+                    log(f"deferred (onedrive still has an online item at the destination from an earlier run): {dst}")
                     continue
                 final = dst
                 for _ in range(1000):
@@ -572,8 +596,8 @@ def cmd_apply(a):
     write_undo(a.state, day)
     for e in odl.errors:
         log(f"onedrive log: {e}")
-    log(f"apply done: moved {done}, failed {failed}, onedrive log error lines {len(odl.errors)}")
-    print(f"moved {done}, failed {failed}, onedrive error lines {len(odl.errors)}; log {tsv}, undo {os.path.join(a.state, f'undo-{day}.sh')}")
+    log(f"apply done: moved {done}, failed {failed}, deferred {deferred}, onedrive log error lines {len(odl.errors)}")
+    print(f"moved {done}, failed {failed}, deferred {deferred}, onedrive error lines {len(odl.errors)}; log {tsv}, undo {os.path.join(a.state, f'undo-{day}.sh')}")
     return 0 if failed == 0 else 1
 
 
@@ -669,7 +693,8 @@ def main():
     ap.add_argument("--state", default=os.path.join(home, ".local", "state", "downloads-sort"))
     ap.add_argument("--keep-days", type=int, default=14)
     ap.add_argument("--batch", type=int, default=200)
-    ap.add_argument("--settle-quiet", type=int, default=20)
+    ap.add_argument("--settle-quiet", type=int, default=20, help="seconds of client log silence that count as 'caught up' after a batch")
+    ap.add_argument("--start-quiet", type=int, default=120, help="seconds of client log silence required before the first move")
     ap.add_argument("--min-dup-size", type=int, default=1)
     ap.add_argument("--onedrive-log", default=os.path.join(home, ".local", "state", "onedrive-personal.log"))
     ap.add_argument("--onedrive-status", default=os.path.join(home, ".config", "onedrive-personal", "monitor-status.json"))
