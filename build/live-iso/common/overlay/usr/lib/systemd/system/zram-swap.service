@@ -1,8 +1,13 @@
 # systemd twin of /etc/init.d/zram-swap (same script, settings in /etc/conf.d/zram-swap): zram compressed swap, the ONLY swap on servers.
 [Unit]
 Description=zram compressed swap
+# an early-boot unit like the swap units it sits beside: with the default dependencies (After=basic.target) plus Before=swap.target (which
+# sysinit.target needs) systemd found an ordering cycle at every boot and broke it by dropping a random job: swap.target, or tmp.mount, and
+# then every PrivateTmp= service (chronyd, systemd-logind, iwd) failed with "Failed to set up mount namespacing: /tmp/".
+DefaultDependencies=no
 After=local-fs.target systemd-modules-load.service
-Before=swap.target
+Before=swap.target shutdown.target
+Conflicts=shutdown.target
 
 [Service]
 Type=oneshot

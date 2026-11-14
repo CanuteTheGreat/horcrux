@@ -166,5 +166,20 @@ class PkgList(unittest.TestCase):
         self.assertEqual(subprocess.run(["sh", sh, f], capture_output=True, text=True, env=env).stdout.split(), ["a/b", "h/i"])
 
 
+class EarlyBootUnits(unittest.TestCase):
+    def test_units_ordered_before_early_targets_drop_default_dependencies(self):
+        # Before=swap.target/sysinit.target/local-fs.target with the default dependencies (After=basic.target) is an ordering cycle: systemd
+        # breaks it by dropping a random job every boot (zram-swap.service dropped tmp.mount; every PrivateTmp= service then failed)
+        d = os.path.join(COMMON, "overlay/usr/lib/systemd/system")
+        early = {"swap.target", "sysinit.target", "local-fs.target", "local-fs-pre.target"}
+        for f in sorted(os.listdir(d)):
+            if not f.endswith(".service"):
+                continue
+            t = open(os.path.join(d, f)).read()
+            before = {w for line in t.splitlines() if line.startswith("Before=") for w in line[7:].split()}
+            if before & early:
+                self.assertIn("DefaultDependencies=no", t, f"{f} is ordered before {sorted(before & early)} but keeps the default dependencies")
+
+
 if __name__ == "__main__":
     unittest.main()
