@@ -701,7 +701,7 @@ class ZRun(qt.Runner):
         # the first login of a fresh account is slow (cold caches): XDG autostart runs some seconds after gnome-shell appears, so poll instead of sampling once
         end = time.time() + qt.T(120)
         while True:
-            rc, o = self.sh("ls /tmp/hx-autostart-* 2>&1; cat /etc/user/init.d/gsd | grep -c 'want pipewire-pulse wireplumber'")
+            rc, o = self.sh("ls /tmp/hx-autostart-* 2>&1; cat /etc/user/init.d/gsd 2>/dev/null | grep -c 'want pipewire-pulse wireplumber'")
             if ("hx-autostart-user" in o and "hx-autostart-xdg" in o) or time.time() > end:
                 break
             time.sleep(5)
@@ -718,6 +718,13 @@ class ZRun(qt.Runner):
             if len(f) >= 2 and f[0].isdigit():
                 t.setdefault("pulse" if "pipewire-pulse" in l or "pipewire.*pulse" in l or "pulse.conf" in l else f[1], int(f[0]))
         okord = all(k in t for k in ("wireplumber", "gsd-media-keys", "gsd-sound", "pipewire")) and max(t["wireplumber"], t["pipewire"], t.get("pulse", 0)) <= min(t["gsd-media-keys"], t["gsd-sound"])
+        if "SYSTEMD" in self.sh("[ -d /run/systemd/system ] && echo SYSTEMD")[1]:
+            # systemd: upstream gnome-session; PipeWire is socket-activated by the user manager, so a gsd daemon may start first and connect through
+            # the socket (the OpenRC start-order workaround does not apply). Gate: the sockets are active and the daemons run; the volume key below
+            # proves gsd really reaches the sink.
+            rc, so = u("systemctl --user is-active pipewire.socket pipewire-pulse.socket wireplumber.service")
+            okord = all(k in t for k in ("wireplumber", "gsd-media-keys", "gsd-sound", "pipewire")) and so.split()[:3] == ["active", "active", "active"]
+            o = o + " | user units: " + " ".join(so.split()[:3])
         self.step("gsd-media-keys-and-gsd-sound-started-after-pipewire-and-wireplumber", okord, o.strip().replace("\n", " | ")[:300])
         rc, o = u("wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.40; wpctl get-volume @DEFAULT_AUDIO_SINK@")
         before = re.findall(r"Volume: ([0-9.]+)", o)

@@ -59,6 +59,16 @@ class TargetInit(unittest.TestCase):
             ["systemctl", "enable", "zram-swap.service"],
         ])
 
+    def test_display_manager_maps_to_the_installed_dm(self):
+        r = mkroot("systemd")
+        i = Rec(r)
+        self.assertFalse(initsys.exists("display-manager", r))
+        open(os.path.join(r, "usr/lib/systemd/system/gdm.service"), "w").close()
+        self.assertTrue(initsys.exists("display-manager", r))
+        initsys.enable(i, "display-manager")
+        initsys.enable(i, "cupsd")
+        self.assertEqual(i.cmds, [["systemctl", "enable", "gdm.service"], ["systemctl", "enable", "cups.service"]])
+
     def test_exists(self):
         r = mkroot("systemd")
         self.assertFalse(initsys.exists("horcrux-api", r))

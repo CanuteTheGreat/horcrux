@@ -4,5 +4,7 @@
 sys-fs/zfs rootfs dist-kernel
 sys-fs/zfs-kmod dist-kernel
 # the initramfs generator the dist-kernel installkernel hook runs
-sys-kernel/installkernel dracut
+# -systemd (and no UKI): the classic installkernel hooks on BOTH inits, so a kernel is always /boot/vmlinuz-<ver> + initramfs-<ver>.img, the layout
+# GRUB's generated config, horcrux-be and the installer use (with USE=systemd, kernel-install wrote /boot/kernel-<ver> on the systemd image)
+sys-kernel/installkernel dracut -systemd -systemd-boot -uki -ukify
 # the server core never needs a display stack: the hypervisor is managed through the web UI, the API and ssh (VM consoles are served as VNC/SPICE streams)

@@ -16,13 +16,15 @@ COPY project/variants/gnome-light/portage/ /etc/portage/
 COPY project/variants/gnome-light/repo/ /var/db/repos/horcrux-gnome-light/
 COPY project/variants/gnome-light/packages.txt /tmp/packages-desktop.txt
 
-# profile with the GNOME defaults (OpenRC flavour: elogind, no systemd), one emerge (the owner's apps are NOT here: machine layers)
+# profile with the GNOME defaults for the image's init (OpenRC: desktop/gnome + elogind; systemd: desktop/gnome/systemd, upstream gnome-session),
+# one emerge (the owner's apps are NOT here: machine layers). Lines `openrc? atom` / `systemd? atom` in packages.txt are for that init only.
 RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; \
-    eselect profile set default/linux/amd64/23.0/desktop/gnome; \
+    case "${INIT}" in systemd) rm -f /etc/portage/package.use/init-openrc; eselect profile set default/linux/amd64/23.0/desktop/gnome/systemd ;; \
+      *) rm -f /etc/portage/package.use/init-systemd; eselect profile set default/linux/amd64/23.0/desktop/gnome ;; esac; \
     export FEATURES="-ccache"; \
-    pk=$(grep -v '^#' /tmp/packages-desktop.txt | tr '\n' ' '); \
+    pk=$(sed -E -e 's/#.*//' -e "/^(openrc|systemd)\? /{/^${INIT}\? /!d; s/^${INIT}\? //}" /tmp/packages-desktop.txt | tr '\n' ' '); \
     emerge --update --newuse $pk || { rc=$?; \
       echo "== desktop emerge failed (rc=$rc): failing build logs (BuildKit truncates the real compiler error)"; \
       for f in $(ls -t /var/tmp/portage/*/*/temp/build.log 2>/dev/null | head -3); do echo "=== $f"; grep -n -E 'FAILED:|error:|Killed|signal|internal compiler|No space' "$f" | tail -15; tail -30 "$f"; done; free -m | head -2; \
@@ -44,11 +46,16 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     # GNOME under OpenRC = gnome-base/gnome-session-openrc-49.2-r2::horcrux (pulled by horcrux-gnome-defaults; its patches used to be /etc/portage/patches in this image):\
     # gsd meta services without a supervisor, gsd audio after PipeWire, gnome-shell on the user bus, and session-scoped user services (a GNOME logout stops the\
     # session's services even while an ssh login of the user keeps the OpenRC user runlevel alive; no gnome-shell respawn into a closed session)\
+    # systemd image: upstream gnome-session (systemd user units, systemd-logind) as on any systemd distribution; gnome-session-openrc must not be there
+    if [ "${INIT}" = systemd ]; then qlist -I gnome-base/gnome-session; ! qlist -I gnome-base/gnome-session-openrc; ! qlist -I sys-auth/elogind; \
+      test -f /usr/lib/systemd/user/gnome-session@.target || test -f /usr/lib/systemd/user/gnome-session-wayland@.target; \
+    else \
     qlist -IRv gnome-base/gnome-session-openrc | grep -q '::horcrux'; test ! -e /etc/portage/patches/gnome-base/gnome-session-openrc; \
     if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd supervisor patch not applied'; exit 1; fi; \
     grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio ordering patch not applied'; exit 1; }; \
     grep -q 'keep the shell there' /etc/user/init.d/gnome-shell-wayland || { echo 'gnome-shell user-bus patch not applied'; exit 1; }; \
     test -x /usr/libexec/gnome-session-openrc-helper && grep -q 'command_args="guard /usr/bin/gnome-shell' /etc/user/init.d/gnome-shell-wayland || { echo 'session-scoping patch not applied'; exit 1; }; \
+    fi; \
     test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local && qfile -q /etc/portage/repos.conf/horcrux.conf; \
     # GATE: the os-release names this edition (sys-apps/horcrux-release[gnome-light]; the core layer built the Server one)
     grep -qx 'VARIANT_ID=gnome' /usr/lib/os-release; ! grep -iE '^PRETTY_NAME=.*(live|installer)' /usr/lib/os-release; \

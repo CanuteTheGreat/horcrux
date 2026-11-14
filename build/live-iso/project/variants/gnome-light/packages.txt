@@ -8,7 +8,8 @@ gnome-base/gdm
 gnome-extra/gnome-tweaks
 gnome-extra/gnome-shell-extensions
 gnome-extra/gnome-shell-extension-appindicator
-sys-auth/elogind
+# elogind is the OpenRC session tracker; systemd images use systemd-logind
+openrc? sys-auth/elogind
 net-misc/networkmanager
 media-video/pipewire
 media-video/wireplumber

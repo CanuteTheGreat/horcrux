@@ -39,9 +39,11 @@ UNIT_MAP = {
     "swap": (),                       # fstab swap entries become swap units
     "sysklogd": (),                   # journald
     "zram-init": ("zram-swap.service",),
-    "xdm": ("display-manager.service",),
-    "display-manager": ("display-manager.service",),
+    "cupsd": ("cups.service",),
+    # display-manager / xdm: OpenRC's generic DM script; on systemd the DM's own unit (enabling it creates the display-manager.service
+    # alias), resolved per target by enable() (DISPLAY_MANAGERS)
 }
+DISPLAY_MANAGERS = ("gdm.service", "lightdm.service", "sddm.service")
 
 
 def _check(init):
@@ -92,6 +94,8 @@ def exists(svc, root="/", init=None):
     _check(init)
     if init == "openrc":
         return os.path.exists(os.path.join(root, "etc/init.d", svc))
+    if svc in ("display-manager", "xdm"):
+        return display_manager_unit(root) is not None
     units = unit_names(svc)
     if not units:
         return False
@@ -135,8 +139,21 @@ def control_cmd(init, action, svc):
 
 # ---- installer helpers (inst = system.Installer: .run(argv, chroot=True, check=False), .target) ----
 
+def display_manager_unit(root):
+    """the display manager unit installed in `root` (systemd), or None"""
+    for u in DISPLAY_MANAGERS:
+        if any(os.path.exists(p) for p in unit_paths(root, u)):
+            return u
+    return None
+
+
 def enable(inst, svc, level="default"):
     init = target_init(getattr(inst, "target", "/nonexistent"))
+    if init == "systemd" and svc in ("display-manager", "xdm"):
+        dm = display_manager_unit(inst.target)
+        if dm:
+            inst.run(["systemctl", "enable", dm], chroot=True, check=False)
+        return
     for cmd in enable_cmds(init, svc, level):
         inst.run(cmd, chroot=True, check=False)
 

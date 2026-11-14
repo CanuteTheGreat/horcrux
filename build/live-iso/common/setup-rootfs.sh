@@ -151,7 +151,13 @@ DR
 # their hooks and prompts are then identical on both inits; systemd starts as PID 1 after switch_root). docs/design/init-parity.md, phase 3.
 # Own file: it stays on the installed system, so every kernel update builds the same kind of initramfs.
 if [ "$INIT" = systemd ]; then
-  printf '# Horcrux/Patronus systemd images: script-based initramfs (same as the OpenRC images); systemd runs from the real root\nomit_dracutmodules+=" systemd systemd-initrd dracut-systemd systemd-ask-password systemd-networkd "\n' > /etc/dracut.conf.d/05-init.conf
+  # every systemd dracut module (systemd, systemd-*, dracut-systemd: e.g. systemd-battery-check errors out when only `systemd` is omitted), read
+  # from the installed modules so a dracut update that adds one cannot break the build. Modules that only use systemd WHEN it is included
+  # (resume, squash-lib, tpm2-tss, ...) stay.
+  sdmods=$(for d in /usr/lib/dracut/modules.d/[0-9]*; do n=${d##*/}; n=${n#[0-9][0-9]}; \
+           case "$n" in systemd|systemd-*|dracut-systemd) echo "$n" ;; esac; done | sort -u | tr '\n' ' ')
+  echo "dracut modules omitted (systemd initrd): $sdmods"
+  printf '# Horcrux/Patronus systemd images: script-based initramfs (same as the OpenRC images); systemd runs from the real root.\n# setup-rootfs.sh lists every module that is or needs systemd.\nomit_dracutmodules+=" %s "\n' "$sdmods" > /etc/dracut.conf.d/05-init.conf
 fi
 # root on ZFS (Horcrux, Patronus): put the zfs dracut module into the generic initramfs when it is installed
 if [ -d /usr/lib/dracut/modules.d/90zfs ]; then echo 'add_dracutmodules+=" zfs "' >> /etc/dracut.conf.d/live.conf; fi
