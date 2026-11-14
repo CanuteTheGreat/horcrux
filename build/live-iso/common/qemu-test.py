@@ -1969,6 +1969,7 @@ class Runner:
                    'journalctl -b -q --no-pager -o cat 2>/dev/null | grep -m3 -i "ordering cycle" | sed "s|^|BAD |"',
                    # each failed unit with the tail of its journal, so the gate's FAIL line says why it failed
                    'systemctl --failed --no-legend --plain 2>/dev/null | awk \'{print $1}\' | while read -r u; do echo "BAD failed unit: $u"; '
+                   'echo "BAD   $u: $(systemctl show -p Result -p ExecMainCode -p ExecMainStatus -p NRestarts -p InactiveEnterTimestamp "$u" 2>/dev/null | paste -sd " ")"; '
                    'journalctl -b -q --no-pager -o cat -n 6 -u "$u" 2>/dev/null | sed "s|^|BAD   $u: |"; done']
         else:
             sh += ['[ ! -d /run/systemd/system ] && [ -e /run/openrc/softlevel ] || echo "BAD PID 1 is $(cat /proc/1/comm), expected OpenRC init"']
