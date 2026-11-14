@@ -1,0 +1,13 @@
+[Unit]
+Description=HOGSMEADE CI runner idle-gate guard (stops guests when the owner is back)
+After=docker.service
+[Service]
+EnvironmentFile=-/etc/conf.d/hogsmeade-ci-guard
+ExecStart=/usr/libexec/hogsmeade-ci-guard
+ExecStopPost=/usr/libexec/hogsmeade-ci-gate arc restore
+RuntimeDirectory=hogsmeade-ci
+Restart=always
+RestartSec=10
+Nice=10
+[Install]
+WantedBy=multi-user.target

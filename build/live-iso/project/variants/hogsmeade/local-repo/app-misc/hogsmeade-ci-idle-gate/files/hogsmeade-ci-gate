@@ -1,0 +1,99 @@
+#!/bin/bash
+# hogsmeade-ci-gate: may a CI runner guest use this machine right now? (HOGSMEADE is the owner's daily desktop; the guest is the lowest-weight thing on it.)
+#   hogsmeade-ci-gate check [start|run]   exit 0 + "ok", or exit 1 + "busy: <reason>"   (start: strict, run: only 'the owner came back' signals)
+#   hogsmeade-ci-gate caps                "cpus=N mem_mb=M" for the guest (cores <= half, >= MIN_FREE_GB left free, no GPU)
+#   hogsmeade-ci-gate arc shrink|restore  runtime ZFS ARC cap while a guest runs (restored after)
+#   hogsmeade-ci-gate status              every signal, for humans
+# Needs root (reads gnome-shell's idle time over the SESSION bus as the owner: a read-only D-Bus call, nothing is shown on screen, no GNOME state is touched).
+# Init-neutral: plain bash + procfs + loginctl (logind or elogind); settings in /etc/conf.d/hogsmeade-ci-guard (also the systemd EnvironmentFile).
+set -u
+CONF=${HCI_CONF:-/etc/conf.d/hogsmeade-ci-guard}; [ -r "$CONF" ] && . "$CONF"
+: "${IDLE_MIN:=15}" "${RUN_ACTIVE_S:=120}" "${MIN_FREE_GB:=16}" "${VM_MEM_MAX_MB:=24576}" "${VM_MEM_MIN_MB:=6144}" "${CORES_FRAC_DEN:=2}"
+: "${GPU_UTIL_MAX:=25}" "${GPU_MEM_MAX_MB:=6000}" "${PSI_MAX:=15}" "${COMFY_URL:=http://127.0.0.1:8188/queue}" "${OWNER:=canutethegreat}" "${ARC_CAP_GB:=8}"
+: "${GAME_RE:=gamescope|steamapps/common|[w]ine.*[.]exe|proton|lutris|heroic}" "${OWN_JOBS_RE:=restic restore|comfyui-fetch-models|rsync .*qcow2}"
+PROC=${HCI_PROC:-/proc}; NOW=${HCI_NOW:-$(date +%s)}; ARCP=${HCI_ARC_PARAM:-/sys/module/zfs/parameters/zfs_arc_max}; ARCSAVE=${HCI_RUN:-/run/hogsmeade-ci}/arc_max.saved
+GIB=1073741824
+
+meminfo_gb() { awk -v k="$1" '$1==k":"{printf "%d", $2/1048576}' "$PROC/meminfo"; }
+arc_size()   { awk '$1=="size"{print $3}' "$PROC/spl/kstat/zfs/arcstats" 2>/dev/null || echo 0; }
+ncpu()       { awk '/^processor/{n++} END{print n+0}' "$PROC/cpuinfo"; }
+# GB we could have free after capping the ARC (ZFS ARC is not in MemAvailable but gives memory back on a smaller zfs_arc_max)
+avail_gb()   { local a s; a=$(meminfo_gb MemAvailable); s=$(arc_size); echo $(( a + ( (s > ARC_CAP_GB*GIB ? s - ARC_CAP_GB*GIB : 0) / GIB ) )); }
+
+# --- owner idle: gnome-shell's idle monitor (ms, read without popups) AND logind's IdleHint of his graphical session; logind alone if gnome-shell is not readable
+mutter_ms() {
+	local pid addr out
+	pid=$(pgrep -u "$OWNER" -x gnome-shell | head -1); [ -n "$pid" ] || return 1
+	addr=$(tr '\0' '\n' < "$PROC/$pid/environ" 2>/dev/null | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p'); [ -n "$addr" ] || return 1
+	out=$(runuser -u "$OWNER" -- env DBUS_SESSION_BUS_ADDRESS="$addr" gdbus call --session --dest org.gnome.Mutter.IdleMonitor \
+		--object-path /org/gnome/Mutter/IdleMonitor/Core --method org.gnome.Mutter.IdleMonitor.GetIdletime 2>/dev/null) || return 1
+	out=$(echo "$out" | sed -n 's/.*uint64 \([0-9][0-9]*\).*/\1/p'); [ -n "$out" ] && echo "$out"
+}
+# prints "none" (nobody at a graphical session) | "yes <idle seconds by IdleSinceHint>" | "no 0"
+logind_idle() {
+	local s k v cls typ hint since seen=none worst=999999999 age
+	for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+		cls= typ= hint= since=0
+		while IFS== read -r k v; do case $k in Class) cls=$v;; Type) typ=$v;; IdleHint) hint=$v;; IdleSinceHint) since=$v;; esac; done \
+			< <(loginctl show-session "$s" -p Class -p Type -p IdleHint -p IdleSinceHint 2>/dev/null)
+		[ "$cls" = user ] || continue
+		case $typ in wayland|x11|mir) ;; *) continue;; esac
+		if [ "$hint" != yes ]; then echo "no 0"; return; fi
+		age=$(( NOW - since/1000000 )); [ "$since" -gt 0 ] || age=0
+		[ "$age" -lt "$worst" ] && worst=$age; seen=yes
+	done
+	[ "$seen" = none ] && echo none || echo "yes $worst"
+}
+owner_reason() {   # $1 = start|run
+	local ms li st age need
+	ms=$(mutter_ms); li=$(logind_idle); st=${li%% *}; age=${li#* }
+	if [ "$1" = run ]; then
+		[ -n "$ms" ] && [ "$ms" -lt $(( RUN_ACTIVE_S*1000 )) ] && { echo "owner active (input ${ms} ms ago)"; return; }
+		[ -z "$ms" ] && [ "$st" = no ] && { echo "owner session not idle (logind)"; return; }
+		return 0
+	fi
+	need=$(( IDLE_MIN*60 ))
+	if [ -n "$ms" ]; then
+		[ "$ms" -lt $(( need*1000 )) ] && { echo "owner active (last input $((ms/1000)) s ago, need ${need} s idle)"; return; }
+		[ "$st" = no ] && { echo "owner session not idle per logind (video/inhibitor?)"; return; }
+	else
+		case $st in no) echo "owner session not idle (logind)"; return;; yes) [ "$age" -lt "$need" ] && { echo "owner idle only ${age} s per logind (need ${need})"; return; };; esac
+	fi
+	return 0
+}
+busy_reason() {    # $1 = start|run ; prints the reason (empty = free to run)
+	local mode=$1 r g u m v q c a caps mem
+	r=$(owner_reason "$mode"); [ -n "$r" ] && { echo "$r"; return; }
+	g=$(ps -eo args 2>/dev/null | grep -E "$GAME_RE" | grep -v grep | head -1 | cut -c1-60); [ -n "$g" ] && { echo "game running ($g)"; return; }
+	if command -v nvidia-smi >/dev/null 2>&1; then
+		v=$(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits 2>/dev/null | head -1)
+		if [ -n "$v" ]; then u=${v%%,*}; m=${v##*,}; u=${u// /}; m=${m// /}
+			[ "${u:-0}" -ge "$GPU_UTIL_MAX" ] || [ "${m:-0}" -gt "$GPU_MEM_MAX_MB" ] && { echo "GPU busy (util ${u}% mem ${m} MiB)"; return; }
+		fi
+	fi
+	q=$(curl -s -m 3 "$COMFY_URL" 2>/dev/null | grep -o '"queue_running": *\[ *\[' | head -1); [ -n "$q" ] && { echo "ComfyUI job running"; return; }
+	if [ "$mode" = start ]; then
+		g=$(ps -eo args 2>/dev/null | grep -E "$OWN_JOBS_RE" | grep -v grep | head -1 | cut -c1-60); [ -n "$g" ] && { echo "his own job running ($g)"; return; }
+		c=$(awk '/^some/{split($2,a,"="); print int(a[2])}' "$PROC/pressure/cpu" 2>/dev/null); [ "${c:-0}" -gt "$PSI_MAX" ] && { echo "CPU pressure ${c}%"; return; }
+		caps=$(do_caps); mem=${caps##*mem_mb=}
+		[ "$mem" -lt "$VM_MEM_MIN_MB" ] && { echo "memory: only ${mem} MB for a guest after keeping ${MIN_FREE_GB} GB free"; return; }
+	else
+		a=$(meminfo_gb MemAvailable); [ "$a" -lt $(( MIN_FREE_GB - 4 )) ] && { echo "owner short of memory (${a} GB available)"; return; }
+	fi
+	return 0
+}
+do_caps() {   # guest size: <= 1/CORES_FRAC_DEN of the cores, memory leaves >= MIN_FREE_GB; the 1.5 GB is qemu/container overhead on top of the guest RAM
+	local c m; c=$(( $(ncpu) / CORES_FRAC_DEN )); [ "$c" -ge 2 ] || c=2
+	m=$(( ( $(avail_gb) - MIN_FREE_GB ) * 1024 - 1536 )); [ "$m" -gt "$VM_MEM_MAX_MB" ] && m=$VM_MEM_MAX_MB; [ "$m" -lt 0 ] && m=0
+	echo "cpus=$c mem_mb=$m"
+}
+case ${1:-status} in
+	check)  r=$(busy_reason "${2:-start}"); if [ -n "$r" ]; then echo "busy: $r"; exit 1; fi; echo ok ;;
+	caps)   do_caps ;;
+	arc)    case ${2:-} in
+		shrink) mkdir -p "$(dirname "$ARCSAVE")"; [ -s "$ARCSAVE" ] || cat "$ARCP" > "$ARCSAVE"; echo $(( ARC_CAP_GB*GIB )) > "$ARCP" ;;
+		restore) [ -s "$ARCSAVE" ] && { cat "$ARCSAVE" > "$ARCP"; rm -f "$ARCSAVE"; } ; true ;;
+		*) echo "usage: $0 arc shrink|restore" >&2; exit 2 ;; esac ;;
+	status) echo "start: $(busy_reason start || true) | run: $(busy_reason run || true)"; echo "caps: $(do_caps)  mutter_ms=$(mutter_ms)  logind=$(logind_idle)  avail_after_arc=$(avail_gb)GB" ;;
+	*) echo "usage: $0 check [start|run] | caps | arc shrink|restore | status" >&2; exit 2 ;;
+esac

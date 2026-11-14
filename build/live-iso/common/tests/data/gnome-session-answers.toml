@@ -1,0 +1,21 @@
+# unattended Desktop install for the GNOME session-lifecycle test (gnome-session-lifecycle-test.py): ext4, no autologin, login user "owner"
+[global]
+keyboard = "us"
+timezone = "UTC"
+hostname = "gsl-test.test.lan"
+email = "ops@example.test"
+root_password_hash = "$6$gsltest2$ZkhXS461f6yZ8ATwdsi4x0Xa3kHuONZyiKipi1qbcQ3aofrJdRLg3pwUJpeAV6vr8pAzEds9R71uUmSBRCwFS."
+ssh_keys = ["__HX_TEST_PUBKEY__"]
+ssh_password_auth = false
+install_type = "desktop"
+
+[disk]
+filesystem = "ext4"
+disks = ["/dev/vda"]
+
+[network.management]
+mode = "dhcp"
+
+[user]
+name = "owner"
+password_hash = "$6$gsltest1$nk7xPZqHIm99GugE722GI6xcgS5N2T9ju3YAD5Rfvw8FGYymnutITZYnxFVLO0wcmeSinDztdWgnjmAbcBVN30"

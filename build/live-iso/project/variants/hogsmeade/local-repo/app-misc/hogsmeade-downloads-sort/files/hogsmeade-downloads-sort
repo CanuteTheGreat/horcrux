@@ -292,7 +292,11 @@ def make_plan(root, keep_days):
             dst = os.path.join(dst_dir, free_name(dst_dir, it["name"], taken))
             taken.add(dst)
             plan.append(("file", it["path"], dst, it["size"], it["mtime"], leaf, 1))
-    return plan, loose, folders, skipped
+    # order: loose files (smallest first, so the very first move is a cheap probe of the onedrive client), then folders by size,
+    # smallest first: if the client ever mishandles a move, it shows on a small item, never on a 25k-file tree.
+    files = sorted((p for p in plan if p[0] == "file"), key=lambda p: (p[3], p[1]))
+    dirs = sorted((p for p in plan if p[0] == "dir"), key=lambda p: (p[6], p[3], p[1]))
+    return files + dirs, loose, folders, skipped
 
 
 def esc(s):
@@ -310,9 +314,12 @@ class OneDriveLog:
     Lesson (2026-11-13): onedrive turns a local move into a server-side move ONLY when the destination folder is already
     in its database. A move into a folder it has not uploaded yet is treated as NEW data: every file is uploaded again
     and the old copies are deleted online. So destination folders are created first and the moves wait until the client
-    reports each one created online; a move that still shows up as an upload stops the run."""
+    reports each one created online; a move that still shows up as an upload stops the run. Moving such a folder back
+    makes the client delete its >1000-item online copy, which trips its big-delete guard: it exits on every start and
+    supervise-daemon gives up, so sync stops. Hence the smallest items move first: a mishandled move shows on a small one."""
     ERR = re.compile(r"(ERROR|error:|failed|Failed|FAILED|unable to|Unable to|HTTP 4\d\d|HTTP 5\d\d)")
-    NEW_DATA = re.compile(r"^(New directories to create on Microsoft OneDrive|New items to upload to Microsoft OneDrive|Uploading new file): ?(.*)$")
+    NEW_DATA = re.compile(r"^(New directories to create on Microsoft OneDrive|New items to upload to Microsoft OneDrive|Uploading new file|"
+                          r"Moved local item was not in-sync with local database - uploading as new item)(?:: ?(.*))?$")
     CREATED = re.compile(r"^Successfully created the remote directory (.+) on Microsoft OneDrive\s*$")
     DELETED = re.compile(r"^Deleting item from Microsoft OneDrive: (.+?)\s*$")
 
@@ -367,7 +374,7 @@ class OneDriveLog:
             if m:
                 self.new_data.append(line.strip())
                 self.recent.append(line.strip())
-                if m.group(1) == "Uploading new file":
+                if m.group(1) == "Uploading new file" and m.group(2):
                     self.last[re.sub(r" \.\.\. .*$", "", m.group(2))] = "created"
             m = self.DELETED.match(line.strip())
             if m:
@@ -551,7 +558,7 @@ def cmd_apply(a):
     def fallback_seen():
         """The client uploaded something we just moved as NEW data (no server-side move): stop."""
         rels = [odl.rel(d) for d in batch]
-        hits = [l for l in odl.recent if any(r + "/" in l + "/" or r + " " in l for r in rels)]
+        hits = [l for l in odl.recent if any(r + "/" in l + "/" or r + " " in l for r in rels) or "uploading as new item" in l]
         odl.recent = []
         return hits
 
@@ -583,7 +590,7 @@ def cmd_apply(a):
             except OSError as e:
                 failed += 1
                 log(f"FAILED {src} -> {dst}: {e}")
-            if kind == "dir" or len(batch) >= a.batch or i == len(plan) - 1:
+            if kind == "dir" or len(batch) >= a.batch or i == len(plan) - 1 or (done == 1 and batch):
                 write_undo(a.state, day)
                 odl.settle(quiet=a.settle_quiet, max_wait=a.max_wait, log=log)
                 hits = fallback_seen()

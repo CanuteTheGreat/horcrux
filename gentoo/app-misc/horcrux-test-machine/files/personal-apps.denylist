@@ -71,5 +71,11 @@ dev-util/android-studio*
 net-analyzer/caido*
 media-video/davinci-resolve*
 app-misc/hogsmeade-sudo*
+app-misc/hogsmeade-agent-account*
+acct-user/hermes-agent*
 app-misc/hogsmeade-user-groups*
 app-misc/hogsmeade-b2-mounts*
+app-misc/hogsmeade-ci-idle-gate*
+# HOGSMEADE's idle-gated local LLM (the RTX 5090 box only; owner layer, public-forbidden)
+app-misc/hogsmeade-local-llm*
+sci-ml/ollama-bin*

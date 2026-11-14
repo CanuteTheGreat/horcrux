@@ -1,0 +1,14 @@
+[Unit]
+Description=HOGSMEADE local LLM guard (Ollama only while the owner-idle gate allows it)
+After=network.target
+[Service]
+EnvironmentFile=-/etc/conf.d/hogsmeade-llm-guard
+ExecStart=/usr/libexec/hogsmeade-llm-guard
+ExecStopPost=/usr/libexec/hogsmeade-llm-guard stop
+RuntimeDirectory=hogsmeade-llm
+KillMode=control-group
+Restart=always
+RestartSec=10
+Nice=10
+[Install]
+WantedBy=multi-user.target

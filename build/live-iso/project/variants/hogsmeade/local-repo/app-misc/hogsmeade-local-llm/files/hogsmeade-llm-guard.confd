@@ -1,0 +1,12 @@
+# HOGSMEADE local LLM guard. Sourced by hogsmeade-llm-guard / hogsmeade-llm-pull and used as the systemd EnvironmentFile, so: KEY=value only, comments on their own lines.
+# The idle rules (15 min without input, no game, ComfyUI idle, memory) live in /etc/conf.d/hogsmeade-ci-guard (same gate).
+# Seconds between gate checks while up and while down (the GPU is released within about one poll + the stop grace)
+POLL_S=10
+# GPU memory (MiB) that other processes may hold; more than this keeps Ollama down
+GPU_OTHER_MAX_MB=6000
+# Server settings (loopback only: never change the host without a firewall rule for crystalcave)
+OLLAMA_HOST=127.0.0.1:11434
+OLLAMA_MODELS=/var/lib/ollama/models
+OLLAMA_KEEP_ALIVE=10m
+# Models fetched by hogsmeade-llm-pull (names from the Ollama library). 27b dense Q4 = 17.5 GB, fits 24 GB VRAM with 16k context
+MODELS="qwen3.5:27b"

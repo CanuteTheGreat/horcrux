@@ -293,19 +293,73 @@ class ZRun(qt.Runner):
         elif a.server:
             self.server_checks(first_boot=True)
 
+    # --- boot-environment rollback with a REAL Portage upgrade and VM storage (docs/design/boot-environments.md)
+    PROBE_EBUILD = ("EAPI=8\nDESCRIPTION=\"boot environment test probe\"\nKEYWORDS=\"amd64 arm64 riscv ~amd64 ~arm64\"\nLICENSE=metapackage\nSLOT=0\n"
+                    "S=\"${WORKDIR}\"\nsrc_install() { insinto /usr/share/hx-be-probe; echo \"${PV}\" > version; doins version; }\n")
+    VM_DATA = {"/var/lib/horcrux/vms/hxbe-vm.qcow2": "horcrux-vm-disk-written-after-the-pre-upgrade-snapshot",
+               "/var/lib/libvirt/hxbe-vm.qcow2": "libvirt-vm-disk-written-after-the-pre-upgrade-snapshot",
+               "/home/hxbe-user-data": "user-data-written-after-the-pre-upgrade-snapshot"}
+
+    def probe_upgrade_and_rollback(self):
+        """install probe 1.0, then UPGRADE it to 2.0 through emerge (the Portage bashrc hook must snapshot the boot environment by itself),
+        write VM + user data, then `horcrux-be rollback` with no argument (= boot the previous version)"""
+        put = "mkdir -p /var/lib/horcrux/vms /var/lib/libvirt && " + " && ".join(f"printf '%s' '{v}' > {k}" for k, v in self.VM_DATA.items())
+        setup = (
+            "set -e\n"
+            "R=/var/db/repos/hxbe; mkdir -p $R/profiles $R/metadata $R/app-misc/hx-be-probe /etc/portage/repos.conf\n"
+            "echo hxbe > $R/profiles/repo_name; printf 'masters = gentoo\\nthin-manifests = true\\n' > $R/metadata/layout.conf\n"
+            "printf '[hxbe]\\nlocation = %s\\n' $R > /etc/portage/repos.conf/hxbe.conf\n"
+            "cat > $R/app-misc/hx-be-probe/hx-be-probe-1.0.ebuild <<'EOF'\n" + self.PROBE_EBUILD + "EOF\n"
+            "cp $R/app-misc/hx-be-probe/hx-be-probe-1.0.ebuild $R/app-misc/hx-be-probe/hx-be-probe-2.0.ebuild\n"
+            "set +e\n"
+            "emerge -1q --nodeps --usepkg=n --getbinpkg=n =app-misc/hx-be-probe-1.0 2>&1 | tail -5; cat /usr/share/hx-be-probe/version\n")
+        b64 = base64.b64encode(setup.encode()).decode()
+        rc, o = self.sh(f"echo {b64} | base64 -d | sh", timeout=900)
+        self.step("probe-package-v1-installed", o.strip().endswith("1.0"), o.strip().replace("\n", " | ")[-250:])
+        rc, o = self.sh("rm -f /run/horcrux-be-auto; zfs list -H -t snapshot -o name | grep -c pre-upgrade; "
+                        "emerge -1q --nodeps --usepkg=n --getbinpkg=n =app-misc/hx-be-probe-2.0 2>&1 | tail -5; cat /usr/share/hx-be-probe/version; "
+                        "zfs list -H -t snapshot -o name | grep -c pre-upgrade", timeout=900)
+        lines = [l for l in o.strip().splitlines() if l.strip()]
+        try:
+            before, after = int(lines[0]), int(lines[-1])
+        except ValueError:
+            before, after = 0, 0
+        self.step("emerge-upgrade-took-a-pre-upgrade-snapshot", "2.0" in lines and after == before + 1, f"v2 installed, pre-upgrade snapshots {before} -> {after}: " + " | ".join(lines)[-250:])
+        rc, o = self.sh(put + " && sync; horcrux-be list --json | python3 -c 'import json,sys; d=json.load(sys.stdin); "
+                        "print(d[\"running\"], len(d[\"snapshots\"]), [x[\"path\"] for x in d[\"data\"] if not x[\"safe\"]])'; horcrux-be check; echo CHECK=$?")
+        self.step("vm-and-user-data-on-shared-datasets", "CHECK=0" in o, o.strip().replace("\n", " | ")[-400:])
+        rc, o = self.sh("zfs list -H -o name,mountpoint rpool/var/lib/horcrux/vms rpool/var/lib/libvirt rpool/home")
+        self.step("vm-datasets-are-not-under-ROOT", rc == 0 and "ROOT" not in o, o.strip().replace("\n", " | "))
+
+    def verify_after_rollback(self):
+        """boot 2, in the rolled-back boot environment: the OLD package version, and every VM/user file written after the snapshot is intact"""
+        rc, o = self.sh("cat /usr/share/hx-be-probe/version; ls /var/db/pkg/app-misc/ | grep hx-be-probe")
+        self.step("rollback-booted-the-previous-package-version", o.split() and o.split()[0] == "1.0" and "hx-be-probe-1.0" in o and "hx-be-probe-2.0" not in o,
+                  o.strip().replace("\n", " | "))
+        bad = []
+        for path, want in self.VM_DATA.items():
+            rc, o = self.sh(f"cat {path}")
+            if o.strip() != want:
+                bad.append(path)
+        self.step("rollback-left-vm-and-user-data-untouched", not bad, f"{len(self.VM_DATA)} files checked, damaged or missing: {bad}")
+        rc, o = self.sh("horcrux-be list --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[\"running\"], d[\"active\"], [e[\"name\"] for e in d[\"environments\"]])'")
+        self.step("old-environment-still-listed-after-rollback", "rolledback rolledback" in o and "horcrux" in o, o.strip())
+
     def change_and_rollback(self):
         if self.z.server:
             # headless server: the rolled-back BE must keep its serial console (the reboot is driven over the serial line); the desktop run proves a BE switch with
             # a changed kernel command line (console=ttyS0 dropped) instead
-            rc, o = self.sh("horcrux-be snapshot before-change && echo CHANGE > /root/marker-after-snapshot && "
-                            "horcrux-be rollback horcrux@before-change --name rolledback && horcrux-be list && zpool get -H -o value bootfs rpool && "
+            self.probe_upgrade_and_rollback()
+            rc, o = self.sh("echo CHANGE > /root/marker-after-snapshot && "
+                            "horcrux-be rollback --name rolledback && horcrux-be list && zpool get -H -o value bootfs rpool && "
                             "grep -c 'be-rolledback' /boot/grub/grub.cfg && grep -Eq 'console=tty(S0|AMA0)' /boot/grub/grub.cfg")
             self.step("rollback-boot-environment-created", rc == 0 and "rpool/ROOT/rolledback" in o, o.strip().replace("\n", " | ")[-300:])
             self.sh("cat /boot/grub/grub.cfg > /root/grub.cfg.copy")
             return
-        rc, o = self.sh("horcrux-be snapshot before-change && echo CHANGE > /root/marker-after-snapshot && "
+        self.probe_upgrade_and_rollback()
+        rc, o = self.sh("echo CHANGE > /root/marker-after-snapshot && "
                         "sed -i 's/console=ttyS0,115200n8//' /etc/horcrux/be.conf && grep ^CMDLINE /etc/horcrux/be.conf && "
-                        "horcrux-be rollback horcrux@before-change --name rolledback && horcrux-be list && zpool get -H -o value bootfs rpool && "
+                        "horcrux-be rollback --name rolledback && horcrux-be list && zpool get -H -o value bootfs rpool && "
                         "grep -c 'be-rolledback' /boot/grub/grub.cfg && ! grep -q ttyS0 /boot/grub/grub.cfg")
         self.step("rollback-boot-environment-created", rc == 0 and "rpool/ROOT/rolledback" in o, o.strip().replace("\n", " | ")[-300:])
         self.sh("cat /boot/grub/grub.cfg > /root/grub.cfg.copy")
@@ -338,6 +392,7 @@ class ZRun(qt.Runner):
             rc, o = self.sh("zpool get -H -o value bootfs rpool; findmnt -no SOURCE /; test -e /root/marker-after-snapshot && echo MARKER || echo NOMARKER; "
                             "horcrux-be list; dmesg | grep -ci 'i8042' ")
             self.step("rolled-back-to-previous-boot-environment", "rpool/ROOT/rolledback" in o and "NOMARKER" in o, o.strip().replace("\n", " | ")[:300])
+            self.verify_after_rollback()
             rc, o = self.sh("zfs get -H -o value keystatus rpool; lsblk -no FSTYPE,MOUNTPOINT | head -20")
             if a.desktop:
                 self.desktop_checks(vm)
@@ -497,6 +552,7 @@ class ZRun(qt.Runner):
                 return
             rc, o = self.sh("zpool get -H -o value bootfs rpool; findmnt -no SOURCE /; test -e /root/marker-after-snapshot && echo MARKER || echo NOMARKER")
             self.step("rolled-back-to-previous-boot-environment", "rpool/ROOT/rolledback" in o and "NOMARKER" in o, o.strip().replace("\n", " | ")[:300])
+            self.verify_after_rollback()
             self.server_checks(first_boot=False)
             self.sh("poweroff", timeout=10)
             self.wait_exit(vm)

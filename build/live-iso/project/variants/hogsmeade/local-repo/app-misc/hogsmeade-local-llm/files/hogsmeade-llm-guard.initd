@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+description="Runs Ollama on HOGSMEADE only while the owner-idle gate allows it; frees the GPU when he is back"
+supervisor=supervise-daemon
+command=/usr/libexec/hogsmeade-llm-guard
+command_background=false
+pidfile=/run/hogsmeade-llm-guard.pid
+respawn_delay=10
+respawn_max=0
+depend() { need localmount; use elogind; after elogind hogsmeade-ci-guard; }
+start_pre() { checkpath -d -m 0755 /run/hogsmeade-llm; }
+stop_post() { /usr/libexec/hogsmeade-llm-guard stop; }

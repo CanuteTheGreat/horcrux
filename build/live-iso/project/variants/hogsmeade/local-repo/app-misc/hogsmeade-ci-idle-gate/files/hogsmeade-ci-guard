@@ -1,0 +1,24 @@
+#!/bin/bash
+# hogsmeade-ci-guard: the on-host enforcer. The runner guests are started by the lab scheduler (crystalcave, ssh hogsmeade-agent), which asks the gate before it
+# starts one and while it runs. This daemon is the backstop that does not depend on it: whenever the owner is back (or gaming / GPU / ComfyUI / low memory) and a
+# guest container exists, it gives the guest DRAIN_AFTER_S (default 240 s, < 5 min) to finish its own job and then stops ONLY the guest's own containers
+# (name cirunner-*). It also writes /run/hogsmeade-ci/state for the scheduler and puts the ZFS ARC cap back when no guest is left. Never touches his session.
+set -u
+CONF=${HCI_CONF:-/etc/conf.d/hogsmeade-ci-guard}; [ -r "$CONF" ] && . "$CONF"
+: "${POLL_S:=20}" "${DRAIN_AFTER_S:=240}" "${GUEST_RE:=cirunner-}" "${HCI_RUN:=/run/hogsmeade-ci}" "${GATE:=/usr/libexec/hogsmeade-ci-gate}"
+export HCI_RUN; mkdir -p "$HCI_RUN"
+guests() { docker ps -q --filter "name=${GUEST_RE}" 2>/dev/null; }
+since=0
+while :; do
+	g=$(guests); r=$("$GATE" check run) && ok=1 || ok=0; now=$(date +%s)
+	if [ "$ok" = 1 ]; then since=0; echo "allow $now" > "$HCI_RUN/state.new"
+	else [ "$since" -eq 0 ] && since=$now; echo "drain $now ${r#busy: }" > "$HCI_RUN/state.new"; fi
+	mv -f "$HCI_RUN/state.new" "$HCI_RUN/state"
+	if [ -z "$g" ]; then since=0; "$GATE" arc restore
+	elif [ "$ok" = 0 ] && [ "$since" -gt 0 ] && [ $(( now - since )) -ge "$DRAIN_AFTER_S" ]; then
+		logger -t hogsmeade-ci-guard "stopping CI guests: ${r#busy: } for $(( now - since )) s"
+		# SIGTERM first (the guest's own shutdown trap deregisters the runner), then remove
+		docker stop -t 30 $g >/dev/null 2>&1; docker rm -f $g >/dev/null 2>&1; "$GATE" arc restore; since=0
+	fi
+	sleep "$POLL_S"
+done

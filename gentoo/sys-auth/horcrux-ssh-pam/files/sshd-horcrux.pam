@@ -1,0 +1,21 @@
+#%PAM-1.0
+# sshd on Horcrux (sshd_config.d/10-horcrux-ssh-pam.conf: PAMServiceName sshd-horcrux). Owned by sys-auth/horcrux-ssh-pam.
+#
+# The same stack as pambase's sshd -> system-remote-login -> system-login, MINUS pam_openrc: an ssh login does not start or hold the user's OpenRC
+# user services (service user.<name>, runlevel "default" + the GNOME session's services). That runlevel is shared by every login of the user and
+# only stops with the last one, so an agent's or script's ssh session kept a logged-out GNOME session's gnome-shell alive and supervise-daemon
+# respawned it into the closed session (seat taken, next login without mouse and keyboard). Graphical and console logins (gdm-password, login)
+# keep pam_openrc. auth/account/password are pambase's own stack, unchanged.
+auth       include   system-remote-login
+account    include   system-remote-login
+password   include   system-remote-login
+
+# = system-login's session part without pam_openrc (check with: horcrux-ssh-pam-check)
+session    optional  pam_loginuid.so
+session    required  pam_env.so envfile=/etc/profile.env
+session    include   system-auth
+-session   optional  pam_motd.so motd=/etc/motd
+-session   optional  pam_lastlog.so never showfailed
+-session   optional  pam_mail.so
+-session   optional  pam_elogind.so
+-session   optional  pam_systemd.so

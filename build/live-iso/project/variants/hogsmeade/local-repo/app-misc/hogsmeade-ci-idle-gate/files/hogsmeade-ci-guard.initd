@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+description="Stops the CI runner guest within minutes when the owner is back or the machine is busy (HOGSMEADE idle gate)"
+supervisor=supervise-daemon
+command=/usr/libexec/hogsmeade-ci-guard
+command_background=false
+pidfile=/run/hogsmeade-ci-guard.pid
+respawn_delay=10
+respawn_max=0
+depend() { need localmount; use docker elogind; after docker elogind; }
+start_pre() { checkpath -d -m 0755 /run/hogsmeade-ci; }
+stop_post() { /usr/libexec/hogsmeade-ci-gate arc restore; }

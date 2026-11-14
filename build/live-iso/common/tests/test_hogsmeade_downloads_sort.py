@@ -148,6 +148,8 @@ class HogsmeadeDownloadsSort(unittest.TestCase):
         status.write_text(json.dumps({"pid": proc.pid, "process": {"state": "idle"}}))
         for i in range(3):
             self.put(f"vids/{i}.mp4", b"v" * 10)
+        for i in range(5):
+            self.put(f"bigvids/{i}.mp4", b"v" * 10)
         self.put("doc.pdf", b"d")
         stop = threading.Event()
         seen_early = []
@@ -180,7 +182,8 @@ class HogsmeadeDownloadsSort(unittest.TestCase):
         self.assertEqual(r.returncode, 4, r.stdout + r.stderr)  # ABORT
         self.assertEqual(seen_early, [])
         self.assertTrue((self.dl / "Videos" / "vids" / "0.mp4").is_file())
-        self.assertTrue((self.dl / "doc.pdf").is_file())  # nothing more moved after the abort
+        self.assertTrue((self.dl / "Documents" / "doc.pdf").is_file())  # loose files go first (the probe), smallest folder next
+        self.assertTrue((self.dl / "bigvids" / "0.mp4").is_file())  # nothing more moved after the abort
         self.assertIn("ABORT", (self.state / "progress.log").read_text())
 
     def test_stopped_client_means_no_moves(self):

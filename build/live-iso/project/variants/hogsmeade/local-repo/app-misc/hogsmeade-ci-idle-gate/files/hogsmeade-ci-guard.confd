@@ -1,0 +1,15 @@
+# HOGSMEADE CI runner idle gate. Read by hogsmeade-ci-gate / -guard (sourced) and as the systemd EnvironmentFile, so: KEY=value only, comments on their own lines.
+# Minutes without input before a guest may start
+IDLE_MIN=15
+# A running guest is drained when input is newer than this many seconds
+RUN_ACTIVE_S=120
+# RAM that must stay free for the owner while a guest runs
+MIN_FREE_GB=16
+# Guest vCPUs = cores / this (half the cores)
+CORES_FRAC_DEN=2
+VM_MEM_MAX_MB=24576
+# Owner back: the guest gets this long (s) to finish its own job, then it is stopped (must stay under 5 min)
+DRAIN_AFTER_S=240
+POLL_S=20
+ARC_CAP_GB=8
+OWNER=canutethegreat

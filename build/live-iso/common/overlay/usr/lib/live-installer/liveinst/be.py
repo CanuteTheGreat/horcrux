@@ -26,6 +26,7 @@ import sys
 import time
 
 CONF = "/etc/horcrux/be.conf"
+PIN_PROP = "horcrux:pin"  # ZFS user property on a snapshot or boot environment: "yes" = never pruned/destroyed automatically
 BOOT = "/boot"
 OBJECTS = ".objects"
 BIG = 64 * 1024  # files below this are copied, not stored as objects
@@ -34,7 +35,9 @@ AUTO_SNAP = re.compile(r"(pre-upgrade|create)-\d{8}-\d{6}")  # created by horcru
 
 def conf(path=CONF):
     c = {"POOL": "rpool", "KEEP": "5", "AUTO_SNAPSHOT": "yes", "TIMEOUT": "5", "CMDLINE": "", "KERNEL_GLOB": "*",
-         "BOOT_MAX_USED_PCT": "80", "BOOT_MIN_FREE_MB": "32"}
+         "BOOT_MAX_USED_PCT": "80", "BOOT_MIN_FREE_MB": "32",
+         # directories that hold user data / VM disks: they MUST be their own datasets (outside rpool/ROOT), or a rollback would lose them
+         "DATA_PATHS": "/home /var/lib/libvirt /var/lib/horcrux/vms /var/lib/docker /var/lib/lxc"}
     try:
         for line in open(path):
             m = re.match(r'^\s*([A-Z_]+)\s*=\s*"?([^"\n]*)"?\s*$', line)
@@ -235,6 +238,51 @@ def space_ok(c, need, boot=BOOT):
     return free - need >= keep
 
 
+def pinned(pool):
+    """names ('be' or 'be@snap') carrying horcrux:pin=yes"""
+    r = subprocess.run(["zfs", "get", "-H", "-r", "-t", "snapshot,filesystem", "-o", "name,value", PIN_PROP, f"{pool}/ROOT"],
+                       capture_output=True, text=True)
+    pre = f"{pool}/ROOT/"
+    return {l.split("\t")[0][len(pre):] for l in r.stdout.splitlines() if l.startswith(pre) and l.endswith("\tyes")} if r.returncode == 0 else set()
+
+
+def cmd_pin(c, name, on=True):
+    pool = c["POOL"]
+    be = name.partition("@")[0]
+    if be not in be_datasets(pool):
+        raise SystemExit(f"horcrux-be: no boot environment {be}")
+    if "@" in name and name.partition("@")[2] not in {s for b, s, _ in (snapshots(pool) or []) if b == be}:
+        raise SystemExit(f"horcrux-be: no snapshot {name}")
+    sh(["zfs", "set" if on else "inherit", *([f"{PIN_PROP}=yes"] if on else [PIN_PROP]), f"{pool}/ROOT/{name}"])
+    print(f"{'pinned' if on else 'unpinned'} {name}")
+
+
+def data_isolation(c):
+    """For each DATA_PATHS entry: the dataset it lives on and whether a rollback is safe for it. A path that exists on a boot
+    environment's own dataset holds data that a rollback would discard; a missing path is fine."""
+    pool, res = c["POOL"], []
+    for path in c.get("DATA_PATHS", "").split():
+        if not os.path.isdir(path):
+            res.append({"path": path, "dataset": None, "safe": True, "why": "absent"})
+            continue
+        r = subprocess.run(["findmnt", "-no", "SOURCE", "-T", path], capture_output=True, text=True)
+        src = r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
+        own = src.startswith(f"{pool}/ROOT/") or not src.startswith(f"{pool}/")
+        empty = not os.listdir(path)
+        res.append({"path": path, "dataset": src or None, "safe": (not own) or empty,
+                    "why": "own dataset" if not own else ("empty, on the boot environment" if empty else "HOLDS FILES ON THE BOOT ENVIRONMENT DATASET")})
+    return res
+
+
+def isolation_guard(c, force=False):
+    bad = [d for d in data_isolation(c) if not d["safe"]]
+    if bad and not force:
+        raise SystemExit("horcrux-be: refusing: " + ", ".join(d["path"] for d in bad) + " live on the boot environment dataset itself, so booting "
+                         "another environment would hide (not delete, but cut you off from) their current contents. Move them to their own "
+                         "datasets (see docs/design/boot-environments.md), or pass --force.")
+    return bad
+
+
 def origins(pool):
     """snapshots that a boot environment was cloned from (they cannot be destroyed while the clone lives)"""
     out = sh(["zfs", "list", "-H", "-o", "origin", "-r", f"{pool}/ROOT"], check=False)
@@ -277,7 +325,7 @@ def make_room(c, need, boot=BOOT, protect=()):
     sn = snapshots(pool)
     if sn is None:
         return False
-    org = origins(pool)
+    org = origins(pool) | pinned(pool)
     cand = [(be, s) for be, s, _cr in sn if AUTO_SNAP.fullmatch(s) and f"{be}@{s}" not in org and f"{be}@{s}" not in protect]
     total, free = boot_space(boot)
     if free + reclaimable(boot, [snap_dir(boot, b, s) for b, s in cand]) - need < max(total * (100 - int(c.get("BOOT_MAX_USED_PCT", "80"))) // 100, int(c.get("BOOT_MIN_FREE_MB", "32")) << 20):
@@ -457,7 +505,7 @@ def prune(c, boot=BOOT):
     sn = snapshots(c["POOL"])
     if sn is None:
         return
-    org = origins(c["POOL"])
+    org = origins(c["POOL"]) | pinned(c["POOL"])  # pinned snapshots never count against KEEP and are never pruned
     for prefix in ("pre-upgrade-", "create-"):
         auto = [s for s in sn if s[1].startswith(prefix) and AUTO_SNAP.fullmatch(s[1]) and f"{s[0]}@{s[1]}" not in org]
         for be, snap, _cr in auto[:-keep] if keep > 0 else auto:
@@ -514,6 +562,8 @@ def cmd_destroy(c, name, boot=BOOT):
     pool = c["POOL"]
     if name in (running_be(), active_be(pool)):
         raise SystemExit("horcrux-be: refusing to destroy the running/active boot environment")
+    if name in pinned(pool):
+        raise SystemExit(f"horcrux-be: {name} is pinned (horcrux-be unpin {name} first)")
     sh(["zfs", "destroy", "-r", f"{pool}/ROOT/{name}"])
     shutil.rmtree(os.path.join(boot, "be", name), ignore_errors=True)
     gc_objects(boot)
@@ -540,6 +590,54 @@ def cmd_list(c):
             print(f"  {be}@{s}  {cr}")
 
 
+def info(c):
+    """everything a UI needs, as a dict (horcrux-be list --json)"""
+    pool = c["POOL"]
+    act, run = active_be(pool), running_be()
+    pins = pinned(pool)
+    org = {}
+    out = sh(["zfs", "list", "-H", "-p", "-o", "name,origin,creation,used", "-r", "-d", "1", f"{pool}/ROOT"], check=False)
+    envs = []
+    for l in out.splitlines():
+        f = l.split("\t")
+        if len(f) < 4 or f[0].count("/") != 2:
+            continue
+        b = f[0].split("/")[-1]
+        try:
+            kv = open(os.path.join(BOOT, "be", b, "kver")).read().strip()
+        except OSError:
+            kv = ""
+        envs.append({"name": b, "active": b == act, "running": b == run, "kernel": kv, "pinned": b in pins,
+                     "origin": f[1].split("/")[-1] if f[1] != "-" else None, "created": int(f[2]), "used": int(f[3])})
+    snaps = []
+    out = sh(["zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,creation,used", "-s", "creation", "-r", f"{pool}/ROOT"], check=False)
+    for l in out.splitlines():
+        f = l.split("\t")
+        m = re.fullmatch(rf"{re.escape(pool)}/ROOT/([^@/]+)@(.+)", f[0])
+        if m and len(f) >= 3:
+            sd = snap_dir(BOOT, m.group(1), m.group(2))
+            try:
+                kv = open(os.path.join(sd, "kver")).read().strip()
+            except OSError:
+                kv = ""
+            snaps.append({"be": m.group(1), "name": m.group(2), "created": int(f[1]), "used": int(f[2]), "kernel": kv,
+                          "pinned": f"{m.group(1)}@{m.group(2)}" in pins, "auto": bool(AUTO_SNAP.fullmatch(m.group(2)))})
+    total, free = boot_space()
+    return {"pool": pool, "running": run, "active": act, "keep": int(c.get("KEEP", "5")), "auto_snapshot": c.get("AUTO_SNAPSHOT") == "yes",
+            "environments": envs, "snapshots": snaps, "boot": {"total": total, "free": free}, "data": data_isolation(c),
+            "preserved": [l for l in sh(["zfs", "list", "-H", "-o", "name", "-r", pool], check=False).splitlines()
+                          if l != pool and not (l == f"{pool}/ROOT" or l.startswith(f"{pool}/ROOT/"))]}
+
+
+def previous_snapshot(c):
+    """the newest automatic (pre-upgrade/create) snapshot of the running BE: what `rollback` with no argument returns to"""
+    be = running_be() or active_be(c["POOL"])
+    auto = [f"{b}@{s}" for b, s, _ in (snapshots(c["POOL"]) or []) if b == be and AUTO_SNAP.fullmatch(s)]
+    if not auto:
+        raise SystemExit(f"horcrux-be: {be} has no pre-upgrade snapshot to return to (see `horcrux-be list`)")
+    return auto[-1]
+
+
 def init_installer(c, be="horcrux", boot=BOOT, uuid=None):
     """called by the installer in the chroot: first BE kernel dir + grub.cfg"""
     k = kernel_files(boot, c.get("KERNEL_GLOB", "*"))
@@ -553,13 +651,17 @@ def init_installer(c, be="horcrux", boot=BOOT, uuid=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="horcrux-be", description="ZFS boot environments and rollback")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("list")
+    p = sub.add_parser("list"); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("pin", help="keep a boot environment or BE@snapshot forever (never pruned)"); p.add_argument("name")
+    p = sub.add_parser("unpin"); p.add_argument("name")
+    sub.add_parser("check", help="verify that user data / VM disks are outside the boot environments (exit 1 when not)")
     p = sub.add_parser("snapshot"); p.add_argument("name", nargs="?")
     p = sub.add_parser("create"); p.add_argument("name"); p.add_argument("--from", dest="src", help="snapshot, BE@snap")
-    p = sub.add_parser("activate"); p.add_argument("name")
+    p = sub.add_parser("activate"); p.add_argument("name"); p.add_argument("--force", action="store_true")
     p = sub.add_parser("destroy"); p.add_argument("name")
     p = sub.add_parser("rollback", help="create a BE from a snapshot and activate it (then reboot)")
-    p.add_argument("snapshot"); p.add_argument("--name")
+    p.add_argument("snapshot", nargs="?", help="BE@snapshot; default: the newest pre-upgrade snapshot (boot the previous version)")
+    p.add_argument("--name"); p.add_argument("--force", action="store_true")
     p = sub.add_parser("destroy-snapshot", help="destroy a snapshot and its /boot copy"); p.add_argument("snapshot", help="BE@snap")
     sub.add_parser("dedupe", help="share identical kernel copies under /boot/be (hard links) and drop orphans")
     sub.add_parser("sync"); sub.add_parser("grubcfg"); sub.add_parser("auto-snapshot"); sub.add_parser("prune")
@@ -569,22 +671,40 @@ def main(argv=None):
         raise SystemExit("horcrux-be: run as root")
     c = conf()
     if a.cmd == "list":
-        cmd_list(c)
+        if a.json:
+            import json
+            print(json.dumps(info(c)))
+        else:
+            cmd_list(c)
+    elif a.cmd == "pin":
+        cmd_pin(c, a.name)
+    elif a.cmd == "unpin":
+        cmd_pin(c, a.name, False)
+    elif a.cmd == "check":
+        d = data_isolation(c)
+        for x in d:
+            print(f"{'ok  ' if x['safe'] else 'FAIL'} {x['path']:<26} {x['dataset'] or '-':<32} {x['why']}")
+        return 0 if all(x["safe"] for x in d) else 1
     elif a.cmd == "snapshot":
         cmd_snapshot(c, a.name)
     elif a.cmd == "create":
         cmd_create(c, a.name, a.src)
     elif a.cmd == "activate":
+        isolation_guard(c, a.force)
         cmd_activate(c, a.name)
     elif a.cmd == "destroy":
         cmd_destroy(c, a.name)
     elif a.cmd == "rollback":
+        isolation_guard(c, a.force)
+        snap = a.snapshot or previous_snapshot(c)
         nm = a.name or "rollback-" + time.strftime("%Y%m%d-%H%M%S")
-        cmd_create(c, nm, a.snapshot)
+        cmd_create(c, nm, snap)
         cmd_activate(c, nm)
         print("reboot to enter it; the previous boot environment stays in the boot menu")
     elif a.cmd == "destroy-snapshot":
         be, _, sn = a.snapshot.partition("@")
+        if f"{be}@{sn}" in pinned(c["POOL"]):
+            raise SystemExit(f"horcrux-be: {a.snapshot} is pinned (horcrux-be unpin {a.snapshot} first)")
         if not sn or not destroy_snapshot(c, be, sn):
             raise SystemExit(f"horcrux-be: could not destroy {a.snapshot}")
     elif a.cmd == "dedupe":

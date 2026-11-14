@@ -1,0 +1,85 @@
+#!/bin/bash
+# hogsmeade-llm-guard: runs Ollama (CUDA) on HOGSMEADE ONLY while the owner's idle gate says the machine is free, and frees the GPU within ~1 min when he is back.
+# It is the only thing that starts `ollama serve`: the server is its child (loopback 127.0.0.1 only; crystalcave reaches it through an ssh -L tunnel as hogsmeade-agent),
+# so "gate says busy" = SIGTERM to the server = models unloaded + VRAM released. No models stay resident while he is active.
+# The decision is the SAME gate as the CI runner guests (app-misc/hogsmeade-ci-idle-gate, hogsmeade-ci-gate): 15 min without input (gnome-shell idle monitor + logind),
+# no game, ComfyUI idle, CPU pressure ~0, memory headroom. Differences, both deliberate:
+#   * the gate's GPU util/mem limits are switched off for the gate call (our own inference would trip them) and replaced here by "GPU memory held by processes other
+#     than ollama <= GPU_OTHER_MAX_MB" (so ComfyUI/games holding VRAM keep us down, our own model does not);
+#   * a running server is dropped when input is newer than RUN_ACTIVE_S (gate 'run' mode), polled every POLL_S (10 s) -> well under a minute.
+# State for crystalcave/humans: /run/hogsmeade-llm/state = "up <epoch>" | "down <epoch> <reason>".   Modes: (none)=loop, once = one tick, status.
+set -u
+CONF=${HLL_CONF:-/etc/conf.d/hogsmeade-llm-guard}; [ -r "$CONF" ] && . "$CONF"
+: "${POLL_S:=10}" "${GATE:=/usr/libexec/hogsmeade-ci-gate}" "${OLLAMA_BIN:=/usr/bin/ollama}" "${RUN_AS_USER:=ollama}" "${RUN_AS_GROUP:=video}"
+: "${GPU_OTHER_MAX_MB:=6000}" "${HLL_RUN:=/run/hogsmeade-llm}" "${HLL_PIDFILE:=}" "${STOP_GRACE_S:=20}" "${NVSMI:=nvidia-smi}" "${HLL_NO_RUNAS:=0}"
+: "${OLLAMA_HOST:=127.0.0.1:11434}" "${OLLAMA_MODELS:=/var/lib/ollama/models}" "${OLLAMA_KEEP_ALIVE:=10m}" "${OLLAMA_MAX_LOADED_MODELS:=1}" "${OLLAMA_NUM_PARALLEL:=1}"
+: "${OLLAMA_FLASH_ATTENTION:=1}" "${OLLAMA_NO_CLOUD:=1}" "${OLLAMA_NOPRUNE:=1}" "${HOME_OLLAMA:=/var/lib/ollama}"
+[ -n "$HLL_PIDFILE" ] || HLL_PIDFILE=$HLL_RUN/ollama.pid
+export OLLAMA_HOST OLLAMA_MODELS OLLAMA_KEEP_ALIVE OLLAMA_MAX_LOADED_MODELS OLLAMA_NUM_PARALLEL OLLAMA_FLASH_ATTENTION OLLAMA_NO_CLOUD OLLAMA_NOPRUNE
+mkdir -p "$HLL_RUN"
+
+log() { logger -t hogsmeade-llm-guard "$*" 2>/dev/null; echo "$(date +%T) $*" >&2; }
+setstate() { echo "$1 $(date +%s)${2:+ $2}" > "$HLL_RUN/state.new"; mv -f "$HLL_RUN/state.new" "$HLL_RUN/state"; }
+serving() { [ -s "$HLL_PIDFILE" ] && kill -0 "$(cat "$HLL_PIDFILE")" 2>/dev/null; }
+
+# GPU memory (MiB) used by anything that is not an ollama process
+gpu_other_mb() {
+	local total ours=0 pid mem
+	total=$("$NVSMI" --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+	[ -n "$total" ] || { echo 0; return; }
+	while IFS=, read -r pid mem; do
+		pid=${pid// /}; mem=${mem// /}; mem=${mem%%.*}
+		[ -n "$pid" ] && [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = ollama ] && ours=$(( ours + ${mem:-0} ))
+	done < <("$NVSMI" --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null)
+	echo $(( total - ours ))
+}
+# prints the reason we must not run (empty = free). $1 = start|run
+busy() {
+	local mode=$1 r o
+	r=$(GPU_UTIL_MAX=101 GPU_MEM_MAX_MB=99999999 VM_MEM_MIN_MB=0 "$GATE" check "$mode" 2>&1) || { echo "${r#busy: }"; return; }
+	o=$(gpu_other_mb); [ "${o:-0}" -gt "$GPU_OTHER_MAX_MB" ] && { echo "GPU memory held by other processes (${o} MiB)"; return; }
+	return 0
+}
+start_server() {
+	local pid
+	mkdir -p "$OLLAMA_MODELS"; [ "$HLL_NO_RUNAS" = 1 ] || chown "$RUN_AS_USER:$RUN_AS_GROUP" "$OLLAMA_MODELS" "$HOME_OLLAMA" 2>/dev/null
+	if [ "$HLL_NO_RUNAS" = 1 ]; then
+		nice -n 10 "$OLLAMA_BIN" serve >>"${HLL_LOG:-/var/log/hogsmeade-ollama.log}" 2>&1 &
+	else
+		HOME=$HOME_OLLAMA nice -n 10 runuser -u "$RUN_AS_USER" -g "$RUN_AS_GROUP" -- env HOME="$HOME_OLLAMA" "$OLLAMA_BIN" serve >>"${HLL_LOG:-/var/log/hogsmeade-ollama.log}" 2>&1 &
+	fi
+	pid=$!; echo "$pid" > "$HLL_PIDFILE"
+}
+stop_server() {   # SIGTERM the whole tree (server + its runner subprocesses), then SIGKILL stragglers: the VRAM is released when the runner exits
+	local pid kids i
+	serving || { rm -f "$HLL_PIDFILE"; return 0; }
+	pid=$(cat "$HLL_PIDFILE"); kids=$(pgrep -P "$pid" 2>/dev/null | tr '\n' ' ')
+	# runuser forks the server: collect its children too
+	for k in $kids; do kids="$kids $(pgrep -P "$k" 2>/dev/null | tr '\n' ' ')"; done
+	kill -TERM $pid $kids 2>/dev/null
+	for i in $(seq 1 "$STOP_GRACE_S"); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+	kill -KILL $pid $kids 2>/dev/null; rm -f "$HLL_PIDFILE"
+	# the runner is a separate process whose parent may have gone: kill any ollama process still owned by our user
+	[ "$HLL_NO_RUNAS" = 1 ] || pkill -KILL -u "$RUN_AS_USER" -x ollama 2>/dev/null
+	return 0
+}
+tick() {
+	local r
+	if serving; then
+		r=$(busy run)
+		if [ -n "$r" ]; then log "stopping ollama: $r"; stop_server; setstate down "$r"; fi
+	else
+		rm -f "$HLL_PIDFILE"
+		r=$(busy start)
+		if [ -z "$r" ]; then start_server; log "started ollama (gate: idle)"; setstate up
+		else setstate down "$r"; fi
+	fi
+}
+case ${1:-loop} in
+	once) tick ;;
+	status) cat "$HLL_RUN/state" 2>/dev/null; serving && echo "server pid $(cat "$HLL_PIDFILE")"; echo "start: $(busy start)  | run: $(busy run)  | gpu_other=$(gpu_other_mb) MiB" ;;
+	stop) stop_server; setstate down "guard stopped" ;;
+	loop) trap 'stop_server; setstate down "guard stopped"; exit 0' TERM INT
+		while :; do tick; sleep "$POLL_S" & wait $!; done ;;
+	*) echo "usage: $0 [loop|once|status|stop]" >&2; exit 2 ;;
+esac
