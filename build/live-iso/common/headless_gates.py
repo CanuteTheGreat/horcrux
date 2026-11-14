@@ -206,8 +206,8 @@ cfg=0; grep -Eq '"ip-forward-no-drop"[[:space:]]*:[[:space:]]*true' /etc/docker/
 echo "CFG $cfg"
 if ! command -v dockerd >/dev/null 2>&1; then echo "DOCKER-ABSENT"; ls -d /var/db/pkg/sys-apps/horcrux-core-* >/dev/null 2>&1 || echo "NO-HORCRUX-CORE"; echo "FWD-DONE"; exit 0; fi
 rc-service docker status >/dev/null 2>&1 || rc-service docker start >/dev/null 2>&1
-n=0; until docker info >/dev/null 2>&1 || [ $n -ge 60 ]; do n=$((n+1)); sleep 1; done
-docker info >/dev/null 2>&1 && echo "DOCKER-UP" || echo "DOCKER-DOWN"
+n=0; until docker info >/dev/null 2>&1 || [ $n -ge ${HXW:-60} ]; do n=$((n+1)); sleep 1; done
+docker info >/dev/null 2>&1 && echo "DOCKER-UP" || { echo "DOCKER-DOWN"; rc-service docker status 2>&1 | head -2; tail -n 4 /var/log/docker.log 2>/dev/null; }
 echo "POLICY $( (nft list chain ip filter FORWARD 2>/dev/null || iptables -S FORWARD 2>/dev/null) | grep -Eo 'policy [a-z]+|-P FORWARD [A-Z]+' | head -1)"
 cleanup() { ip netns del hxfwdt 2>/dev/null; ip link del hxfwdt-h 2>/dev/null; nft delete table ip hxfwdtest 2>/dev/null; }
 cleanup
@@ -225,7 +225,7 @@ NFT
 ip netns exec hxfwdt ping -c 3 -W 3 10.0.2.2 >/dev/null 2>&1 && echo "NETNS-PING-OK" || echo "NETNS-PING-FAIL"
 # the other order: dockerd (re)started AFTER the VM bridge exists (a restart, a Docker upgrade) must not drop it either
 rc-service docker restart >/dev/null 2>&1
-n=0; until docker info >/dev/null 2>&1 || [ $n -ge 60 ]; do n=$((n+1)); sleep 1; done
+n=0; until docker info >/dev/null 2>&1 || [ $n -ge ${HXW:-60} ]; do n=$((n+1)); sleep 1; done
 echo "POLICY-AFTER-RESTART $( (nft list chain ip filter FORWARD 2>/dev/null || iptables -S FORWARD 2>/dev/null) | grep -Eo 'policy [a-z]+|-P FORWARD [A-Z]+' | head -1)"
 ip netns exec hxfwdt ping -c 3 -W 3 10.0.2.2 >/dev/null 2>&1 && echo "NETNS-PING-AFTER-RESTART-OK" || echo "NETNS-PING-AFTER-RESTART-FAIL"
 cleanup
@@ -233,9 +233,11 @@ echo "FWD-DONE"
 '''
 
 
-def docker_forward_gate(sh, step):
+def docker_forward_gate(sh, step, slow=1.0):
     """horcrux-core's daemon.json keeps Docker from dropping forwarded traffic; with Docker installed a NAT-style netns still reaches the outside"""
-    rc, o = sh(b64("sh", DOCKER_FWD_CHECK), 180)
+    # dockerd's first start (containerd, overlay/zfs graph driver, iptables chains) takes far longer than 60 s under TCG emulation (aarch64 run 2690:
+    # DOCKER-DOWN while every other line was fine); the in-guest wait scales with the harness timeout factor like the ssh timeout does
+    rc, o = sh(f"HXW={int(60 * max(slow, 1.0))}; export HXW; " + b64("sh", DOCKER_FWD_CHECK), 180)
     o = (o or "").replace("\r", "")
     cfg = re.search(r"(?m)^CFG 1$", o) is not None
     absent = "DOCKER-ABSENT" in o

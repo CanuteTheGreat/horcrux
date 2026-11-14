@@ -142,6 +142,12 @@ class DockerForwardGate(unittest.TestCase):
         self.assertFalse(self.run_gate("CFG 0\nDOCKER-UP\nNO-HORCRUX-CORE\nNETNS-PING-OK\nNETNS-PING-AFTER-RESTART-OK\nFWD-DONE\n")[1])  # docker present: config still required
         self.assertFalse(self.run_gate("")[1])                                                     # script did not finish = FAIL
 
+    def test_docker_wait_scales_with_the_tcg_timeout_factor(self):
+        cmds = []
+        HG.docker_forward_gate(lambda cmd, timeout=60: (cmds.append(cmd), (0, "CFG 1\nFWD-DONE\n"))[1], lambda n, ok, i="": None, slow=3.0)
+        self.assertTrue(cmds[0].startswith("HXW=180; export HXW; "))
+        self.assertEqual(HG.DOCKER_FWD_CHECK.count("${HXW:-60}"), 2)
+
     def test_script_is_valid_shell_and_core_ships_the_option(self):
         subprocess.run(["sh", "-n"], input=HG.DOCKER_FWD_CHECK, text=True, check=True)
         gentoo = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(ROOT)))), "gentoo", "sys-apps", "horcrux-core")
