@@ -12,6 +12,14 @@ cp "$ROOT/boot/vmlinuz-$kver" "$ISO/boot/vmlinuz"
 cp "$ROOT/boot/initramfs-$kver.img" "$ISO/boot/initramfs.img"
 cp "$ROOT/etc/os-release" "$ISO/boot/os-release"
 
+# `docker export` adds the container runtime's own files: /.dockerenv (systemd then says "Detected virtualization docker" and runs the
+# container getty/console setup on real hardware) and /etc/hostname = the build container's id (Docker bind-mounts it during the build, so
+# what setup-rootfs.sh wrote never reached the layer). The live system gets the product name, as /etc/conf.d/hostname says on OpenRC.
+rm -f "$ROOT/.dockerenv"
+h=$(sed -n 's/^hostname="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$ROOT/etc/conf.d/hostname" 2>/dev/null | head -1)
+echo "${h:-$PROJ}" > "$ROOT/etc/hostname"
+if grep -qE '^[0-9.]+[[:space:]]+[0-9a-f]{12}$' "$ROOT/etc/hosts" 2>/dev/null; then printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost\n' > "$ROOT/etc/hosts"; fi
+
 echo "== squashfs"
 # Desktop image: 1 MiB blocks (xz sees 4x the context: ~4-6 % smaller) so it fits below the 2 GiB release-asset limit; slower random reads, fine for a live ISO
 SQFS_BLOCK=256K; grep -qx desktop "$ROOT/etc/live-iso-variant" 2>/dev/null && SQFS_BLOCK=1M
