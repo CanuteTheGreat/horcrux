@@ -10,7 +10,13 @@ canvas and fires `connect`, so it needs no VM and no network. Checks:
    40 px hit the canvas (not a toolbar or a status badge);
  * pop-out window: the same, the auto-hide bar is out of view until the pointer
    touches the top edge, appears there, and hides again afterwards;
- * the buttons still drive the guest (Ctrl+Alt+Del, paste) in both modes.
+ * the buttons still drive the guest (Ctrl+Alt+Del, paste) in both modes;
+ * leaving fullscreen by any path (document.exitFullscreen() = F11/Esc, the
+   button, or just a window resize back from the fullscreen size) re-fits the
+   guest: the canvas stays inside its container (aspect kept) and the page has
+   no horizontal overflow. The fit stub only rescales when `scaleViewport` is
+   (re)assigned, i.e. it does not watch the container itself, so the page's own
+   refit logic is what is under test.
 
 usage: console_overlay_e2e.py <novnc.html>   (exit 1 on any failure)
 """
@@ -34,6 +40,38 @@ export default class RFB {
   clipboardPasteFrom(t) { window.__paste = t; }
 }
 """
+STUB_FIT = """
+export default class RFB {
+  constructor(el) {
+    this.l = {}; this.el = el; this._s = false;
+    const c = document.createElement('canvas');
+    c.width = 1024; c.height = 768; c.id = 'guest';
+    c.style.cssText = 'display:block;background:#345;width:1024px;height:768px';
+    el.appendChild(c); this.c = c;
+    setTimeout(() => (this.l.connect || []).forEach(f => f({})), 30);
+  }
+  set scaleViewport(v) {
+    this._s = v;
+    if (!v) { this.c.style.width = '1024px'; this.c.style.height = '768px'; return; }
+    const k = Math.min(this.el.clientWidth / 1024, this.el.clientHeight / 768);
+    this.c.style.width = Math.floor(1024 * k) + 'px';
+    this.c.style.height = Math.floor(768 * k) + 'px';
+  }
+  get scaleViewport() { return this._s; }
+  addEventListener(n, f) { (this.l[n] = this.l[n] || []).push(f); }
+  sendCtrlAltDel() {}
+  clipboardPasteFrom(t) {}
+}
+"""
+FIT = """() => {
+  const c = document.getElementById('guest').getBoundingClientRect();
+  const s = document.getElementById('screen').getBoundingClientRect();
+  const d = document.documentElement;
+  return {c: [c.left, c.top, c.right, c.bottom], s: [s.left, s.top, s.right, s.bottom],
+          fits: c.left >= s.left - 1 && c.top >= s.top - 1 && c.right <= s.right + 1 && c.bottom <= s.bottom + 1,
+          overflow: d.scrollWidth > d.clientWidth || document.body.scrollWidth > d.clientWidth,
+          ratio: c.width / c.height};
+}"""
 PARENT = """<!doctype html><body style="margin:0">
 <div id="toolbar" style="height:48px;background:#222;color:#fff">toolbar</div>
 <iframe id="console-frame" src="/novnc?embed=1" style="display:block;width:100%;height:600px;border:0"></iframe>
@@ -73,10 +111,11 @@ with sync_playwright() as p:
     b = p.firefox.launch()
     for name, vp in (("desktop", {"width": 1280, "height": 800}), ("phone", {"width": 390, "height": 760})):
         ctx = b.new_context(viewport=vp, ignore_https_errors=True)
+        stub = {"v": STUB}
         def route(r):
             u = r.request.url
             if u.endswith("rfb.js"):
-                r.fulfill(status=200, content_type="text/javascript", body=STUB)
+                r.fulfill(status=200, content_type="text/javascript", body=stub["v"])
             elif u.startswith(ORIGIN + "/novnc"):
                 r.fulfill(status=200, content_type="text/html", body=HTML)
             elif u == ORIGIN + "/parent":
@@ -137,6 +176,47 @@ with sync_playwright() as p:
         check(not pg.locator("#bar").is_visible(), f"[{name}] pop-out: bar hides again")
         check(set(pg.evaluate(TOPHITS)) == {"guest"}, f"[{name}] pop-out: top 40px clickable again after hide")
         pg.close()
+
+        # ---- leaving fullscreen re-fits the guest ---------------------------
+        stub["v"] = STUB_FIT
+        def fit_ok(pg, label):
+            pg.wait_for_timeout(1000)  # refit settles over <= 700 ms
+            r = pg.evaluate(FIT)
+            check(r["fits"] and not r["overflow"] and abs(r["ratio"] - 4 / 3) < 0.03,
+                  f"[{name}] {label}: canvas fits its container, aspect kept, no h-overflow ({r})")
+
+        for mode in ("pop-out", "embedded"):
+            pg = ctx.new_page()
+            pg.set_viewport_size({"width": 1920, "height": 1080})  # 'fullscreen' size
+            if mode == "pop-out":
+                pg.goto(ORIGIN + "/novnc")
+                tgt = pg
+            else:
+                pg.goto(ORIGIN + "/parent")
+                pg.frame_locator("#console-frame").locator("#guest").wait_for(timeout=15000)
+                tgt = next(x for x in pg.frames if x != pg.main_frame)
+            tgt.wait_for_function("document.getElementById('status').textContent === 'Connected'")
+            fit_ok(tgt, f"{mode} at 1920x1080")
+            # F11 / browser UI: the window shrinks back, no click on our button
+            pg.set_viewport_size(vp)
+            fit_ok(tgt, f"{mode} after window resize back to {vp['width']}x{vp['height']}")
+            pg.set_viewport_size({"width": 1920, "height": 1080})
+            fit_ok(tgt, f"{mode} grown again")
+            # button -> fullscreen -> exitFullscreen() (what Esc/F11 end up calling)
+            if mode == "pop-out":
+                pg.mouse.move(300, 300)
+                pg.mouse.move(300, 0)
+                pg.wait_for_function("document.getElementById('bar').classList.contains('show')")
+                pg.wait_for_timeout(250)
+                pg.locator("#btn-fullscreen").click()
+            else:
+                tgt.evaluate("document.documentElement.requestFullscreen().catch(() => {})")
+            pg.wait_for_timeout(500)
+            pg.set_viewport_size(vp)
+            tgt.evaluate("document.fullscreenElement ? document.exitFullscreen() : null")
+            fit_ok(tgt, f"{mode} after exitFullscreen()")
+            pg.close()
+        stub["v"] = STUB
         ctx.close()
     b.close()
 

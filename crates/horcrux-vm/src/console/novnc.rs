@@ -186,8 +186,9 @@ pub fn get_novnc_html(_ticket_id: &str, ws_url: &str, password: Option<&str>) ->
             left: 0;
             right: 0;
             bottom: 0;
-            width: 100vw;
-            height: 100vh;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
         }}
 
         #bar {{
@@ -389,8 +390,33 @@ pub fn get_novnc_html(_ticket_id: &str, ws_url: &str, password: Option<&str>) ->
             if (t && t.clientY <= 12) showBar();
         }}, true);
         document.addEventListener('mouseleave', scheduleHide);
-        document.addEventListener('fullscreenchange', syncMode);
-        window.addEventListener('resize', syncMode);
+        // Always fit the guest to the window (scale-to-fit, aspect kept). The
+        // fullscreen size must never stick: leaving fullscreen through F11,
+        // Esc, the browser UI or the button resizes the window late and
+        // sometimes without noVNC noticing, so every size/fullscreen signal
+        // re-runs the scaling, now and again once the transition settled.
+        function refit() {{
+            if (!rfb) return;
+            rfb.scaleViewport = false;
+            rfb.scaleViewport = true;
+        }}
+        let refitTimers = [];
+        function scheduleRefit() {{
+            refitTimers.forEach(clearTimeout);
+            refit();
+            requestAnimationFrame(refit);
+            refitTimers = [60, 250, 700].map((ms) => setTimeout(refit, ms));
+        }}
+        window.horcruxRefit = scheduleRefit;
+        function onModeChange() {{
+            syncMode();
+            scheduleRefit();
+        }}
+        document.addEventListener('fullscreenchange', onModeChange);
+        window.addEventListener('resize', onModeChange);
+        if (window.ResizeObserver) {{
+            new ResizeObserver(scheduleRefit).observe(screen);
+        }}
         syncMode();
 
         // Commands from the parent page's toolbar.
@@ -398,6 +424,7 @@ pub fn get_novnc_html(_ticket_id: &str, ws_url: &str, password: Option<&str>) ->
             if (e.origin !== window.location.origin || !e.data) return;
             if (e.data.horcruxConsole === 'ctrl-alt-del') sendCtrlAltDel();
             else if (e.data.horcruxConsole === 'paste') pasteText(e.data.text);
+            else if (e.data.horcruxConsole === 'refit') scheduleRefit();
         }});
 
         // Connection handling
@@ -477,6 +504,7 @@ pub fn get_novnc_html(_ticket_id: &str, ws_url: &str, password: Option<&str>) ->
 
             // Make rfb global for control buttons
             window.rfb = rfb;
+            scheduleRefit();
 
         }} catch (err) {{
             status.textContent = 'Error: ' + err.message;
