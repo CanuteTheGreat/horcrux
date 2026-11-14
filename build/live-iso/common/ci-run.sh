@@ -191,8 +191,12 @@ if [ "$result" = pass ]; then
     # chrony steps the clock, package-contents-complete, kernel module builds, zfs-kmod dist-kernel rule, shadow reuse, no autologin, web UI reachable,
     # no display stack installed (qlist + emerge -pv @world), nothing personal (public-forbidden.txt), first boot waits for the network and does not show crashed.
     name=server-headless-zfs-enc
+    # a branch run (dispatch on a branch that is not on main yet): the installed system syncs the PUBLISHED overlay (main), which lacks the branch's
+    # core packages (e.g. a systemd image + main's OpenRC-only horcrux-firstboot = openrc/sysvinit blocker in emerge @world); --overlay-dir puts them back
+    ovl=""
+    if [ "${GITHUB_REF_TYPE:-}" = branch ] && [ -n "${GITHUB_REF_NAME:-}" ] && [ "${GITHUB_REF_NAME}" != main ]; then ovl="--overlay-dir $(cd "$HERE/../../.." && pwd)/gentoo"; fi
     echo "::group::QEMU test $name"
-    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --server --public --late-network ${SERVER_LATE_NET_S:-90} 2>&1 | tee "$EVI/test-$name.log" | tail -70
+    with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$name" --server --public --late-network ${SERVER_LATE_NET_S:-90} $ovl 2>&1 | tee "$EVI/test-$name.log" | tail -70
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img

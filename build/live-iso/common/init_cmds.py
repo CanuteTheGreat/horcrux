@@ -88,5 +88,6 @@ def running_list_sh(pattern=""):
 def stopped_sh(pattern):
     """`stopped <name>` for every service matching `pattern` that is enabled at boot but not running (OpenRC rc-status -a; systemd is-active)"""
     return (f"if {IS_SYSTEMD}; then for u in $(systemctl list-unit-files --type=service --state=enabled --no-legend --plain 2>/dev/null | awk '{{print $1}}' | grep -E '{pattern}'); do "
-            "systemctl -q is-active $u || echo \"stopped ${u%.service}\"; done; "
+            # a unit its own Condition*= skipped (horcrux-firstboot once firstboot-done exists) is not "stopped": the OpenRC script returns early, started
+            "systemctl -q is-active $u || [ \"$(systemctl show -P ConditionResult $u)\" = no ] || echo \"stopped ${u%.service}\"; done; "
             f"else rc-status -a 2>/dev/null | grep -Ei 'stopped' | grep -E '{pattern}' | awk '{{print \"stopped\", $1}}'; fi")
