@@ -5,9 +5,10 @@ Description=zram compressed swap
 # sysinit.target needs) systemd found an ordering cycle at every boot and broke it by dropping a random job: swap.target, or tmp.mount, and
 # then every PrivateTmp= service (chronyd, systemd-logind, iwd) failed with "Failed to set up mount namespacing: /tmp/".
 # Not After=local-fs.target either: tmp.mount (tmpfs) is ordered after swap.target, and local-fs.target after tmp.mount (a cycle again).
+# After=systemd-udevd: mkswap on a fresh zram device raced udev's probe (EBUSY) under a slow first boot and the swap silently never came up (Patronus aarch64).
 # The script only needs the root file system (mounted by the initramfs, made writable by systemd-remount-fs) and the zram module.
 DefaultDependencies=no
-After=systemd-remount-fs.service systemd-modules-load.service
+After=systemd-remount-fs.service systemd-modules-load.service systemd-udevd.service
 Before=swap.target shutdown.target
 Conflicts=shutdown.target
 

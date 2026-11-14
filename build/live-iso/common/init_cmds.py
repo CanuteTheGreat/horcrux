@@ -51,7 +51,8 @@ def boot_diag_cmd(init):
     """Stopped/crashed services + zram state, for the zram-not-active diagnostic."""
     _check(init)
     first = "rc-status -a 2>&1 | grep -iE 'zram|stopped|crashed'" if init == "openrc" else "systemctl list-units --all --no-legend 2>&1 | grep -iE 'zram|inactive|failed'"
-    return first + "; dmesg 2>/dev/null | grep -i zram | tail -5; zramctl 2>&1; cat /proc/swaps"
+    unit = "rc-service zram-swap status 2>&1" if init == "openrc" else "systemctl status zram-swap.service --no-pager -l 2>&1 | head -15; journalctl -b -q --no-pager -u zram-swap.service 2>&1 | tail -15"
+    return unit + "; " + first + "; dmesg 2>/dev/null | grep -i zram | tail -5; zramctl 2>&1; cat /proc/swaps"
 
 
 def boots_with(init, console_text):
