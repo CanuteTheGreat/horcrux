@@ -4,6 +4,8 @@
 # started by app-misc/hogsmeade-local-llm (idle-gated), never by an init script of its own.
 EAPI=8
 
+inherit unpacker
+
 DESCRIPTION="Ollama (prebuilt, bundled CUDA runners) for HOGSMEADE"
 HOMEPAGE="https://ollama.com/"
 SRC_URI="https://github.com/ollama/ollama/releases/download/v${PV}/ollama-linux-amd64.tar.zst -> ${P}-amd64.tar.zst"
