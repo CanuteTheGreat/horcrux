@@ -4,8 +4,10 @@ Description=zram compressed swap
 # an early-boot unit like the swap units it sits beside: with the default dependencies (After=basic.target) plus Before=swap.target (which
 # sysinit.target needs) systemd found an ordering cycle at every boot and broke it by dropping a random job: swap.target, or tmp.mount, and
 # then every PrivateTmp= service (chronyd, systemd-logind, iwd) failed with "Failed to set up mount namespacing: /tmp/".
+# Not After=local-fs.target either: tmp.mount (tmpfs) is ordered after swap.target, and local-fs.target after tmp.mount (a cycle again).
+# The script only needs the root file system (mounted by the initramfs, made writable by systemd-remount-fs) and the zram module.
 DefaultDependencies=no
-After=local-fs.target systemd-modules-load.service
+After=systemd-remount-fs.service systemd-modules-load.service
 Before=swap.target shutdown.target
 Conflicts=shutdown.target
 

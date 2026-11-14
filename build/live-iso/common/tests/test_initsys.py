@@ -179,6 +179,10 @@ class EarlyBootUnits(unittest.TestCase):
             before = {w for line in t.splitlines() if line.startswith("Before=") for w in line[7:].split()}
             if before & early:
                 self.assertIn("DefaultDependencies=no", t, f"{f} is ordered before {sorted(before & early)} but keeps the default dependencies")
+            after = {w for line in t.splitlines() if line.startswith("After=") for w in line[6:].split()}
+            if "swap.target" in before:
+                # tmp.mount (tmpfs) is After=swap.target and local-fs.target After=tmp.mount: a swap provider after local-fs.target is a cycle
+                self.assertFalse(after & {"local-fs.target", "tmp.mount"}, f"{f} is Before=swap.target but After={sorted(after & {'local-fs.target', 'tmp.mount'})}")
 
 
 if __name__ == "__main__":
