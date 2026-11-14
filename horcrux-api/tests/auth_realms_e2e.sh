@@ -53,7 +53,21 @@ EOF
 apt-get update -qq >/dev/null
 apt-get install -y -qq slapd ldap-utils >/dev/null
 (slapd -h "ldap:///" -u openldap -g openldap || true)
-for i in $(seq 1 30); do ldapsearch -x -H ldap://localhost -b dc=horcrux,dc=test -s base >/dev/null 2>&1 && break; sleep 1; done
+# slapd needs well over 30 s to answer on a loaded runner or a nested-KVM lab guest (run 99521:
+# the old 30 s loop fell through and ldapadd died with exit 255): wait up to 180 s, and fail
+# HERE with slapd diagnostics rather than in ldapadd.
+ready=""
+for i in $(seq 1 180); do
+  if ldapsearch -x -H ldap://localhost -b dc=horcrux,dc=test -s base >/dev/null 2>&1; then ready=1; break; fi
+  # slapd daemonises: if it is gone (not just slow), start it again once
+  if [ "$i" -eq 20 ] && ! kill -0 "$(cat /run/slapd/slapd.pid 2>/dev/null)" 2>/dev/null; then (slapd -h "ldap:///" -u openldap -g openldap || true); fi
+  sleep 1
+done
+if [ -z "$ready" ]; then
+  echo "slapd did not answer within 180 s" >&2
+  (kill -0 "$(cat /run/slapd/slapd.pid 2>/dev/null)" 2>/dev/null && echo "slapd is running but not answering") >&2 || echo "slapd is not running" >&2
+    exit 1
+fi
 ldapadd -x -H ldap://localhost -D cn=admin,dc=horcrux,dc=test -w ldap-admin-pass >/dev/null <<EOF
 dn: ou=people,dc=horcrux,dc=test
 objectClass: organizationalUnit
