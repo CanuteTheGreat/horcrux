@@ -1965,7 +1965,9 @@ class Runner:
         # the installed system runs the init of the ISO it came from (init-parity phase 3): PID 1 and the init markers must agree with --init
         if self.a.init == "systemd":
             sh += ['[ "$(cat /proc/1/comm)" = systemd ] && [ -d /run/systemd/system ] || echo "BAD PID 1 is $(cat /proc/1/comm), expected systemd"',
-                   'systemctl --failed --no-legend --plain 2>/dev/null | awk \'{print "BAD failed unit: " $1}\'']
+                   # each failed unit with the tail of its journal, so the gate's FAIL line says why it failed
+                   'systemctl --failed --no-legend --plain 2>/dev/null | awk \'{print $1}\' | while read -r u; do echo "BAD failed unit: $u"; '
+                   'journalctl -b -q --no-pager -o cat -n 6 -u "$u" 2>/dev/null | sed "s|^|BAD   $u: |"; done']
         else:
             sh += ['[ ! -d /run/systemd/system ] && [ -e /run/openrc/softlevel ] || echo "BAD PID 1 is $(cat /proc/1/comm), expected OpenRC init"']
         if P.get("forward"):
