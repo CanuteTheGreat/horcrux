@@ -114,7 +114,8 @@ docker start "$ID-dex" >/dev/null
 echo "== Pebble"
 docker run -d --name "$ID-chall" --network "$NET" --network-alias challtestsrv \
   ghcr.io/letsencrypt/pebble-challtestsrv:latest -defaultIPv6 "" -defaultIPv4 "$RUN_IP" >/dev/null
-docker run -d --name "$ID-pebble" --network "$NET" --network-alias pebble -e PEBBLE_VA_NOSLEEP=1 \
+# Pebble rejects ~5 % of JWS nonces on purpose (badNonce); run 99778 failed "ACME order 503 badNonce". 0 = deterministic CA.
+docker run -d --name "$ID-pebble" --network "$NET" --network-alias pebble -e PEBBLE_VA_NOSLEEP=1 -e PEBBLE_WFE_NONCEREJECT=0 \
   ghcr.io/letsencrypt/pebble:latest -config test/config/pebble-config.json -dnsserver challtestsrv:8053 >/dev/null
 sleep 2
 docker cp "$ID-pebble":/test/certs/pebble.minica.pem "$TMP/pebble-ca.pem"
