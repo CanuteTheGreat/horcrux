@@ -99,7 +99,7 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge --oneshot sys-apps/hogsmeade-private; \
     rm -rf /var/db/repos/local/sys-apps/hogsmeade-private/files/*; \
     emerge --noreplace --select=y app-misc/hogsmeade-tools app-misc/awccd app-misc/alienfx sci-misc/comfyui sys-apps/hogsmeade-private app-misc/hogsmeade-obs app-misc/hogsmeade-nextcloud app-misc/hogsmeade-speaker-tuning app-misc/hogsmeade-input-quirks app-admin/rustinion-agent \
-        app-admin/ctg-ops net-misc/ctg-ssh-ca-fleet app-misc/hogsmeade-ssh-ca app-misc/hogsmeade-sudo app-misc/hogsmeade-agent-account app-misc/hogsmeade-user-groups app-misc/hogsmeade-b2-mounts app-misc/hogsmeade-downloads-sort sys-firmware/sof-firmware sys-kernel/linux-firmware
+        app-admin/ctg-ops net-misc/ctg-ssh-ca-fleet app-misc/hogsmeade-ssh-ca app-misc/hogsmeade-sudo app-misc/hogsmeade-agent-account app-misc/hogsmeade-user-groups app-misc/hogsmeade-b2-mounts app-misc/hogsmeade-downloads-sort app-misc/hogsmeade-ci-idle-gate sys-firmware/sof-firmware sys-kernel/linux-firmware
 
 # make @world consistent with the desktop profile + new USE, so the owner's first `emerge -uDN @world` is a no-op for them
 RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,sharing=locked \
@@ -113,7 +113,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH:-x86_64},target=/var/cache/binpkgs,shar
 
 # services, markers; the byte-code made by build steps (not by a package) would be unowned files: drop exactly those; horcrux-orphans gates the result
 RUN set -e; unset ARCH; \
-    for s in hogsmeade-firewall hogsmeade-speaker-tuning awccd nvidia-persistenced switcheroo-control smartd hogsmeade-firstboot comfyui docker cronie hogsmeade-b2-mount.ctg-storage hogsmeade-b2-mount.ctg-media hogsmeade-b2-mount.ctg-hacktheplanet; do rc-update add $s default 2>/dev/null || true; done; \
+    for s in hogsmeade-firewall hogsmeade-speaker-tuning awccd nvidia-persistenced switcheroo-control smartd hogsmeade-firstboot comfyui docker cronie hogsmeade-b2-mount.ctg-storage hogsmeade-b2-mount.ctg-media hogsmeade-b2-mount.ctg-hacktheplanet hogsmeade-ci-guard; do rc-update add $s default 2>/dev/null || true; done; \
     printf 'DISPLAYMANAGER="gdm"\n' > /etc/conf.d/display-manager; \
     echo "hogsmeade" > /etc/live-iso-variant; \
     # kernel modules are always built on this machine against its own source-built kernel (own config): a binhost zfs-kmod for the same
