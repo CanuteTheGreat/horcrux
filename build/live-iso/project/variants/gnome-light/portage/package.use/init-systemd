@@ -1,0 +1,7 @@
+# GNOME on systemd: upstream gnome-session + systemd-logind, as on any systemd distribution (the gnome-light Dockerfile deletes this file on an OpenRC image)
+gnome-base/gdm systemd -elogind
+gnome-base/gnome-shell systemd
+media-video/wireplumber systemd -elogind
+sys-apps/fwupd systemd
+net-print/cups systemd
+net-wireless/bluez systemd

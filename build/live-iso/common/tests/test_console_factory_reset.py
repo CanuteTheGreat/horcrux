@@ -9,6 +9,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "overlay", "usr", "lib", "live-installer"))
+os.environ["LIVEINST_INIT"] = "openrc"     # the command assertions below are the OpenRC ones (tests/test_initsys.py covers systemd)
 from liveinst import consolemenu as CM  # noqa: E402
 from liveinst import system as S  # noqa: E402
 

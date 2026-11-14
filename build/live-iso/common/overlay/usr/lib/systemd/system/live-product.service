@@ -1,0 +1,15 @@
+# systemd twin of /etc/init.d/live-product (same script): "Try it live" starts the product services with a random admin password.
+[Unit]
+Description=Live session: start the product services
+After=network-online.target live-persist.service dhcpcd.service
+Wants=network-online.target
+Before=live-serial.service getty@tty1.service
+ConditionKernelCommandLine=rd.live.image
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/live-openrc-compat /etc/init.d/live-product start
+
+[Install]
+WantedBy=multi-user.target

@@ -207,8 +207,12 @@ if [ "$result" = pass ]; then
     # chrony steps the clock, package-contents-complete, kernel module builds, zfs-kmod dist-kernel rule, shadow reuse, no autologin, web UI reachable,
     # no display stack installed (qlist + emerge -pv @world), nothing personal (public-forbidden.txt), first boot waits for the network and does not show crashed.
     name=server-headless-zfs-enc
+    # a branch run (dispatch on a branch that is not on main yet): the installed system syncs the PUBLISHED overlay (main), which lacks the branch's
+    # core packages (e.g. a systemd image + main's OpenRC-only horcrux-firstboot = openrc/sysvinit blocker in emerge @world); --overlay-dir puts them back
+    ovl=""
+    if [ "${GITHUB_REF_TYPE:-}" = branch ] && [ -n "${GITHUB_REF_NAME:-}" ] && [ "${GITHUB_REF_NAME}" != main ]; then ovl="--overlay-dir $(cd "$HERE/../../.." && pwd)/gentoo"; fi
     echo "::group::QEMU test $name"
-    zfs_enc_run "$name" --server --public --late-network ${SERVER_LATE_NET_S:-90}
+    zfs_enc_run "$name" --server --public --late-network ${SERVER_LATE_NET_S:-90} $ovl
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
@@ -219,7 +223,7 @@ if [ "$result" = pass ]; then
       [ $fw = bios ] && [ "${HAS_BIOS:-1}" = 0 ] && continue
       name=boot-modes-$fw; media=usb; [ $fw = bios ] && media=cdrom
       echo "::group::QEMU test $name"
-      with_deadline $DL_MODES python3 -u "$HERE/boot-modes-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" --mode $fw --media $media ${NO_MEMTEST:+--no-memtest} --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+      with_deadline $DL_MODES python3 -u "$HERE/boot-modes-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" --init "$INIT" --mode $fw --media $media ${NO_MEMTEST:+--no-memtest} --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
       rc=${PIPESTATUS[0]}
       echo "::endgroup::"
       rm -f "$EVI/$name"/*.raw "$EVI/$name"/*.qcow2 "$EVI/$name"/install/target*.qcow2 "$EVI/$name"/install/answers.img

@@ -18,6 +18,10 @@ ROOT=${2:-}
 PAMD=$ROOT/etc/pam.d
 SLL=$PAMD/system-local-login
 GDM=$PAMD/gdm-password
+PASSWD=$PAMD/passwd
+# changing the login password (passwd / GNOME Settings) re-keys the login keyring through this line. Gentoo's pambase puts it into passwd on OpenRC
+# images only: the systemd profile's passwd just includes system-auth, so the keyring stayed on the old password there.
+PWLINE='password	optional	pam_gnome_keyring.so use_authtok'
 
 count() { [ -f "$1" ] || { echo 0; return; }; grep -c '^[^#]*pam_gnome_keyring' "$1" || true; }
 
@@ -33,6 +37,7 @@ if [ -f "$GDM" ]; then
 else
 	problems="$problems no-gdm-password"
 fi
+[ -f "$PASSWD" ] && ! grep -q '^[^#]*password.*pam_gnome_keyring' "$PASSWD" && problems="$problems passwd-does-not-rekey-the-keyring"
 
 case "$1" in
 check)
@@ -45,6 +50,9 @@ fix)
 		if grep -q '^[^#]*auth.*pam_gnome_keyring' "$GDM" && grep -q '^[^#]*session.*pam_gnome_keyring' "$GDM"; then
 			sed -i '/^[^#]*pam_gnome_keyring/d' "$SLL" && echo "horcrux-keyring-pam: removed the duplicate pam_gnome_keyring lines from $SLL"
 		fi
+	fi
+	if [ -f "$GDM" ] && [ -f "$PASSWD" ] && ! grep -q '^[^#]*password.*pam_gnome_keyring' "$PASSWD"; then
+		printf '%s\n' "$PWLINE" >> "$PASSWD" && echo "horcrux-keyring-pam: added the keyring re-key line to $PASSWD"
 	fi
 	exec "$0" check "$ROOT" ;;
 *)

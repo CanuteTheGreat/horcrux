@@ -114,6 +114,7 @@ jobs:
       - run: python3 gentoo/ci/check-manifests.py
       # Every ebuild that ships an OpenRC script ships a systemd unit too (init parity; EXEMPT list inside the script).
       - run: python3 gentoo/ci/check-init-parity.py
+      - run: python3 ci/gen-systemd-workflows.py --check   # live-iso-*-systemd-*.yml are generated from their OpenRC twins
       # Public overlay files (shipped to end users, mirrored to GitHub) must not name the private Forgejo host.
       - run: python3 gentoo/ci/check-no-forgejo.py
 

@@ -73,7 +73,10 @@ def sync(log, sh=_sh, now=time.time):
                     return False
                 log(f"rtc: live clock was {int(skew)} s off: stepped from an HTTP Date header")
     if src is None:
-        log("rtc: NOT written: no verified time source (offline install); chrony + the NetworkManager hook correct the clock at the first network")
+        rc, out = sh(["chronyc", "-n", "tracking"])
+        why = " ".join(l.strip() for l in out.splitlines() if l.split(":")[0].strip() in ("Reference ID", "Stratum", "Leap status"))[:160]
+        log("rtc: NOT written: no verified time source (offline install); chrony + the NetworkManager hook correct the clock at the first network"
+            f" [chronyc rc={rc}: {why or out.strip()[:120]}]")
         return False
     rc, out = sh(["hwclock", "-w", "-u"])
     if rc != 0:

@@ -102,12 +102,13 @@ def apply(inst):
     if not (c.get("user_hash") or c.get("user_password")):
         raise InstallError("desktop profile needs a password for " + name)
     create_user(inst)
+    from . import initsys
     for s in REPLACED:
-        inst.run(["rc-update", "del", s, "default"], chroot=True, check=False)
+        initsys.disable(inst, s, "default")
     if os.path.exists(T + SERVICES):
         for svc, lvl in parse_services(open(T + SERVICES).read()):
-            if os.path.exists(f"{T}/etc/init.d/{svc}"):
-                inst.run(["rc-update", "add", svc, lvl], chroot=True, check=False)
+            if initsys.installed(inst, svc):
+                initsys.enable(inst, svc, lvl)
             else:
                 inst.log(f"desktop: service {svc} not in the image, skipped")
     # OpenRC's display-manager service reads this (xdm is only a compat alias); gdm is the GNOME display manager

@@ -116,14 +116,15 @@ def kernel_cmdline(profile, model):
 # ------------------------------------------------------------------ install-time steps
 def apply_profile(inst, profile, model):
     """Run on the installed system after the base configuration. Everything is optional and idempotent."""
+    from . import initsys
     c = inst.c
     d = c.get("desktop") or {}
     for s in profile.get("services_add", []):
         name, _, lvl = s.partition(":")
-        inst.run(["rc-update", "add", name, lvl or "default"], chroot=True, check=False)
+        initsys.enable(inst, name, lvl or "default")
     for s in profile.get("services_del", []):
         name, _, lvl = s.partition(":")
-        inst.run(["rc-update", "del", name, lvl or "default"], chroot=True, check=False)
+        initsys.disable(inst, name, lvl or "default")
     if d.get("enable") and d.get("user"):
         add_desktop_user(inst, d)
 

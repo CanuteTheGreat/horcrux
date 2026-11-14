@@ -15,6 +15,8 @@ StandardOutput=append:/var/log/horcrux-firstboot.log
 StandardError=append:/var/log/horcrux-firstboot.log
 # the worker backgrounds the tree sync: do not kill its leftovers when the main process ends
 KillMode=process
+# stays "active (exited)" once the worker finished, as the OpenRC script stays started (the core-services QEMU gate: started, not stopped)
+RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target

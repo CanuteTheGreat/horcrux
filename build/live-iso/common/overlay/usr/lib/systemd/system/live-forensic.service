@@ -1,0 +1,14 @@
+# systemd twin of /etc/init.d/live-forensic (same script): forensic rescue, every disk read-only before udev can open it.
+[Unit]
+Description=Forensic rescue: all disks read-only, no auto-mount, no swap
+DefaultDependencies=no
+Before=systemd-udevd.service systemd-udev-trigger.service sysinit.target swap.target
+ConditionKernelCommandLine=rd.live.image
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/live-openrc-compat /etc/init.d/live-forensic start
+
+[Install]
+WantedBy=sysinit.target

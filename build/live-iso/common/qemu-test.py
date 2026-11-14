@@ -1385,6 +1385,10 @@ class Runner:
             if n > 40 and not missing:
                 break
             time.sleep(6)
+        if not (n > 40 and not missing):         # why: the GUI log, the session/a11y buses and the probe's own error
+            _, dbg = self.gsh(vm, "tail -n 15 /run/live-installer/gui.log; ps -eo pid,args | grep -E '[d]bus-daemon|[a]t-spi' | cut -c1-150; "
+                                  "/usr/libexec/live-installer-atspi tree 2>&1 | tail -n 6", 60)
+            print("gui-atspi-tree diagnostics:\n" + (dbg or "").replace("\r", ""), flush=True)
         self.step("gui-atspi-tree", n > 40 and not missing, f"{n} accessible nodes; missing: {missing}")
         self.gshot(vm, "keyboard", "Language, keyboard and install type (Server default)")
         # timezone through the keyboard-only picker
@@ -1958,6 +1962,16 @@ class Runner:
     def health_script(self, check_logs=True):
         P = self.P
         sh = init_cmds.services_health_sh(self.a.init, P["services"])
+        # the installed system runs the init of the ISO it came from (init-parity phase 3): PID 1 and the init markers must agree with --init
+        if self.a.init == "systemd":
+            sh += ['[ "$(cat /proc/1/comm)" = systemd ] && [ -d /run/systemd/system ] || echo "BAD PID 1 is $(cat /proc/1/comm), expected systemd"',
+                   # an ordering cycle makes systemd drop a random job each boot (a flaky boot): never acceptable
+                   'journalctl -b -q --no-pager -o cat 2>/dev/null | grep -m3 -i "ordering cycle" | sed "s|^|BAD |"',
+                   # each failed unit with the tail of its journal, so the gate's FAIL line says why it failed
+                   'systemctl --failed --no-legend --plain 2>/dev/null | awk \'{print $1}\' | while read -r u; do echo "BAD failed unit: $u"; '
+                   'journalctl -b -q --no-pager -o cat -n 6 -u "$u" 2>/dev/null | sed "s|^|BAD   $u: |"; done']
+        else:
+            sh += ['[ ! -d /run/systemd/system ] && [ -e /run/openrc/softlevel ] || echo "BAD PID 1 is $(cat /proc/1/comm), expected OpenRC init"']
         if P.get("forward"):
             sh += ['[ "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || echo "BAD net.ipv4.ip_forward=$(cat /proc/sys/net/ipv4/ip_forward)"',
                    '[ "$(cat /proc/sys/net/ipv6/conf/all/forwarding)" = 1 ] || echo "BAD net.ipv6.conf.all.forwarding=$(cat /proc/sys/net/ipv6/conf/all/forwarding)"',
@@ -1967,6 +1981,8 @@ class Runner:
         logs = " ".join(P.get("logdirs", []) + ["/var/log/messages", "/var/log/syslog"])
         if check_logs:
             sh.append(f'grep -rIiE -A2 "{self.DB_ERR}" {logs} 2>/dev/null | head -8 | sed "s/^/BAD db error in log: /"')
+            if self.a.init == "systemd":     # services log to the journal (no syslog daemon on the systemd images)
+                sh.append(f'journalctl -b -q --no-pager 2>/dev/null | grep -iE -A2 "{self.DB_ERR}" | head -8 | sed "s/^/BAD db error in journal: /"')
         sh.append('dmesg 2>/dev/null | grep -iE "invalid opcode|traps: .*(trap|ip:)" | head -3 | sed "s/^/BAD cpu fault: /"')
         sh.append("echo HEALTH-DONE")
         return "\n".join(sh)

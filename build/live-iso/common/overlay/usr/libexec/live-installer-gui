@@ -23,12 +23,20 @@ run_gui() {
 	       GSK_RENDERER=cairo GDK_DISABLE=gl,vulkan,dmabuf LIVEINST_RESULT=$RES
 	if [ -s $RUN/xkb ]; then read XKB_DEFAULT_LAYOUT XKB_DEFAULT_VARIANT < $RUN/xkb; export XKB_DEFAULT_LAYOUT XKB_DEFAULT_VARIANT; fi
 	rm -f $RES
-	# own session bus (address saved for the AT-SPI probe /usr/libexec/live-installer-atspi)
-	addr=$(dbus-daemon --session --fork --print-address 2>/dev/null)
+	# session bus (address saved for the AT-SPI probe /usr/libexec/live-installer-atspi). systemd: the logind session already has the user
+	# manager's bus; use it, because a second (forked) session bus means a second AT-SPI bus launcher competing for the same a11y bus socket
+	# under /run/user/0/at-spi, and the probe ended up on the other one (gui-atspi-tree: 0 accessible nodes). OpenRC: our own bus.
+	own=
+	if [ -d /run/systemd/system ] && [ -S /run/user/0/bus ]; then
+		addr=unix:path=/run/user/0/bus
+	else
+		addr=$(dbus-daemon --session --fork --print-address 2>/dev/null); own=1
+	fi
 	export DBUS_SESSION_BUS_ADDRESS=$addr
 	echo "$addr" > $RUN/dbus-address
 	cage -s -- /usr/bin/live-installer --ui gui >$RUN/gui.log 2>&1
-	pkill -f "dbus-daemon --session" 2>/dev/null
+	# only the bus we forked (never the user manager's: its command line also says dbus-daemon --session)
+	[ -n "$own" ] && pkill -f "dbus-daemon --session --fork" 2>/dev/null
 	return 0
 }
 

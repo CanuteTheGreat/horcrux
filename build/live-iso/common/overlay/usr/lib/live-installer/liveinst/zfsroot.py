@@ -180,17 +180,21 @@ def configure(inst, cmdline_extra="", kernel_glob="*"):
     from .system import mem_mb
     ram = mem_mb() or 8192
     inst.write("/etc/conf.d/zram-init", ZRAM_CONF.format(mb=max(2048, min(ram // 2, 16384))))
-    if os.path.exists(f"{inst.target}/etc/init.d/zram-init"):
+    from . import initsys
+    if initsys.target_init(inst.target) == "openrc" and os.path.exists(f"{inst.target}/etc/init.d/zram-init"):
         inst.run(["rc-update", "add", "zram-init", "boot"], chroot=True, check=False)
         # one zram swap only: the generic cfg_hardening step enabled the live image's zram-swap script as well, which gave
         # two zram devices (7.7G prio 16383 + 8G prio 100) on hogshead
         inst.run(["rc-update", "del", "zram-swap", "default"], chroot=True, check=False)
+    # systemd: the image's zram-swap.service (the same script as OpenRC's zram-swap, reads /etc/conf.d/zram-swap) is the one zram swap,
+    # enabled by cfg_finish_config
     inst.write("/etc/horcrux/be.conf", BE_CONF.format(cmdline=cmdline_extra.strip(), kglob=kernel_glob))
     inst.write("/etc/portage/bashrc", PORTAGE_BASHRC)
     inst.write("/etc/kernel/postinst.d/90-horcrux-be", "#!/bin/sh\nexec horcrux-be sync\n", 0o755)
-    # the boot-time import of an encrypted pool: zfs-import/zfs-mount from OpenRC (dracut already mounted /)
+    # the boot-time import of the other pools/datasets: zfs-import/zfs-mount (OpenRC) or zfs-import-cache/zfs-mount + zfs.target (systemd);
+    # dracut already mounted /
     for svc in ("zfs-import", "zfs-mount", "zfs-zed"):
-        inst.run(["rc-update", "add", svc, "boot" if svc != "zfs-zed" else "default"], chroot=True, check=False)
+        initsys.enable(inst, svc, "boot" if svc != "zfs-zed" else "default")
     if inst.c.get("zfs_encrypt") and inst.c.get("zfs_keymode") == "tpm":
         tpm_seal(inst)
     # /boot is its own ext4 partition: fstab (the installer wrote none)

@@ -1,0 +1,7 @@
+# GNOME on OpenRC: elogind, no systemd (the gnome-light Dockerfile deletes this file on a systemd image)
+gnome-base/gdm elogind -systemd
+gnome-base/gnome-shell -systemd
+media-video/wireplumber elogind -systemd
+sys-apps/fwupd -systemd
+net-print/cups -systemd
+net-wireless/bluez -systemd

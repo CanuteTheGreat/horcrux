@@ -26,6 +26,7 @@ import sys
 import time
 
 sys.path.insert(0, "/usr/lib/live-installer")
+from liveinst import initsys  # noqa: E402
 from liveinst import system as S  # noqa: E402
 
 RUN = "/run/live-installer"
@@ -307,7 +308,7 @@ def product(action):
     pf = p.get("admin_password_file")
     if action == "restart":
         for s in reversed(svcs):
-            sh(["rc-service", s, "stop"], timeout=120)
+            sh(initsys.control_cmd(initsys.running_init(), "stop", s), timeout=120)
     prev = {}
     try:
         prev = json.load(open(RUN + "/live-info"))
@@ -345,7 +346,8 @@ def product(action):
     with os.fdopen(fd, "w") as f:
         json.dump(info, f)
     for s in svcs:
-        sh(["rc-service", s, "start"], timeout=180)
+        # systemd: --no-block, this runs inside live-product.service during boot (a blocking start from a unit's ExecStart can wait on the boot transaction)
+        sh(initsys.control_cmd(initsys.running_init(), "start", s) + (["--no-block"] if initsys.running_init() == "systemd" else []), timeout=180)
     if pf and info["password"]:
         # the seed file must not stay around once the service has read it
         subprocess.Popen(["sh", "-c", f"n=0; while [ $n -lt 300 ]; do if ss -ltn 2>/dev/null | grep -q ':{port} '; then sleep 5; rm -f {pf}; exit 0; fi; sleep 2; n=$((n+2)); done"],

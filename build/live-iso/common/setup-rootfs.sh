@@ -5,9 +5,18 @@ set -eu
 
 chmod +x /etc/init.d/live-* /etc/init.d/zram-swap /usr/libexec/live-* /usr/libexec/console-menu-session /usr/bin/live-installer /usr/bin/live-rescue /usr/bin/live-persist 2>/dev/null || true
 
+# --- init system: the image's INIT (build.sh INIT=openrc|systemd -> the gentoo/stage3 flavour). One implementation of each live service: the
+# /etc/init.d script; on systemd its unit (/usr/lib/systemd/system/live-*.service) runs the same script through /usr/libexec/live-openrc-compat.
+INIT=${INIT:-openrc}
+case "$INIT" in openrc|systemd) ;; *) echo "setup-rootfs: unknown INIT=$INIT" >&2; exit 1 ;; esac
+if [ "$INIT" = systemd ]; then
+  [ -x /usr/lib/systemd/systemd ] || { echo "FATAL: INIT=systemd but this rootfs has no systemd (stage3 flavour?)" >&2; exit 1; }
+fi
+rm -f /.dockerenv
+
+if [ "$INIT" = openrc ]; then
 # --- the stage3 *container* image makes OpenRC think it runs in docker (skips root remount,
 # localmount, devfs ...): this rootfs boots on real hardware / KVM
-rm -f /.dockerenv
 sed -i 's/^#\?rc_sys=.*/rc_sys=""/' /etc/rc.conf
 
 # --- OpenRC runlevels (a stage3 container image ships them empty) ---------
@@ -22,6 +31,28 @@ add live-installer default
 add live-forensic sysinit
 add live-persist boot
 add live-product default
+# the systemd twins are not used on this image
+rm -f /usr/lib/systemd/system/live-*.service /usr/lib/systemd/system/zram-swap.service; rm -rf /etc/systemd/system/getty@tty1.service.d/00-live.conf
+rmdir /etc/systemd/system/getty@tty1.service.d /etc/systemd/system 2>/dev/null || true
+else
+# --- systemd: same services, same order, as units (journald replaces sysklogd; dhcpcd + iwd stay the network stack on both inits, so the
+# installer's network configuration is identical). sshd is deliberately NOT enabled on the live image.
+systemctl set-default multi-user.target
+systemctl enable getty@tty1.service cronie.service dhcpcd.service iwd.service \
+    live-serial.service live-installer.service live-forensic.service live-persist.service live-product.service
+# one getty per UART: live-serial owns the console= UART (the systemd-getty-generator would add serial-getty@<console> as well, which
+# steals input and prints stray login prompts: the OpenRC image deletes the stage3's s0:/f0: inittab lines for the same reason)
+systemctl mask serial-getty@.service
+# sshd off (the installer enables it on the installed system); no first-boot wizard on a live boot
+systemctl disable sshd.service sshd.socket 2>/dev/null || true
+systemctl mask systemd-firstboot.service
+# every boot (and every installed system) gets its own machine id: an EMPTY /etc/machine-id makes systemd generate one at boot
+: > /etc/machine-id; rm -f /var/lib/dbus/machine-id
+# journald: keep the journal in RAM on the live medium (the installed system has /var/log/journal from the package)
+mkdir -p /etc/systemd/journald.conf.d
+printf '[Journal]\n# live/installer image default (the installer removes this file)\nStorage=volatile\nRuntimeMaxUse=64M\n' > /etc/systemd/journald.conf.d/50-live.conf
+# the OpenRC scripts stay: they ARE the implementation the units run (live-openrc-compat)
+fi
 
 # --- no fstab entries (live: overlay root; installer writes its own) ------
 printf '# live system: root is an overlay; the installer writes the real fstab\ntmpfs /tmp tmpfs defaults,nosuid,nodev 0 0\n' > /etc/fstab
@@ -31,7 +62,7 @@ echo "${PROJECT}" > /etc/hostname
 printf 'hostname="%s"\n' "${PROJECT}" > /etc/conf.d/hostname
 # no stock serial getty: the live-serial service owns the console UART (stage3 ships s0:/ttyS0 on x86 and
 # f0:/ttyAMA0 on arm64; a second getty on the same UART steals input and prints stray login prompts)
-sed -i -E '/^#?[a-z][0-9a-z]*:[0-9]*:respawn:\/sbin\/agetty .*tty(S|AMA|AML|MXC|USB)[0-9]+ /d' /etc/inittab
+[ ! -f /etc/inittab ] || sed -i -E '/^#?[a-z][0-9a-z]*:[0-9]*:respawn:\/sbin\/agetty .*tty(S|AMA|AML|MXC|USB)[0-9]+ /d' /etc/inittab
 # /usr/lib/os-release: Horcrux's is owned by sys-apps/horcrux-release (installed by the core layer / the machine meta packages; name, version, build id, variant).
 # Products without such a package yet (Patronus) get this installed-system file written here: never "live/installer" (the live session marks itself at boot,
 # /usr/libexec/live-os-release); the URLs are the product's pages on the Errant Solutions site (never the Forgejo).
@@ -69,7 +100,7 @@ if [ -f /etc/chrony/chrony.conf ]; then
   grep -q '^makestep' /etc/chrony/chrony.conf || echo 'makestep 1.0 3' >> /etc/chrony/chrony.conf
   grep -q '^rtcsync' /etc/chrony/chrony.conf || echo 'rtcsync' >> /etc/chrony/chrony.conf
 fi
-chmod 0644 /etc/dhcpcd.exit-hook 2>/dev/null || true
+chmod 0644 /etc/dhcpcd.exit-hook /etc/dhcpcd.enter-hook 2>/dev/null || true
 
 # --- kernel + live initramfs ------------------------------------------------------
 kver=$(ls /lib/modules | sort -V | tail -1)
@@ -116,6 +147,18 @@ omit_dracutmodules+=" plymouth network-manager nfs iscsi biosdevname "
 add_drivers+=" $DRIVERS "
 compress="gzip"
 DR
+# systemd images use the SAME script-based dracut initramfs as the OpenRC images (dmsquash-live, zfs, the horcrux-unlock/tpm-unlock modules,
+# their hooks and prompts are then identical on both inits; systemd starts as PID 1 after switch_root). docs/design/init-parity.md, phase 3.
+# Own file: it stays on the installed system, so every kernel update builds the same kind of initramfs.
+if [ "$INIT" = systemd ]; then
+  # every systemd dracut module (systemd, systemd-*, dracut-systemd: e.g. systemd-battery-check errors out when only `systemd` is omitted), read
+  # from the installed modules so a dracut update that adds one cannot break the build. Modules that only use systemd WHEN it is included
+  # (resume, squash-lib, tpm2-tss, ...) stay.
+  sdmods=$(for d in /usr/lib/dracut/modules.d/[0-9]*; do n=${d##*/}; n=${n#[0-9][0-9]}; \
+           case "$n" in systemd|systemd-*|dracut-systemd) echo "$n" ;; esac; done | sort -u | tr '\n' ' ')
+  echo "dracut modules omitted (systemd initrd): $sdmods"
+  printf '# Horcrux/Patronus systemd images: script-based initramfs (same as the OpenRC images); systemd runs from the real root.\n# setup-rootfs.sh lists every module that is or needs systemd.\nomit_dracutmodules+=" %s "\nadd_dracutmodules+=" horcrux-scripted-init "\n' "$sdmods" > /etc/dracut.conf.d/05-init.conf
+fi
 # root on ZFS (Horcrux, Patronus): put the zfs dracut module into the generic initramfs when it is installed
 if [ -d /usr/lib/dracut/modules.d/90zfs ]; then echo 'add_dracutmodules+=" zfs "' >> /etc/dracut.conf.d/live.conf; fi
 # dracut exits 0 after `dracut[E]: FAILED: dracut-install ...` (a module it could not find): fail the build on any [E] line, and below on a missing zfs/squashfs in the result
@@ -126,6 +169,7 @@ lsinitrd "/boot/initramfs-${kver}.img" > /tmp/initrd.lst 2>&1
 if [ -d /usr/lib/dracut/modules.d/90zfs ] && ! grep -Eq '/(zfs|spl)\.ko' /tmp/initrd.lst; then
   echo "FATAL: the initramfs of $kver has no zfs module although zfs is installed: the installed system could not import its pool" >&2; exit 1
 fi
+if [ "$INIT" = systemd ] && grep -Eq ' (usr/)?bin/systemctl$' /tmp/initrd.lst; then echo "FATAL: the script-based initramfs contains systemctl (zfs-load-key.sh would wait for systemd forever)" >&2; exit 1; fi
 grep -Eq 'squashfs' /tmp/initrd.lst || grep -q '/squashfs\.ko' "/lib/modules/$kver/modules.builtin" || { echo "FATAL: the initramfs of $kver has no squashfs support" >&2; exit 1; }
 rm -f /tmp/dracut.log /tmp/initrd.lst
 ls -l /boot

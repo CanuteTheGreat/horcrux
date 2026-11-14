@@ -269,10 +269,11 @@ def write_config(inst):
     inst.write("/etc/modules-load.d/horcrux-t2.conf", modules_load_conf())
     if install_audio(inst):
         inst.log("T2 audio: t2linux profile sets installed")
-    # services (OpenRC); each only when the package/init script is in the image
+    # services (OpenRC script or systemd unit); each only when the package is in the image
+    from . import initsys
     for svc in ("t2fanrd", "tiny-dfr"):
-        if os.path.exists(f"{inst.target}/etc/init.d/{svc}") and os.path.exists(f"{inst.target}/usr/bin/{svc}"):
-            inst.run(["rc-update", "add", svc, "default"], chroot=True, check=False)
+        if initsys.installed(inst, svc) and os.path.exists(f"{inst.target}/usr/bin/{svc}"):
+            initsys.enable(inst, svc, "default")
 
 
 def rebuild_initramfs(inst, kver):

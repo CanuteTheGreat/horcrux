@@ -5,6 +5,9 @@
 ARG BASE
 FROM ${BASE}
 ARG ARCH=x86_64
+# init system of the image + the per-arch-and-init binary package cache (build.sh passes both; see common/Dockerfile.rootfs)
+ARG INIT=openrc
+ARG BINPKG_ID=binpkgs-${ARCH}
 ARG VARIANT=gnome
 
 COPY project/variants/gnome/portage/ /etc/portage/
@@ -12,7 +15,7 @@ COPY project/variants/gnome/packages.txt /tmp/packages-gnome.txt
 # the extras meta package lives in the Horcrux overlay (hxfull = the repo's gentoo/)
 COPY --from=hxfull /gnome-extra/horcrux-gnome-extras/ /var/db/repos/horcrux/gnome-extra/horcrux-gnome-extras/
 
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     emerge-webrsync -q || emerge --sync -q; \

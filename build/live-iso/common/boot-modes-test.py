@@ -180,7 +180,7 @@ class Tests:
             return base
         a = self.a
         d = f"{a.out}/install"
-        cmd = [sys.executable, "-u", os.path.join(HERE, "qemu-test.py"), "--iso", a.iso, "--project", a.project, "--mode", a.mode, "--media", a.media,
+        cmd = [sys.executable, "-u", os.path.join(HERE, "qemu-test.py"), "--iso", a.iso, "--project", a.project, "--init", a.init, "--mode", a.mode, "--media", a.media,
                "--flow", "auto", "--fs", "ext4", "--disk-gb", "12", "--keep-disks", "--arch", a.arch, "--out", d]
         t = time.time()
         r = subprocess.run(cmd, capture_output=True, text=True)
@@ -619,6 +619,7 @@ def main():
     ap.add_argument("--mode", choices=["uefi", "bios"], default="uefi")
     ap.add_argument("--media", choices=["usb", "cdrom"], default="usb")
     ap.add_argument("--arch", choices=list(qt.ARCHS), default=qt.HOST_ARCH)
+    ap.add_argument("--init", choices=["openrc", "systemd"], default="openrc", help="init system of the ISO (its installed system runs the same one)")
     ap.add_argument("--slow", type=float, default=0)
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"))
     ap.add_argument("--only", default="menu,modes,forensic,rescue,live,persist")
