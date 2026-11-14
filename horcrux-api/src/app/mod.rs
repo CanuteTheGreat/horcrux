@@ -543,6 +543,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::audit_view::routes())
         .merge(api::node_shell::routes())
         .merge(api::sdn_zones::routes(&state))
+        .merge(api::sdn_ovs::routes(&state))
         .merge(api::vm_hw::routes())
         .merge(api::vm_devices::routes())
         .merge(api::mdev::routes())

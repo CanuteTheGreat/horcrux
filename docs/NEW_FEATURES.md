@@ -39,8 +39,17 @@ POST /api/sdn/ovs/bridges/{bridge}/ports
   }
 }
 
-# List all OVS bridges
+# List all OVS bridges / one bridge with its ports
 GET /api/sdn/ovs/bridges
+GET /api/sdn/ovs/bridges/{bridge}
+
+# Remove a bridge, a port, or all of a bridge's flows
+DELETE /api/sdn/ovs/bridges/{bridge}
+DELETE /api/sdn/ovs/bridges/{bridge}/ports/{port}
+DELETE /api/sdn/ovs/bridges/{bridge}/flows
+
+# List a bridge's flows
+GET /api/sdn/ovs/bridges/{bridge}/flows
 
 # Add OpenFlow rule
 POST /api/sdn/ovs/bridges/{bridge}/flows

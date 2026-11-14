@@ -12,7 +12,8 @@ pub struct OvsBridge {
     pub name: String,
     pub datapath_type: DatapathType,
     pub fail_mode: Option<FailMode>,
-    pub protocols: Vec<String>,     // e.g., ["OpenFlow10", "OpenFlow13"]
+    #[serde(default)]
+    pub protocols: Vec<String>, // e.g., ["OpenFlow10", "OpenFlow13"]
     pub controller: Option<String>, // Controller address (e.g., "tcp:127.0.0.1:6633")
 }
 
@@ -37,8 +38,10 @@ pub enum FailMode {
 pub struct OvsPort {
     pub name: String,
     pub port_type: PortType,
-    pub tag: Option<u16>,                 // VLAN tag (1-4095)
-    pub trunks: Vec<u16>,                 // Trunk VLANs
+    pub tag: Option<u16>, // VLAN tag (1-4095)
+    #[serde(default)]
+    pub trunks: Vec<u16>, // Trunk VLANs
+    #[serde(default)]
     pub options: HashMap<String, String>, // Type-specific options
 }
 
@@ -394,6 +397,42 @@ impl OvsManager {
         Ok(ports)
     }
 
+    /// `ovs-ofctl` speaks OpenFlow 1.0 unless told otherwise, and a bridge limited
+    /// to newer protocols (`protocols=OpenFlow13`) refuses it ("version negotiation
+    /// failed"): talk the newest version the bridge allows.
+    fn ofctl_args(cmd: &str, bridge_name: &str, flow: Option<&str>) -> Vec<String> {
+        let mut args = Vec::new();
+        if let Ok(out) = Command::new("ovs-vsctl")
+            .args(["get", "bridge", bridge_name, "protocols"])
+            .output()
+        {
+            if let Some(v) = Self::newest_protocol(&String::from_utf8_lossy(&out.stdout)) {
+                args.push("-O".to_string());
+                args.push(v);
+            }
+        }
+        args.push(cmd.to_string());
+        args.push(bridge_name.to_string());
+        args.extend(flow.map(str::to_string));
+        args
+    }
+
+    /// Newest `OpenFlowNN` in an `ovs-vsctl get ... protocols` value like `[OpenFlow10, OpenFlow13]`.
+    fn newest_protocol(value: &str) -> Option<String> {
+        value
+            .trim()
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .map(|p| p.trim().trim_matches('"'))
+            .filter(|p| {
+                p.starts_with("OpenFlow")
+                    && p[8..].chars().all(|c| c.is_ascii_digit())
+                    && p.len() > 8
+            })
+            .max_by_key(|p| p[8..].parse::<u32>().unwrap_or(0))
+            .map(str::to_string)
+    }
+
     /// Add an OpenFlow rule
     pub fn add_flow(bridge_name: &str, flow: &OvsFlow) -> Result<(), String> {
         let mut flow_str = format!("table={},priority={}", flow.table, flow.priority);
@@ -409,7 +448,7 @@ impl OvsManager {
         }
 
         let output = Command::new("ovs-ofctl")
-            .args(["add-flow", bridge_name, &flow_str])
+            .args(Self::ofctl_args("add-flow", bridge_name, Some(&flow_str)))
             .output()
             .map_err(|e| format!("Failed to add flow: {}", e))?;
 
@@ -426,7 +465,7 @@ impl OvsManager {
     /// Delete all flows from a bridge
     pub fn delete_flows(bridge_name: &str) -> Result<(), String> {
         let output = Command::new("ovs-ofctl")
-            .args(["del-flows", bridge_name])
+            .args(Self::ofctl_args("del-flows", bridge_name, None))
             .output()
             .map_err(|e| format!("Failed to delete flows: {}", e))?;
 
@@ -443,7 +482,7 @@ impl OvsManager {
     /// Show flows on a bridge
     pub fn show_flows(bridge_name: &str) -> Result<String, String> {
         let output = Command::new("ovs-ofctl")
-            .args(["dump-flows", bridge_name])
+            .args(Self::ofctl_args("dump-flows", bridge_name, None))
             .output()
             .map_err(|e| format!("Failed to show flows: {}", e))?;
 
@@ -460,7 +499,7 @@ impl OvsManager {
     /// Get bridge information
     pub fn get_bridge_info(bridge_name: &str) -> Result<BridgeInfo, String> {
         let output = Command::new("ovs-vsctl")
-            .args(["show", bridge_name])
+            .args(["list", "bridge", bridge_name])
             .output()
             .map_err(|e| format!("Failed to get bridge info: {}", e))?;
 
@@ -498,6 +537,30 @@ mod tests {
     fn test_vlan_validation() {
         assert!(OvsManager::set_port_vlan("br0", "port1", 0).is_err());
         assert!(OvsManager::set_port_vlan("br0", "port1", 4096).is_err());
+    }
+
+    #[test]
+    fn newest_protocol_is_picked_from_the_bridge_value() {
+        let n = OvsManager::newest_protocol;
+        assert_eq!(n("[OpenFlow13]\n").as_deref(), Some("OpenFlow13"));
+        assert_eq!(
+            n("[OpenFlow10, OpenFlow15, OpenFlow13]").as_deref(),
+            Some("OpenFlow15")
+        );
+        assert_eq!(n("[]\n"), None);
+        assert_eq!(n(""), None);
+    }
+
+    #[test]
+    fn documented_request_bodies_parse() {
+        let p: OvsPort = serde_json::from_str(
+            r#"{"name":"vxlan100","port_type":"vxlan","options":{"remote_ip":"192.168.1.100","key":"100"}}"#,
+        )
+        .unwrap();
+        assert!(p.trunks.is_empty() && p.tag.is_none());
+        let b: OvsBridge =
+            serde_json::from_str(r#"{"name":"ovsbr0","datapath_type":"system"}"#).unwrap();
+        assert!(b.protocols.is_empty());
     }
 
     #[test]
