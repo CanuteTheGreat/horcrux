@@ -288,6 +288,10 @@ pub struct ContainerManager {
     containers: Arc<RwLock<HashMap<String, Container>>>,
     /// Ids with a runtime create in flight (see `create_container`).
     creating: Arc<Mutex<InFlight>>,
+    /// Held across a whole reconcile pass (runtime listing + map update), so a
+    /// slow pass that listed *before* an out-of-band change can never write its
+    /// stale snapshot over the fresher pass that started after it.
+    reconcile_gate: Arc<tokio::sync::Mutex<()>>,
     #[cfg(feature = "lxc")]
     lxc_manager: lxc::LxcManager,
     #[cfg(feature = "lxd")]
@@ -312,6 +316,7 @@ impl ContainerManager {
         Self {
             containers: Arc::new(RwLock::new(HashMap::new())),
             creating: Arc::new(Mutex::new(InFlight::default())),
+            reconcile_gate: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(feature = "lxc")]
             lxc_manager: lxc::LxcManager::new(),
             #[cfg(feature = "lxd")]
@@ -331,6 +336,7 @@ impl ContainerManager {
         Self {
             containers: Arc::new(RwLock::new(HashMap::new())),
             creating: Arc::new(Mutex::new(InFlight::default())),
+            reconcile_gate: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(feature = "lxc")]
             lxc_manager: lxc::LxcManager::new(),
             #[cfg(feature = "lxd")]
@@ -355,14 +361,20 @@ impl ContainerManager {
     /// docker CLI, or created before an API restart - the map is in-memory)
     /// are adopted so they can be managed from the UI.
     pub async fn list_containers(&self) -> Vec<ContainerConfig> {
-        self.reconcile_docker().await;
-        self.reconcile_podman().await;
-        self.reconcile_lxc().await;
-        self.reconcile_instances().await;
+        self.reconcile_all().await;
         let containers = self.containers.read().await;
         let mut list: Vec<ContainerConfig> = containers.values().map(|c| c.to_config()).collect();
         list.sort_by(|a, b| a.id.cmp(&b.id));
         list
+    }
+
+    /// One full reconcile pass over every compiled-in runtime, serialised.
+    async fn reconcile_all(&self) {
+        let _gate = self.reconcile_gate.lock().await;
+        self.reconcile_docker().await;
+        self.reconcile_podman().await;
+        self.reconcile_lxc().await;
+        self.reconcile_instances().await;
     }
 
     /// Bring the Docker part of the in-memory map in line with the daemon.
@@ -620,10 +632,7 @@ impl ContainerManager {
 
     /// Get a specific container by ID
     pub async fn get_container(&self, id: &str) -> Result<ContainerConfig> {
-        self.reconcile_docker().await;
-        self.reconcile_podman().await;
-        self.reconcile_lxc().await;
-        self.reconcile_instances().await;
+        self.reconcile_all().await;
         let containers = self.containers.read().await;
         containers
             .get(id)
