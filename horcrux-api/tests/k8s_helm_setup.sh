@@ -113,27 +113,34 @@ for c in $(docker ps -aq --filter name=horcrux-ci-k3s-); do
 done
 
 name="horcrux-ci-k3s-${HX_RUN_TAG:-$$}"
-docker run -d --name "$name" --privileged --network "$net" --memory 2g \
-    --tmpfs /run --tmpfs /var/run \
-    "$K3S_IMAGE" server \
-    --disable=traefik,metrics-server,servicelb,local-storage \
-    --write-kubeconfig-mode 644 >/dev/null
-# Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
-bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$name"
-[ -n "${GITHUB_ENV:-}" ] && echo "HORCRUX_CI_K3S=$name" >>"$GITHUB_ENV"
-
+# k3s's kubelet occasionally stalls at start on a loaded runner (run 16338: 190 s with the
+# node never registering, after "cgroup manager.Set failed ... kubepods/pids.max"); a fresh
+# container starts in ~15 s on the same host. Retry the whole start up to 3 times, loudly.
 ready=
-for i in $(seq 1 90); do
-    if docker exec "$name" kubectl get --raw /readyz >/dev/null 2>&1 &&
-        docker exec "$name" kubectl -n default get serviceaccount default >/dev/null 2>&1; then
-        ready=1
-        break
-    fi
-    sleep 2
+for attempt in 1 2 3; do
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    docker run -d --name "$name" --privileged --network "$net" --memory 2g \
+        --tmpfs /run --tmpfs /var/run \
+        "$K3S_IMAGE" server \
+        --disable=traefik,metrics-server,servicelb,local-storage \
+        --write-kubeconfig-mode 644 >/dev/null
+    # Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
+    bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$name"
+    [ -n "${GITHUB_ENV:-}" ] && ! grep -qx "HORCRUX_CI_K3S=$name" "$GITHUB_ENV" && echo "HORCRUX_CI_K3S=$name" >>"$GITHUB_ENV"
+    for i in $(seq 1 60); do
+        if docker exec "$name" kubectl get --raw /readyz >/dev/null 2>&1 &&
+            docker exec "$name" kubectl -n default get serviceaccount default >/dev/null 2>&1; then
+            ready=1
+            break
+        fi
+        sleep 2
+    done
+    [ -n "$ready" ] && break
+    echo "k3s did not become ready (attempt $attempt/3)" >&2
+    docker logs --tail 40 "$name" >&2 || true
 done
 if [ -z "$ready" ]; then
-    echo "k3s did not become ready" >&2
-    docker logs --tail 80 "$name" >&2 || true
+    echo "k3s did not become ready after 3 attempts" >&2
     exit 1
 fi
 ip=$(docker inspect "$name" -f "{{(index .NetworkSettings.Networks \"$net\").IPAddress}}")
