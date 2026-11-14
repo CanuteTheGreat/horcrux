@@ -1,0 +1,6 @@
+# app-misc/hogsmeade-downloads-sort (HOGSMEADE only): keep ~/Downloads sorted. Moves only, never deletes or overwrites.
+# Hourly check; the sorter itself runs at most once per 20 h and only when the onedrive client is running and idle.
+# Its own log: ~/.local/state/downloads-sort/progress.log (moves-YYYYMMDD.tsv + undo-YYYYMMDD.sh next to it).
+SHELL=/bin/sh
+PATH=/usr/bin:/bin
+23 * * * * canutethegreat [ -x /usr/bin/hogsmeade-downloads-sort ] && nice -n 19 ionice -c 3 /usr/bin/hogsmeade-downloads-sort nightly >/dev/null 2>&1

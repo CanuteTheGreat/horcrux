@@ -1,0 +1,729 @@
+#!/usr/bin/env python3
+"""hogsmeade-downloads-sort: keep ~/Downloads sorted into plain type folders. MOVES ONLY.
+
+Owner rules (HOGSMEADE, 2026-11-13):
+  * never delete or overwrite: every move is a same-filesystem rename(2) with RENAME_NOREPLACE; a name clash gets " (2)", " (3)", ...
+  * every move is logged (TSV: old path, new path, size, mtime) to <state>/moves-YYYYMMDD.tsv and an undo script
+    <state>/undo-YYYYMMDD.sh reverses every move of that day (newest first, mv -n, so it never overwrites either);
+  * files (and top-level folders containing any file) modified in the last --keep-days days (default 14) stay where they are;
+  * in-progress downloads (*.part, *.crdownload, *.tmp, ...) and hidden names are never touched;
+  * a top-level folder moves as one unit into the bucket that matches its dominant content (Folders/ when mixed);
+  * loose top-level files go by type; a bucket holding more than 500 loose files is sub-sorted by year (YYYY/, from mtime).
+
+Commands: inventory | plan | apply | verify | report     (run as the owner, at nice 19 / ionice idle)
+"""
+import argparse
+import collections
+import ctypes
+import errno
+import hashlib
+import json
+import os
+import re
+import shlex
+import sys
+import time
+
+YEAR_THRESHOLD = 500
+IN_PROGRESS = (".part", ".crdownload", ".tmp", ".partial", ".download", ".opdownload", ".!qb", ".aria2", ".filepart")
+
+# extension -> bucket (relative path under Downloads). Checked on the LAST suffix, lower case.
+BUCKETS = {
+    "Documents": "pdf doc docx docm dot dotx xls xlsx xlsm xlsb ods odt odp odg ppt pptx pps ppsx txt md rtf csv tsv tex "
+                 "html htm mht mhtml xps oxps pages numbers key-doc vsd vsdx one ics vcf eml msg rpmsg enw",
+    "Documents/Books": "epub mobi azw azw3 djvu fb2 cbz cbr",
+    "Images": "jpg jpeg jpe jfif png gif webp heic heif svg bmp tif tiff ico avif psd xcf raw cr2 cr3 nef arw dng orf rw2",
+    "Videos": "mp4 mkv avi mov webm m4v wmv flv mpg mpeg m2ts mts 3gp vob",
+    "Audio": "mp3 flac wav m4a ogg opus aac wma aiff aif alac mid midi",
+    "Archives": "zip 7z rar tar gz tgz bz2 tbz2 xz txz zst lz lzma z",
+    "Disk Images": "iso img qcow2 vmdk vhd vhdx dmg vdi ova ovf wim esd",
+    "Installers/Windows": "exe msi msix msixbundle appx appxbundle",
+    "Installers/macOS": "pkg mpkg",
+    "Installers/Linux": "deb rpm appimage flatpakref flatpak snap run",
+    "Installers/Android": "apk aab xapk apks",
+    "Torrents": "torrent",
+    "Code": "py sh bash zsh fish ps1 psm1 bat cmd js mjs cjs ts tsx jsx rs go c h cpp hpp cc java kt kts rb php pl lua "
+            "json yaml yml toml ini cfg conf ipynb xml sql patch diff ebuild nix gradle css scss",
+    "3D-Print": "stl 3mf gcode obj step stp f3d scad",
+    "Fonts": "ttf otf woff woff2 fon",
+    "Keys": "pem crt cer der key pub asc gpg sig p12 pfx csr certsigningrequest ovpn kdbx",
+}
+EXT = {e: b for b, exts in BUCKETS.items() for e in exts.split()}
+ROOT_BUCKETS = sorted({b.split("/")[0] for b in BUCKETS} | {"Software", "Folders", "Other"})
+SOFTWARE_EXT = {"exe", "dll", "msi", "sys", "so", "bin", "app", "jar", "winmd", "pak"}
+CODE_EXT = {e for e, b in EXT.items() if b == "Code"} | {"cl", "hcmask", "hcchr", "rule", "mk", "cmake", "s", "asm", "smali", "kt", "swift",
+                                                         "m", "mm", "cs", "vb", "fs", "dart", "lock", "gitignore", "in", "am", "ac"}
+YEAR_RE = re.compile(r"^(19|20)\d\d$")
+
+
+def ext_of(name):
+    """Last suffix, lower case. Browser duplicate suffixes are looked through: 'a.png.1' -> png, 'b.jpeg (1)' -> jpeg."""
+    n = re.sub(r" \(\d+\)$", "", name)
+    n = re.sub(r"(\.[A-Za-z][A-Za-z0-9]{0,5})\.\d{1,2}$", r"\1", n)
+    return n.rsplit(".", 1)[-1].lower() if "." in n.lstrip(".") else ""
+
+
+def bucket_for_file(name, size):
+    e = ext_of(name)
+    if e == "ts" and size > 10 * 1024 * 1024:  # MPEG transport stream, not TypeScript
+        return "Videos"
+    if e == "raw" and size > 256 * 1024 * 1024:
+        return "Disk Images"
+    return EXT.get(e, "Other")
+
+
+def in_progress(name):
+    n = name.lower()
+    return n.endswith(IN_PROGRESS) or n.startswith("~$") or n.startswith(".~lock")
+
+
+# ---------------------------------------------------------------- safe rename (never overwrites)
+_libc = ctypes.CDLL(None, use_errno=True)
+_RENAME_NOREPLACE = 1
+_AT_FDCWD = -100
+
+
+def rename_noreplace(src, dst):
+    """rename(2) that fails with FileExistsError instead of replacing dst. Same filesystem only (EXDEV -> error, never a copy)."""
+    try:
+        fn = _libc.renameat2
+    except AttributeError:
+        fn = None
+    if fn is not None:
+        r = fn(_AT_FDCWD, os.fsencode(src), _AT_FDCWD, os.fsencode(dst), _RENAME_NOREPLACE)
+        if r == 0:
+            return
+        err = ctypes.get_errno()
+        if err not in (errno.EINVAL, errno.ENOSYS):
+            raise OSError(err, os.strerror(err), dst)
+    # filesystem without RENAME_NOREPLACE: link-free fallback, checked immediately before the rename
+    if os.path.lexists(dst):
+        raise FileExistsError(errno.EEXIST, "exists", dst)
+    os.rename(src, dst)
+
+
+def free_name(dirpath, name, taken, is_dir=False):
+    """name, or 'stem (2).ext', 'stem (3).ext' ... that exists neither on disk nor in this run's plan (folders: 'name (2)')."""
+    if "." in name.lstrip(".") and not is_dir:
+        stem, dot, suf = name.rpartition(".")
+        # keep double suffixes together: foo.tar.gz -> foo (2).tar.gz
+        if stem.lower().endswith(".tar"):
+            stem, suf = stem[:-4], "tar." + suf
+        suf = "." + suf
+    else:
+        stem, suf = name, ""
+    cand, i = name, 1
+    while os.path.lexists(os.path.join(dirpath, cand)) or os.path.join(dirpath, cand) in taken:
+        i += 1
+        cand = f"{stem} ({i}){suf}"
+    return cand
+
+
+# ---------------------------------------------------------------- scanning
+def walk_stats(path):
+    """files, bytes, newest mtime, per-bucket counts/bytes, ext counts, has_git for a folder."""
+    files = nbytes = 0
+    newest = 0.0
+    cnt = collections.Counter()
+    byt = collections.Counter()
+    exts = collections.Counter()
+    has_git = False
+    for dp, dns, fns in os.walk(path):
+        if ".git" in dns:
+            has_git = True
+        for f in fns:
+            p = os.path.join(dp, f)
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if not os.path.isfile(p) or os.path.islink(p):
+                continue
+            files += 1
+            nbytes += st.st_size
+            newest = max(newest, st.st_mtime)
+            if "/.git/" in p + "/":
+                continue
+            e = ext_of(f)
+            exts[e] += 1
+            b = bucket_for_file(f, st.st_size).split("/")[0]
+            if e in SOFTWARE_EXT:
+                b = "Software"
+            elif e in CODE_EXT:
+                b = "Code"
+            cnt[b] += 1
+            byt[b] += st.st_size
+    return {"files": files, "bytes": nbytes, "newest": newest, "count": dict(cnt), "bytes_by": dict(byt),
+            "exts": dict(exts.most_common(12)), "git": has_git}
+
+
+def bucket_for_folder(s):
+    """Dominant content -> bucket; mixed/unclear -> Folders."""
+    if s["files"] == 0:
+        return "Folders"
+    cnt, byt = s["count"], s["bytes_by"]
+    nf = sum(cnt.values()) or 1
+    nb = sum(byt.values()) or 1
+    if s["git"] or cnt.get("Code", 0) / nf >= 0.75:
+        return "Code"
+    # extracted software (hashcat-x.y, driver packs): executables/libraries are a real part of it
+    if cnt.get("Software", 0) and (cnt.get("Software", 0) / nf >= 0.1 or (byt.get("Software", 0) + byt.get("Installers", 0)) / nb >= 0.2):
+        return "Software"
+    if cnt.get("Code", 0) / nf >= 0.5:
+        return "Code"
+    if byt.get("Installers", 0) / nb >= 0.6:
+        return "Software"
+    for b in ("Videos", "Images", "Audio", "Documents", "Archives", "Disk Images", "3D-Print", "Fonts", "Keys", "Torrents"):
+        if cnt.get(b, 0) / nf >= 0.75 or (byt.get(b, 0) / nb >= 0.6 and cnt.get(b, 0) / nf >= 0.4) or byt.get(b, 0) / nb >= 0.9:
+            return b
+    return "Folders"
+
+
+def file_skip_reason(name, st, now, keep_days):
+    if name.startswith("."):
+        return "hidden"
+    if in_progress(name):
+        return "in-progress"
+    if now - st.st_mtime < 600:
+        return "modified<10min"
+    if now - st.st_mtime < keep_days * 86400:
+        return f"recent<{keep_days}d"
+    return None
+
+
+def scan(root, keep_days):
+    now = time.time()
+    loose, folders, skipped = [], [], []
+    for e in sorted(os.scandir(root), key=lambda x: x.name):
+        p = e.path
+        if e.is_symlink():
+            skipped.append({"path": p, "reason": "symlink"})
+            continue
+        if e.is_dir():
+            if e.name in ROOT_BUCKETS:
+                continue
+            if e.name.startswith("."):
+                skipped.append({"path": p, "reason": "hidden"})
+                continue
+            s = walk_stats(p)
+            s.update(path=p, name=e.name, bucket=bucket_for_folder(s))
+            if s["files"] and now - s["newest"] < keep_days * 86400:
+                s["skip"] = f"recent<{keep_days}d"
+            folders.append(s)
+        elif e.is_file():
+            st = e.stat(follow_symlinks=False)
+            r = file_skip_reason(e.name, st, now, keep_days)
+            item = {"path": p, "name": e.name, "size": st.st_size, "mtime": st.st_mtime,
+                    "bucket": bucket_for_file(e.name, st.st_size)}
+            if r:
+                item["skip"] = r
+            loose.append(item)
+        else:
+            skipped.append({"path": p, "reason": "special"})
+    return loose, folders, skipped
+
+
+def tree_totals(root):
+    n = b = 0
+    for dp, dns, fns in os.walk(root):
+        for f in fns:
+            p = os.path.join(dp, f)
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if os.path.islink(p):
+                continue
+            n += 1
+            b += st.st_size
+    return n, b
+
+
+# ---------------------------------------------------------------- planning
+def leaf_loose_files(root, leaf):
+    d = os.path.join(root, leaf)
+    out = []
+    if os.path.isdir(d):
+        for e in os.scandir(d):
+            if e.is_file(follow_symlinks=False):
+                out.append(e)
+    return out
+
+
+def leaf_has_years(root, leaf):
+    d = os.path.join(root, leaf)
+    return os.path.isdir(d) and any(e.is_dir() and YEAR_RE.match(e.name) for e in os.scandir(d))
+
+
+def year_of(mtime):
+    return time.strftime("%Y", time.localtime(mtime))
+
+
+def make_plan(root, keep_days):
+    loose, folders, skipped = scan(root, keep_days)
+    now = time.time()
+    taken = set()
+    plan = []  # (kind, src, dst, size, mtime, bucket)
+    # 1) folders as units
+    for f in folders:
+        if f.get("skip"):
+            continue
+        dst_dir = os.path.join(root, f["bucket"])
+        dst = os.path.join(dst_dir, free_name(dst_dir, f["name"], taken, is_dir=True))
+        taken.add(dst)
+        plan.append(("dir", f["path"], dst, f["bytes"], f["newest"], f["bucket"], f["files"]))
+    # 2) loose files, with the year rule per leaf bucket
+    incoming = collections.defaultdict(list)
+    for it in loose:
+        if not it.get("skip"):
+            incoming[it["bucket"]].append(it)
+    for leaf, items in sorted(incoming.items()):
+        existing = []
+        for e in leaf_loose_files(root, leaf):
+            st = e.stat(follow_symlinks=False)
+            if not file_skip_reason(e.name, st, now, keep_days):
+                existing.append({"path": e.path, "name": e.name, "size": st.st_size, "mtime": st.st_mtime})
+        years = leaf_has_years(root, leaf) or len(items) + len(existing) > YEAR_THRESHOLD
+        move = items + (existing if years else [])
+        for it in move:
+            dst_dir = os.path.join(root, leaf, year_of(it["mtime"])) if years else os.path.join(root, leaf)
+            if os.path.dirname(it["path"]) == dst_dir:
+                continue
+            dst = os.path.join(dst_dir, free_name(dst_dir, it["name"], taken))
+            taken.add(dst)
+            plan.append(("file", it["path"], dst, it["size"], it["mtime"], leaf, 1))
+    return plan, loose, folders, skipped
+
+
+def esc(s):
+    return s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+
+
+def unesc(s):
+    return re.sub(r"\\(.)", lambda m: {"t": "\t", "n": "\n", "\\": "\\"}.get(m.group(1), m.group(1)), s)
+
+
+# ---------------------------------------------------------------- onedrive client watch
+class OneDriveLog:
+    """Follows the abraunegg onedrive --monitor log (and its monitor-status.json) so the sort never outruns the client.
+
+    Lesson (2026-11-13): onedrive turns a local move into a server-side move ONLY when the destination folder is already
+    in its database. A move into a folder it has not uploaded yet is treated as NEW data: every file is uploaded again
+    and the old copies are deleted online. So destination folders are created first and the moves wait until the client
+    reports each one created online; a move that still shows up as an upload stops the run."""
+    ERR = re.compile(r"(ERROR|error:|failed|Failed|FAILED|unable to|Unable to|HTTP 4\d\d|HTTP 5\d\d)")
+    NEW_DATA = re.compile(r"^(New directories to create on Microsoft OneDrive|New items to upload to Microsoft OneDrive|Uploading new file): ?(.*)$")
+    CREATED = re.compile(r"^Successfully created the remote directory (.+) on Microsoft OneDrive\s*$")
+
+    def __init__(self, path, status=None, sync_root=None):
+        self.path = path if path and os.path.isfile(path) else None
+        self.status = status if status and os.path.isfile(status) else None
+        self.sync_root = os.path.realpath(sync_root) if sync_root else None
+        self.pos = os.path.getsize(self.path) if self.path else 0
+        self.errors = []
+        self.created = set()
+        self.new_data = []
+        self.recent = []  # created/uploaded lines since the last reset (one batch)
+
+    def read_all(self):
+        """Learn every folder the client ever reported created (folders made by an earlier, interrupted run)."""
+        pos = self.pos
+        self.pos = 0
+        self.read_new()
+        self.pos = max(self.pos, pos)
+        self.recent = []
+        self.new_data = []
+
+    def rel(self, p):
+        return "./" + os.path.relpath(p, self.sync_root) if self.sync_root else p
+
+    def read_new(self):
+        if not self.path:
+            return ""
+        size = os.path.getsize(self.path)
+        if size < self.pos:  # rotated
+            self.pos = 0
+        with open(self.path, "rb") as fh:
+            fh.seek(self.pos)
+            data = fh.read().decode("utf-8", "replace")
+        self.pos = size
+        for line in data.splitlines():
+            if re.search(r"\bERROR\b", line) or (self.ERR.search(line) and "Downloads" in line):
+                self.errors.append(line.strip())
+            m = self.CREATED.match(line.strip())
+            if m:
+                self.created.add(m.group(1))
+                self.recent.append(line.strip())
+            m = self.NEW_DATA.match(line.strip())
+            if m:
+                self.new_data.append(line.strip())
+                self.recent.append(line.strip())
+        return data
+
+    def busy(self):
+        if not self.status:
+            return False
+        try:
+            st = json.load(open(self.status))
+            return st.get("process", {}).get("state", "idle") != "idle"
+        except (OSError, ValueError):
+            return False
+
+    def client_running(self):
+        """None when there is no onedrive client set up; else whether its monitor process is alive. Moving while the
+        client is stopped is unsafe: on its next start it sees the moves as deletions + new data, not as moves."""
+        if not self.status:
+            return None
+        try:
+            pid = int(json.load(open(self.status)).get("pid", 0))
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                return b"onedrive" in fh.read()
+        except (OSError, ValueError, TypeError):
+            return False
+
+    def settle(self, quiet=20, max_wait=1800, log=print):
+        """Wait until the client is idle and its log has been quiet for `quiet` s (it has processed our changes)."""
+        if not self.path:
+            time.sleep(min(quiet, 2))
+            return True
+        t0 = time.time()
+        last = time.time()
+        while time.time() - t0 < max_wait:
+            if self.read_new().strip() or self.busy():
+                last = time.time()
+            if time.time() - last >= quiet:
+                return True
+            time.sleep(5)
+        log(f"onedrive client still busy after {max_wait}s")
+        return False
+
+    def wait_created(self, dirs, max_wait=3600, log=print):
+        """True once the client has reported every one of `dirs` created online (or there is no client log to follow)."""
+        if not self.path or not self.sync_root:
+            return True
+        want = {self.rel(d) for d in dirs}
+        t0 = time.time()
+        while time.time() - t0 < max_wait:
+            self.read_new()
+            if want <= self.created:
+                return True
+            time.sleep(5)
+        log(f"onedrive did not report these folders created online within {max_wait}s: {sorted(want - self.created)[:10]}")
+        return False
+
+
+# ---------------------------------------------------------------- commands
+def cmd_inventory(a):
+    loose, folders, skipped = scan(a.root, a.keep_days)
+    n, b = tree_totals(a.root)
+    exts = collections.Counter()
+    ebytes = collections.Counter()
+    for it in loose:
+        exts[ext_of(it["name"])] += 1
+        ebytes[ext_of(it["name"])] += it["size"]
+    inv = {"root": a.root, "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "keep_days": a.keep_days,
+           "total_files": n, "total_bytes": b,
+           "loose_files": len(loose), "loose_bytes": sum(i["size"] for i in loose),
+           "loose_by_ext": {e: {"files": c, "bytes": ebytes[e]} for e, c in exts.most_common()},
+           "loose_recent_or_skipped": sum(1 for i in loose if i.get("skip")),
+           "folders": [{k: f[k] for k in ("name", "files", "bytes", "newest", "count", "exts", "git", "bucket", "skip") if k in f}
+                       for f in folders],
+           "loose": loose, "skipped": skipped}
+    out = os.path.join(a.state, "inventory.json")
+    with open(out + ".tmp", "w") as fh:
+        json.dump(inv, fh, indent=1)
+    os.replace(out + ".tmp", out)
+    print(f"inventory: {n} files, {b} bytes, {len(loose)} loose files, {len(folders)} folders -> {out}")
+
+
+def summarize(plan):
+    per = collections.OrderedDict()
+    for kind, src, dst, size, mtime, bucket, nfiles in plan:
+        r = per.setdefault(bucket, {"moves": 0, "folders": 0, "files": 0, "bytes": 0})
+        r["moves"] += 1
+        r["folders"] += kind == "dir"
+        r["files"] += nfiles
+        r["bytes"] += size
+    return per
+
+
+def cmd_plan(a, quiet=False):
+    plan, loose, folders, skipped = make_plan(a.root, a.keep_days)
+    out = os.path.join(a.state, "plan.tsv")
+    with open(out, "w") as fh:
+        fh.write("kind\tbucket\told\tnew\tsize\tmtime\tfiles\n")
+        for kind, src, dst, size, mtime, bucket, nfiles in plan:
+            fh.write(f"{kind}\t{bucket}\t{esc(src)}\t{esc(dst)}\t{size}\t{int(mtime)}\t{nfiles}\n")
+    if not quiet:
+        print(f"plan: {len(plan)} moves -> {out}")
+        for b, r in sorted(summarize(plan).items()):
+            print(f"  {b:22s} moves={r['moves']:5d} folders={r['folders']:3d} files={r['files']:6d} bytes={r['bytes']}")
+        stay = [i for i in loose if i.get("skip")] + [f for f in folders if f.get("skip")]
+        print(f"  stay at top level: {len(stay)} ({collections.Counter(i['skip'] for i in stay)})")
+    return plan
+
+
+def write_undo(state, day):
+    tsv = os.path.join(state, f"moves-{day}.tsv")
+    undo = os.path.join(state, f"undo-{day}.sh")
+    rows = []
+    with open(tsv) as fh:
+        for line in fh:
+            if line.startswith("old\t"):
+                continue
+            old, new = line.rstrip("\n").split("\t")[:2]
+            rows.append((unesc(old), unesc(new)))
+    with open(undo + ".tmp", "w") as fh:
+        fh.write("#!/bin/bash\n# Reverses every move in moves-%s.tsv, newest first. mv -n: never overwrites; a path that exists is reported.\n"
+                 "set -u\nrc=0\nu() { if [ -e \"$2\" ] || [ -L \"$2\" ]; then echo \"exists, not moved back: $2\" >&2; rc=1; return; fi\n"
+                 "     mkdir -p -- \"$(dirname -- \"$2\")\" && mv -n -- \"$1\" \"$2\" || rc=1; }\n" % day)
+        for old, new in reversed(rows):
+            fh.write(f"u {shlex.quote(new)} {shlex.quote(old)}\n")
+        fh.write("exit $rc\n")
+    os.chmod(undo + ".tmp", 0o700)
+    os.replace(undo + ".tmp", undo)
+
+
+def cmd_apply(a):
+    day = time.strftime("%Y%m%d")
+    plan = cmd_plan(a, quiet=True)
+    tsv = os.path.join(a.state, f"moves-{day}.tsv")
+    new_file = not os.path.exists(tsv)
+    odl = OneDriveLog(a.onedrive_log, a.onedrive_status, a.sync_root)
+    progress = os.path.join(a.state, "progress.log")
+    pending_f = os.path.join(a.state, "pending-dirs.json")
+    done = failed = 0
+
+    def log(msg):
+        with open(progress, "a") as fh:
+            fh.write(time.strftime("%F %T ") + msg + "\n")
+
+    if not plan:
+        return 0
+    log(f"apply start: {len(plan)} moves, batch {a.batch}")
+    # 0) the client must be running and idle, then every destination folder must exist ONLINE before anything moves into it
+    if odl.client_running() is False:
+        log("onedrive client is set up but not running; nothing moved (moving now would turn into re-uploads at its next start)")
+        return 3
+    if not odl.settle(quiet=a.settle_quiet, max_wait=a.max_wait, log=log):
+        log("onedrive client busy; nothing moved (next run retries)")
+        return 3
+    pending = set(json.load(open(pending_f))) if os.path.exists(pending_f) else set()
+    for d in sorted({os.path.dirname(p[2]) for p in plan}, key=lambda x: (x.count("/"), x)):
+        if not os.path.isdir(d):
+            os.makedirs(d)
+            pending.add(d)
+    if pending:
+        json.dump(sorted(pending), open(pending_f, "w"))
+        if odl.path:
+            odl.read_all()
+        if not odl.wait_created(pending, max_wait=a.max_wait, log=log):
+            log("destination folders not online yet; nothing moved (next run retries)")
+            return 3
+        os.remove(pending_f)  # our own bookkeeping file, not his data
+        log(f"{len(pending)} destination folders are online")
+        odl.settle(quiet=a.settle_quiet, max_wait=a.max_wait, log=log)
+
+    batch = []
+    odl.read_new()
+    odl.recent = []
+
+    def fallback_seen():
+        """The client uploaded something we just moved as NEW data (no server-side move): stop."""
+        rels = [odl.rel(d) for d in batch]
+        hits = [l for l in odl.recent if any(r + "/" in l + "/" or r + " " in l for r in rels)]
+        odl.recent = []
+        return hits
+
+    with open(tsv, "a") as out:
+        if new_file:
+            out.write("old\tnew\tsize\tmtime\n")
+        for i, (kind, src, dst, size, mtime, bucket, nfiles) in enumerate(plan):
+            try:
+                st = os.lstat(src)
+                if kind == "file" and (time.time() - st.st_mtime < a.keep_days * 86400 or not os.path.isfile(src)):
+                    log(f"skip (changed since plan): {src}")
+                    continue
+                final = dst
+                for _ in range(1000):
+                    try:
+                        rename_noreplace(src, final)
+                        break
+                    except FileExistsError:
+                        d = os.path.dirname(dst)
+                        final = os.path.join(d, free_name(d, os.path.basename(dst), set(), is_dir=(kind == "dir")))
+                out.write(f"{esc(src)}\t{esc(final)}\t{size}\t{int(mtime)}\n")
+                out.flush()
+                batch.append(final)
+                done += 1
+            except OSError as e:
+                failed += 1
+                log(f"FAILED {src} -> {dst}: {e}")
+            if kind == "dir" or len(batch) >= a.batch or i == len(plan) - 1:
+                write_undo(a.state, day)
+                odl.settle(quiet=a.settle_quiet, max_wait=a.max_wait, log=log)
+                hits = fallback_seen()
+                if hits:
+                    log(f"ABORT: onedrive handled a move as a new upload, stopping: {hits[:5]}")
+                    print(f"ABORT after {done} moves: onedrive re-uploaded moved data; see {progress}")
+                    return 4
+                log(f"{i + 1}/{len(plan)} done (moved {done}, failed {failed}); onedrive idle")
+                batch = []
+    write_undo(a.state, day)
+    for e in odl.errors:
+        log(f"onedrive log: {e}")
+    log(f"apply done: moved {done}, failed {failed}, onedrive log error lines {len(odl.errors)}")
+    print(f"moved {done}, failed {failed}, onedrive error lines {len(odl.errors)}; log {tsv}, undo {os.path.join(a.state, f'undo-{day}.sh')}")
+    return 0 if failed == 0 else 1
+
+
+def cmd_verify(a):
+    inv = json.load(open(os.path.join(a.state, "inventory.json")))
+    n, b = tree_totals(a.root)
+    loose, folders, skipped = scan(a.root, a.keep_days)
+    stray_files = [i["path"] for i in loose if not i.get("skip")]
+    stray_dirs = [f["path"] for f in folders if not f.get("skip")]
+    ok = n == inv["total_files"] and b == inv["total_bytes"] and not stray_files and not stray_dirs
+    res = {"before": [inv["total_files"], inv["total_bytes"]], "after": [n, b], "stray_files": stray_files,
+           "stray_dirs": stray_dirs, "stay_loose": sum(1 for i in loose if i.get("skip")),
+           "stay_dirs": [f["name"] for f in folders if f.get("skip")], "ok": ok}
+    json.dump(res, open(os.path.join(a.state, "verify.json"), "w"), indent=1)
+    print(json.dumps({k: (v if not isinstance(v, list) or len(v) < 20 else f"{len(v)} items") for k, v in res.items()}))
+    return 0 if ok else 1
+
+
+def cmd_report(a):
+    """Byte-identical duplicates (size groups -> 64 KiB head hash -> full sha256) and Windows installers. Report only."""
+    by_size = collections.defaultdict(list)
+    installers = []
+    for dp, dns, fns in os.walk(a.root):
+        dns[:] = [d for d in dns if d != ".git"]
+        for f in fns:
+            p = os.path.join(dp, f)
+            if os.path.islink(p):
+                continue
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if st.st_size >= a.min_dup_size:
+                by_size[st.st_size].append(p)
+            if ext_of(f) in ("exe", "msi"):
+                installers.append((p, st.st_size))
+
+    def h(p, limit=None):
+        d = hashlib.sha256()
+        with open(p, "rb") as fh:
+            if limit:
+                d.update(fh.read(limit))
+            else:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    d.update(chunk)
+        return d.hexdigest()
+
+    groups = []
+    for size, paths in by_size.items():
+        if len(paths) < 2:
+            continue
+        heads = collections.defaultdict(list)
+        for p in paths:
+            try:
+                heads[h(p, 65536)].append(p)
+            except OSError:
+                pass
+        for hp in heads.values():
+            if len(hp) < 2:
+                continue
+            full = collections.defaultdict(list)
+            for p in hp:
+                try:
+                    full[h(p) if size > 65536 else "head"].append(p)
+                except OSError:
+                    pass
+            for digest, same in full.items():
+                if len(same) > 1:
+                    groups.append((size, sorted(same)))
+    dup_files = sum(len(g) - 1 for _, g in groups)
+    dup_bytes = sum(s * (len(g) - 1) for s, g in groups)
+    out = os.path.join(a.state, "delete-candidates.tsv")
+    with open(out, "w") as fh:
+        fh.write("reason\tgroup\tpath\tsize\tkeep\n")
+        for gi, (size, g) in enumerate(sorted(groups, key=lambda x: -x[0] * (len(x[1]) - 1))):
+            # suggest keeping the shortest path (usually the original name, not "x (1).pdf")
+            keep = min(g, key=lambda p: (len(p), p))
+            for p in g:
+                fh.write(f"duplicate\t{gi}\t{esc(p)}\t{size}\t{'keep' if p == keep else 'extra-copy'}\n")
+        for p, s in sorted(installers):
+            fh.write(f"windows-installer\t-\t{esc(p)}\t{s}\t-\n")
+    res = {"dup_groups": len(groups), "dup_extra_copies": dup_files, "dup_extra_bytes": dup_bytes,
+           "windows_installers": len(installers), "windows_installer_bytes": sum(s for _, s in installers), "list": out}
+    json.dump(res, open(os.path.join(a.state, "report.json"), "w"), indent=1)
+    print(json.dumps(res))
+
+
+def main():
+    home = os.path.expanduser("~")
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("command", choices=["inventory", "plan", "apply", "verify", "report", "nightly"])
+    ap.add_argument("--root", default=os.path.join(home, "Downloads"))
+    ap.add_argument("--state", default=os.path.join(home, ".local", "state", "downloads-sort"))
+    ap.add_argument("--keep-days", type=int, default=14)
+    ap.add_argument("--batch", type=int, default=200)
+    ap.add_argument("--settle-quiet", type=int, default=20)
+    ap.add_argument("--min-dup-size", type=int, default=1)
+    ap.add_argument("--onedrive-log", default=os.path.join(home, ".local", "state", "onedrive-personal.log"))
+    ap.add_argument("--onedrive-status", default=os.path.join(home, ".config", "onedrive-personal", "monitor-status.json"))
+    ap.add_argument("--sync-root", default=os.path.join(home, "OneDrive-Personal"))
+    ap.add_argument("--max-wait", type=int, default=3600, help="longest wait (s) for the onedrive client to go idle / create folders")
+    ap.add_argument("--min-interval-hours", type=float, default=20, help="nightly: skip if the last successful run is newer")
+    a = ap.parse_args()
+    a.root = os.path.realpath(a.root)
+    if not os.path.isdir(a.root):
+        print(f"{a.root}: not a directory, nothing to do")
+        return 0
+    os.makedirs(a.state, exist_ok=True)
+    try:
+        os.nice(19 - os.nice(0))
+    except OSError:
+        pass
+    try:  # ionice idle (IOPRIO_CLASS_IDLE=3) for this process
+        _libc.syscall(251 if os.uname().machine == "x86_64" else 30, 1, 0, 3 << 13)
+    except Exception:
+        pass
+    if a.command in ("apply", "nightly"):
+        import fcntl
+        lock = open(os.path.join(a.state, ".lock"), "w")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("another sort run holds the lock; nothing to do")
+            return 0
+    if a.command == "nightly":
+        # cron (hourly; runs at most once per --min-interval-hours, so a laptop asleep at night still gets its run):
+        # same rules, only files/folders older than --keep-days move. Quiet unless something failed.
+        stamp = os.path.join(a.state, "last-nightly-ok")
+        if os.path.exists(stamp) and time.time() - os.path.getmtime(stamp) < a.min_interval_hours * 3600:
+            return 0
+        cmd_inventory(a)
+        rc = cmd_apply(a)
+        if rc in (0, 1):
+            rc = max(rc, cmd_verify(a))
+            open(stamp, "w").close()
+        return rc
+    if a.command == "plan":
+        cmd_plan(a)
+        return 0
+    return {"inventory": cmd_inventory, "apply": cmd_apply, "verify": cmd_verify,
+            "report": cmd_report}[a.command](a) or 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception:
+        import traceback
+        st = os.path.join(os.path.expanduser("~"), ".local", "state", "downloads-sort")
+        os.makedirs(st, exist_ok=True)
+        with open(os.path.join(st, "progress.log"), "a") as fh:
+            fh.write(time.strftime("%F %T ") + "CRASH\n" + traceback.format_exc())
+        raise
