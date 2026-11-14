@@ -104,6 +104,10 @@ class Installer(unittest.TestCase):
         d = dict(Z.datasets())
         self.assertIn("var/lib/horcrux/vms", d)
         self.assertFalse([n for n in d if n.startswith("ROOT/") and "vms" in n])
+        # Patronus uses the same installer: it must not get Horcrux's VM datasets
+        p = dict(Z.datasets(False, "patronus"))
+        self.assertFalse([n for n in p if "horcrux" in n and not n.startswith("ROOT/")], sorted(p))
+        self.assertIn("var/log", p)
 
 
 if __name__ == "__main__":
