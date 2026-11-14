@@ -92,6 +92,12 @@ print(f"MEM-PROBE {'JOB TOTAL':28} | {end - marks[0][0]:5d}s | {gib(tot[0])} | {
 if peak:
     print(f"MEM-PROBE cgroup memory.peak = {gib(int(peak))} (limit {limit or '?'})")
 EOF
+    # Did the kernel ever have to kill anything in this cgroup? memory.peak at the limit is
+    # normal (page cache fills the cap and is reclaimed); only oom_kill > 0 means the cap hurt.
+    if [ -r "$cg/memory.events" ]; then
+        echo "MEM-PROBE memory.events: $(tr '\n' ' ' < "$cg/memory.events")"
+        echo "MEM-PROBE memory.stat: $(awk '$1=="anon"||$1=="file"||$1=="shmem"{printf "%s=%.2fGiB ", $1, $2/2^30}' "$cg/memory.stat")"
+    fi
     ;;
 *)
     echo "usage: $0 start | mark <label> | report" >&2
