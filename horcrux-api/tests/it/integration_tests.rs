@@ -2193,17 +2193,27 @@ async fn test_container_lifecycle() {
 
     // 7. Out-of-band stop is reflected by the list (reconciliation)
     assert!(docker(&["stop", "-t", "1", id]).status.success());
-    let list: Vec<serde_json::Value> = client
-        .get(format!("{}/containers", API_BASE))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let mine = list.iter().find(|c| c["id"] == id).expect("listed");
-    assert_eq!(mine["status"], "stopped");
+    // The list reconciles against the daemon on every call, but a loaded shared
+    // Docker daemon can still report the old state for a moment after `docker stop`
+    // returned (run 16348: still "running"): poll for up to 20 s before judging.
+    let mut last = serde_json::Value::Null;
+    for _ in 0..40 {
+        let list: Vec<serde_json::Value> = client
+            .get(format!("{}/containers", API_BASE))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        last = list.iter().find(|c| c["id"] == id).expect("listed")["status"].clone();
+        if last == "stopped" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert_eq!(last, "stopped", "out-of-band stop reflected by the list");
 
     // 8. Clone -> a real, registered container built from a commit
     let r = client
