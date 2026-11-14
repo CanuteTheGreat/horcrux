@@ -100,7 +100,7 @@ if [ -f /etc/chrony/chrony.conf ]; then
   grep -q '^makestep' /etc/chrony/chrony.conf || echo 'makestep 1.0 3' >> /etc/chrony/chrony.conf
   grep -q '^rtcsync' /etc/chrony/chrony.conf || echo 'rtcsync' >> /etc/chrony/chrony.conf
 fi
-chmod 0644 /etc/dhcpcd.exit-hook 2>/dev/null || true
+chmod 0644 /etc/dhcpcd.exit-hook /etc/dhcpcd.enter-hook 2>/dev/null || true
 
 # --- kernel + live initramfs ------------------------------------------------------
 kver=$(ls /lib/modules | sort -V | tail -1)

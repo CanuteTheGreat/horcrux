@@ -1,0 +1,7 @@
+# sourced by dhcpcd-run-hooks before every hook (shared by Horcrux and Patronus images, both init systems).
+# On systemd images `resolvconf` is systemd's resolvectl (sys-apps/systemd[resolvconf]), which only works while systemd-resolved runs. These
+# images do not run it (dhcpcd + iwd are the network stack on both inits, and Patronus serves DNS on :53 itself), so dhcpcd must write
+# /etc/resolv.conf itself, exactly as on OpenRC; otherwise a DHCP lease brings no DNS: no NTP pool, no emerge, no TLS clock check.
+if [ ! -S /run/systemd/resolve/io.systemd.Resolve ] && [ "$(readlink -f "$(command -v resolvconf 2>/dev/null)" 2>/dev/null)" = /usr/bin/resolvectl ]; then
+	resolvconf=dhcpcd-write-resolv-conf-directly
+fi

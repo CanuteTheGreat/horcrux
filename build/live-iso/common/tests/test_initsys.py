@@ -142,6 +142,17 @@ class LiveUnits(unittest.TestCase):
         self.assertIn('rm -f "$ROOT/.dockerenv"', open(os.path.join(COMMON, "assemble-iso.sh")).read())
 
 
+class DhcpcdDns(unittest.TestCase):
+    def test_enter_hook_bypasses_resolvectl_without_resolved(self):
+        h = os.path.join(COMMON, "overlay/etc/dhcpcd.enter-hook")
+        t = open(h).read()
+        self.assertIn("/run/systemd/resolve/io.systemd.Resolve", t)
+        self.assertIn("/usr/bin/resolvectl", t)
+        # an OpenRC image (no resolvectl): the variable stays unset, dhcpcd's own default applies
+        r = subprocess.run(["sh", "-c", f". {h}; echo \"[${{resolvconf:-}}]\""], capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "[]")
+
+
 class PkgList(unittest.TestCase):
     def test_conditions(self):
         d = tempfile.mkdtemp()
