@@ -12,6 +12,20 @@ use std::process::Command;
 use tokio::process::Command as AsyncCommand;
 use tracing::{error, info};
 
+/// Where the API keeps pool `id`'s export mounted:
+/// `<HORCRUX_DATA_DIR or /var/lib/horcrux>/mnt/nfs/<id>`.
+pub fn mount_dir(id: &str) -> String {
+    let base = std::env::var("HORCRUX_DATA_DIR").unwrap_or_else(|_| "/var/lib/horcrux".into());
+    format!("{}/mnt/nfs/{}", base.trim_end_matches('/'), id)
+}
+
+/// Whether `dir` is a mount point right now (/proc/mounts).
+pub fn is_mounted(dir: &str) -> bool {
+    std::fs::read_to_string("/proc/mounts")
+        .map(|m| m.lines().any(|l| l.split(' ').nth(1) == Some(dir)))
+        .unwrap_or(false)
+}
+
 /// NFS storage manager
 pub struct NfsManager {}
 
@@ -71,6 +85,14 @@ impl NfsManager {
         }
 
         Ok(())
+    }
+
+    /// Mount the export on `dir` unless it is mounted already.
+    pub async fn ensure_mounted(&self, config: &NfsConfig, dir: &str) -> Result<()> {
+        if is_mounted(dir) {
+            return Ok(());
+        }
+        self.mount_export(config, dir).await
     }
 
     /// Unmount NFS export
@@ -288,6 +310,14 @@ impl NfsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mount_dir_is_per_pool_under_the_data_dir() {
+        let d = mount_dir("abc");
+        assert!(d.ends_with("/mnt/nfs/abc"), "{d}");
+        assert!(!is_mounted("/definitely/not/a/mount/point"));
+        assert!(is_mounted("/proc"));
+    }
 
     #[test]
     fn test_parse_nfs_path() {
