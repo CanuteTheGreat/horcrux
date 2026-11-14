@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -51,6 +52,12 @@ class HogsmeadeDownloadsSort(unittest.TestCase):
         env = {"HOME": str(self.home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
         return subprocess.run(["python3", str(SCRIPT), *args, "--settle-quiet", "1", "--start-quiet", "1"], env=env, capture_output=True,
                               text=True, timeout=timeout)
+
+    def fake_client(self):
+        """A process whose command line says onedrive, as the real client's does. Not a symlink to /bin/sleep: where sleep
+        is a multicall binary (busybox/uutils; the aarch64 runner) argv[0]='onedrive' is an unknown applet and it exits
+        at once, so the sorter saw 'client not running' (rc 3)."""
+        return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", "onedrive"])
 
     def snapshot(self):
         return {str(p.relative_to(self.dl)): (p.read_bytes(), p.stat().st_mtime) for p in self.dl.rglob("*") if p.is_file()}
@@ -140,9 +147,7 @@ class HogsmeadeDownloadsSort(unittest.TestCase):
         log = self.home / "od.log"
         log.write_text("Sync with Microsoft OneDrive is complete\n")
         status = self.home / "monitor-status.json"
-        fake = self.home / "onedrive"  # a process whose command line says onedrive, as the real client's does
-        os.symlink("/bin/sleep", fake)
-        proc = subprocess.Popen([str(fake), "300"])
+        proc = self.fake_client()
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
         status.write_text(json.dumps({"pid": proc.pid, "process": {"state": "idle"}}))
@@ -199,9 +204,7 @@ class HogsmeadeDownloadsSort(unittest.TestCase):
     def test_online_leftover_defers(self):
         """An interrupted earlier run left ./Downloads/Documents/old online (created, never deleted): moving a local 'old'
         folder onto that path would collide online, so it waits; once the client deletes the leftover, it moves."""
-        fake = self.home / "onedrive"
-        os.symlink("/bin/sleep", fake)
-        proc = subprocess.Popen([str(fake), "300"])
+        proc = self.fake_client()
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
         status = self.home / "monitor-status.json"
