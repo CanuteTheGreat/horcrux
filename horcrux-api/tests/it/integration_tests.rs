@@ -33,6 +33,19 @@ fn create_client() -> Client {
         .expect("Failed to create HTTP client")
 }
 
+/// Client for the stack tests that drive the runner host's shared Docker
+/// daemon. `docker rm`/`stop` latency belongs to that daemon, not to Horcrux:
+/// on a busy runner (other jobs' containers, the host's disk-guard cleanup)
+/// a stack removal took 87 s and the 30 s client of `create_client` timed
+/// out. The test that asserts the 30 s stop budget keeps `create_client`.
+fn create_stack_client() -> Client {
+    Client::builder()
+        .timeout(Duration::from_secs(240))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .expect("Failed to create HTTP client")
+}
+
 /// Assert the request reached the server AND got a 2xx status (printing the
 /// body on failure). `response.is_ok()` alone only proves *some* HTTP
 /// response came back - a 401/404/500 passed, which is how most of this
@@ -2241,7 +2254,7 @@ async fn test_container_lifecycle() {
 /// to be parsed and silently dropped).
 #[tokio::test]
 async fn test_stack_networking_and_options() {
-    let client = create_client();
+    let client = create_stack_client();
     let token = admin_token(&client).await;
     let name = "itstack";
     let _ = client
@@ -2393,7 +2406,7 @@ async fn test_stack_stop_is_concurrent() {
 /// on other failures, later ones) survived `DELETE /api/stacks/<name>`.
 #[tokio::test]
 async fn test_failed_stack_deploy_rolls_back() {
-    let client = create_client();
+    let client = create_stack_client();
     let token = admin_token(&client).await;
     let name = "itfailstack";
     let services = ["good", "bad"];
@@ -2498,7 +2511,7 @@ async fn test_failed_stack_deploy_rolls_back() {
 /// volume keeps its data, env can be merged in, a bad image rolls back.
 #[tokio::test]
 async fn test_stack_update_rolling_keeps_volumes() {
-    let client = create_client();
+    let client = create_stack_client();
     let token = admin_token(&client).await;
     let name = "itupstack";
     let services = ["web", "db"];
