@@ -307,6 +307,7 @@ class VM:
         self.log = open(f"{out}/{name}-serial.log", "wb")
         self.vt = VT()
         self.raw = b""
+        self.snap_pred, self.snap, self.snap_key = None, None, ""     # snap_when(): first screen satisfying a predicate, captured in the reader thread
         self.lock = threading.Lock()
         self.qmp_path = f"{out}/{name}.qmp"
         self.ser_path = f"{out}/{name}.serial"
@@ -384,6 +385,12 @@ class VM:
             with self.lock:
                 self.raw += b
                 self.vt.feed(b)
+                if self.snap_pred is not None and self.snap is None:
+                    t = self.vt.text()
+                    if self.snap_pred(t):
+                        self.snap = t
+                        if self.snap_key:
+                            self.send(self.snap_key)       # e.g. a space: cancels GRUB's countdown at once, in the same breath as the capture
             if VM.LUKS_UNLOCK and self.name[:1] in ("2", "3"):
                 # an xfs-luks root asks for the disk passphrase at EVERY boot of the installed disk (initramfs, on the console): type it, else the
                 # boot waits at the prompt and no login/ssh ever comes (lab installer-vm server-headless 2026-11-06: 'installed-boots-to-login 421s')
@@ -402,6 +409,12 @@ class VM:
     def screen(self):
         with self.lock:
             return self.vt.text()
+
+    def snap_when(self, pred, key=""):
+        """Arm a one-shot capture: the reader thread keeps the FIRST screen (after any chunk of serial output) for which pred(text) is true.
+        Polling screen() cannot do this under slow TCG: the reader may be handed menu + countdown expiry + 'Booting ...' in one burst."""
+        with self.lock:
+            self.snap, self.snap_pred, self.snap_key = None, pred, key
 
     def expect_raw(self, pat, timeout, consume=True):
         rx = re.compile(pat.encode() if isinstance(pat, str) else pat)
