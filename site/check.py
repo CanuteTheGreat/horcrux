@@ -47,4 +47,21 @@ for dp, _, fs in os.walk(D):
 for b in bad:
     print("BROKEN", *b, file=sys.stderr)
 print(f"checked {pages} pages, {len(bad)} problems")
+
+# --- gating unit checks (fake asset lists; no network) ---
+sys.path.insert(0, HERE)
+import gating
+_o = "horcrux-server-openrc-daily-x86_64.iso"; _s = "horcrux-server-systemd-daily-x86_64.iso"
+_cases = [
+    (set(), False), (None, False),
+    ({_o, _o + ".sha256"}, False),                 # only OpenRC published
+    ({_s}, False), ({_s + ".sha256"}, False),      # incomplete systemd pair: stay hidden
+    ({_s, _s + ".sha256"}, True),                  # tested + published
+    ({_s.replace("x86_64", "aarch64"), _s.replace("x86_64", "aarch64") + ".sha256"}, False),  # other arch only
+]
+_fail = [(a, w) for a, w in _cases if gating.systemd_listed(_o, a) != w]
+assert gating.systemd_name(_o) == _s
+if _fail:
+    print("GATING CHECK FAILED", _fail, file=sys.stderr); sys.exit(1)
+print(f"gating: {len(_cases)} cases ok")
 sys.exit(1 if bad else 0)

@@ -60,6 +60,7 @@ type Res<T> = Result<Json<T>, ApiError>;
 pub struct Zone {
     pub id: String,
     /// simple | vlan | vxlan
+    #[serde(alias = "type")]
     pub zone_type: String,
     #[serde(default)]
     pub description: String,
@@ -620,7 +621,7 @@ fn spawn_reapply(state: Arc<AppState>) {
 
 // -------------------------------------------------------------------- handlers
 
-async fn list_zones(State(state): State<Arc<AppState>>) -> Json<Vec<Zone>> {
+pub(crate) async fn list_zones(State(state): State<Arc<AppState>>) -> Json<Vec<Zone>> {
     Json(Cfg::new(&state).zones().await)
 }
 
@@ -634,7 +635,10 @@ async fn get_zone(State(state): State<Arc<AppState>>, Path(id): Path<String>) ->
         .ok_or_else(|| ApiError::NotFound(format!("zone {id} not found")))
 }
 
-async fn create_zone(State(state): State<Arc<AppState>>, Json(z): Json<Zone>) -> Res<Zone> {
+pub(crate) async fn create_zone(
+    State(state): State<Arc<AppState>>,
+    Json(z): Json<Zone>,
+) -> Res<Zone> {
     validate_zone(&z).map_err(ApiError::ValidationError)?;
     let cfg = Cfg::new(&state);
     if cfg.zones().await.iter().any(|x| x.id == z.id) {
@@ -647,7 +651,7 @@ async fn create_zone(State(state): State<Arc<AppState>>, Json(z): Json<Zone>) ->
     Ok(Json(z))
 }
 
-async fn update_zone(
+pub(crate) async fn update_zone(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(mut z): Json<Zone>,
@@ -680,7 +684,7 @@ async fn update_zone(
     Ok(Json(z))
 }
 
-async fn delete_zone(
+pub(crate) async fn delete_zone(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Res<serde_json::Value> {
@@ -702,11 +706,14 @@ async fn delete_zone(
     Ok(Json(serde_json::json!({"deleted": id})))
 }
 
-async fn list_vnets(State(state): State<Arc<AppState>>) -> Json<Vec<VNet>> {
+pub(crate) async fn list_vnets(State(state): State<Arc<AppState>>) -> Json<Vec<VNet>> {
     Json(Cfg::new(&state).vnets().await)
 }
 
-async fn create_vnet(State(state): State<Arc<AppState>>, Json(v): Json<VNet>) -> Res<VNet> {
+pub(crate) async fn create_vnet(
+    State(state): State<Arc<AppState>>,
+    Json(v): Json<VNet>,
+) -> Res<VNet> {
     let cfg = Cfg::new(&state);
     let zone = cfg
         .zones()
@@ -745,7 +752,7 @@ async fn create_vnet(State(state): State<Arc<AppState>>, Json(v): Json<VNet>) ->
     Ok(Json(v))
 }
 
-async fn delete_vnet(
+pub(crate) async fn delete_vnet(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Res<serde_json::Value> {
@@ -771,11 +778,11 @@ async fn delete_vnet(
     Ok(Json(serde_json::json!({"deleted": id})))
 }
 
-async fn list_subnets(State(state): State<Arc<AppState>>) -> Json<Vec<Subnet>> {
+pub(crate) async fn list_subnets(State(state): State<Arc<AppState>>) -> Json<Vec<Subnet>> {
     Json(Cfg::new(&state).subnets().await)
 }
 
-async fn create_subnet(
+pub(crate) async fn create_subnet(
     State(state): State<Arc<AppState>>,
     Path(vnet): Path<String>,
     Json(mut s): Json<Subnet>,
@@ -835,7 +842,7 @@ async fn create_subnet(
     Ok(Json(s))
 }
 
-async fn delete_subnet(
+pub(crate) async fn delete_subnet(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Res<serde_json::Value> {

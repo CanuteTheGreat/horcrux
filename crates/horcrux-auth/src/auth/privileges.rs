@@ -110,6 +110,7 @@ pub const KNOWN_AREAS: &[&str] = &[
     "tags",
     "search",
     "tree",
+    "declarative",
     "gpu",
     "tls",
     "vault",
@@ -406,6 +407,13 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             _ => read_write(m, P::SysAudit, P::SysModify, "/cluster"),
         },
         "ha" => read_write(m, P::SysAudit, P::SysModify, "/cluster"),
+        // Whole-node desired state: plan/export only read, apply changes
+        // pools, networks and VMs, so it needs node-wide rights.
+        "declarative" => match (arg(1), m) {
+            ("plan", "POST") => need(P::SysAudit, "/"),
+            ("apply", "POST") => need(P::SysModify, "/"),
+            _ => read_write(m, P::SysAudit, P::SysModify, "/"),
+        },
         "firewall" | "cni" | "network-policies" | "sdn" | "network" => {
             if arg(1) == "check" {
                 need(P::SdnAudit, "/sdn")

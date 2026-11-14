@@ -7,6 +7,8 @@ with one 301 redirect. Needs the `markdown` package.  Usage: python3 site/build.
 """
 import html, json, os, re, shutil, sys, posixpath
 import markdown
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gating
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -147,10 +149,22 @@ def main():
     sh = "".join(f'<figure><img src="{rel("", "docs/images/" + p)}" alt="{html.escape(a)}" loading="lazy"><figcaption>{html.escape(a)}</figcaption></figure>'
                  for p, a in CFG["shots"])
     DLD = rel("", "download/")
-    dl_rows = "".join(
-        f'<tr><td>{html.escape(a)}</td><td><a href="{DLD}{f}">{f}</a></td><td><a href="{DLD}{f}.sha256">sha256</a></td>'
-        f'<td><a href="{DLD}{f[:-4]}-test-evidence.tgz">evidence</a></td></tr>'
-        for a, f in CFG["isos"])
+    assets = gating.release_assets(CFG["repo"])
+    def cell(iso, label, listed):
+        if not listed:
+            return '<td class="v"><span class="muted">systemd build: coming soon</span></td>'
+        ev = gating.evidence_name(iso)
+        evl = f' &middot; <a href="{DLD}{ev}">evidence</a>' if assets is None or ev in assets else ""
+        return (f'<td class="v"><a class="btn sm" href="{DLD}{iso}" title="{iso}">{label} ISO</a> '
+                f'<span class="aux"><a href="{DLD}{iso}.sha256">sha256</a>{evl}</span>'
+                f'<span class="fn">{iso}</span></td>')
+    dl_rows = ""
+    for a, f in CFG["isos"]:
+        tw = gating.systemd_name(f)
+        shown = gating.systemd_listed(f, assets)
+        dl_rows += (f'<tr><td>{html.escape(a.replace(" \u00b7 OpenRC", ""))}</td>' + cell(f, "OpenRC", True)
+                    + cell(tw, "systemd", shown) + '</tr>')
+        print(f"download {tw}: {'listed' if shown else 'hidden (not published)'}")
     feats = "".join(f"<li>{html.escape(x)}</li>" for x in CFG["works"])
     gaps = "".join(f"<li>{html.escape(x)}</li>" for x in CFG["gaps"])
     land = f"""<main>
@@ -164,12 +178,13 @@ def main():
 <p>The measurable exit criteria for 1.0, and how far each one is, are on the <a href="{rel('', 'roadmap/')}">roadmap checklist</a>.</p></section>
 <section class="wrap" id="download"><h2>Download</h2>
 <p>Daily builds are test builds of the <code>main</code> branch, replaced in place. A build is published only after QEMU boot, install, reboot and web probe tests passed. They are not releases: use test hardware or a VM. There is no stable release yet. Secure Boot must be off.</p>
-<div class="tw"><table class="dl"><thead><tr><th>Image: desktop &middot; init &middot; architecture</th><th>ISO</th><th>Checksum</th><th>Test evidence</th></tr></thead><tbody>{dl_rows}</tbody></table></div>
+<p><strong>OpenRC or systemd:</strong> the same edition built on either init system. The installed system uses the init of the image you download; the installer does not switch it. Pick systemd if you want upstream GNOME session and systemd tooling, OpenRC for the classic Gentoo init.</p>
+<div class="tw"><table class="dl"><thead><tr><th>Image: desktop &middot; architecture</th><th>OpenRC</th><th>systemd</th></tr></thead><tbody>{dl_rows}</tbody></table></div>
 <p>{CFG['dl_note']} Verify with <code>sha256sum -c</code>, write to a USB stick with <code>dd</code> (see the <a href="{rel('', 'docs/iso-install/')}">install guide</a>), or boot it in a VM. The test evidence (serial logs and screenshots) is attached to every build.</p>
 <h3>How the image names work</h3>
 <p>Every image is named <code>&lt;product&gt;-&lt;desktop or server&gt;-&lt;init&gt;-&lt;channel&gt;-&lt;arch&gt;.iso</code>, for example <code>{CFG['key']}-server-openrc-daily-x86_64.iso</code>.
 <strong>Desktop or server</strong> is the graphical environment the image installs: <code>server</code> means no desktop. An image with a desktop gets its environment in the name, for example <code>gnome-light</code> (GNOME on Wayland, small app set), <code>xfce</code> or <code>kde</code>.
-<strong>Init</strong> is the init system: <code>openrc</code> today, <code>systemd</code> only if a systemd image is ever built.
+<strong>Init</strong> is the init system: <code>openrc</code> or <code>systemd</code>. Both are offered for each edition and architecture; a systemd image appears in the table above once its build has passed the same QEMU tests (until then the table says so).
 <strong>Channel</strong> is <code>daily</code> (the rolling test build) or a release tag. <strong>Arch</strong> is <code>x86_64</code> or <code>aarch64</code>.
 Older download names (for example <code>{CFG['key']}-daily-x86_64.iso</code>) still work: they redirect (HTTP 301) to the new name.</p></section>
 <section class="wrap"><h2>The installer</h2><p>A text-mode wizard, on a VGA screen or a serial console. These are real captures from the CI test. A graphical installer is in progress.</p><div class="shots">{sh}</div></section>

@@ -1698,7 +1698,11 @@ class Runner:
                 vm.shot("login-prompt")
                 self.serial_login(vm, P["old_pw"], expect_ok=False)
                 # web_auth=pam products keep root LOCKED: the installer's administrator signs in and reaches the menu through sudo
-                self.step("serial-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True, user=P.get("web_user", "root")), "lands in the console menu")
+                # An answer-file install (flow auto) sets root_password_hash, so root is NOT locked there and root's login shell runs the console menu
+                # (profile.d/console-menu.sh); the [user] administrator only gets the menu through sudo when root is locked (guided installs). Logging in as
+                # that administrator on an answer-file install lands in a plain shell, so console-menu-shown failed on uefi-usb-auto-zfs-mirror-sshpw (runs 2494/2548).
+                root_unlocked = a.flow == "auto" and not getattr(a, "answer_file", "")
+                self.step("serial-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True, user="root" if root_unlocked else P.get("web_user", "root")), "lands in the console menu")
             deadline = time.time() + T(300)
             got = None
             while time.time() < deadline:
@@ -1805,6 +1809,7 @@ class Runner:
 
     def console_menu_checks(self, vm):
         a, P = self.a, self.P
+        vm.expect_screen(r"Assign interfaces", 30)     # the menu may still be drawing after the login returned
         scr = vm.screen()
         vm.snap("console-menu")
         vm.shot("console-menu")
@@ -1919,6 +1924,7 @@ class Runner:
 
     def serial_login(self, vm, pw, expect_ok, user="root"):
         for _ in range(6):
+            time.sleep(2)     # agetty flushes the tty input when it restarts after "Login incorrect"/a timeout; text typed into that gap is lost (runs 2469/2491: the password went to the login prompt)
             vm.send("\r")
             if not vm.expect_raw("login:", 20):
                 continue
@@ -1939,6 +1945,7 @@ class Runner:
                 else:
                     r = vm.expect_raw(r"(Login incorrect|#|\$ )", 20)
                     self.step("old-default-root-password-rejected", bool(r) and b"incorrect" in r.group(0), "Login incorrect" if r else "no answer")
+                    vm.expect_raw("login:", 30)     # let the fresh login prompt appear (and be consumed) before the next login starts
                     return False
         return False
 

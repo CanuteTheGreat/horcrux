@@ -40,6 +40,12 @@ def log(msg):
     print(f"[lxc-e2e] {msg}", flush=True)
 
 
+def lxc_include(kind, distro="alpine"):
+    base = "/usr/share/lxc/config"
+    path = f"{base}/{distro}.{kind}.conf"
+    return "lxc.include = " + (path if os.path.exists(path) else f"{base}/{kind}.conf")
+
+
 def step(msg):
     STEP[0] += 1
     log(f"--- {STEP[0]}. {msg}")
@@ -277,8 +283,10 @@ def main():
         "lxc.net.0.veth.vlan.id = 20",
         "lxc.start.auto = 1",
         "lxc.start.order = 3",
-        "lxc.include = /usr/share/lxc/config/alpine.common.conf",
-        "lxc.include = /usr/share/lxc/config/alpine.userns.conf",
+        # LXC 5.x ships alpine.common.conf/alpine.userns.conf, LXC 6.0.6 only common.conf/userns.conf:
+        # the product includes the distro file when it exists, else the generic one.
+        lxc_include("common"),
+        lxc_include("userns"),
     ]:
         check(line in cfg.splitlines(), f"config has `{line}`")
     check(os.path.getsize(f"{LXC_PATH}/ct1/rootfs.raw") == 1 << 30, "1 GiB rootfs image")
@@ -450,7 +458,7 @@ def main():
                                      "lxc": {"nets": [{"bridge": "hxbr0", "ip": "10.77.0.60/24"}]}})
         meta = json.load(open(f"{LXC_PATH}/deb/horcrux.json"))
         log(f"debian guest network config system: {meta['guest_net']}, distro {meta['distro']}")
-        check("lxc.include = /usr/share/lxc/config/debian.common.conf" in open(f"{LXC_PATH}/deb/config").read(),
+        check(lxc_include("common", "debian") in open(f"{LXC_PATH}/deb/config").read(),
               "debian config include")
         req("POST", "/containers/deb/start", {})
         wait_for("debian static IP", lambda: "10.77.0.60/24" in exec_ct("deb", "ip -4 addr show eth0"), 90)

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=HOGSMEADE OneDrive home folders
+Comment=Links ~/Documents, ~/Downloads, ~/Pictures ... to OneDrive Personal (never moves or deletes files)
+Exec=/usr/bin/hogsmeade-known-folders
+NoDisplay=true
+Terminal=false
+X-GNOME-Autostart-Phase=Initialization
+X-GNOME-AutoRestart=false

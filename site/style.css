@@ -37,7 +37,10 @@ table{border-collapse:collapse;width:100%;margin:12px 0}
 .tw{overflow-x:auto;max-width:100%}
 th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
 th{background:#101216}
-.dl td:nth-child(2){word-break:break-all}
+.dl td.v .fn{display:block;color:var(--muted);font-size:.78rem;margin-top:.35em;word-break:break-all}
+.dl td.v .aux{margin-left:.4em;white-space:nowrap}
+.btn.sm{padding:5px 12px;font-size:.9rem}
+.muted{color:var(--muted)}
 .shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
 figure{margin:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
 figcaption{padding:8px 12px;color:var(--muted);font-size:.9rem}
@@ -68,6 +71,4 @@ footer p{margin:.3em 0}
  .dl thead{display:none}
  .dl tr{padding:.7em 0;border-bottom:1px solid #222}
  .dl td{border:0;padding:.2em .4em}
- .dl td:nth-child(2){word-break:normal;overflow-wrap:anywhere}
- .dl td:nth-child(3),.dl td:nth-child(4){display:inline-block}
 }

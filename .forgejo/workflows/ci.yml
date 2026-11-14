@@ -529,6 +529,15 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "VM devices"
           bash horcrux-api/tests/vm_devices_e2e.sh target/debug/horcrux-api
 
+      - name: "Snapshot schedules (cron runs, retention, disable, delete; real qcow2)"
+        # snapshot_schedule_e2e.sh lets a custom cron schedule snapshot a VM
+        # three times on its own, checks retention keeps 2 and never prunes a
+        # hand-made snapshot whose name starts with the schedule's, a disabled
+        # schedule stops and a deleted one is gone; checked with qemu-img.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Snapshot schedules"
+          bash horcrux-api/tests/snapshot_schedule_e2e.sh target/debug/horcrux-api
+
       - name: "VM advanced hardware (serial, virtiofs, ivshmem, SMBIOS, NUMA, hotplug, hookscript, real QEMU)"
         # vm_advanced_e2e.sh boots a VM with two extra serial ports (a socket
         # and a host tty), a real virtiofsd share, ivshmem, SMBIOS strings, a
@@ -1325,6 +1334,11 @@ jobs:
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "UI offers every USE-flag feature of an all-features build"
           MODE=full /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
+
+      - name: Dashboard banner lists only genuinely unmanaged libvirt domains
+        env:
+          BASE_URL: https://localhost:8006
+        run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/unmanaged_libvirt_banner_e2e.py
 
       - name: UX crawl (every nav page, desktop + phone, light + dark; no JS errors, overlays, dead stat cards, private text)
         # ci/ux-qa/ux_crawl.py: the owner kept finding these by hand (docs/qa/owner-findings.md). Known, tracked
