@@ -135,7 +135,7 @@ class Packaging(unittest.TestCase):
         self.assertIn("KillMode=control-group", unit)
         # same gate as the CI guests, never a copy of its logic
         self.assertIn("/usr/libexec/hogsmeade-ci-gate", guard)
-        self.assertIn("app-misc/hogsmeade-ci-idle-gate", (PKG / "hogsmeade-local-llm-1.ebuild").read_text())
+        self.assertIn("app-misc/hogsmeade-ci-idle-gate", (PKG / "hogsmeade-local-llm-1-r1.ebuild").read_text())
         # loopback only: no LAN listener, no 0.0.0.0
         self.assertIn("OLLAMA_HOST=127.0.0.1:11434", conf)
         for t in (guard, conf, initd, unit):
