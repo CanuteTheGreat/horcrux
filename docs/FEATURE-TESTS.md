@@ -9,7 +9,7 @@ Generated from the lab's feature matrix (`scripts/lab/vmcluster/matrix.py` in th
 
 **Test column.** `vmc:` = the VM-cluster suite; `ci:` = an e2e that exists and runs in CI containers (to be ported into the VM cluster); `rust:` = `horcrux-api/tests/it` suite against a live server; `lab:` = lab-laptop job; `-` = **no e2e test yet**.
 
-**Coverage (2026-11-10).** 73 features claimed. Passing e2e in the VM cluster: **51**; failing: **1**; written, not yet run: 3; e2e exists in CI only: 10; hardware-only: 4; no e2e test: **4**.
+**Coverage (2026-11-10).** 73 features claimed. Passing e2e in the VM cluster: **53**; failing: **1**; written, not yet run: 1; e2e exists in CI only: 10; hardware-only: 4; no e2e test: **4**.
 
 A failing feature, or a claimed-but-missing one, is a bug: it is filed in qa-findings/horcrux.md and fixed (or the claim is corrected here and in the docs).
 
@@ -20,7 +20,7 @@ A failing feature, or a claimed-but-missing one, is a bug: it is filed in qa-fin
 | `vm.guest-data` | VMs | guest disk persists data | - | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `vm.snapshot-rollback` | VMs | snapshot and roll back (data written after the snapshot is gone) | README, docs/API.md snapshots | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `vm.clone-running` | VMs | full clone of a running VM | README Templates: full and linked clones | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
-| `vm.clone-running-live` | VMs | live full clone of a running VM: guest never paused, clone boots with the source's data, linked clone refused (409) | docs/API.md Clone VM | vmc: nodetests/fix_node.py | VM | written, not yet run |
+| `vm.clone-running-live` | VMs | live full clone of a running VM: guest never paused, clone boots with the source's data, linked clone refused (409) | docs/API.md Clone VM | vmc: nodetests/fix_node.py | VM | pass, 2026-11-14 (VM cluster run pqa1114, fix suite) |
 | `vm.clone` | VMs | full clone (stopped source) boots with the source's data | README Templates | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `vm.disk-add` | VMs | add a disk, guest sees it | UI VM hardware | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `vm.delete` | VMs | delete VM removes QEMU, files and record | API vms | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
@@ -40,7 +40,7 @@ A failing feature, or a claimed-but-missing one, is a bug: it is filed in qa-fin
 | `stack.deploy` | Containers | compose stack deploy, published port answers real HTTP | API stacks | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `stack.stop-start` | Containers | stack stop / start (port closes / opens) | API stacks | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `stack.update` | Containers | update a deployed stack to a new image | owner list | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
-| `stack.update-rolling` | Containers | PUT /api/stacks/:id: rolling update keeps volumes + unchanged services, env merge, bad image refused/rolled back, stopped stack started | docs/API.md Stacks | vmc: nodetests/fix_node.py | VM | written, not yet run |
+| `stack.update-rolling` | Containers | PUT /api/stacks/:id: rolling update keeps volumes + unchanged services, env merge, bad image refused/rolled back, stopped stack started | docs/API.md Stacks | vmc: nodetests/fix_node.py | VM | pass, 2026-11-14 (VM cluster run pqa1114, fix suite) |
 | `stack.remove` | Containers | stack remove | API stacks | vmc: nodetests/ct_stacks.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `ct.lxc` | Containers | LXC: templates, create, console, limits, checkpoint | docs/LXC.md | vmc: ciport.py running the CI e2e lxc_e2e.py on a VM node | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `ct.incus` | Containers | Incus / LXD containers: create, console, exec, limits, snapshots (incus_e2e.py MODE=ct) | README | vmc: ciport.py running the CI e2e incus_e2e.py (MODE=ct) on a VM node | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
@@ -81,7 +81,7 @@ A failing feature, or a claimed-but-missing one, is a bug: it is filed in qa-fin
 | `bak.backup-restore` | Storage | backup a RUNNING VM (zstd and dedup), verify, delete it, restore over it and to a new id: data written in the guest is identical | API backups | vmc: storetests.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `sto.snapshot-schedules` | Storage | snapshot schedules: cron schedule snapshots by itself, retention prunes only its own, disable/delete stop it (quotas: no test yet) | API snapshot-schedules | ci: tests/snapshot_schedule_e2e.sh (real qcow2) | VM | pass, 2026-11-13 (rw-man-01 run; CI step "Snapshot schedules") |
 | `auth.users-rbac` | Auth | users, groups, roles, ACLs: RBAC enforced on every route | docs/RBAC.md | rust: rbac_matrix_tests, auth_e2e_tests | VM | e2e exists in CI containers, not yet moved into the VM cluster |
-| `auth.tokens-totp` | Auth | API tokens, TOTP, security keys, sessions | docs/ACCESS_CONTROL.md | vmc: uitests.py (ui_e2e.py auth part) | VM | written, not yet run |
+| `auth.tokens-totp` | Auth | API tokens, TOTP, security keys, sessions | docs/ACCESS_CONTROL.md | vmc: uitests.py (ui_e2e.py auth part) | VM | pass, 2026-11-14 (VM cluster run pqa1114, fix suite) |
 | `auth.realms` | Auth | LDAP / OIDC / PAM realms | README | ci: tests/auth_realms_e2e.sh (real OpenLDAP, Dex) | VM | e2e exists in CI containers, not yet moved into the VM cluster |
 | `ui.flows` | UI | web UI flows (login, 2FA, containers, stacks, events, notifications, metrics, realms, certificates, themes...) in a real browser against a VM node | UI pages | vmc: uitests.py running horcrux-ui/e2e/ui_e2e.py (Playwright) | VM | **FAIL** 2026-11-09: 287s rc=1:     400 × locator resolved to <span id="s3-state" class="status-inactive">Stopped</span> /         - unexpected value "Stopped" / Aria snap |
 | `mon.metrics-alerts` | Ops | metrics, metric servers, alerts, webhooks | docs/METRICS.md, ALERT_NOTIFICATIONS_GUIDE.md | rust: alerts_tests, metric_servers_tests, webhook_events_tests; ui monitoring | VM | e2e exists in CI containers, not yet moved into the VM cluster |
