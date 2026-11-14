@@ -165,13 +165,44 @@ pub fn VmConsole() -> impl IntoView {
     // Fullscreen shows only the noVNC page: its own auto-hiding bar (pointer
     // at the top edge) takes over the toolbar's buttons there.
     let toggle_fullscreen = move |_| {
-        if let Some(elem) = web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.get_element_by_id("console-frame"))
-        {
+        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        // Already fullscreen (e.g. F11 first, then this button): leave it.
+        if doc.fullscreen_element().is_some() {
+            doc.exit_fullscreen();
+        } else if let Some(elem) = doc.get_element_by_id("console-frame") {
             let _ = elem.request_fullscreen();
         }
     };
+    // Fullscreen can end by Esc, F11 or the browser UI as well as by a click on
+    // our button: whatever changes the window or fullscreen state, tell the
+    // noVNC page to re-fit the guest to its new size.
+    let on_refit = Closure::wrap(Box::new(move |_: JsValue| {
+        frame_action("refit", None);
+    }) as Box<dyn FnMut(JsValue)>);
+    if let Some(w) = web_sys::window() {
+        let _ = w.add_event_listener_with_callback("resize", on_refit.as_ref().unchecked_ref());
+        if let Some(d) = w.document() {
+            let _ = d.add_event_listener_with_callback(
+                "fullscreenchange",
+                on_refit.as_ref().unchecked_ref(),
+            );
+        }
+    }
+    on_cleanup(move || {
+        if let Some(w) = web_sys::window() {
+            let _ =
+                w.remove_event_listener_with_callback("resize", on_refit.as_ref().unchecked_ref());
+            if let Some(d) = w.document() {
+                let _ = d.remove_event_listener_with_callback(
+                    "fullscreenchange",
+                    on_refit.as_ref().unchecked_ref(),
+                );
+            }
+        }
+        drop(on_refit);
+    });
 
     view! {
         <div class="console-page">
