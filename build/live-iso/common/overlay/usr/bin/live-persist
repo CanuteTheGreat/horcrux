@@ -33,6 +33,7 @@ RUN = "/run/live-installer"
 MNT = "/run/live-persist"
 DIRS = ["/etc", "/root", "/home", "/var/lib", "/var/log"]
 MAPPER = "live-persist"
+LIVE_USER = "live-admin"     # PAM products (web_auth = pam): the throwaway system administrator of a "Try it live" session
 
 
 def proj():
@@ -315,18 +316,22 @@ def product(action):
         pass
     if existing and prev.get("password"):
         info["password"] = prev["password"]        # restart after the persistence came up: the DB was seeded by this session's password
+        if prev.get("user"):
+            info["user"] = prev["user"]
     elif existing:
         info["note"] = "persisted configuration: log in with the admin password you set earlier"
     elif p.get("web_auth") == "pam":
-        # the web UI signs in SYSTEM users: the live session gets a throwaway administrator account with a random password
+        # the web UI signs in SYSTEM users: the live session gets a throwaway administrator account with a random password,
+        # in the PRODUCT's admin group (Patronus: patronus-admin, Horcrux: horcrux-admin) and wheel
         pw = random_password()
-        sh(["groupadd", "-f", "horcrux-admin"])
-        if sh(["id", "live-admin"]).returncode != 0:
-            sh(["useradd", "-m", "-s", "/bin/bash", "-G", "wheel,horcrux-admin", "live-admin"])
-        subprocess.run(["chpasswd"], input=f"live-admin:{pw}\n", text=True, check=False)
+        grp = p.get("web_admin_group") or f"{p.get('name', 'horcrux')}-admin"
+        sh(["groupadd", "-f", grp])
+        if sh(["id", LIVE_USER]).returncode != 0:
+            sh(["useradd", "-m", "-s", "/bin/bash", "-G", f"wheel,{grp}", LIVE_USER])
+        subprocess.run(["chpasswd"], input=f"{LIVE_USER}:{pw}\n", text=True, check=False)
         info["password"] = pw
-        info["user"] = "live-admin"
-        info["note"] = "web UI / console user: live-admin (a system account; it exists only for this live session)"
+        info["user"] = LIVE_USER
+        info["note"] = f"web UI / console user: {LIVE_USER} (a system account; it exists only for this live session)"
     elif pf:
         pw = random_password()
         os.makedirs(os.path.dirname(pf), exist_ok=True)
@@ -381,7 +386,7 @@ def cmd_banner():
         url = f"{info['scheme']}://{ip or '<address pending: check the network>'}:{info['port']}"
         print(f" Web UI         : {url}")
         if info.get("password"):
-            print(f" Admin login    : admin")
+            print(f" Admin login    : {info.get('user') or 'admin'}")     # PAM products: the live system account, there is no 'admin'
             print(f" Admin password : {info['password']}")
             print("                  (random, valid for this live session only)")
         elif info.get("note"):

@@ -362,11 +362,11 @@ class Tests:
         self.step("disk-hash-unchanged", after == before, f"{before[:16]} == {after[:16]}" if after == before else f"CHANGED {before[:16]} -> {after[:16]}")
         os.unlink(disk)
 
-    def web_code(self, pw, wait=240, port=None):
+    def web_code(self, pw, wait=240, port=None, user=None):
         end = time.time() + wait
         port = port or qt.FWD_WEB
         while True:
-            sc, code, resp = http(port, "/api/auth/login", "POST", {"username": self.P.get("web_user", "admin"), "password": pw})
+            sc, code, resp = http(port, "/api/auth/login", "POST", {"username": user or self.P.get("web_user", "admin"), "password": pw})
             if code in (200, 401, 403) or time.time() >= end:
                 return code
             time.sleep(5)
@@ -477,11 +477,15 @@ class Tests:
             raw = vm.raw.decode(errors="replace")
             pw = re.search(r"Admin password : (\S+)", raw)
             self.step("random-session-password-shown", bool(pw) and len(pw.group(1)) >= 12, "per-session password on the console, none baked in")
+            # the login name the banner shows: PAM products (web_auth = pam) have no 'admin' and the installer's user does not exist in a live
+            # session, the live session creates its own system account (live-admin); run 2026-11-13 logged in as pxadmin and got 401
+            lu = re.search(r"Admin login\s*:\s*(\S+)", raw)
+            user = lu.group(1) if lu else self.P.get("web_user", "admin")
             # Patronus: the live system has no static LAN address, its WAN-side (DHCP) port is the one QEMU forwards
             lp = qt.FWD_WAN if self.a.project == "patronus" else qt.FWD_WEB
-            code = self.web_code(pw.group(1) if pw else "x", port=lp)
-            self.step("web-ui-up-in-live-session", code == 200, f"full product served from RAM: login -> {code}")
-            self.step("default-passwords-refused", self.web_code(self.P["old_pw"], 5, port=lp) in (401, 403), "the product's old default is not accepted")
+            code = self.web_code(pw.group(1) if pw else "x", port=lp, user=user)
+            self.step("web-ui-up-in-live-session", code == 200, f"full product served from RAM: login {user} -> {code}")
+            self.step("default-passwords-refused", self.web_code(self.P["old_pw"], 5, port=lp, user=user) in (401, 403), f"the product's old default is not accepted for {user}")
             self.step("live-sshd-off", not qt.ssh_banner(qt.FWD_SSH).startswith("SSH-"), "no sshd in the live session")
             self.step("live-shell", self.shell(vm))
             rc, o = self.run(vm, "echo \"V=$(grep -c vda /proc/mounts) W=$(cat /proc/swaps | wc -l)\"")
