@@ -79,7 +79,7 @@ A failing feature, or a claimed-but-missing one, is a bug: it is filed in qa-fin
 | `sto.nfs-iscsi-ceph` | Storage | NFS / iSCSI / Ceph storage backends | docs | - | VM | no end-to-end test exists (gap) |
 | `sto.replication` | Storage | replication job: VM snapshot -> zfs send|receive to a second node, data identical | API replication | vmc: storetests.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `bak.backup-restore` | Storage | backup a RUNNING VM (zstd and dedup), verify, delete it, restore over it and to a new id: data written in the guest is identical | API backups | vmc: storetests.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
-| `sto.snapshot-schedules` | Storage | snapshot schedules and quotas | API snapshot-schedules | - | VM | no end-to-end test exists (gap) |
+| `sto.snapshot-schedules` | Storage | snapshot schedules: cron schedule snapshots by itself, retention prunes only its own, disable/delete stop it (quotas: no test yet) | API snapshot-schedules | ci: tests/snapshot_schedule_e2e.sh (real qcow2) | VM | pass, 2026-11-13 (rw-man-01 run; CI step "Snapshot schedules") |
 | `auth.users-rbac` | Auth | users, groups, roles, ACLs: RBAC enforced on every route | docs/RBAC.md | rust: rbac_matrix_tests, auth_e2e_tests | VM | e2e exists in CI containers, not yet moved into the VM cluster |
 | `auth.tokens-totp` | Auth | API tokens, TOTP, security keys, sessions | docs/ACCESS_CONTROL.md | vmc: uitests.py (ui_e2e.py auth part) | VM | written, not yet run |
 | `auth.realms` | Auth | LDAP / OIDC / PAM realms | README | ci: tests/auth_realms_e2e.sh (real OpenLDAP, Dex) | VM | e2e exists in CI containers, not yet moved into the VM cluster |
