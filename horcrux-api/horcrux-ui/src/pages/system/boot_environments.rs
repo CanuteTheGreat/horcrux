@@ -111,7 +111,7 @@ pub fn BootEnvironmentsPage() -> impl IntoView {
                     <table class="data-table">
                         <thead><tr><th>"Name"</th><th>"State"</th><th>"Kernel"</th><th>"Created"</th><th>"Actions"</th></tr></thead>
                         <tbody>
-                            {i.environments.iter().cloned().map(|e| {
+                            {i.environments.iter().map(|e| {
                                 let n1 = e.name.clone(); let n2 = e.name.clone(); let n3 = e.name.clone(); let n4 = e.name.clone();
                                 let state = [(e.running, "running"), (e.active, "boots next"), (e.pinned, "pinned")]
                                     .iter().filter(|(on, _)| *on).map(|(_, t)| *t).collect::<Vec<_>>().join(", ");
@@ -147,14 +147,14 @@ pub fn BootEnvironmentsPage() -> impl IntoView {
                             <table class="data-table">
                                 <thead><tr><th>"Snapshot"</th><th>"Kernel"</th><th>"Created"</th><th>"Kind"</th><th>"Actions"</th></tr></thead>
                                 <tbody>
-                                    {i.snapshots.iter().rev().cloned().map(|s| {
+                                    {i.snapshots.iter().rev().map(|s| {
                                         let full = format!("{}@{}", s.be, s.name);
                                         let (f1, f2, f3, f4) = (full.clone(), full.clone(), full.clone(), full.clone());
                                         let (be, sn) = (s.be.clone(), s.name.clone());
                                         let pinned = s.pinned;
                                         view! {
                                             <tr>
-                                                <td><strong>{full}</strong>{pinned.then(|| " (pinned)")}</td>
+                                                <td><strong>{full}</strong>{pinned.then_some(" (pinned)")}</td>
                                                 <td>{s.kernel.clone()}</td>
                                                 <td>{when(s.created)}</td>
                                                 <td>{if s.auto { "automatic" } else { "manual" }}</td>
