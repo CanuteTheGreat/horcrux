@@ -1354,6 +1354,13 @@ async fn notification_channels_deliver_for_real() {
     assert_eq!(status, 404, "deleted channel still readable");
 }
 
+/// Serializes the tests that register a cluster peer (migration center adds
+/// `contract-target`) with the tests that assert this node is standalone
+/// (guest power: `clustered` must be false). They share one server, so
+/// without it the assertion fails whenever the peer is registered at that
+/// moment: a timing race that only slow runners lose.
+static CLUSTER_NODES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Serializes the tests that create notification channels or fire alerts:
 /// a fired alert goes to EVERY enabled channel, so running them together
 /// would put unexpected messages into each other's receivers / counters.
@@ -2548,6 +2555,7 @@ async fn instance_console_ticket_route_reads_into_ui_type() {
 /// and reads every response into the page's own types.
 #[tokio::test]
 async fn migration_center_routes_read_into_ui_types() {
+    let _nodes = CLUSTER_NODES.lock().await;
     let c = client();
     let token = login(&c).await;
     let _: Vec<api::MigrationJob> = fetch(&c, &token, "/migration/jobs").await;
@@ -4041,6 +4049,7 @@ async fn event_webhooks_mask_secrets_and_deliver_signed() {
 /// nothing to save or resume; the policy round-trips.
 #[tokio::test]
 async fn guest_power_routes_read_into_ui_types() {
+    let _nodes = CLUSTER_NODES.lock().await;
     let c = client();
     let token = login(&c).await;
     let vm = "contract-power-vm";
