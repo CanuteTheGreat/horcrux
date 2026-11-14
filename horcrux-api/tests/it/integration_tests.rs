@@ -37,7 +37,7 @@ fn create_client() -> Client {
 /// daemon. `docker rm`/`stop` latency belongs to that daemon, not to Horcrux:
 /// on a busy runner (other jobs' containers, the host's disk-guard cleanup)
 /// a stack removal took 87 s and the 30 s client of `create_client` timed
-/// out. The test that asserts the 30 s stop budget keeps `create_client`.
+/// out. `test_stack_stop_is_concurrent` uses it too and asserts concurrency on elapsed time instead.
 fn create_stack_client() -> Client {
     Client::builder()
         .timeout(Duration::from_secs(240))
@@ -2337,10 +2337,13 @@ async fn purge_stack(client: &Client, token: &str, name: &str, services: &[&str]
 /// Stopping a stack stops its services concurrently. Each busybox `sleep`
 /// ignores SIGTERM, so docker waits out its 10 s grace period per service:
 /// stopping three of them one after another took ~30 s, and the dashboard /
-/// any client with a 30 s timeout (this one) failed.
+/// any client with a 30 s timeout failed.
 #[tokio::test]
 async fn test_stack_stop_is_concurrent() {
-    let client = create_client();
+    // The 240 s client: concurrency is asserted by `took` below (sequential stops
+    // need >= 30 s), not by the client timeout. A 30 s client turned a slow shared
+    // Docker daemon on a busy runner into a bare TimedOut (run 16295).
+    let client = create_stack_client();
     let token = admin_token(&client).await;
     let name = "itstopstack";
     let services = ["a", "b", "c"];
@@ -2373,11 +2376,12 @@ async fn test_stack_stop_is_concurrent() {
         .bearer_auth(&token)
         .send()
         .await
-        .expect("stopping a 3-service stack must answer within the 30 s client timeout");
+        .expect("stopping a 3-service stack must answer");
     let took = started.elapsed();
     assert!(r.status().is_success(), "stop: {}", r.status());
+    // sequential = 3 x 10 s grace = 30 s+; concurrent = ~10 s plus daemon latency
     assert!(
-        took < Duration::from_secs(22),
+        took < Duration::from_secs(27),
         "3 services must stop concurrently (~10 s), took {took:?}"
     );
     for svc in services {
