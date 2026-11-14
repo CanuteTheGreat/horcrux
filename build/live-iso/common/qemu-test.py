@@ -1697,7 +1697,11 @@ class Runner:
                 vm.shot("login-prompt")
                 self.serial_login(vm, P["old_pw"], expect_ok=False)
                 # web_auth=pam products keep root LOCKED: the installer's administrator signs in and reaches the menu through sudo
-                self.step("serial-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True, user=P.get("web_user", "root")), "lands in the console menu")
+                # An answer-file install (flow auto) sets root_password_hash, so root is NOT locked there and root's login shell runs the console menu
+                # (profile.d/console-menu.sh); the [user] administrator only gets the menu through sudo when root is locked (guided installs). Logging in as
+                # that administrator on an answer-file install lands in a plain shell, so console-menu-shown failed on uefi-usb-auto-zfs-mirror-sshpw (runs 2494/2548).
+                root_unlocked = a.flow == "auto" and not getattr(a, "answer_file", "")
+                self.step("serial-login-with-chosen-password", self.serial_login(vm, PW, expect_ok=True, user="root" if root_unlocked else P.get("web_user", "root")), "lands in the console menu")
             deadline = time.time() + T(300)
             got = None
             while time.time() < deadline:
