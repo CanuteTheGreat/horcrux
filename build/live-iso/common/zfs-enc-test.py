@@ -603,7 +603,9 @@ class ZRun(qt.Runner):
             self.step("resume-device-set-and-no-key-left-in-run", re.search(r"---\s*\d+:\d+", o) is not None and "nokey" in o and "KEYLEFT" not in o,
                       "/sys/power/resume set by hx-resume; /run/hx/key shredded")
             self.step("kernel-args-resume-and-unlock", "resume=UUID=" in o and "rd.hx.swap=" in o, "")
-            self.step("zram-higher-priority-than-disk-swap", "zram" not in sw or (bool(re.search(r"zram\d+\s+\d+\s+16383", sw))), sw.strip().replace("\n", " | "))
+            # OpenRC's zram script uses priority 16383, systemd's zram-swap.service 100: what matters is zram > the disk swap (10)
+            zr = re.search(r"zram\d+\s+\d+\s+(-?\d+)", sw)
+            self.step("zram-higher-priority-than-disk-swap", "zram" not in sw or (bool(zr and m) and int(zr.group(1)) > int(m.group(2))), sw.strip().replace("\n", " | "))
             # initramfs: the one-passphrase module and the hook order, on the REAL installed image
             # lsinitrd of every image of the (large) desktop install can outlast the default 60 s ssh timeout on a loaded runner,
             # which returned (255, "timeout") = zero images listed: allow it the time it needs and retry a failed transport
@@ -635,7 +637,7 @@ class ZRun(qt.Runner):
             lines = o.strip().splitlines()
             before = {"counter": int(lines[0]), "pid": lines[1].strip(), "marker": lines[2].strip(), "boot_id": lines[3].strip()}
             self.step("marker-and-process-written", before["counter"] >= 3, f"counter={before['counter']} pid={before['pid']}")
-            rc, o = self.sh("loginctl hibernate; echo rc=$?", timeout=40)
+            rc, o = self.sh("if command -v systemctl >/dev/null 2>&1; then systemctl hibernate; else loginctl hibernate; fi; echo rc=$?", timeout=40)   # loginctl has no hibernate verb on systemd
             # elogind starts the hibernation and the guest dies under the ssh session: "closed by remote host" / no output = it worked;
             # an explicit non-zero rc means loginctl refused (then the kernel interface is tried so the rest still runs)
             refused = "rc=" in o and "rc=0" not in o
@@ -647,7 +649,7 @@ class ZRun(qt.Runner):
                 time.sleep(2)
             gone = not vm.alive()
             if not refused:
-                self.step("loginctl-hibernate", gone, "`loginctl hibernate` (elogind) wrote the image and powered the guest off: " + o.strip().replace("\n", " | ")[:100])
+                self.step("loginctl-hibernate", gone, "`hibernate` (elogind: loginctl, systemd: systemctl) wrote the image and powered the guest off: " + o.strip().replace("\n", " | ")[:100])
             self.step("hibernate-powered-off", gone, f"VM powered off after writing the image ({int(time.time() - t)}s)")
             if not gone:
                 vm.p.kill()
