@@ -26,16 +26,6 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
       echo '== retrying once with MAKEOPTS=-j2 (intermittent compile failures, e.g. mutter ninja)'; \
       MAKEOPTS=-j2 emerge --resume || exit $rc; }
 
-# GNOME under OpenRC (patches in /etc/portage/patches/gnome-base/gnome-session-openrc): the gsd meta services lose supervisor=supervise-daemon (openrc refused to start
-# them: no session), and gsd-media-keys/gsd-sound `want` + start after wireplumber and pipewire-pulse (nothing started PipeWire in the user session:
-# pipewire.desktop is X-GNOME-HiddenUnderSystemd; and a gsd that came up before it never reconnected: dead volume keys). Binary packages ignore patches: rebuild from source.
-RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
-    set -e; unset ARCH; export FEATURES="-ccache"; \
-    emerge --oneshot --usepkg=n --getbinpkg=n --buildpkg=n gnome-base/gnome-session-openrc; \
-    if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd supervisor patch not applied'; exit 1; fi; \
-    grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio ordering patch not applied'; exit 1; }; \
-    grep -q 'keep the shell there' /etc/user/init.d/gnome-shell-wayland || { echo 'gnome-shell user-bus patch not applied'; exit 1; }
-
 # Mutter's ScreenCast frame limiter (patch in /etc/portage/patches/x11-wm/mutter, copied above with the rest of portage/; --usepkg-exclude in make.conf made the
 # desktop emerge build mutter from source): remote desktop / screen sharing delivered 30-40 fps at a 60 Hz display. Fail the build when the patch was not applied.
 RUN set -e; strings /usr/lib64/libmutter-*.so.0 | grep -q 'too early (nearest interval boundary)' || { echo 'mutter ScreenCast frame limiter patch not applied (binary package used?)'; exit 1; }
@@ -48,6 +38,14 @@ COPY --from=hxfull / /var/db/repos/horcrux/
 RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     install -D -m644 /var/db/repos/horcrux/sys-apps/horcrux-repo-config/files/horcrux.conf /etc/portage/repos.conf/horcrux.conf; \
     emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults; \
+    # GNOME under OpenRC = gnome-base/gnome-session-openrc-49.2-r2::horcrux (pulled by horcrux-gnome-defaults; its patches used to be /etc/portage/patches in this image):\
+    # gsd meta services without a supervisor, gsd audio after PipeWire, gnome-shell on the user bus, and session-scoped user services (a GNOME logout stops the\
+    # session's services even while an ssh login of the user keeps the OpenRC user runlevel alive; no gnome-shell respawn into a closed session)\
+    qlist -IRv gnome-base/gnome-session-openrc | grep -q '::horcrux'; test ! -e /etc/portage/patches/gnome-base/gnome-session-openrc; \
+    if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd supervisor patch not applied'; exit 1; fi; \
+    grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio ordering patch not applied'; exit 1; }; \
+    grep -q 'keep the shell there' /etc/user/init.d/gnome-shell-wayland || { echo 'gnome-shell user-bus patch not applied'; exit 1; }; \
+    test -x /usr/libexec/gnome-session-openrc-helper && grep -q 'command_args="guard /usr/bin/gnome-shell' /etc/user/init.d/gnome-shell-wayland || { echo 'session-scoping patch not applied'; exit 1; }; \
     test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local && qfile -q /etc/portage/repos.conf/horcrux.conf; \
     # GATE: the os-release names this edition (sys-apps/horcrux-release[gnome-light]; the core layer built the Server one)
     grep -qx 'VARIANT_ID=gnome' /usr/lib/os-release; ! grep -iE '^PRETTY_NAME=.*(live|installer)' /usr/lib/os-release; \
@@ -86,11 +84,12 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     find /usr/share/help /usr/share/gnome/help -mindepth 1 -maxdepth 1 ! -name C ! -name 'en*' -exec rm -rf {} + 2>/dev/null || true; \
     # development leftovers of the desktop emerge (~1 GB uncompressed): static libs (libclamav_rust.a 330 MB, QmlDom 218, qpdf 108, LLVM ...),\
     # headers, and the clang/LLVM tools (mesa's llvmpipe/radeonsi only load libLLVM.so, which stays)\
-    # KEEP the toolchain's own development files (glibc + kernel headers + the libraries kernel-module builds link: elfutils, openssl, zlib, zstd, xz, ncurses):\
+    # KEEP the toolchain's own development files (glibc + kernel headers + the libraries kernel-module builds link: elfutils, openssl, zlib, zstd, xz, ncurses;\
+    # glib + elogind + openrc because gnome-base/gnome-session-openrc::horcrux is a source package and its updates compile on the installed system):\
     # stripping them left every installed system unable to compile anything (gringotts, 2026-11-03: `C compiler cannot create executables`, missing\
     # libc_nonshared.a/stdio.h), which also breaks the zfs-kmod rebuild on every kernel update. ~100 MB; the rest of the headers/static libs go.\
     if [ -z "$KEEP_DEV" ]; then \
-    qlist -e sys-libs/glibc sys-kernel/linux-headers dev-libs/elfutils dev-libs/openssl sys-libs/zlib app-arch/zstd app-arch/xz-utils sys-libs/ncurses sys-libs/libxcrypt | grep -E '^/usr/(include|lib64?)/' | sort -u > /tmp/devkeep.lst; \
+    qlist -e sys-libs/glibc sys-kernel/linux-headers dev-libs/glib sys-auth/elogind sys-apps/openrc dev-libs/elfutils dev-libs/openssl sys-libs/zlib app-arch/zstd app-arch/xz-utils sys-libs/ncurses sys-libs/libxcrypt | grep -E '^/usr/(include|lib64?)/' | sort -u > /tmp/devkeep.lst; \
     test "$(wc -l < /tmp/devkeep.lst)" -gt 500; \
     find /usr/lib /usr/lib64 -xdev -name '*.a' -type f ! -path '/usr/lib/gcc/*' 2>/dev/null | grep -vxFf /tmp/devkeep.lst | xargs -r rm -f; \
     find /usr/include -xdev \( -type f -o -type l \) 2>/dev/null | grep -vxFf /tmp/devkeep.lst | xargs -r rm -f; find /usr/include -xdev -depth -type d -empty -delete 2>/dev/null || true; \
