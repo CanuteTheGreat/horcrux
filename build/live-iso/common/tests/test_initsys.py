@@ -185,5 +185,14 @@ class EarlyBootUnits(unittest.TestCase):
                 self.assertFalse(after & {"local-fs.target", "tmp.mount"}, f"{f} is Before=swap.target but After={sorted(after & {'local-fs.target', 'tmp.mount'})}")
 
 
+class ConsoleStatus(unittest.TestCase):
+    def test_systemd_status_lines_do_not_overwrite_the_console_menu(self):
+        # parity with OpenRC: after the getty is up, systemd prints only failures on the console (the menu got scrolled away otherwise)
+        f = os.path.join(COMMON, "overlay/usr/lib/systemd/system.conf.d/50-console-menu.conf")
+        t = open(f).read()
+        self.assertIn("[Manager]", t)
+        self.assertIn("ShowStatus=error", [l.strip() for l in t.splitlines()])
+
+
 if __name__ == "__main__":
     unittest.main()
