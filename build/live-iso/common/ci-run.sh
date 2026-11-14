@@ -54,7 +54,16 @@ if [ "$result" = pass ]; then
   tail -15 "$EVI/unit-tests.log"
   [ "$ut_rc" = 0 ] || { grep -E '^(FAIL|ERROR):|Error|assert' "$EVI/unit-tests.log" | head -12; fail unit-tests "guided-installer unit tests failed (rc=$ut_rc): $(grep -E '^(FAIL|ERROR):' "$EVI/unit-tests.log" | head -3 | tr '\n' ' ')"; }
   # /boot space handling on a REAL 512 MB ext4 loop mount (30 snapshots, <= 80% used); needs root + loop devices, skipped otherwise
-  if [ "$(id -u)" = 0 ] && command -v mkfs.ext4 >/dev/null && losetup -f >/dev/null 2>&1; then
+  # `losetup -f` alone only names a free /dev/loopN and succeeds on hosts where the node is absent or the loop pool is
+  # exhausted (run 15819: mount failed to set up a loop device and failed the whole publish): attach a real file first.
+  loop_ok=0
+  if [ "$(id -u)" = 0 ] && command -v mkfs.ext4 >/dev/null; then
+    lp_img=$(mktemp); truncate -s 1M "$lp_img"
+    if lp_dev=$(losetup -f --show "$lp_img" 2>/dev/null); then loop_ok=1; losetup -d "$lp_dev" 2>/dev/null; fi
+    rm -f "$lp_img"
+    [ "$loop_ok" = 1 ] || echo "::warning::be-boot-space skipped: this runner cannot attach a loop device"
+  fi
+  if [ "$loop_ok" = 1 ]; then
     python3 -W ignore "$HERE/be-boot-space-test.py" > "$EVI/be-boot-space.log" 2>&1; bs_rc=$?
     grep -E '^(RESULT|ok)' "$EVI/be-boot-space.log"
     if [ "$bs_rc" != 0 ]; then tail -n 30 "$EVI/be-boot-space.log"; fail be-boot-space "horcrux-be /boot space test failed (rc=$bs_rc): $(tail -n 1 "$EVI/be-boot-space.log" | cut -c1-200)"; fi
