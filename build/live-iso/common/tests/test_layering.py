@@ -121,7 +121,9 @@ class Layering(unittest.TestCase):
 
     def test_server_gate_wired_in_ci_for_both_arches(self):
         ci = open(os.path.join(LIVE, "common", "ci-run.sh")).read()
-        self.assertRegex(ci, r"zfs-enc-test\.py.*--server --public --late-network")
+        # the server gate runs through zfs_enc_run (one retry after an outside SIGKILL), which calls zfs-enc-test.py
+        self.assertRegex(ci, r"zfs_enc_run\(\) \{[^}]*zfs-enc-test\.py")
+        self.assertRegex(ci, r"zfs_enc_run \"\$name\" --server --public --late-network")
         self.assertIn('[ "$IMG_DE" = server ]', ci)       # not gated on x86_64: aarch64 runs it too
 
 
