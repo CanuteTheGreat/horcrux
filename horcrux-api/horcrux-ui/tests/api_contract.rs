@@ -4116,9 +4116,11 @@ async fn guest_power_routes_read_into_ui_types() {
     let (st, _) = get_raw(&c, &token, "/nodes/maintenance").await;
     if st == 200 {
         let m: api::MaintenanceState = fetch(&c, &token, "/nodes/maintenance").await;
+        // `clustered` is shared server state: the node-membership test above
+        // registers a peer while this one runs, so only `enabled` is stable.
         assert!(
-            !m.enabled && !m.clustered,
-            "a single node is not in maintenance: {m:?}"
+            !m.enabled,
+            "a node nobody drained is not in maintenance: {m:?}"
         );
         let _: api::MovePlan = fetch(&c, &token, "/nodes/maintenance/plan").await;
         let r: api::RebalanceState = fetch(&c, &token, "/cluster/rebalance").await;
