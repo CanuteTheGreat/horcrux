@@ -18,6 +18,22 @@ use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 use tracing::{error, info, warn};
 
+/// True when `name` is a snapshot this schedule created itself
+/// (`<schedule>_<YYYYmmdd_HHMMSS>`, see `execute_snapshot`).
+pub(crate) fn is_scheduled_snapshot_name(name: &str, schedule_name: &str) -> bool {
+    let Some(ts) = name
+        .strip_prefix(schedule_name)
+        .and_then(|rest| rest.strip_prefix('_'))
+    else {
+        return false;
+    };
+    ts.len() == 15
+        && ts.char_indices().all(|(i, c)| match i {
+            8 => c == '_',
+            _ => c.is_ascii_digit(),
+        })
+}
+
 /// Snapshot schedule configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotSchedule {
@@ -453,7 +469,10 @@ impl SnapshotScheduler {
         let mut snapshots = manager.list_snapshots(vm_id);
 
         // Filter snapshots from this schedule (by name prefix)
-        snapshots.retain(|s| s.name.starts_with(schedule_name));
+        // (exact `<schedule>_<YYYYmmdd_HHMMSS>`: a bare prefix match would
+        // also prune hand-made snapshots such as `nightly-before-upgrade`
+        // and the snapshots of a schedule named `nightly2`)
+        snapshots.retain(|s| is_scheduled_snapshot_name(&s.name, schedule_name));
 
         // Sort by creation time (newest first)
         snapshots.sort_by_key(|x| std::cmp::Reverse(x.created_at));
@@ -703,6 +722,20 @@ mod tests {
         let next_dt = chrono::DateTime::<chrono::Utc>::from_timestamp(next, 0).unwrap();
         assert_eq!(next_dt.hour(), 14);
         assert_eq!(next_dt.minute(), 0);
+    }
+
+    #[test]
+    fn retention_only_touches_snapshots_the_schedule_made() {
+        use super::is_scheduled_snapshot_name as own;
+        assert!(own("nightly_20261113_080000", "nightly"));
+        assert!(!own("nightly-before-upgrade", "nightly"));
+        assert!(!own("nightly", "nightly"));
+        assert!(!own("nightly2_20261113_080000", "nightly"));
+        assert!(!own("nightly_manual", "nightly"));
+        assert!(!own("nightly_20261113_08000x", "nightly"));
+        assert!(!own("nightly_20261113-080000", "nightly"));
+        assert!(own("a_b_20261113_080000", "a_b"));
+        assert!(!own("a_b_20261113_080000", "a"));
     }
 
     #[test]
