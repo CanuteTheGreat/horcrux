@@ -64,8 +64,14 @@ class Behaviour(unittest.TestCase):
     def alive(self, pid):
         try:
             os.kill(pid, 0)
-            return True
         except OSError:
+            return False
+        # a killed process whose parent never reaps it (PID 1 of a CI job container is not an init) stays a zombie: kill(pid, 0) still
+        # succeeds, but it is dead (live-iso run 2631: test_stop_is_prompt / test_owner_back_stops_server_and_frees_gpu)
+        try:
+            with open(f"/proc/{pid}/stat") as fh:
+                return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
+        except (OSError, IndexError):
             return False
 
     def tearDown(self):
@@ -129,7 +135,7 @@ class Packaging(unittest.TestCase):
         self.assertIn("KillMode=control-group", unit)
         # same gate as the CI guests, never a copy of its logic
         self.assertIn("/usr/libexec/hogsmeade-ci-gate", guard)
-        self.assertIn("app-misc/hogsmeade-ci-idle-gate", (PKG / "hogsmeade-local-llm-1.ebuild").read_text())
+        self.assertIn("app-misc/hogsmeade-ci-idle-gate", (PKG / "hogsmeade-local-llm-1-r1.ebuild").read_text())
         # loopback only: no LAN listener, no 0.0.0.0
         self.assertIn("OLLAMA_HOST=127.0.0.1:11434", conf)
         for t in (guard, conf, initd, unit):

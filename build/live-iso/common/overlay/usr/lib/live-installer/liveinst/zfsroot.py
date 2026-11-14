@@ -78,7 +78,7 @@ def pool_args(encrypt, devs, mirror, target, keyformat="passphrase"):
     return a
 
 
-def datasets(with_docker=False):
+def datasets(with_docker=False, product="horcrux"):
     """(name, properties) in creation order; the first BE is rpool/ROOT/horcrux"""
     d = [("ROOT", ["canmount=off", "mountpoint=none"]),
          (f"ROOT/{BE}", ["canmount=noauto", "mountpoint=/", "org.horcrux:be=1"]),
@@ -86,10 +86,12 @@ def datasets(with_docker=False):
          ("var", ["canmount=off", "mountpoint=/var"]),
          ("var/log", []),
          ("var/lib", ["canmount=off"]),
-         ("var/lib/libvirt", ["recordsize=64K"]),       # qcow2 clusters are 64 KiB
-         # Horcrux's own VM disks (config paths.vm_storage = /var/lib/horcrux/vms): a boot-environment rollback must never touch them
-         ("var/lib/horcrux", ["canmount=off"]),
-         ("var/lib/horcrux/vms", ["recordsize=64K"])]
+         ("var/lib/libvirt", ["recordsize=64K"])]       # qcow2 clusters are 64 KiB
+    if product == "horcrux":
+        # Horcrux's own VM disks (config paths.vm_storage = /var/lib/horcrux/vms): a boot-environment rollback must never touch them.
+        # Only Horcrux has them: a Patronus install (same installer, profile name "patronus") must not get Horcrux datasets.
+        d += [("var/lib/horcrux", ["canmount=off"]),
+              ("var/lib/horcrux/vms", ["recordsize=64K"])]
     if with_docker:
         d.append(("var/lib/docker", []))
     return d
@@ -123,7 +125,7 @@ def mkpool(inst):
             finally:
                 os.unlink(KEY_FILE)
     docker = "docker" in inst.p.get("services", [])
-    for name, props in datasets(docker):
+    for name, props in datasets(docker, inst.p.get("name", "horcrux")):
         argv = ["zfs", "create"] + [x for p in props for x in ("-o", p)] + [f"{POOL}/{name}"]
         inst.run(argv)
     inst.run(["zpool", "set", f"bootfs={POOL}/ROOT/{BE}", POOL])

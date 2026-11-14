@@ -20,7 +20,9 @@ mkdir -p "$HLL_RUN"
 
 log() { logger -t hogsmeade-llm-guard "$*" 2>/dev/null; echo "$(date +%T) $*" >&2; }
 setstate() { echo "$1 $(date +%s)${2:+ $2}" > "$HLL_RUN/state.new"; mv -f "$HLL_RUN/state.new" "$HLL_RUN/state"; }
-serving() { [ -s "$HLL_PIDFILE" ] && kill -0 "$(cat "$HLL_PIDFILE")" 2>/dev/null; }
+# a pid is running when it exists and is not a zombie: an exited server whose parent has not reaped it yet holds no GPU memory
+running() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null && ! grep -q '^[0-9]* (.*) Z' "/proc/$1/stat" 2>/dev/null; }
+serving() { [ -s "$HLL_PIDFILE" ] && running "$(cat "$HLL_PIDFILE")"; }
 
 # GPU memory (MiB) used by anything that is not an ollama process
 gpu_other_mb() {
@@ -57,7 +59,7 @@ stop_server() {   # SIGTERM the whole tree (server + its runner subprocesses), t
 	# runuser forks the server: collect its children too
 	for k in $kids; do kids="$kids $(pgrep -P "$k" 2>/dev/null | tr '\n' ' ')"; done
 	kill -TERM $pid $kids 2>/dev/null
-	for i in $(seq 1 "$STOP_GRACE_S"); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+	for i in $(seq 1 "$STOP_GRACE_S"); do running "$pid" || break; sleep 1; done
 	kill -KILL $pid $kids 2>/dev/null; rm -f "$HLL_PIDFILE"
 	# the runner is a separate process whose parent may have gone: kill any ollama process still owned by our user
 	[ "$HLL_NO_RUNAS" = 1 ] || pkill -KILL -u "$RUN_AS_USER" -x ollama 2>/dev/null
