@@ -15,8 +15,10 @@ import json
 import os
 import sys
 
+# The saved address WINS over an inherited one: on a systemd image a root login gets DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus
+# from pam_systemd (the user manager's bus). Probing that bus activates a second AT-SPI bus that the installer is not on: an empty tree.
 try:
-    os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", open("/run/live-installer/dbus-address").read().strip())
+    os.environ["DBUS_SESSION_BUS_ADDRESS"] = open("/run/live-installer/dbus-address").read().strip()
 except OSError:
     pass
 import gi
