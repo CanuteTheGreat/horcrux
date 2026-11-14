@@ -830,7 +830,7 @@ class ZRun(qt.Runner):
         chronyd steps (makestep) and is enabled, and a VM booted with a months-off RTC ends up with the right time after the network is up"""
         rc, o = self.sh("f=/etc/NetworkManager/dispatcher.d/20-horcrux-chrony; test -x $f && echo HOOK; qfile -q $f && echo OWNED; qlist -I net-misc/horcrux-chrony-nm; "
                         "grep -h '^makestep' /etc/chrony/chrony.conf /etc/chrony.conf 2>/dev/null | head -2; grep -hE '^rtcsync' /etc/chrony/chrony.conf 2>/dev/null; "
-                        "{ " + init_cmds.enabled_list_sh() + "; } | grep -c '^chronyd '; grep -h '^clock=' /etc/conf.d/hwclock; test -f /usr/lib/live-installer/liveinst/rtc.py && echo RTCPY")
+                        "{ " + init_cmds.enabled_list_sh() + "; } | sed -E 's/^[[:space:]]+//' | grep -c '^chronyd '; grep -h '^clock=' /etc/conf.d/hwclock; test -f /usr/lib/live-installer/liveinst/rtc.py && echo RTCPY")
         self.step("chrony-nm-dispatcher-hook-installed-and-package-owned", "HOOK" in o and "OWNED" in o and "horcrux-chrony-nm" in o, re.sub(r"\s+", " ", o).strip()[:300])
         self.step("chronyd-enabled-makestep-rtcsync-clock-utc", "makestep" in o and "rtcsync" in o and re.search(r"(?m)^1$", o) is not None and 'clock="UTC"' in o and "RTCPY" in o, re.sub(r"\s+", " ", o).strip()[:300])
         rc, o = self.sh("date -u +%s")
