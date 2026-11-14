@@ -18,6 +18,22 @@ pub fn ContainerList() -> impl IntoView {
     // Load (and, after every action, re-load) the container list so the
     // table always shows the real post-action state.
     let reload = move || {
+        // The container list is what the table shows, so it must never wait
+        // on the (slower) power overview that only adds the save-state
+        // hints: a stalled overview used to leave a just-stopped container
+        // showing "running" (UI E2E flake on main).
+        spawn_local(async move {
+            match api::get_containers().await {
+                Ok(container_list) => {
+                    set_containers.set(container_list);
+                    set_error.set(None);
+                }
+                Err(e) => {
+                    set_error.set(Some(e.message));
+                }
+            }
+            set_loading.set(false);
+        });
         spawn_local(async move {
             if let Ok(o) = api::power_overview().await {
                 set_saved.set(
@@ -35,16 +51,6 @@ pub fn ContainerList() -> impl IntoView {
                         .collect(),
                 );
             }
-            match api::get_containers().await {
-                Ok(container_list) => {
-                    set_containers.set(container_list);
-                    set_error.set(None);
-                }
-                Err(e) => {
-                    set_error.set(Some(e.message));
-                }
-            }
-            set_loading.set(false);
         });
     };
 
