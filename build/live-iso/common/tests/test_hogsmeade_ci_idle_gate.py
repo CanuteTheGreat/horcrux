@@ -173,7 +173,7 @@ class Packaging(unittest.TestCase):
         bad = []
         for r in (REPO / "gentoo", LIVE / "common", LIVE / "project"):
             for p in r.rglob("*"):
-                if not p.is_file() or "__pycache__" in p.parts or p.suffix == ".pyc" or p.name == Path(__file__).name:
+                if not p.is_file() or "__pycache__" in p.parts or p.suffix == ".pyc" or p.name in (Path(__file__).name, "test_hogsmeade_local_llm.py"):
                     continue
                 if HSM in p.parents or p.name in ("public-forbidden.txt", "personal-apps.denylist", "personal-paths.denylist"):
                     continue

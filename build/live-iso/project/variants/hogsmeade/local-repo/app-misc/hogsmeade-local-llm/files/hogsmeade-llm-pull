@@ -1,0 +1,17 @@
+#!/bin/bash
+# hogsmeade-llm-pull: download the models listed in MODELS (/etc/conf.d/hogsmeade-llm-guard) with a throw-away loopback server on :11498 (never the gated one),
+# at idle I/O and nice 19 so it does not show on his desktop. Skips models already present. Needs root (runs the server as the ollama user).
+set -u
+CONF=${HLL_CONF:-/etc/conf.d/hogsmeade-llm-guard}; [ -r "$CONF" ] && . "$CONF"
+: "${OLLAMA_BIN:=/usr/bin/ollama}" "${OLLAMA_MODELS:=/var/lib/ollama/models}" "${HOME_OLLAMA:=/var/lib/ollama}" "${RUN_AS_USER:=ollama}" "${RUN_AS_GROUP:=video}" "${MODELS:=}"
+[ $# -gt 0 ] && MODELS="$*"
+export OLLAMA_HOST=127.0.0.1:11498 OLLAMA_MODELS OLLAMA_NO_CLOUD=1
+mkdir -p "$OLLAMA_MODELS"; chown "$RUN_AS_USER:$RUN_AS_GROUP" "$OLLAMA_MODELS" "$HOME_OLLAMA"
+runuser -u "$RUN_AS_USER" -g "$RUN_AS_GROUP" -- env HOME="$HOME_OLLAMA" ionice -c3 nice -n 19 "$OLLAMA_BIN" serve >/dev/null 2>&1 &
+sp=$!; trap 'pkill -KILL -u "$RUN_AS_USER" -x ollama 2>/dev/null; exit' EXIT INT TERM
+for i in $(seq 1 30); do curl -sf -m 2 http://127.0.0.1:11498/api/version >/dev/null && break; sleep 1; done
+for m in $MODELS; do
+	echo "== $m"; runuser -u "$RUN_AS_USER" -g "$RUN_AS_GROUP" -- env HOME="$HOME_OLLAMA" OLLAMA_HOST=$OLLAMA_HOST ionice -c3 nice -n 19 "$OLLAMA_BIN" pull "$m" 2>&1 | tr '\r' '\n' | awk 'NR%50==0 || /success|rror/' | tail -2
+done
+runuser -u "$RUN_AS_USER" -g "$RUN_AS_GROUP" -- env HOME="$HOME_OLLAMA" OLLAMA_HOST=$OLLAMA_HOST "$OLLAMA_BIN" list
+echo PULL-DONE
