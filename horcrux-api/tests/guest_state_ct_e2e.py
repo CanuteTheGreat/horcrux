@@ -11,7 +11,11 @@ privileged sibling of guest_state_ct_e2e.sh; real LXC, real API).
     (it stops), Resume restores it - the same process keeps counting with the
     same PID - and the same through the host shutdown / boot paths. When
     `criu check` fails on this runner the half is SKIPPED, loudly, after
-    checking that the API shows the reason CRIU reports.
+    checking that the API shows the reason CRIU reports. On a nested node
+    (this sibling is a container: LXC cannot move CRIU into its base cgroup)
+    the API must refuse up front with that reason, and the host shutdown
+    path must fall back; the real checkpoint/restore runs on throwaway VMs in
+    guest_state_ct_vm_e2e.py.
 """
 import json
 import os
@@ -113,7 +117,10 @@ def login():
 
 
 def counter_start(ct):
-    exec_ct(ct, "nohup sh -c 'i=0; while :; do i=$((i+1)); echo $i > /tmp/count; sleep 1; done' >/dev/null 2>&1 &"
+    # setsid: a process started through exec (lxc-attach) otherwise keeps the attach helper's session, whose
+    # leader is outside the container's pid namespace, and CRIU refuses the dump ("A session leader of N is
+    # outside of its pid namespace"). Real container services have their session inside; so does this one now.
+    exec_ct(ct, "setsid nohup sh -c 'i=0; while :; do i=$((i+1)); echo $i > /tmp/count; sleep 1; done' </dev/null >/dev/null 2>&1 &"
                 " sleep 1; pgrep -f 'while :' | head -1 > /tmp/counter.pid")
     time.sleep(4)
     return exec_ct(ct, "cat /tmp/counter.pid"), int(exec_ct(ct, "cat /tmp/count"))
@@ -167,31 +174,27 @@ if "Looks good" not in chk:
     sys.exit(0)
 time.sleep(32)
 g, ov = guest("gsct")
-check(ov["capabilities"]["criu"]["available"] and g["can_save"],
-      f"API sees CRIU and the container can save state (criu={ov['capabilities']['criu']}, blocker={g['save_blocker']})")
+check(ov["capabilities"]["criu"]["available"], f"API sees CRIU ({ov['capabilities']['criu']})")
+if not g["can_save"] and "cgroup namespace" in (g["save_blocker"] or ""):
+    # This sibling is a container: LXC moves CRIU into its base cgroup (PID 1's, minus /init.scope) before
+    # every checkpoint AND restore, and here that is a non-root cgroup with controllers enabled, which the
+    # kernel refuses (EBUSY). The API must say so up front instead of failing half way (it used to dump the
+    # container and then fail the resume). Checkpoint/restore itself runs on real VMs in
+    # guest_state_ct_vm_e2e.py (guest-power.yml), where it is never skipped.
+    log(f"nested node: {g['save_blocker']}")
+    st, b = req("POST", "/containers/gsct/save-state", {}, expect=None)
+    check(st == 422 and "cgroup namespace" in json.dumps(b), f"save refused up front with that reason ({st})")
+    check("RUNNING" in state("gsct"), "the container keeps running after the refused save")
+    out = host_stop()
+    check("shutdown container gsct" in out and "cgroup namespace" in out,
+          "host shutdown: clean shutdown fallback with the cgroup reason")
+    check("STOPPED" in state("gsct"), "container stopped by the fallback")
+    req("DELETE", "/containers/gsct", None, expect=204)
+    log("ALL GUEST-STATE CONTAINER CHECKS PASSED (nested node: CRIU present, save refused with the reason)")
+    sys.exit(0)
+check(g["can_save"], f"the container can save state (blocker={g['save_blocker']})")
 pid, c0 = counter_start("gsct")
 st, saved = req("POST", "/containers/gsct/save-state", {}, expect=None)
-if st != 200:
-    # `criu check` passes but the dump itself cannot run here (typically a
-    # nested LXC whose cgroup layout CRIU cannot escape from). The failure
-    # must be clean and explain itself; then this half is skipped, loudly.
-    msg = json.dumps(saved)
-    log(f"CRIU dump failed on this runner: {msg[:400]}")
-    check("lxc-checkpoint" in msg, "the refusal names the failing step")
-    check("RUNNING" in state("gsct"), "the container is still running after the failed save")
-    g, _ = guest("gsct")
-    check(g["saved"] is None and not os.path.exists("/tmp/gsct-data/saved-state/index/ct-gsct.json"),
-          "no saved state was recorded for the failed save")
-    check(g["last_result"]["ok"] is False, "the failure is recorded for the UI")
-    # ... and the host-shutdown path still copes: clean shutdown fallback.
-    out = host_stop()
-    check("shutdown container gsct" in out and "State could not be saved" in out,
-          "host shutdown falls back to a clean shutdown with the reason")
-    check("STOPPED" in state("gsct"), "container stopped by the fallback")
-    log("SKIP: the real CRIU checkpoint/restore half is not exercised on this runner "
-        "(criu check passes but lxc-checkpoint cannot dump here); fallback behaviour verified above.")
-    req("DELETE", "/containers/gsct", None, expect=204)
-    sys.exit(0)
 check(st == 200, f"Save state ({st} {json.dumps(saved)[:300]})")
 check("STOPPED" in state("gsct"), "container stopped by the checkpoint")
 g, _ = guest("gsct")

@@ -275,6 +275,10 @@ fn lxc_blocker(name: &str) -> Option<String> {
              {name} with `unprivileged: false` and the `checkpoint` feature"
         ));
     }
+    let pid1 = std::fs::read_to_string("/proc/1/cgroup").unwrap_or_default();
+    if let Some(why) = cgroup_escape_blocker(Path::new("/sys/fs/cgroup"), &pid1) {
+        return Some(why);
+    }
     if !(has("lxc.console.path=none") && has("lxc.tty.max=0")) {
         return Some(format!(
             "LXC container {name} has a console/ttys, which CRIU cannot checkpoint: turn on the \
@@ -282,6 +286,37 @@ fn lxc_blocker(name: &str) -> Option<String> {
         ));
     }
     None
+}
+
+/// lxc-checkpoint (dump AND restore) first moves CRIU into LXC's base cgroup
+/// (`cgfsng_criu_escape`): the cgroup of PID 1 with a trailing `/init.scope`
+/// dropped. On a host that is the real root cgroup, which may hold processes.
+/// On a node inside a container (Horcrux nested in Docker/LXC/Incus, CI) it is
+/// a child cgroup with controllers enabled for its children, and the kernel's
+/// no-internal-processes rule refuses the move (EBUSY, "Failed to escape to
+/// cgroup"): neither checkpoint nor restore can work there. Only the real root
+/// cgroup has no `cgroup.type` file.
+fn cgroup_escape_blocker(cgroup_mount: &Path, pid1_cgroup: &str) -> Option<String> {
+    let base = pid1_cgroup
+        .lines()
+        .find_map(|l| l.strip_prefix("0::"))?
+        .trim();
+    let base = base.strip_suffix("/init.scope").unwrap_or(base);
+    let dir = cgroup_mount.join(base.trim_start_matches('/'));
+    if !dir.join("cgroup.type").exists() {
+        return None;
+    }
+    let sub = std::fs::read_to_string(dir.join("cgroup.subtree_control")).unwrap_or_default();
+    if sub.trim().is_empty() {
+        return None;
+    }
+    Some(format!(
+        "this node runs inside a container (cgroup namespace): LXC moves CRIU into its base \
+         cgroup {} before every checkpoint and restore, and the kernel refuses that for a \
+         non-root cgroup with controllers enabled. Run Horcrux on the host itself (or in a VM) to \
+         save LXC container state",
+        if base.is_empty() { "/" } else { base }
+    ))
 }
 
 /// Run `cmd` for at most `timeout` with stdout/stderr going to files, not
@@ -1003,6 +1038,40 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn lxc_checkpoint_is_blocked_only_where_criu_cannot_enter_the_base_cgroup() {
+        let d = tempfile::tempdir().unwrap();
+        let w = |p: &str, t: &str| {
+            let f = d.path().join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, t).unwrap();
+        };
+        // A host: PID 1 in /init.scope, base = the real root (no cgroup.type).
+        w("cgroup.subtree_control", "cpu memory pids\n");
+        assert!(cgroup_escape_blocker(d.path(), "0::/init.scope\n").is_none());
+        // Docker, private cgroup namespace: base = the namespace root = a real child cgroup.
+        w("cgroup.type", "domain\n");
+        let why = cgroup_escape_blocker(d.path(), "0::/init.scope\n").unwrap();
+        assert!(
+            why.contains("cgroup namespace") && why.contains("cgroup / "),
+            "{why}"
+        );
+        // Docker, host cgroup namespace: base = the container's scope.
+        w("system.slice/docker-x.scope/cgroup.type", "domain\n");
+        w(
+            "system.slice/docker-x.scope/cgroup.subtree_control",
+            "memory\n",
+        );
+        let why = cgroup_escape_blocker(d.path(), "0::/system.slice/docker-x.scope/init.scope\n")
+            .unwrap();
+        assert!(why.contains("/system.slice/docker-x.scope"), "{why}");
+        // A child cgroup without controllers for its children can take CRIU.
+        w("system.slice/docker-x.scope/cgroup.subtree_control", "\n");
+        assert!(cgroup_escape_blocker(d.path(), "0::/system.slice/docker-x.scope\n").is_none());
+        // cgroup v1 only (no 0:: line): nothing to say.
+        assert!(cgroup_escape_blocker(d.path(), "4:memory:/\n").is_none());
+    }
 
     #[test]
     fn dir_size_sums_nested_files() {
