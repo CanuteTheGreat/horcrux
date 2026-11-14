@@ -1,0 +1,16 @@
+# systemd twin of /etc/init.d/live-persist (same script): "Try it live" with persistence.
+[Unit]
+Description=Live persistence (plain partition; encrypted ones are unlocked on the console)
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target dhcpcd.service systemd-hostnamed.service live-product.service sysinit.target
+Wants=network-pre.target
+ConditionKernelCommandLine=rd.live.image
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/live-openrc-compat /etc/init.d/live-persist start
+
+[Install]
+WantedBy=sysinit.target

@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, luksroot, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
+from . import arch, hwprofile, initsys, luksroot, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -1027,6 +1027,10 @@ class Installer:
             os.symlink(f"/usr/share/zoneinfo/{c['timezone']}", lt)
         self.write("/etc/conf.d/keymaps", f'keymap="{c["keymap"]}"\n')
         self.write("/etc/env.d/02locale", f'LANG="{c["locale"]}"\n')
+        if initsys.target_init(T) == "systemd":
+            # systemd reads the console keymap and the locale from its own files (systemd-vconsole-setup, systemd-localed)
+            self.write("/etc/vconsole.conf", f'KEYMAP={c["keymap"]}\n')
+            self.write("/etc/locale.conf", f'LANG={c["locale"]}\n')
         self.run(["env-update"], chroot=True, check=False)
         # ALWAYS generate: a stage3 ships an empty locale.gen, so LANG=en_US.UTF-8 alone gives GTK
         # "Locale not supported by C library" in the desktop session
@@ -1049,7 +1053,7 @@ class Installer:
             if os.path.exists("/etc/hostid"):
                 shutil.copy("/etc/hostid", f"{T}/etc/hostid")
             for svc in ("zfs-import", "zfs-mount"):
-                self.run(["rc-update", "add", svc, "boot"], chroot=True, check=False)
+                initsys.enable(self, svc, "boot")
         if c["root_hash"]:
             self.run(["chpasswd", "-e"], chroot=True, input_=f"root:{c['root_hash']}\n")
         elif c["root_password"]:
@@ -1079,21 +1083,37 @@ class Installer:
         c, p = self.c, self.p
         # live-only services are not wanted on the installed system
         for s_ in ("live-installer",):
-            self.run(["rc-update", "del", s_, "default"], chroot=True, check=False)
+            initsys.disable(self, s_, "default")
+        if initsys.target_init(self.target) == "systemd":
+            # live-image-only systemd settings: the live tty1 program (getty@tty1 drop-in) and the in-RAM journal
+            for f in (initsys.GETTY_DROPIN_DIR + "/00-live.conf", "etc/systemd/journald.conf.d/50-live.conf"):
+                try:
+                    os.remove(os.path.join(self.target, f))
+                except OSError:
+                    pass
+            os.makedirs(os.path.join(self.target, "var/log/journal"), exist_ok=True)     # persistent journal on the installed system
+            # a fresh machine id for the installed system (generated at its first boot)
+            with open(os.path.join(self.target, "etc/machine-id"), "w"):
+                pass
         for s_ in p["services"]:
             if s_ == "sshd" or s_ in c["services_off"]:
                 continue
-            self.run(["rc-update", "add", s_, "default"], chroot=True, check=False)
+            initsys.enable(self, s_, "default")
         self.cfg_clock()
         # serial console keeps working when the installer was driven over a serial line
         if arch.serial_console():
-            self.run(["rc-update", "add", "live-serial", "default"], chroot=True, check=False)
+            initsys.enable(self, "live-serial", "default")
 
     def cfg_clock(self):
         """Installed system: read the hardware clock at boot and write it back when the machine stops (hwclock replaces swclock) when the
         machine has an RTC; chrony keeps it right afterwards (rtcsync) and steps a months-off clock at the first network (makestep + the
         dhcpcd exit hook /etc/dhcpcd.exit-hook). A board without an RTC keeps swclock."""
         T = self.target
+        if initsys.target_init(T) == "systemd":
+            # systemd: the kernel reads the RTC at boot (CONFIG_RTC_HCTOSYS) and chrony writes it back (rtcsync); the RTC holds UTC
+            if os.path.exists("/dev/rtc0"):
+                self.write("/etc/adjtime", "0.0 0 0.0\n0\nUTC\n")
+            return
         if os.path.exists("/dev/rtc0") and os.path.exists(f"{T}/etc/init.d/hwclock"):
             self.write("/etc/conf.d/hwclock", '# written by live-installer: the hardware clock holds UTC\nclock="UTC"\nclock_hctosys="YES"\nclock_systohc="YES"\n')
             self.run(["rc-update", "del", "swclock", "boot"], chroot=True, check=False)
@@ -1107,16 +1127,13 @@ class Installer:
         # (no active directives of its own) and the first match wins, so SSHD_DROPIN (00-...) beats every package drop-in;
         # package-owned drop-ins are left untouched.
         self.write(SSHD_DROPIN, sshd_hardening(c["ssh_password_auth"]))
-        self.run(["rc-update", "add" if c["ssh_enabled"] else "del", "sshd", "default"], chroot=True, check=False)
+        (initsys.enable if c["ssh_enabled"] else initsys.disable)(self, "sshd", "default")
         if c["sysctl_hardening"]:
             self.write("/etc/sysctl.d/90-live-installer-hardening.conf", SYSCTL_HARDENING)
         # post-install console menu: login first (default) or OPNsense-style open console
         if c.get("console_open"):
             self.write("/etc/live-installer/console-open", "1\n")
-            ip = f"{T}/etc/inittab"
-            if os.path.exists(ip):
-                t = re.sub(r"(?m)^c1:.*$", "c1:12345:respawn:/sbin/agetty --noclear -n -l /usr/libexec/console-menu-session 38400 tty1 linux", open(ip).read())
-                open(ip, "w").write(t)
+            initsys.set_tty1(T, "--noclear -n -l /usr/libexec/console-menu-session")
 
     def cfg_use_flags(self):
         from . import useflags
@@ -1148,8 +1165,8 @@ class Installer:
             self.hw_profile, self.hw_model = hp, hm
             if hp:
                 self.log(f"hardware profile: {hp['id']} / {(hm or {}).get('id', 'generic')}")
-        if os.path.exists(f"{self.target}/etc/init.d/zram-swap"):     # compressed RAM swap: the ONLY swap on servers/firewalls (no swap partition, no swapfile)
-            self.run(["rc-update", "add", "zram-swap", "default"], chroot=True, check=False)
+        if initsys.installed(self, "zram-swap"):     # compressed RAM swap: the ONLY swap on servers/firewalls (no swap partition, no swapfile)
+            initsys.enable(self, "zram-swap", "default")
         if not self.luks() and not self.zfs():
             # plain xfs / ext4: root, /boot and the ESP by UUID. Without these lines /boot (its own partition, the one GRUB reads) is NOT mounted on the installed
             # system, so every kernel update lands in the root file system's empty /boot and the machine keeps booting the old kernel (QEMU gate
@@ -1278,14 +1295,14 @@ class Installer:
             dh += ["", "# Wi-Fi is configured by iwd (EnableNetworkConfiguration)", "denyinterfaces wlan* wlp*"]
         self.write("/etc/dhcpcd.conf", open(f"{self.target}/etc/dhcpcd.conf").read() + "\n".join(dh) + "\n") \
             if os.path.exists(f"{self.target}/etc/dhcpcd.conf") else self.write("/etc/dhcpcd.conf", "\n".join(dh) + "\n")
-        if wifi and os.path.exists(f"{self.target}/etc/init.d/NetworkManager") and not os.path.exists(f"{self.target}/etc/init.d/iwd"):
+        if wifi and initsys.installed(self, "NetworkManager") and not initsys.installed(self, "iwd"):
             # NetworkManager machine (Surface profile): carry the Wi-Fi over as an NM keyfile that is NOT pinned to the live
             # system's interface name (wlan0 vs wlp1s0 differs on the installed system), mode 600, autoconnect
             write_nm_wifi_profile(self.target, wifi["ssid"], wifi.get("psk", ""))
         elif wifi:
             write_wifi_profile(self.target, wifi["ssid"], wifi.get("psk", ""))
             self.write("/etc/iwd/main.conf", "[General]\nEnableNetworkConfiguration=true\n")
-            self.run(["rc-update", "add", "iwd", "default"], chroot=True, check=False)
+            initsys.enable(self, "iwd", "default")
         n_pinned = strip_pinned_interfaces(self.target)
         if n_pinned:
             self.log(f"removed the pinned interface-name from {n_pinned} NetworkManager profile(s)")

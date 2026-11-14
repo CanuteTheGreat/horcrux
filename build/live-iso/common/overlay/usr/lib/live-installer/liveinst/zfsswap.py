@@ -65,7 +65,21 @@ start() {
 }
 """
 
+HX_RESUME_UNIT = """[Unit]
+Description=Horcrux: set /sys/power/resume to the hibernation swap
+DefaultDependencies=no
+After=local-fs.target dev-mapper-hxswap.device
+Before=systemd-logind.service sysinit.target
+ConditionPathExists=/dev/mapper/hxswap
 
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'dev=$(readlink -f /dev/mapper/hxswap) && [ -b "$dev" ] && cat /sys/class/block/$${dev##*/}/dev > /sys/power/resume || true'
+
+[Install]
+WantedBy=sysinit.target
+"""
 
 
 def initramfs_problems(lsinitrd_text):
@@ -166,8 +180,10 @@ def finish_config(inst):
             _check_initramfs(inst)
         return
     inst.write("/etc/fstab", fstab_line(), append=True)
+    from . import initsys
     inst.write("/etc/init.d/hx-resume", HX_RESUME_INIT, 0o755)
-    inst.run(["rc-update", "add", "hx-resume", "boot"], chroot=True, check=False)
+    inst.write("/etc/systemd/system/hx-resume.service", HX_RESUME_UNIT, 0o644)
+    initsys.enable(inst, "hx-resume", "boot")
     if not getattr(inst, "t2", False):
         _rebuild_initramfs(inst)
     else:

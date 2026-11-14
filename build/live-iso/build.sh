@@ -20,7 +20,15 @@ ARCH=${ARCH:-$HOST_ARCH}
 # (qemu-user); the app stage then cannot use the host toolchain images, so it is refused unless forced.
 if [ "$ARCH" != "$HOST_ARCH" ] && [ -z "${ALLOW_EMULATED:-}" ]; then echo "ARCH=$ARCH on a $HOST_ARCH host needs emulation: set ALLOW_EMULATED=1 (slow)"; exit 2; fi
 PLAT=""; [ "$ARCH" != "$HOST_ARCH" ] && PLAT="--platform $DOCKER_PLATFORM"
-ARCHARGS="--build-arg ARCH=$ARCH --build-arg STAGE3_TAG=$STAGE3_TAG"
+# INIT=openrc (default) | systemd: the init system of the image (stage3 flavour, ctg binhost lane, services as OpenRC scripts or units).
+# The installed system runs the ISO's init (docs/ISO-INSTALL.md "OpenRC or systemd"). arch/<arch>.env names the OpenRC stage3; the
+# systemd one is the same tag with the init swapped (amd64-openrc -> amd64-systemd). Binary packages are cached per arch AND init.
+INIT=${INIT:-openrc}
+case "$INIT" in openrc|systemd) ;; *) echo "unknown INIT=$INIT (openrc|systemd)"; exit 2;; esac
+STAGE3_TAG=${STAGE3_TAG%-openrc}-$INIT
+BINPKG_ID=binpkgs-$ARCH; [ "$INIT" = openrc ] || BINPKG_ID=binpkgs-$ARCH-$INIT
+ARCHARGS="--build-arg ARCH=$ARCH --build-arg STAGE3_TAG=$STAGE3_TAG --build-arg INIT=$INIT --build-arg BINPKG_ID=$BINPKG_ID"
+export INIT
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 export DOCKER_BUILDKIT=1
 T0=$(date +%s); lap() { echo "== [$(( $(date +%s)-T0 ))s] $*"; }

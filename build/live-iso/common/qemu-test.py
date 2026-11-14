@@ -1967,6 +1967,8 @@ class Runner:
         logs = " ".join(P.get("logdirs", []) + ["/var/log/messages", "/var/log/syslog"])
         if check_logs:
             sh.append(f'grep -rIiE -A2 "{self.DB_ERR}" {logs} 2>/dev/null | head -8 | sed "s/^/BAD db error in log: /"')
+            if self.a.init == "systemd":     # services log to the journal (no syslog daemon on the systemd images)
+                sh.append(f'journalctl -b -q --no-pager 2>/dev/null | grep -iE -A2 "{self.DB_ERR}" | head -8 | sed "s/^/BAD db error in journal: /"')
         sh.append('dmesg 2>/dev/null | grep -iE "invalid opcode|traps: .*(trap|ip:)" | head -3 | sed "s/^/BAD cpu fault: /"')
         sh.append("echo HEALTH-DONE")
         return "\n".join(sh)

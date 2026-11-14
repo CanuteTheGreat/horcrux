@@ -29,7 +29,7 @@ class GentoolkitEverywhere(unittest.TestCase):
 
     def test_rootfs_emerges_common_list_into_world(self):
         d = open(os.path.join(COMMON, "Dockerfile.rootfs")).read()
-        self.assertRegex(d, r"emerge --noreplace \$\(cat /tmp/packages\.common\.txt")      # no --oneshot: gentoolkit is selected into world
+        self.assertRegex(d, r"emerge --noreplace \$\(live-pkglist /tmp/packages\.common\.txt")      # no --oneshot: gentoolkit is selected into world
 
     def test_vdb_prune_keeps_gentoolkit(self):
         s = open(os.path.join(COMMON, "vdb-prune.py")).read()

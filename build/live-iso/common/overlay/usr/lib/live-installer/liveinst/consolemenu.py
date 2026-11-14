@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import time
 
+from . import initsys
 from . import system as S
 
 BACKUP_DIR_FMT = "/var/backups/{name}"
@@ -135,6 +136,11 @@ class Console:
         self.table = profile.get("db_table", "users")
         self.cfg_paths = list(profile.get("config_paths", [f"/etc/{self.name}"]))
         self.backup_dir = BACKUP_DIR_FMT.format(name=self.name)
+        self.init = initsys.running_init()
+
+    def svc_cmd(self, action, svc):
+        """argv for a service action on this (running) system: rc-service on OpenRC, systemctl on systemd"""
+        return initsys.control_cmd(self.init, action, svc)
 
     # -- io ---------------------------------------------------------------
     def say(self, s=""):
@@ -248,8 +254,9 @@ class Console:
         self.say(f"Web UI : {self.web_url()}   login: admin")
         self.say(f"Host   : {S.read('/etc/hostname')}   up: {S.sh('uptime -p')[1].strip()}   kernel {os.uname().release}")
         for svc in self.p.get("services", []):
-            rc, o = S.sh(["rc-service", svc, "status"])
-            self.say(f"  {svc:<16}{'running' if 'started' in o else o.strip().replace(chr(10), ' ')[:40]}")
+            rc, o = S.sh(self.svc_cmd("status", svc))
+            up = ("started" in o) if self.init == "openrc" else rc == 0
+            self.say(f"  {svc:<16}{'running' if up else (o.strip().replace(chr(10), ' ')[:40] or 'not running')}")
         rc, o = S.sh("df -h / | tail -1")
         self.say("Root fs: " + re.sub(r"\s+", " ", o.strip()))
         rc, o = S.sh("sshd -T 2>/dev/null | grep -Ei '^(permitrootlogin|passwordauthentication) '")
@@ -322,10 +329,10 @@ class Console:
 
     def rc_restart(self, svc):
         """rc-service <svc> restart; one retry when it fails (the service is left in a defined state first)"""
-        rc, o = S.sh(["rc-service", svc, "restart"], timeout=self.RESTART_TIMEOUT)
+        rc, o = S.sh(self.svc_cmd("restart", svc), timeout=self.RESTART_TIMEOUT)
         if rc != 0:
             time.sleep(3)
-            rc, o = S.sh(["rc-service", svc, "restart"], timeout=self.RESTART_TIMEOUT)
+            rc, o = S.sh(self.svc_cmd("restart", svc), timeout=self.RESTART_TIMEOUT)
         return rc, o
 
     def port_listening(self):
@@ -345,7 +352,7 @@ class Console:
         """start the web service and wait until its port listens; one restart when it does not (never report success on a dead web UI)"""
         if not self.web:
             return True
-        S.sh(["rc-service", self.web, "start"], timeout=self.RESTART_TIMEOUT)
+        S.sh(self.svc_cmd("start", self.web), timeout=self.RESTART_TIMEOUT)
         if self.wait_listening(wait):
             return True
         self.say(f"  {self.web}: not listening after {wait} s, restarting it")
@@ -354,7 +361,7 @@ class Console:
 
     def restart_services(self, svcs):
         for s in svcs:
-            if os.path.exists(f"/etc/init.d/{s}"):
+            if initsys.exists(s, "/", self.init):
                 rc, o = self.rc_restart(s)
                 self.say(f"  {s}: " + ("restarted" if rc == 0 else "restart failed: " + o.strip()[-80:]))
 
@@ -396,7 +403,7 @@ class Console:
         open(path, "w").write(apply_iface_config(txt, nm, *cfg))
         S.sh(["ip", "-4", "addr", "flush", "dev", nm])
         S.sh(["ip", "link", "set", nm, "up"])
-        rc, o = S.sh(["rc-service", "dhcpcd", "restart"], timeout=90)
+        rc, o = S.sh(self.svc_cmd("restart", "dhcpcd"), timeout=90)
         if cfg[0] == "static":
             S.sh(["ip", "addr", "replace", cfg[1], "dev", nm])          # apply right now even if dhcpcd is slow
             if cfg[2]:
@@ -548,7 +555,7 @@ class Console:
             pw = secrets.token_urlsafe(18) + "9!"
             gen = True
         if self.web:
-            S.sh(["rc-service", self.web, "stop"], timeout=60)
+            S.sh(self.svc_cmd("stop", self.web), timeout=60)
         for f in self.reset_files():
             try:
                 os.remove(f)
@@ -561,7 +568,7 @@ class Console:
         if not pam:
             self.remove_firstboot_later()
         self.say("Factory defaults restored; the web service was restarted." if up else
-                 "Factory defaults restored, but the web service is NOT listening: check /var/log and run 'rc-service %s restart'." % self.web)
+                 "Factory defaults restored, but the web service is NOT listening: check /var/log and run '%s'." % " ".join(self.svc_cmd("restart", self.web)))
         if pam:
             return self.say(f"Sign in to the web UI with your system user (wheel / {self.p.get('web_admin_group', 'horcrux-admin')}); there is no separate web account.")
         self.say("Web admin password: " + (pw + "   (generated - note it now, it is not shown again)" if gen else "the one you just entered"))
@@ -569,7 +576,7 @@ class Console:
     def reapply(self):
         """re-seed / re-apply what depends on the config store (Patronus: firewall + applyd), then fix ownership"""
         for svc in self.p.get("reapply_services", []):
-            if os.path.exists(f"/etc/init.d/{svc}"):
+            if initsys.exists(svc, "/", self.init):
                 rc, o = self.rc_restart(svc)
                 self.say(f"  {svc}: " + ("restarted" if rc == 0 else "restart failed: " + o.strip()[-80:]))
         owner = self.p.get("admin_password_owner", "root")
@@ -720,7 +727,7 @@ class Console:
             return
         self.say("Saved the current configuration as " + self.make_backup("pre-restore"))
         if self.web:
-            S.sh(["rc-service", self.web, "stop"], timeout=60)
+            S.sh(self.svc_cmd("stop", self.web), timeout=60)
         for f in self.reset_files():
             try:
                 os.remove(f)
@@ -731,7 +738,7 @@ class Console:
             tf.extractall("/", members=members, filter="tar")
         self.reapply()
         if self.web:
-            S.sh(["rc-service", self.web, "start"], timeout=120)
+            S.sh(self.svc_cmd("start", self.web), timeout=120)
         self.umount_usb()
         self.say("Configuration restored; web service restarted.")
 

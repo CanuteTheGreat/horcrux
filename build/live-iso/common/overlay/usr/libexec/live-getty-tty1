@@ -1,0 +1,10 @@
+#!/bin/sh
+# systemd: the tty1 login program of the LIVE system (getty@tty1 drop-in 00-live.conf). live-installer.service decides what tty1 runs for
+# the boot-menu mode (guided installer, rescue menu, try-it-live session, root shell) and writes the agetty arguments to
+# /run/live-installer/tty1-args, exactly what it writes into /etc/inittab's c1 line on OpenRC. No file = the normal login prompt.
+a=/run/live-installer/tty1-args
+if [ -s "$a" ]; then
+	# shellcheck disable=SC2046
+	exec /sbin/agetty $(cat "$a") tty1 linux
+fi
+exec /sbin/agetty -o '-p -- \u' --noclear tty1 linux

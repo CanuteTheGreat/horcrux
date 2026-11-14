@@ -64,7 +64,9 @@ PAYLOAD_DIR = "/usr/share/live-installer/test-machine"
 PAYLOAD = (                                  # (file in PAYLOAD_DIR, path on the target, mode)
     ("horcrux-test-watchdog.sh", "/usr/libexec/horcrux-test-watchdog", 0o755),
     ("horcrux-test-watchdog.initd", "/etc/init.d/horcrux-test-watchdog", 0o755),
+    ("horcrux-test-watchdog.service", "/etc/systemd/system/horcrux-test-watchdog.service", 0o644),
     ("sleep.conf", "/etc/elogind/sleep.conf.d/50-horcrux-test-machine.conf", 0o644),
+    ("sleep.conf", "/etc/systemd/sleep.conf.d/50-horcrux-test-machine.conf", 0o644),
     ("sysctl.conf", "/etc/sysctl.d/50-horcrux-test-machine.conf", 0o644),
 )
 
@@ -78,6 +80,7 @@ def install_payload(inst, payload_dir=None):
         with open(f"{src}/{name}") as f:
             inst.write(dst, f.read(), mode)
         out.append(dst)
-    inst.run(["rc-update", "add", "horcrux-test-watchdog", "default"], chroot=True, check=False)
+    from . import initsys
+    initsys.enable(inst, "horcrux-test-watchdog", "default")
     inst.log("test machine: watchdog (softdog + iTCO), never-suspend and panic-reboot installed for the first boot: " + ", ".join(out))
     return out

@@ -1,0 +1,20 @@
+# systemd twin of /etc/init.d/live-serial (same script, start_pre computes the agetty arguments): the console on the UART named by console=.
+# The stock serial-getty@ instances are masked on these images (one getty per UART).
+[Unit]
+Description=Serial console (the kernel console= UART)
+After=systemd-user-sessions.service live-installer.service live-product.service
+ConditionPathExists=/usr/libexec/live-serial-dev
+
+[Service]
+ExecCondition=/usr/libexec/live-serial-dev
+ExecStart=/usr/libexec/live-openrc-compat /etc/init.d/live-serial exec
+Restart=always
+RestartSec=0
+UtmpIdentifier=live-serial
+TTYVHangup=yes
+KillMode=process
+IgnoreSIGPIPE=no
+SendSIGHUP=yes
+
+[Install]
+WantedBy=multi-user.target

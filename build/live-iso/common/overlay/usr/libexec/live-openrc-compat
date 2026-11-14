@@ -1,0 +1,29 @@
+#!/bin/sh
+# Run an OpenRC service script's function under systemd: live-openrc-compat <script> <start|stop|exec>
+# The live/installer services keep ONE implementation (the /etc/init.d script, also used on OpenRC images); their systemd units
+# (/usr/lib/systemd/system/live-*.service) call it through this shim, which provides the few OpenRC helpers the scripts use.
+#   start|stop  run that function (exit status = its return code)
+#   exec        run start_pre (when defined), then exec "$command $command_args" (supervised daemons such as live-serial: systemd
+#               supervises the process the way supervise-daemon does on OpenRC)
+script=${1:?script}; action=${2:?action}
+einfo() { echo " * $*"; }
+ewarn() { echo " * WARNING: $*" >&2; }
+eerror() { echo " * ERROR: $*" >&2; }
+ebegin() { printf ' * %s ...\n' "$*"; }
+eend() { return "${1:-0}"; }
+ewend() { return "${1:-0}"; }
+yesno() { case "$1" in [Yy][Ee][Ss]|[Tt][Rr][Uu][Ee]|[Oo][Nn]|1) return 0 ;; *) return 1 ;; esac; }
+RC_SVCNAME=${script##*/}; SVCNAME=$RC_SVCNAME
+[ -r "/etc/conf.d/$RC_SVCNAME" ] && . "/etc/conf.d/$RC_SVCNAME"
+. "$script"
+case "$action" in
+start|stop)
+	command -v "$action" >/dev/null 2>&1 || exit 0
+	"$action"; exit $? ;;
+exec)
+	if command -v start_pre >/dev/null 2>&1; then start_pre || exit $?; fi
+	[ -n "${command:-}" ] || { eerror "$script defines no command"; exit 1; }
+	# shellcheck disable=SC2086
+	exec $command $command_args ;;
+*) eerror "unknown action $action"; exit 2 ;;
+esac

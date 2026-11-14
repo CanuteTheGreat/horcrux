@@ -54,7 +54,10 @@ print("GUI-PACKAGES", len(bad), " ".join(bad[:25]))
 ps = subprocess.run(["ps", "-eo", "comm"], capture_output=True, text=True).stdout.split()
 run = sorted({p for p in ps if p in procs})
 print("GUI-PROCESSES", len(run), " ".join(run))
-rc = subprocess.run("rc-update show -v 2>/dev/null | awk '{print $1}'", shell=True, capture_output=True, text=True).stdout.split()
+if os.path.isdir("/run/systemd/system"):
+    rc = [u.rsplit(".", 1)[0] for u in subprocess.run("systemctl list-unit-files --state=enabled --no-legend 2>/dev/null | awk '{print $1}'", shell=True, capture_output=True, text=True).stdout.split()]
+else:
+    rc = subprocess.run("rc-update show -v 2>/dev/null | awk '{print $1}'", shell=True, capture_output=True, text=True).stdout.split()
 en = sorted({s for s in rc if s in svcs})
 print("GUI-SERVICES", len(en), " ".join(en))
 bins = [b for b in ("/usr/bin/Xorg", "/usr/bin/Xwayland", "/usr/bin/sway", "/usr/bin/cage", "/usr/bin/gnome-shell", "/usr/bin/startx") if os.path.exists(b)]
@@ -73,7 +76,9 @@ ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdou
 ag = [l.strip() for l in ps if "agetty" in l and "grep" not in l]
 auto = [l for l in ag if re.search(r"(^|\s)(-a\s+\S+|--autologin\b|-n(\s|$)|--skip-login\b)", l)]
 print("AGETTY", len(ag), "AUTOLOGIN-OR-NOLOGIN", len(auto), " | ".join(auto)[:200])
-inittab = [l for l in open("/etc/inittab").read().splitlines() if re.search(r"agetty.*(autologin|\s-a\s)", l) and not l.startswith("#")]
+import glob, os
+_tabs = [p for p in ["/etc/inittab"] + glob.glob("/etc/systemd/system/*getty@*.service.d/*.conf") if os.path.isfile(p)]
+inittab = [l for p in _tabs for l in open(p).read().splitlines() if re.search(r"agetty.*(autologin|\s-a\s)", l) and not l.startswith("#")]
 print("INITTAB-AUTOLOGIN", len(inittab))
 users = [l.split(":")[0] for l in open("/etc/passwd").read().splitlines() if l.split(":")[6] not in ("/sbin/nologin", "/bin/false", "/usr/sbin/nologin", "") and l.split(":")[0] != "root" and not l.split(":")[0].startswith("sync") and l.split(":")[0] not in ("shutdown", "halt")]
 print("LOGIN-USERS-OTHER-THAN-ROOT", len(users), " ".join(users))
@@ -172,7 +177,7 @@ def link(vm, names, up):
 
 def clock_gate(sh, step, host_now=time.time, timeout=480, label="months-off-rtc-clock-stepped-by-chrony-after-the-late-network"):
     """the guest booted with an RTC months off: after the network came up its clock must be within 120 s of the host's"""
-    rc, o = sh("chronyc -n tracking 2>&1 | head -3; grep -h '^makestep' /etc/chrony/chrony.conf 2>/dev/null; grep -hc '^rtcsync' /etc/chrony/chrony.conf 2>/dev/null; rc-update show default boot | grep -E 'chronyd|hwclock|swclock'")
+    rc, o = sh("chronyc -n tracking 2>&1 | head -3; grep -h '^makestep' /etc/chrony/chrony.conf 2>/dev/null; grep -hc '^rtcsync' /etc/chrony/chrony.conf 2>/dev/null; { rc-update show default boot 2>/dev/null || systemctl is-enabled chronyd.service 2>/dev/null | sed 's/^/chronyd.service /'; } | grep -E 'chronyd|hwclock|swclock'")
     cfg = re.sub(r"\s+", " ", o).strip()[:200]
     rc, o = sh("date -u +%s")
     try:
@@ -205,7 +210,8 @@ DOCKER_FWD_CHECK = r'''
 cfg=0; grep -Eq '"ip-forward-no-drop"[[:space:]]*:[[:space:]]*true' /etc/docker/daemon.json 2>/dev/null && cfg=1
 echo "CFG $cfg"
 if ! command -v dockerd >/dev/null 2>&1; then echo "DOCKER-ABSENT"; ls -d /var/db/pkg/sys-apps/horcrux-core-* >/dev/null 2>&1 || echo "NO-HORCRUX-CORE"; echo "FWD-DONE"; exit 0; fi
-rc-service docker status >/dev/null 2>&1 || rc-service docker start >/dev/null 2>&1
+svc() { if [ -d /run/systemd/system ]; then systemctl "$1" "$2"; else rc-service "$2" "$1"; fi; }
+svc status docker >/dev/null 2>&1 || svc start docker >/dev/null 2>&1
 n=0; until docker info >/dev/null 2>&1 || [ $n -ge 60 ]; do n=$((n+1)); sleep 1; done
 docker info >/dev/null 2>&1 && echo "DOCKER-UP" || echo "DOCKER-DOWN"
 echo "POLICY $( (nft list chain ip filter FORWARD 2>/dev/null || iptables -S FORWARD 2>/dev/null) | grep -Eo 'policy [a-z]+|-P FORWARD [A-Z]+' | head -1)"
@@ -224,7 +230,7 @@ table ip hxfwdtest {
 NFT
 ip netns exec hxfwdt ping -c 3 -W 3 10.0.2.2 >/dev/null 2>&1 && echo "NETNS-PING-OK" || echo "NETNS-PING-FAIL"
 # the other order: dockerd (re)started AFTER the VM bridge exists (a restart, a Docker upgrade) must not drop it either
-rc-service docker restart >/dev/null 2>&1
+svc restart docker >/dev/null 2>&1
 n=0; until docker info >/dev/null 2>&1 || [ $n -ge 60 ]; do n=$((n+1)); sleep 1; done
 echo "POLICY-AFTER-RESTART $( (nft list chain ip filter FORWARD 2>/dev/null || iptables -S FORWARD 2>/dev/null) | grep -Eo 'policy [a-z]+|-P FORWARD [A-Z]+' | head -1)"
 ip netns exec hxfwdt ping -c 3 -W 3 10.0.2.2 >/dev/null 2>&1 && echo "NETNS-PING-AFTER-RESTART-OK" || echo "NETNS-PING-AFTER-RESTART-FAIL"

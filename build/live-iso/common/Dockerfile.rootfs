@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 # Gentoo live/installer root filesystem (shared by Horcrux and Patronus).
 #
-# Everything comes from Portage: gentoo/stage3 (openrc, arch from STAGE3_TAG) + the official
+# Everything comes from Portage: gentoo/stage3 (STAGE3_TAG = <arch>-<init>: amd64-openrc, amd64-systemd, arm64-openrc, arm64-systemd) + the official
 # per-arch binhost (common/arch/<arch>.binrepos.conf; x86_64 = generic x86-64, Ivy Bridge / Surface Pro
 # safe, no x86-64-v3) for every package whose USE matches, compiled locally only where the default
 # binpkg USE differs (qemu, libvirt, ...). BuildKit cache mounts keep the
@@ -13,6 +13,10 @@ FROM ${APP_IMAGE} AS app
 
 FROM gentoo/stage3:${STAGE3_TAG} AS rootfs
 ARG ARCH=x86_64
+# init system of the image (openrc | systemd; must match STAGE3_TAG). BINPKG_ID keys the binary-package cache per arch AND init (the two
+# profiles build different USE: elogind vs systemd, ...); distfiles + ccache are shared by both.
+ARG INIT=openrc
+ARG BINPKG_ID=binpkgs-${ARCH}
 ARG PROJECT=horcrux
 ARG ISO_LABEL=HORCRUX_LIVE
 ARG PROJECT_TITLE=Horcrux
@@ -38,36 +42,37 @@ RUN set -e; uri=$(sed -n 's/^sync-uri *= *//p' /etc/portage/binrepos.conf/gentoo
 # Higher priority than the official one; Portage falls back per package. Optional: if it is unreachable the build still
 # works from the official binhost + source. https://git.canutethegreat.com/CanuteTheGreat/gentoo-binhost
 RUN case "${ARCH}" in x86_64) A=amd64;; aarch64) A=arm64;; *) A=;; esac; \
-    [ -z "$A" ] || curl -fsSL --retry 3 https://f002.backblazeb2.com/file/ctg-binhost/ctg-binhost-setup.sh | sh -s -- --arch "$A" --init openrc \
+    [ -z "$A" ] || curl -fsSL --retry 3 https://f002.backblazeb2.com/file/ctg-binhost/ctg-binhost-setup.sh | sh -s -- --arch "$A" --init "${INIT}" \
     || echo "ctg binhost not configured (official binhost only)"
 
 COPY project/portage/ /etc/portage/
 COPY common/packages.txt /tmp/packages.common.txt
 COPY project/packages.txt /tmp/packages.txt
 COPY project/packages-late.txt /tmp/packages-late.txt
+COPY common/pkglist.sh /usr/local/sbin/live-pkglist
 
 # Everything in one emerge so Portage resolves the whole set once.
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     --mount=type=cache,id=ccache-${ARCH},target=/var/cache/ccache,sharing=locked \
     set -e; \
     emerge --oneshot dev-util/ccache; \
-    emerge --noreplace $(cat /tmp/packages.common.txt /tmp/packages.txt | grep -v '^#' | tr '\n' ' ') ; \
+    emerge --noreplace $(live-pkglist /tmp/packages.common.txt /tmp/packages.txt) ; \
     ls /lib/modules /boot
 
 # Packages that build kernel modules (ZFS) need the kernel from the step above already installed
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     --mount=type=cache,id=ccache-${ARCH},target=/var/cache/ccache,sharing=locked \
-    set -e; pk=$(grep -v '^#' /tmp/packages-late.txt | sed -E "s/^$(uname -m)\\? //; /^[a-z0-9_]+\\? /d" | tr '\n' ' '); \
+    set -e; pk=$(live-pkglist /tmp/packages-late.txt); \
     if [ -n "$(echo $pk)" ]; then emerge --noreplace $pk; fi
 
 # Small extras (console menu: argon2 CLI + sqlite3) in their own layer: editing the list does not redo the big emerge
 COPY common/packages-extra.txt /tmp/packages-extra.txt
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     --mount=type=cache,id=ccache-${ARCH},target=/var/cache/ccache,sharing=locked \
-    set -e; pk=$(grep -v '^#' /tmp/packages-extra.txt | sed -E "s/^$(uname -m)\\? //; /^[a-z0-9_]+\\? /d" | tr '\n' ' '); \
+    set -e; pk=$(live-pkglist /tmp/packages-extra.txt); \
     if [ -n "$(echo $pk)" ]; then emerge --noreplace $pk; fi
 
 # Graphical installer stack (cage kiosk from a local ebuild + GTK4 on Wayland + PyGObject), --oneshot: a Server install
@@ -75,7 +80,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
 COPY common/portage-local/ /var/db/repos/live-local/
 COPY common/portage-gui/package.use /etc/portage/package.use/gui
 COPY common/packages-gui.txt /tmp/packages-gui.txt
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     --mount=type=cache,id=ccache-${ARCH},target=/var/cache/ccache,sharing=locked \
     set -e; mkdir -p /etc/portage/repos.conf /etc/live-installer; \
@@ -83,7 +88,7 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     (cd /var/db/repos/live-local/gui-wm/cage && ebuild cage-0.2.1.ebuild manifest); \
     dc() { emerge --depclean --pretend --with-bdeps=n 2>&1 | sed -n 's/^All selected packages: //p' | tr ' ' '\n' | grep / | sort; }; \
     dc > /tmp/orphans.before; \
-    if emerge --oneshot $(grep -v '^#' /tmp/packages-gui.txt | tr '\n' ' '); then \
+    if emerge --oneshot $(live-pkglist /tmp/packages-gui.txt); then \
       dc > /tmp/orphans.after; comm -13 /tmp/orphans.before /tmp/orphans.after > /etc/live-installer/live-only-packages; \
       echo "live-only packages: $(wc -l < /etc/live-installer/live-only-packages)"; head -80 /etc/live-installer/live-only-packages; \
     elif [ "${ARCH}" = riscv64 ] || [ "${ARCH}" = aarch64 ]; then \
@@ -99,7 +104,7 @@ COPY common/setup-rootfs.sh /tmp/setup-rootfs.sh
 COPY common/mk-portage-meta.py /tmp/mk-portage-meta.py
 COPY common/vdb-prune.py /tmp/vdb-prune.py
 COPY project/setup.sh /tmp/project-setup.sh
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
-    PROJECT="${PROJECT}" ISO_LABEL="${ISO_LABEL}" PROJECT_TITLE="${PROJECT_TITLE}" \
-    sh /tmp/setup-rootfs.sh && sh /tmp/project-setup.sh && rm -f /tmp/*.sh /tmp/packages*.txt /tmp/vdb-prune.py
+    PROJECT="${PROJECT}" ISO_LABEL="${ISO_LABEL}" PROJECT_TITLE="${PROJECT_TITLE}" INIT="${INIT}" \
+    sh /tmp/setup-rootfs.sh && INIT="${INIT}" sh /tmp/project-setup.sh && rm -f /tmp/*.sh /tmp/packages*.txt /tmp/vdb-prune.py /usr/local/sbin/live-pkglist

@@ -30,7 +30,9 @@ def _read(p):
 def _files(root):
     out = []
     for pat in ("/etc/lightdm/lightdm.conf", "/etc/lightdm/lightdm.conf.d/*", "/etc/gdm/custom.conf", "/etc/gdm/daemon.conf", "/etc/gdm/custom.conf.d/*",
-                "/etc/gdm3/custom.conf", "/etc/sddm.conf", "/etc/sddm.conf.d/*", "/usr/lib/sddm/sddm.conf.d/*", "/etc/inittab", "/etc/conf.d/agetty*"):
+                "/etc/gdm3/custom.conf", "/etc/sddm.conf", "/etc/sddm.conf.d/*", "/usr/lib/sddm/sddm.conf.d/*", "/etc/inittab", "/etc/conf.d/agetty*",
+                "/etc/systemd/system/getty@*.service.d/*.conf", "/etc/systemd/system/serial-getty@*.service.d/*.conf",
+                "/etc/systemd/system/getty@.service.d/*.conf", "/etc/systemd/system/serial-getty@.service.d/*.conf"):
         out += [p for p in glob.glob(root + pat) if os.path.isfile(p)]
     return sorted(set(out))
 
@@ -68,7 +70,7 @@ def _active_lines(path, text):
                 m = SDDM_KEYS.match(line)
                 if m and m.group(1).lower() == "user" and m.group(2).strip():
                     hits.append((i, line))
-        elif base == "inittab" or base.startswith("agetty"):
+        elif base == "inittab" or base.startswith("agetty") or "getty@" in path:
             if re.search(r"--autologin\b", line):
                 hits.append((i, line))
     return hits
@@ -105,7 +107,7 @@ def scrub(root="/"):
             if i in bad:
                 if "gdm" in p:
                     new.append(re.sub(r"=\s*\S.*$", "=false", line.rstrip("\n")) + "\n")        # AutomaticLoginEnable=false
-                elif os.path.basename(p) == "inittab" or os.path.basename(p).startswith("agetty"):
+                elif os.path.basename(p) == "inittab" or os.path.basename(p).startswith("agetty") or "getty@" in p:
                     new.append(re.sub(r"\s+(--autologin|-a)\s+\S+", "", line))
                 else:
                     new.append("# " + line.lstrip() if not line.lstrip().startswith("#") else line)
@@ -130,9 +132,6 @@ def enable_gdm(inst, user):
 
 
 def enable_console(inst, user):
-    ip = f"{inst.target}/etc/inittab"
-    if os.path.exists(ip):
-        t = _read(ip)
-        t = re.sub(r"(?m)^c1:.*$", f"c1:12345:respawn:/sbin/agetty --autologin {user} --noclear 38400 tty1 linux", t)
-        open(ip, "w").write(t)
-    inst.log(WARNING + " (tty1 in /etc/inittab)")
+    from . import initsys
+    where = initsys.set_tty1(inst.target, f"--autologin {user} --noclear")
+    inst.log(WARNING + f" (tty1 in {where[len(inst.target):] if where.startswith(inst.target) else where})")

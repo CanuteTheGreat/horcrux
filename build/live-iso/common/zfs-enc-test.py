@@ -21,6 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("qt", os.path.join(HERE, "qemu-test.py"))
 qt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(qt)
+init_cmds = qt.init_cmds          # init-aware guest snippets (OpenRC / systemd), loaded by qemu-test.py
 
 PASSPHRASE = "correct horse battery staple 2026"
 SNI_TEST = "aW1wb3J0IGdpCmdpLnJlcXVpcmVfdmVyc2lvbigiR2lvIiwgIjIuMCIpCmZyb20gZ2kucmVwb3NpdG9yeSBpbXBvcnQgR2lvLCBHTGliClhNTCA9ICIiIjxub2RlPjxpbnRlcmZhY2UgbmFtZT0ib3JnLmtkZS5TdGF0dXNOb3RpZmllckl0ZW0iPgo8cHJvcGVydHkgbmFtZT0iQ2F0ZWdvcnkiIHR5cGU9InMiIGFjY2Vzcz0icmVhZCIvPjxwcm9wZXJ0eSBuYW1lPSJJZCIgdHlwZT0icyIgYWNjZXNzPSJyZWFkIi8+PHByb3BlcnR5IG5hbWU9IlRpdGxlIiB0eXBlPSJzIiBhY2Nlc3M9InJlYWQiLz4KPHByb3BlcnR5IG5hbWU9IlN0YXR1cyIgdHlwZT0icyIgYWNjZXNzPSJyZWFkIi8+PHByb3BlcnR5IG5hbWU9Ikljb25OYW1lIiB0eXBlPSJzIiBhY2Nlc3M9InJlYWQiLz48cHJvcGVydHkgbmFtZT0iTWVudSIgdHlwZT0ibyIgYWNjZXNzPSJyZWFkIi8+Cjxwcm9wZXJ0eSBuYW1lPSJJdGVtSXNNZW51IiB0eXBlPSJiIiBhY2Nlc3M9InJlYWQiLz48L2ludGVyZmFjZT48L25vZGU+IiIiClAgPSB7IkNhdGVnb3J5IjogKCJzIiwgIkFwcGxpY2F0aW9uU3RhdHVzIiksICJJZCI6ICgicyIsICJoeC10ZXN0IiksICJUaXRsZSI6ICgicyIsICJoeCB0cmF5IHRlc3QiKSwgIlN0YXR1cyI6ICgicyIsICJBY3RpdmUiKSwKICAgICAiSWNvbk5hbWUiOiAoInMiLCAibmV0d29yay13aXJlZCIpLCAiTWVudSI6ICgibyIsICIvTk9fREJVU01FTlUiKSwgIkl0ZW1Jc01lbnUiOiAoImIiLCBGYWxzZSl9Ck5BTUUgPSAib3JnLmtkZS5TdGF0dXNOb3RpZmllckl0ZW0tNDI0Mi0xIgpsb29wID0gR0xpYi5NYWluTG9vcCgpCnJlcyA9IHt9CmRlZiBnZXRwKGNvbm4sIHNlbmRlciwgcGF0aCwgaWZhY2UsIG5hbWUpOgogICAgdCwgdiA9IFBbbmFtZV0KICAgIHJldHVybiBHTGliLlZhcmlhbnQodCwgdikKZGVmIG9uX2J1cyhjb25uLCBuYW1lKToKICAgIGNvbm4ucmVnaXN0ZXJfb2JqZWN0KCIvU3RhdHVzTm90aWZpZXJJdGVtIiwgR2lvLkRCdXNOb2RlSW5mby5uZXdfZm9yX3htbChYTUwpLmludGVyZmFjZXNbMF0sIE5vbmUsIGdldHAsIE5vbmUpCmRlZiBvbl9uYW1lKGNvbm4sIG5hbWUpOgogICAgdHJ5OgogICAgICAgIGNvbm4uY2FsbF9zeW5jKCJvcmcua2RlLlN0YXR1c05vdGlmaWVyV2F0Y2hlciIsICIvU3RhdHVzTm90aWZpZXJXYXRjaGVyIiwgIm9yZy5rZGUuU3RhdHVzTm90aWZpZXJXYXRjaGVyIiwgIlJlZ2lzdGVyU3RhdHVzTm90aWZpZXJJdGVtIiwKICAgICAgICAgICAgICAgICAgICAgICBHTGliLlZhcmlhbnQoIihzKSIsIChOQU1FLCkpLCBOb25lLCBHaW8uREJ1c0NhbGxGbGFncy5OT05FLCA1MDAwLCBOb25lKQogICAgICAgIEdMaWIudGltZW91dF9hZGQoMTUwMCwgbGFtYmRhOiBjaGVjayhjb25uKSkKICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICByZXNbImVyciJdID0gc3RyKGUpCiAgICAgICAgbG9vcC5xdWl0KCkKZGVmIGNoZWNrKGNvbm4pOgogICAgZm9yIHAgaW4gKCJSZWdpc3RlcmVkU3RhdHVzTm90aWZpZXJJdGVtcyIsICJJc1N0YXR1c05vdGlmaWVySG9zdFJlZ2lzdGVyZWQiKToKICAgICAgICByID0gY29ubi5jYWxsX3N5bmMoIm9yZy5rZGUuU3RhdHVzTm90aWZpZXJXYXRjaGVyIiwgIi9TdGF0dXNOb3RpZmllcldhdGNoZXIiLCAib3JnLmZyZWVkZXNrdG9wLkRCdXMuUHJvcGVydGllcyIsICJHZXQiLAogICAgICAgICAgICAgICAgICAgICAgICAgICBHTGliLlZhcmlhbnQoIihzcykiLCAoIm9yZy5rZGUuU3RhdHVzTm90aWZpZXJXYXRjaGVyIiwgcCkpLCBOb25lLCBHaW8uREJ1c0NhbGxGbGFncy5OT05FLCA1MDAwLCBOb25lKQogICAgICAgIHJlc1twXSA9IHIudW5wYWNrKClbMF0KICAgIGxvb3AucXVpdCgpCkdpby5idXNfb3duX25hbWUoR2lvLkJ1c1R5cGUuU0VTU0lPTiwgTkFNRSwgR2lvLkJ1c05hbWVPd25lckZsYWdzLk5PTkUsIG9uX2J1cywgb25fbmFtZSwgbGFtYmRhICphOiAocmVzLnNldGRlZmF1bHQoImVyciIsICJuYW1lIGxvc3QiKSwgbG9vcC5xdWl0KCkpKQpHTGliLnRpbWVvdXRfYWRkKDE1MDAwLCBsb29wLnF1aXQpCmxvb3AucnVuKCkKcHJpbnQoIlNOSS1SRVNVTFQiLCByZXMpCg=="      # registers a StatusNotifierItem with the watcher the AppIndicator extension provides
@@ -235,7 +236,7 @@ class ZRun(qt.Runner):
         names = [l.split("\t")[0] for l in o.splitlines()]
         need = ["rpool/ROOT/horcrux", "rpool/home", "rpool/var/log", "rpool/var/lib/libvirt"]
         self.step("datasets", all(n in names for n in need) and "rpool/var/lib/libvirt\t/var/lib/libvirt\t64K" in o, ", ".join(names))
-        rc, dbg = self.sh("cat /etc/fstab; echo ---; findmnt -o TARGET,SOURCE,FSTYPE | head -30; echo ---; rc-status -a 2>&1 | head -40; dmesg | grep -iE 'fstab|zfs|mount' | tail -10")
+        rc, dbg = self.sh("cat /etc/fstab; echo ---; findmnt -o TARGET,SOURCE,FSTYPE | head -30; echo ---; { rc-status -a 2>/dev/null || systemctl list-units --no-legend --plain 2>/dev/null; } | head -40; dmesg | grep -iE 'fstab|zfs|mount' | tail -10")
         open(f"{a.out}/debug-boot1.txt", "w").write(dbg)
         rc, o = self.sh("findmnt -no SOURCE /; findmnt -no FSTYPE /boot; findmnt -no FSTYPE /boot/efi; cat /proc/cmdline")
         self.step("root-on-zfs-boot-environment", "rpool/ROOT/horcrux" in o and "ext4" in o and "vfat" in o, o.replace("\n", " | ")[:200])
@@ -432,7 +433,7 @@ class ZRun(qt.Runner):
         open(f"{self.z.out}/installed-packages.txt", "w").write("\n".join(pk) + "\n")
         self.step("server-has-no-display-stack-installed", rc == 0 and len(pk) > 100 and not gui,
                   f"{len(pk)} packages installed; gui-libs/gui-wm/x11-*/gnome-*/mesa/qt/pipewire/NetworkManager found: {gui[:20] or 'none'} (allowed library deps: {', '.join(self.DISPLAY_ALLOW)})")
-        rc, o = self.sh("(pgrep -x 'Xorg|Xwayland|gdm|lightdm|sddm|gnome-shell|cage|sway|weston' || true) | wc -l; (rc-status -a 2>&1 | grep -Eci 'gdm|lightdm|sddm|display-manager|xdm' || true)")
+        rc, o = self.sh("(pgrep -x 'Xorg|Xwayland|gdm|lightdm|sddm|gnome-shell|cage|sway|weston' || true) | wc -l; (" + init_cmds.running_list_sh("gdm|lightdm|sddm|display-manager|xdm") + " | wc -l)")
         self.step("server-runs-no-x-wayland-or-display-manager", o.split()[-2:] == ["0", "0"], f"display processes / display-manager services: {' '.join(o.split()[-2:])}")
         rc, o = self.sh("grep -o 'console=tty[A-Za-z0-9,]*' /proc/cmdline | tr '\\n' ' '; echo; pgrep -af 'agetty|console-menu|live-serial' | head -4")
         self.step("serial-console-is-the-system-console", "console=tty" in o, re.sub(r"\s+", " ", o).strip()[:200])
@@ -476,10 +477,10 @@ class ZRun(qt.Runner):
         rc, o = self.sh("for p in " + " ".join(self.CORE_PKGS) + "; do qlist -I $p || echo MISSING:$p; done; cat /usr/share/horcrux/core-release; horcrux-time-config check; "
                         "qfile -q /usr/sbin/horcrux-time-config /usr/libexec/horcrux-timesync /usr/libexec/horcrux-firstboot /etc/init.d/horcrux-timesync /etc/init.d/horcrux-firstboot "
                         "/etc/portage/package.use/horcrux-core /usr/sbin/ctg-restic && echo OWNED; "
-                        "rc-update show default | grep -E 'chronyd|horcrux-timesync|horcrux-firstboot|cronie|horcrux-api|sshd' | tr -s ' ' | tr '\\n' ';'")
+                        "{ " + init_cmds.enabled_list_sh() + "; } | grep -E 'chronyd|horcrux-timesync|horcrux-firstboot|cronie|horcrux-api|sshd' | tr -s ' ' | tr '\\n' ';'")
         self.step("core-packages-installed-package-owned-and-enabled", "MISSING" not in o and "OWNED" in o and "OK horcrux time config" in o and "horcrux-core" in o
                   and all(x in o for x in ("chronyd", "horcrux-timesync", "horcrux-firstboot", "horcrux-api")), re.sub(r"\s+", " ", o).strip()[:400])
-        rc, o = self.sh("rc-status -a 2>&1 | grep -Ei 'crashed|stopped.*(chronyd|horcrux)'; echo END; rc-status -s | grep -E 'chronyd|horcrux-timesync|horcrux-api|sshd' | tr -s ' '")
+        rc, o = self.sh(init_cmds.failed_sh() + "; " + init_cmds.stopped_sh("chronyd|horcrux") + "; echo END; " + init_cmds.running_list_sh("chronyd|horcrux-timesync|horcrux-api|sshd"))
         self.step("core-services-running-none-crashed", o.split("END")[0].strip() == "" and "chronyd" in o and "horcrux-timesync" in o and "horcrux-api" in o, re.sub(r"\s+", " ", o).strip()[:300])
         rc, o = self.sh("/usr/sbin/ctg-restic-cron backup; echo BACKUP-RC=$?; ctg-restic content; echo CONTENT-RC=$?; ls /etc/cron.d/horcrux-backup; pgrep -x crond >/dev/null && echo CRONDUP; "
                         "grep -c canutethegreat /etc/ctg-backup/paths /etc/ctg-backup/excludes; ls /etc/ctg-backup/required 2>&1 | head -1")
@@ -503,7 +504,7 @@ class ZRun(qt.Runner):
         end = time.time() + qt.T(1500)
         o = ""
         while time.time() < end:
-            rc, o = self.sh("ls /var/lib/horcrux/ 2>&1; grep -E '^== (horcrux-firstboot|waiting|network is up|hook|portage trees|done|tree sync)' /var/log/horcrux-firstboot.log 2>&1; rc-status -a 2>&1 | grep horcrux-firstboot; test -s /run/horcrux-firstboot.pid && echo PIDLEFT || echo PIDGONE", timeout=60)
+            rc, o = self.sh("ls /var/lib/horcrux/ 2>&1; grep -E '^== (horcrux-firstboot|waiting|network is up|hook|portage trees|done|tree sync)' /var/log/horcrux-firstboot.log 2>&1; " + init_cmds.failed_sh("horcrux-firstboot") + "; test -s /run/horcrux-firstboot.pid && echo PIDLEFT || echo PIDGONE", timeout=60)
             if "firstboot-done" in o:
                 break
             time.sleep(20)
@@ -819,7 +820,7 @@ class ZRun(qt.Runner):
         chronyd steps (makestep) and is enabled, and a VM booted with a months-off RTC ends up with the right time after the network is up"""
         rc, o = self.sh("f=/etc/NetworkManager/dispatcher.d/20-horcrux-chrony; test -x $f && echo HOOK; qfile -q $f && echo OWNED; qlist -I net-misc/horcrux-chrony-nm; "
                         "grep -h '^makestep' /etc/chrony/chrony.conf /etc/chrony.conf 2>/dev/null | head -2; grep -hE '^rtcsync' /etc/chrony/chrony.conf 2>/dev/null; "
-                        "rc-update show default | grep -c chronyd; grep -h '^clock=' /etc/conf.d/hwclock; test -f /usr/lib/live-installer/liveinst/rtc.py && echo RTCPY")
+                        "{ " + init_cmds.enabled_list_sh() + "; } | grep -c '^chronyd '; grep -h '^clock=' /etc/conf.d/hwclock; test -f /usr/lib/live-installer/liveinst/rtc.py && echo RTCPY")
         self.step("chrony-nm-dispatcher-hook-installed-and-package-owned", "HOOK" in o and "OWNED" in o and "horcrux-chrony-nm" in o, re.sub(r"\s+", " ", o).strip()[:300])
         self.step("chronyd-enabled-makestep-rtcsync-clock-utc", "makestep" in o and "rtcsync" in o and re.search(r"(?m)^1$", o) is not None and 'clock="UTC"' in o and "RTCPY" in o, re.sub(r"\s+", " ", o).strip()[:300])
         rc, o = self.sh("date -u +%s")
@@ -842,7 +843,7 @@ class ZRun(qt.Runner):
             time.sleep(8)
         rc, ch = self.sh("chronyc -n sources 2>&1 | head -6; chronyc -n tracking 2>&1 | head -3")
         # the step itself, from chronyd's own log (on a slow/emulated guest the clock may already be right when ssh answers)
-        rc, wr = self.sh("grep -h 'System clock wrong by' /var/log/messages /var/log/syslog /var/log/chrony/*.log 2>/dev/null | tail -2")
+        rc, wr = self.sh("{ grep -h 'System clock wrong by' /var/log/messages /var/log/syslog /var/log/chrony/*.log 2>/dev/null; journalctl -q --no-pager -u chronyd 2>/dev/null | grep 'System clock wrong by'; } | tail -2")
         self.res.setdefault("chrony_steps", []).append(wr.strip())
         ch += " | chronyd: " + re.sub(r"\s+", " ", wr)[:160]
         self.step("months-off-rtc-clock-stepped-by-chrony-after-network", ok,
@@ -897,7 +898,7 @@ class ZRun(qt.Runner):
         o = ""
         while time.time() < end:
             rc, o = self.sh("pgrep -x gdm >/dev/null && echo GDM; pgrep -f gnome-shell >/dev/null && echo SHELL; pgrep -x NetworkManager >/dev/null && echo NM; "
-                            "rc-status -s | grep -E 'gdm|xdm|elogind|NetworkManager|dbus' | tr -s ' '; id owner")
+                            + init_cmds.running_list_sh("gdm|xdm|elogind|logind|NetworkManager|dbus") + "; id owner")
             if "GDM" in o and "SHELL" in o:
                 break
             time.sleep(6)

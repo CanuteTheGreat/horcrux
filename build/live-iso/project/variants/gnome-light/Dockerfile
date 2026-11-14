@@ -4,6 +4,9 @@
 ARG BASE
 FROM ${BASE}
 ARG ARCH=x86_64
+# init system of the image + the per-arch-and-init binary package cache (build.sh passes both; see common/Dockerfile.rootfs)
+ARG INIT=openrc
+ARG BINPKG_ID=binpkgs-${ARCH}
 ARG VARIANT=gnome-light
 
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
@@ -14,7 +17,7 @@ COPY project/variants/gnome-light/repo/ /var/db/repos/horcrux-gnome-light/
 COPY project/variants/gnome-light/packages.txt /tmp/packages-desktop.txt
 
 # profile with the GNOME defaults (OpenRC flavour: elogind, no systemd), one emerge (the owner's apps are NOT here: machine layers)
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; \
     eselect profile set default/linux/amd64/23.0/desktop/gnome; \

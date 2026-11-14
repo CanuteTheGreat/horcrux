@@ -12,6 +12,13 @@ proj() { sed 's/-live$//' /etc/live-iso-label 2>/dev/null; }
 
 set_tty1() {
 	# $1 = full agetty argument string for tty1
+	if [ -d /run/systemd/system ]; then
+		# systemd: getty@tty1 runs /usr/libexec/live-getty-tty1 (drop-in 00-live.conf), which reads these arguments; the unit is ordered
+		# after this service, so at boot nothing needs a restart (only the later fallback to the interactive installer does)
+		mkdir -p /run/live-installer; echo "$1" > /run/live-installer/tty1-args
+		systemctl -q is-active getty@tty1.service 2>/dev/null && systemctl --no-block restart getty@tty1.service 2>/dev/null
+		return 0
+	fi
 	sed -i '/^c1:/d' /etc/inittab
 	echo "c1:12345:respawn:/sbin/agetty $1 tty1 linux" >> /etc/inittab
 	telinit q 2>/dev/null

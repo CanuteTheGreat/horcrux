@@ -10,6 +10,9 @@
 ARG BASE
 FROM ${BASE}
 ARG ARCH=x86_64
+# init system of the image + the per-arch-and-init binary package cache (build.sh passes both; see common/Dockerfile.rootfs)
+ARG INIT=openrc
+ARG BINPKG_ID=binpkgs-${ARCH}
 ARG VARIANT=core
 
 RUN --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
@@ -20,7 +23,7 @@ COPY --from=hxfull / /var/db/repos/horcrux/
 COPY common/vdb-prune.py /tmp/vdb-prune.py
 COPY project/public-forbidden.txt /tmp/public-forbidden.txt
 
-RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=locked \
+RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; \
     if qlist -I sys-apps/horcrux-core >/dev/null 2>&1; then echo "core already installed: nothing to do"; rm -f /tmp/vdb-prune.py /tmp/public-forbidden.txt; exit 0; fi; \
@@ -46,7 +49,9 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     # GATE: the os-release is package-owned (sys-apps/horcrux-release), names a variant and a build, and says nothing about live/installer on an installed system
     qfile -q /usr/lib/os-release | grep -qx sys-apps/horcrux-release; grep -q '^VARIANT_ID=' /usr/lib/os-release; grep -q '^ID_LIKE=gentoo' /usr/lib/os-release; ! grep -iE '^PRETTY_NAME=.*(live|installer)' /usr/lib/os-release; grep -q '^BUILD_ID=' /usr/lib/os-release; ! grep -q 'git.canutethegreat.com' /usr/lib/os-release; \
     # services: time sync + first boot + cron (the backup job) in the image's default runlevel; the installer enables them on the installed system too (profile.toml)
-    for s in chronyd horcrux-timesync horcrux-firstboot cronie; do rc-update add $s default; done; \
+    if [ "${INIT}" = systemd ]; then systemctl enable chronyd.service horcrux-timesync.service horcrux-firstboot.service cronie.service; \
+      qfile -q /usr/lib/systemd/system/horcrux-timesync.service /usr/lib/systemd/system/horcrux-firstboot.service /usr/lib/systemd/system/horcrux-api.service; \
+    else for s in chronyd horcrux-timesync horcrux-firstboot cronie; do rc-update add $s default; done; fi; \
     # the shipped overlay tree is a git checkout (snapshot of this build) so `emaint sync -r horcrux` fast-forwards it to the published overlay
     cd /var/db/repos/horcrux; git init -q -b main; git add -A; git -c user.name=horcrux-image -c user.email=image@horcrux.invalid commit -q -m "image snapshot (core)"; \
     git remote add origin "$(sed -n 's/^sync-uri *= *//p' /etc/portage/repos.conf/horcrux.conf)"; \

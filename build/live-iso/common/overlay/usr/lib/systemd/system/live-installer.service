@@ -1,0 +1,19 @@
+# systemd twin of /etc/init.d/live-installer (same script): picks the console program for the boot-menu mode (tty1 via the getty@tty1
+# drop-in 00-live.conf, the serial UART via live-serial) and runs the unattended answer-file install. Does nothing on an installed system.
+[Unit]
+Description=Live session: guided installer / unattended install / console shells
+After=local-fs.target dhcpcd.service network.target
+Before=live-serial.service getty@tty1.service
+ConditionKernelCommandLine=rd.live.image
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# the unattended install runs inside start() (as on OpenRC, where it runs in the default runlevel before the gettys)
+TimeoutStartSec=infinity
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStart=/usr/libexec/live-openrc-compat /etc/init.d/live-installer start
+
+[Install]
+WantedBy=multi-user.target

@@ -313,8 +313,13 @@ def prepare(inst, extra_dracut_modules=""):
         inst.log("UPower: critical battery = Hibernate")
     else:
         inst.log("UPower is not installed on this image: no automatic hibernate on critical battery (lid/power key still work)")
-    inst.run(["rc-update", "add", "swap", "boot"], chroot=True, check=False)
-    inst.run(["rc-update", "add", "elogind", "boot"], chroot=True, check=False)
+    from . import initsys
+    initsys.enable(inst, "swap", "boot")          # systemd: fstab swap units, no service
+    initsys.enable(inst, "elogind", "boot")       # systemd: systemd-logind
+    if initsys.target_init(inst.target) == "systemd":
+        # logind/sleep settings: systemd-logind reads /etc/systemd, elogind /etc/elogind (same keys)
+        inst.write("/etc/systemd/logind.conf.d/10-horcrux-portable.conf", LOGIND_CONF)
+        inst.write("/etc/systemd/sleep.conf.d/10-horcrux-portable.conf", SLEEP_CONF)
     inst.log(f"portable swap: {inst.swap_dev} (UUID {inst.swap_uuid}), resume={inst.swap_uuid}")
 
 

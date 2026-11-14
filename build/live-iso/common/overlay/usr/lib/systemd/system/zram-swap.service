@@ -1,0 +1,14 @@
+# systemd twin of /etc/init.d/zram-swap (same script, settings in /etc/conf.d/zram-swap): zram compressed swap, the ONLY swap on servers.
+[Unit]
+Description=zram compressed swap
+After=local-fs.target systemd-modules-load.service
+Before=swap.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/live-openrc-compat /etc/init.d/zram-swap start
+ExecStop=/usr/libexec/live-openrc-compat /etc/init.d/zram-swap stop
+
+[Install]
+WantedBy=swap.target

@@ -217,7 +217,8 @@ def configure_stage(inst):
     inst.log("initramfs drivers forced in: " + " ".join(avail) + " (the rest is built into the kernel or absent)")
     inst.write("/etc/dracut.conf.d/90-xfs-luks.conf", dracut_conf(" ".join(avail)))
     inst.write("/etc/cron.weekly/fstrim", FSTRIM_CRON, 0o755)
-    inst.run(["rc-update", "add", "cronie", "default"], chroot=True, check=False)
+    from . import initsys
+    initsys.enable(inst, "cronie", "default")
     inst.log(f"rebuilding the initramfs for {kver} with crypt + USB/HID keyboard drivers")
     # dracut asks gcc-config for libgcc_s, which asks Portage for CHOST: the ISO has no Portage tree, so hand it over
     gcc = f"{inst.target}/usr/lib/gcc"

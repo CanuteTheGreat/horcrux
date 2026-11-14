@@ -1,0 +1,16 @@
+[Unit]
+Description=test machine: hardware watchdog reboots a hung laptop
+After=local-fs.target
+Before=network.target
+
+[Service]
+Type=simple
+ExecStartPre=-/sbin/modprobe iTCO_wdt
+ExecStart=/usr/libexec/horcrux-test-watchdog
+KillSignal=SIGTERM
+TimeoutStopSec=10
+StandardOutput=append:/var/log/horcrux-test-watchdog.log
+StandardError=append:/var/log/horcrux-test-watchdog.log
+
+[Install]
+WantedBy=multi-user.target
