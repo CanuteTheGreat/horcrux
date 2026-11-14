@@ -43,7 +43,7 @@ Always verify: `sha256sum -c horcrux-server-openrc-daily-x86_64.iso.sha256` (run
 |---|---|
 | product | `horcrux`, `patronus` (a private per-machine image adds its machine name: `horcrux-hogshead-gnome-light-openrc-...`) |
 | desktop env | `server` (no desktop), `gnome-light` (GNOME on Wayland, small app set); later `xfce`, `kde`, ... each as its own name |
-| init | `openrc` (all images today), `systemd` only if such an image is ever built |
+| init | `openrc` or `systemd` (both are built for every edition and architecture; see "OpenRC or systemd") |
 | channel | `daily` (rolling pre-release) or the release tag (`v0.2.0`) |
 | arch | `x86_64`, `aarch64` |
 
@@ -60,6 +60,12 @@ The workflow's `only=` input and the status marker use `<desktop env>-<init>-<ar
 
 The product-domain URLs of the old names answer **301** to the new names (also for `.sha256` and `-test-evidence.tgz`), so existing links keep working; the new names answer 302 to the GitHub release asset.
 Note that the `.sha256` file names the NEW file name: rename the download or use `sha256sum` and compare by hand if you fetched an old URL.
+
+## OpenRC or systemd
+
+Every edition and architecture is built on both init systems. The two images are the same product with the same installer; the file names differ only in the `<init>` token (`horcrux-server-openrc-daily-x86_64.iso` and `horcrux-server-systemd-daily-x86_64.iso`). The installed system keeps the init system of the ISO you booted: the installer has no switch for it. The systemd images use the same script-based initramfs and the same services, shipped as systemd units instead of OpenRC scripts. GNOME on systemd uses upstream `gnome-session` with systemd-logind (the OpenRC desktop uses elogind).
+
+A systemd download is listed on the download page only after its image was published, and images are published only after the QEMU tests passed, so a systemd image that is not listed yet has not passed.
 
 ## Architectures
 
