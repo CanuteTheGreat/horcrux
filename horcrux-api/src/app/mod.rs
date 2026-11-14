@@ -2997,7 +2997,12 @@ async fn start_container(
             .await?;
             state.container_manager.get_container(&id).await?
         } else {
-            state.container_manager.start_container(&id).await?
+            // Own task for the same reason as stop_container.
+            let manager = state.container_manager.clone();
+            let start_id = id.clone();
+            tokio::spawn(async move { manager.start_container(&start_id).await })
+                .await
+                .map_err(|e| ApiError::Internal(format!("container start task failed: {e}")))??
         };
 
     // Broadcast status change event
@@ -3019,7 +3024,15 @@ async fn stop_container(
     Path(id): Path<String>,
 ) -> Result<Json<horcrux_common::ContainerConfig>, ApiError> {
     let old_status = state.container_manager.get_container(&id).await?.status;
-    let container = state.container_manager.stop_container(&id).await?;
+    // Own task, like create/delete: a stop takes as long as the container's
+    // grace period, and the browser aborts the request when the container's
+    // veth disappears (net::ERR_NETWORK_CHANGED). Dropping this handler then
+    // would leave the stored status stale after the runtime has stopped it.
+    let manager = state.container_manager.clone();
+    let stop_id = id.clone();
+    let container = tokio::spawn(async move { manager.stop_container(&stop_id).await })
+        .await
+        .map_err(|e| ApiError::Internal(format!("container stop task failed: {e}")))??;
 
     // Broadcast status change event
     state
