@@ -216,6 +216,34 @@ class ConsoleMenuFlows(unittest.TestCase):
         self.assertEqual(con.execute("select password_hash from users").fetchone()[0], "$argon2id$stub$" + GOOD_PW)
         self.assertEqual(con.execute("select count(*) from sessions").fetchone()[0], 0)
 
+    def test_system_user_reset_runs_chpasswd_and_clears_the_faillock_lock(self):
+        # web_auth = pam: the reset is a chpasswd, and a user pam_faillock locked out (3 failures in 15 min) must be able to
+        # log in with the new password at once, so the reset also clears the failure records (root too when it gets the password)
+        import pwd
+        import types
+        calls = []
+        orig_sh, orig_getpwall, orig_which = CM.S.sh, pwd.getpwall, CM.shutil.which
+        u = types.SimpleNamespace(pw_name="pxadmin", pw_uid=1000, pw_shell="/bin/bash")
+        try:
+            CM.S.sh = lambda cmd, timeout=60: (calls.append(cmd), (0, ""))[1]
+            pwd.getpwall = lambda: [u]
+            CM.shutil.which = lambda n: "/usr/sbin/" + n
+            self.prof["web_auth"] = "pam"
+            c = self.console(["pxadmin", GOOD_PW, GOOD_PW, "y"])
+            c.reset_password()
+            flat = [x if isinstance(x, str) else " ".join(x) for x in calls]
+            self.assertTrue(any("chpasswd" in x and "pxadmin" in x for x in flat), flat)
+            self.assertIn("faillock --user pxadmin --reset", flat)
+            self.assertIn("faillock --user root --reset", flat)
+            self.assertLess(next(i for i, x in enumerate(flat) if "chpasswd" in x), flat.index("faillock --user pxadmin --reset"))
+            # no faillock tool (PAM-less tier): the reset still works and runs nothing else
+            calls.clear()
+            CM.shutil.which = lambda n: None
+            self.console(["pxadmin", GOOD_PW, GOOD_PW, "n"]).reset_password()
+            self.assertFalse(any("faillock" in (x if isinstance(x, str) else " ".join(x)) for x in calls), calls)
+        finally:
+            CM.S.sh, pwd.getpwall, CM.shutil.which = orig_sh, orig_getpwall, orig_which
+
     def test_weak_password_rejected_three_times_changes_nothing(self):
         import sqlite3
         c = self.console(["short", "short", "short"])

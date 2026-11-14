@@ -1734,9 +1734,12 @@ class Runner:
                 # no built-in admin, root and a wrong password are refused with the same 401; the old first-boot files do not exist
                 bad = {u: http(FWD_WEB, "/api/auth/login", "POST", {"username": u, "password": pw})[1]
                        for u, pw in (("admin", PW), ("root", PW), (P["web_user"], PW + "x"))}
-                rc, o = ssh(FWD_SSH, self.key, f"id {P['web_user']}; test -e {P['pwfile']} && echo PWFILE-PRESENT; test -e {P['seedfile']} && echo SEED-PRESENT; ls /etc/pam.d/{P['pam']}")
-                self.step("web-no-admin-account-root-and-wrong-password-refused", all(c == 401 for c in bad.values()) and "PRESENT" not in o and "wheel" in o and P["admin_group"] in o,
-                          f"admin/root/wrong password -> {bad}; {o.strip().splitlines()[0][:120] if o.strip() else o!r}")
+                rc, o = ssh(FWD_SSH, self.key, f"id {P['web_user']}; test -e {P['pwfile']} && echo PWFILE-PRESENT; test -e {P['seedfile']} && echo SEED-PRESENT; ls /etc/pam.d/{P['pam']} || echo NO-PAM-SERVICE")
+                # the web login must go through the product's PAM service: without /etc/pam.d/<svc> Patronus' sysauth silently falls back to
+                # its shadow-file backend, which cannot verify yescrypt (what chpasswd writes), so plainly-set passwords got 401 (patronus run 1077)
+                self.step("web-no-admin-account-root-and-wrong-password-refused", all(c == 401 for c in bad.values()) and "PRESENT" not in o and "wheel" in o and P["admin_group"] in o
+                          and "NO-PAM-SERVICE" not in o,
+                          f"admin/root/wrong password -> {bad}; {o.strip().splitlines()[0][:120] if o.strip() else o!r}" + (f"; /etc/pam.d/{P['pam']} MISSING" if "NO-PAM-SERVICE" in o else ""))
             if a.flow != "auto":
                 rc, o = ssh(FWD_SSH, self.key, f"sleep 15; for f in {P['seedfile']} {P['pwfile']}; do test -e $f && echo present:$f || echo gone:$f; done")
                 self.step("first-boot-password-files-removed", "present" not in o and o.count("gone") == 2, o.strip().replace("\n", " "))

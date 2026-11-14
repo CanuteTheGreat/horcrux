@@ -494,10 +494,23 @@ class Console:
             self.say("Cancelled.")
             return
         rc, o = S.sh(f"printf '%s:%s\\n' {S.shquote(name)} {S.shquote(pw)} | chpasswd")
+        if rc == 0:
+            self.clear_login_lock(name)
         self.say(f"Password of {name} changed." if rc == 0 else "could not change it: " + o)
         if rc == 0 and self.yes("Use the same password for the root console login?", False):
             rc, o = S.sh(f"printf 'root:%s\\n' {S.shquote(pw)} | chpasswd")
+            if rc == 0:
+                self.clear_login_lock("root")
             self.say("root console password changed." if rc == 0 else "could not change root: " + o)
+
+    @staticmethod
+    def clear_login_lock(name):
+        """A reset password must work at once. system-auth's pam_faillock locks a user for 10 min after 3 failed logins in
+        15 min (no faillock.conf = the defaults), and a locked user is refused even with the new password; an administrator
+        resetting a password expects that lock to be gone too. So clear the user's failure records with pam_faillock's own
+        tool (absent on a PAM-less tier, where there is nothing to clear)."""
+        if shutil.which("faillock"):
+            S.sh(["faillock", "--user", name, "--reset"])
 
     def reset_password(self):
         if self.p.get("web_auth") == "pam":
