@@ -7,6 +7,9 @@ For every ebuild under gentoo/:
   2. every FILESDIR/ file an install call names must exist;
   3. no hard dependency on sys-apps/openrc (only inside an `|| ( openrc systemd )` group).
 Machine-layer packages that another workstream owns are listed in EXEMPT with the reason; the list may only shrink.
+INIT_HALF lists packages that ARE one init system's implementation of something whose other half is a different
+package (gnome-session-openrc on OpenRC, upstream gnome-session on systemd): they may depend on their init system,
+and every ebuild that pulls them must do so under the matching USE conditional (`!systemd? ( ... )`).
 Exit 1 with the whole list of findings.
 """
 import os, re, sys
@@ -15,6 +18,10 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 EXEMPT = {
     # HOGSMEADE machine layer: its GNOME-on-OpenRC session is being fixed by another workstream; unit added in phase 2.
     "app-misc/hogsmeade-tools": "hogsmeade machine layer (phase 2)",
+}
+INIT_HALF = {
+    # GNOME's session manager on OpenRC; systemd systems run ::gentoo gnome-base/gnome-session (horcrux-gnome-defaults).
+    "gnome-base/gnome-session-openrc": "!systemd?",
 }
 INIT_CALL = re.compile(r"\b(newinitd|doinitd)\b")
 UNIT_CALL = re.compile(r"\b(systemd_dounit|systemd_newunit|systemd_install_serviced)\b")
@@ -31,6 +38,24 @@ def ebuilds():
                 for f in sorted(os.listdir(pd)):
                     if f.endswith(".ebuild"):
                         yield f"{cat}/{pn}", pd, f
+
+
+def dep_atoms(body):
+    """(atom, enclosing USE conditionals) for every atom in the *DEPEND="..." variables."""
+    for m in re.finditer(r'^\s*(?:[RPB]?DEPEND|IDEPEND)\+?="([^"]*)"', body, re.M):
+        stack, pending = [], None
+        for tok in m.group(1).split():
+            if tok.endswith("?"):
+                pending = tok
+            elif tok == "(":
+                stack.append(pending)
+                pending = None
+            elif tok == ")":
+                if stack:
+                    stack.pop()
+            else:
+                pending = None
+                yield tok, [c for c in stack if c]
 
 
 def named_files(text):
@@ -60,6 +85,14 @@ def main():
         for name in set(named_files(body)):
             if not re.search(r"[$*]", name) and not os.path.exists(os.path.join(pd, "files", name)):
                 bad.append(f"{cp}/{f}: names files/{name} which does not exist")
+        # an init-specific half must only be pulled under its USE conditional
+        for half, cond in INIT_HALF.items():
+            if cp != half:
+                for atom, stack in dep_atoms(body):
+                    if half in atom and cond not in stack:
+                        bad.append(f"{cp}/{f}: pulls {half} outside `{cond} ( ... )`")
+        if cp in INIT_HALF:
+            continue
         # hard openrc dependency: a dependency line (tab-indented atom) outside an || ( ) group
         for m in re.finditer(r"^\s+(?!\|\|)(\S*sys-apps/openrc)\s*$", body, re.M):
             bad.append(f"{cp}/{f}: hard dependency on sys-apps/openrc (use || ( sys-apps/openrc sys-apps/systemd ))")
