@@ -55,7 +55,8 @@ class ZRun(qt.Runner):
     def __init__(self, a):
         ns = types.SimpleNamespace(iso=a.iso, project="horcrux", arch=qt.HOST_ARCH, mode="uefi", media="usb", flow="auto", fs="zfs",
                                    zfs_raid="single", ssh_password_opt_in=False, static_ip="", lan_ip="10.77.0.1", console_open=False,
-                                   out=a.out, mem=a.mem, cpu=a.cpu, restarts=0, disk_gb=a.disk_gb, tpm="none", tpm_negative=False)
+                                   out=a.out, mem=a.mem, cpu=a.cpu, restarts=0, disk_gb=a.disk_gb, tpm="none", tpm_negative=False,
+                                   init=a.init or ("systemd" if "-systemd-" in os.path.basename(a.iso) else "openrc"))
         super().__init__(ns)
         self.z = a
         self.no_ps2 = False
@@ -957,6 +958,7 @@ def main():
     ap.add_argument("--public", action="store_true", help="a PUBLIC image: nothing personal / machine-specific may be installed (project/public-forbidden.txt)")
     ap.add_argument("--overlay-dir", default="", help="(--server) the repo's gentoo/ overlay: its horcrux-core packages are copied over the synced /var/db/repos/horcrux before `emerge -pvuDN @world`, "
                     "for a run on a branch whose overlay is not published yet (on main the published overlay is what the installed system really syncs)")
+    ap.add_argument("--init", choices=["openrc", "systemd"], default="", help="init system of the ISO (default: from its file name, <p>-<edition>-<init>-...)")
     ap.add_argument("--late-network", type=int, default=0, metavar="SECS", help="(--server) boot #2 with the NIC link DOWN for SECS seconds (QMP set_link), then up: chrony must still step the clock and the web UI must come up")
     ap.add_argument("--hibernate", action="store_true", help="portable profile: LUKS2 hibernation swap, ONE passphrase, hibernate -> power off -> boot -> resume (marker + process survive, pool clean, scrub clean)")
     ap.add_argument("--fake-t2", action="store_true", help="force the T2 path with answer-file t2=yes (this QEMU cannot present PCI id 106b:1801; detection itself is unit-tested with a fake sysfs)")

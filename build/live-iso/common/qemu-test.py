@@ -1385,6 +1385,10 @@ class Runner:
             if n > 40 and not missing:
                 break
             time.sleep(6)
+        if not (n > 40 and not missing):         # why: the GUI log, the session/a11y buses and the probe's own error
+            _, dbg = self.gsh(vm, "tail -n 15 /run/live-installer/gui.log; ps -eo pid,args | grep -E '[d]bus-daemon|[a]t-spi' | cut -c1-150; "
+                                  "/usr/libexec/live-installer-atspi tree 2>&1 | tail -n 6", 60)
+            print("gui-atspi-tree diagnostics:\n" + (dbg or "").replace("\r", ""), flush=True)
         self.step("gui-atspi-tree", n > 40 and not missing, f"{n} accessible nodes; missing: {missing}")
         self.gshot(vm, "keyboard", "Language, keyboard and install type (Server default)")
         # timezone through the keyboard-only picker

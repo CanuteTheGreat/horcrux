@@ -204,7 +204,7 @@ if [ "$result" = pass ]; then
       [ $fw = bios ] && [ "${HAS_BIOS:-1}" = 0 ] && continue
       name=boot-modes-$fw; media=usb; [ $fw = bios ] && media=cdrom
       echo "::group::QEMU test $name"
-      with_deadline $DL_MODES python3 -u "$HERE/boot-modes-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" --mode $fw --media $media ${NO_MEMTEST:+--no-memtest} --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+      with_deadline $DL_MODES python3 -u "$HERE/boot-modes-test.py" --iso "$ISO" --project "$PROJECT" --arch "$ARCH" --init "$INIT" --mode $fw --media $media ${NO_MEMTEST:+--no-memtest} --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
       rc=${PIPESTATUS[0]}
       echo "::endgroup::"
       rm -f "$EVI/$name"/*.raw "$EVI/$name"/*.qcow2 "$EVI/$name"/install/target*.qcow2 "$EVI/$name"/install/answers.img
