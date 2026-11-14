@@ -47,9 +47,10 @@ def define(args):
         kv = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?$', out, re.M))
         good = bool(kv.get("VERSION_ID") and kv.get("BUILD_ID") and kv.get("VARIANT_ID")) and kv.get("ID_LIKE") == "gentoo" \
             and not re.search(r"live|installer", kv.get("PRETTY_NAME", ""), re.I) and f"sys-apps/{project}-release" in out
-        # qemu-test.py asserts this; the published daily ISO of 2026-11-13 fails it (os-release owned by sys-apps/baselayout, no VERSION_ID),
-        # so it is advisory here unless --arg strict_osrelease=1 (flip once the daily is fixed).
-        (m.check if args.get("strict_osrelease") else m.note)("installed-os-release-is-versioned-and-package-owned", good, f"{kv.get('PRETTY_NAME')} | VARIANT_ID={kv.get('VARIANT_ID')} BUILD_ID={kv.get('BUILD_ID')}" + ("" if good else "\n" + out[:500]))
+        # qemu-test.py asserts this too. Strict for Horcrux since its published daily carries sys-apps/horcrux-release; Patronus keeps it
+        # advisory here until its own daily is green and package-owned (--arg strict_osrelease=1|0 overrides either way).
+        strict = args.get("strict_osrelease", "1" if project == "horcrux" else "0") not in ("", "0")
+        (m.check if strict else m.note)("installed-os-release-is-versioned-and-package-owned", good, f"{kv.get('PRETTY_NAME')} | VARIANT_ID={kv.get('VARIANT_ID')} BUILD_ID={kv.get('BUILD_ID')}" + ("" if good else "\n" + out[:500]))
         n.screenshot("installed-running")
         n.power_off()
         m.check("clean-poweroff", not n.q.alive(), "")
