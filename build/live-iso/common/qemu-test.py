@@ -1958,6 +1958,12 @@ class Runner:
     def health_script(self, check_logs=True):
         P = self.P
         sh = init_cmds.services_health_sh(self.a.init, P["services"])
+        # the installed system runs the init of the ISO it came from (init-parity phase 3): PID 1 and the init markers must agree with --init
+        if self.a.init == "systemd":
+            sh += ['[ "$(cat /proc/1/comm)" = systemd ] && [ -d /run/systemd/system ] || echo "BAD PID 1 is $(cat /proc/1/comm), expected systemd"',
+                   'systemctl --failed --no-legend --plain 2>/dev/null | awk \'{print "BAD failed unit: " $1}\'']
+        else:
+            sh += ['[ ! -d /run/systemd/system ] && [ -e /run/openrc/softlevel ] || echo "BAD PID 1 is $(cat /proc/1/comm), expected OpenRC init"']
         if P.get("forward"):
             sh += ['[ "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || echo "BAD net.ipv4.ip_forward=$(cat /proc/sys/net/ipv4/ip_forward)"',
                    '[ "$(cat /proc/sys/net/ipv6/conf/all/forwarding)" = 1 ] || echo "BAD net.ipv6.conf.all.forwarding=$(cat /proc/sys/net/ipv6/conf/all/forwarding)"',

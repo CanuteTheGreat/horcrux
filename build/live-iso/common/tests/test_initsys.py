@@ -136,7 +136,9 @@ class LiveUnits(unittest.TestCase):
     def test_setup_rootfs_masks_the_stock_serial_getty(self):
         s = open(os.path.join(COMMON, "setup-rootfs.sh")).read()
         self.assertIn("systemctl mask serial-getty@.service", s)
-        self.assertIn('omit_dracutmodules+=" systemd ', s)
+        self.assertIn('systemd|systemd-*|dracut-systemd) echo "$n"', s)       # every systemd* dracut module omitted
+        self.assertIn('omit_dracutmodules+=" %s "', s)
+        self.assertIn('rm -f "$ROOT/.dockerenv"', open(os.path.join(COMMON, "assemble-iso.sh")).read())
 
 
 class PkgList(unittest.TestCase):
