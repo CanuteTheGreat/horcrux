@@ -1,7 +1,7 @@
 {
  "id": "vm-runtime",
  "last_full": "2026-11-12",
- "sha": "9f84bfc8488e82b8cdd0494dd8d9aca34b14ba60",
+ "sha": "7931a8042e5f12141fa1570cdf3fde02d637ba7d",
  "survivors": [
   "crates/horcrux-vm/src/vm/hold.rs: delete match arm (HoldAction::Resume, true) in recover",
   "crates/horcrux-vm/src/vm/hold.rs: delete match arm (HoldAction::Start, false) in recover",
