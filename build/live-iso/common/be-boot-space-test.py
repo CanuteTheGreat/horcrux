@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -17,13 +18,39 @@ from test_be_boot_space import FakeZfs  # noqa: E402
 MB = 1 << 20
 
 
+def attach_loop(img, attempts=5):
+    """Attach `img` to a free loop device ourselves and return /dev/loopN. `mount -o loop` does the same internally but
+    fails with 'failed to setup loop device' (exit 32) when another job on the shared host grabs the free node between
+    its LOOP_CTL_GET_FREE and LOOP_SET_FD; that is infrastructure, so retry only the attach (the test assertions below
+    are never retried)."""
+    last = ""
+    for i in range(attempts):
+        r = subprocess.run(["losetup", "-f", "--show", img], capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+        last = (r.stderr or r.stdout).strip()
+        # a privileged job container's /dev is a snapshot: the kernel hands out the next free loopN (the host's snap
+        # mounts hold loop0-19) but the node does not exist in the container, so create it
+        nxt = subprocess.run(["losetup", "-f"], capture_output=True, text=True).stdout.strip()
+        if nxt.startswith("/dev/loop") and nxt[9:].isdigit() and not os.path.exists(nxt):
+            subprocess.run(["mknod", nxt, "b", "7", nxt[9:]], check=False)
+        print(f"losetup attempt {i + 1}/{attempts} failed: {last}", flush=True)
+        time.sleep(2 * (i + 1))
+    raise RuntimeError(f"could not attach a loop device for {img}: {last}")
+
+
 def main():
     work = tempfile.mkdtemp(prefix="beboot-")
     img, mnt = os.path.join(work, "boot.img"), os.path.join(work, "boot")
     os.makedirs(mnt)
     subprocess.run(["truncate", "-s", "512M", img], check=True)
     subprocess.run(["mkfs.ext4", "-q", "-F", img], check=True)
-    subprocess.run(["mount", "-o", "loop", img, mnt], check=True)
+    dev = attach_loop(img)
+    try:
+        subprocess.run(["mount", dev, mnt], check=True)
+    except BaseException:
+        subprocess.run(["losetup", "-d", dev], check=False)
+        raise
     try:
         z = FakeZfs()
         c = BE.conf("/nonexistent")
@@ -66,6 +93,7 @@ def main():
         return 0
     finally:
         subprocess.run(["umount", mnt], check=False)
+        subprocess.run(["losetup", "-d", dev], check=False)
 
 
 if __name__ == "__main__":

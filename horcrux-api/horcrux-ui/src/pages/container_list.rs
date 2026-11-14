@@ -18,6 +18,22 @@ pub fn ContainerList() -> impl IntoView {
     // Load (and, after every action, re-load) the container list so the
     // table always shows the real post-action state.
     let reload = move || {
+        // The container list is what the table shows, so it must never wait
+        // on the (slower) power overview that only adds the save-state
+        // hints: a stalled overview used to leave a just-stopped container
+        // showing "running" (UI E2E flake on main).
+        spawn_local(async move {
+            match api::get_containers().await {
+                Ok(container_list) => {
+                    set_containers.set(container_list);
+                    set_error.set(None);
+                }
+                Err(e) => {
+                    set_error.set(Some(e.message));
+                }
+            }
+            set_loading.set(false);
+        });
         spawn_local(async move {
             if let Ok(o) = api::power_overview().await {
                 set_saved.set(
@@ -35,25 +51,42 @@ pub fn ContainerList() -> impl IntoView {
                         .collect(),
                 );
             }
-            match api::get_containers().await {
-                Ok(container_list) => {
-                    set_containers.set(container_list);
-                    set_error.set(None);
-                }
-                Err(e) => {
-                    set_error.set(Some(e.message));
-                }
-            }
-            set_loading.set(false);
         });
     };
 
     create_effect(move |_| reload());
 
+    // Start/Stop can take longer than the browser keeps the request: Chromium
+    // aborts it with net::ERR_NETWORK_CHANGED the moment the container's veth
+    // appears or disappears. The server finishes the action on its own task, so
+    // on a transport error wait for the list to show the wanted state instead of
+    // reloading once (a stale row) or reporting a failure for an action that works.
+    let settle = move |container_id: String, want: &'static str| {
+        spawn_local(async move {
+            for _ in 0..60 {
+                if let Ok(list) = api::get_containers().await {
+                    if list
+                        .iter()
+                        .any(|c| c.id == container_id && c.status == want)
+                    {
+                        break;
+                    }
+                }
+                gloo_timers::future::TimeoutFuture::new(1_000).await;
+            }
+            reload();
+        });
+    };
+
     let start_container = move |container_id: String| {
         spawn_local(async move {
             match api::start_container(&container_id).await {
                 Ok(()) => set_action_error.set(None),
+                Err(e) if api::is_transport_error(&e.message) => {
+                    set_action_error.set(None);
+                    settle(container_id, "running");
+                    return;
+                }
                 Err(e) => {
                     set_action_error.set(Some(format!("Start {container_id}: {}", e.message)))
                 }
@@ -66,6 +99,11 @@ pub fn ContainerList() -> impl IntoView {
         spawn_local(async move {
             match api::stop_container(&container_id).await {
                 Ok(()) => set_action_error.set(None),
+                Err(e) if api::is_transport_error(&e.message) => {
+                    set_action_error.set(None);
+                    settle(container_id, "stopped");
+                    return;
+                }
                 Err(e) => set_action_error.set(Some(format!("Stop {container_id}: {}", e.message))),
             }
             reload();
