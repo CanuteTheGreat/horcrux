@@ -157,7 +157,7 @@ if [ "$INIT" = systemd ]; then
   sdmods=$(for d in /usr/lib/dracut/modules.d/[0-9]*; do n=${d##*/}; n=${n#[0-9][0-9]}; \
            case "$n" in systemd|systemd-*|dracut-systemd) echo "$n" ;; esac; done | sort -u | tr '\n' ' ')
   echo "dracut modules omitted (systemd initrd): $sdmods"
-  printf '# Horcrux/Patronus systemd images: script-based initramfs (same as the OpenRC images); systemd runs from the real root.\n# setup-rootfs.sh lists every module that is or needs systemd.\nomit_dracutmodules+=" %s "\n' "$sdmods" > /etc/dracut.conf.d/05-init.conf
+  printf '# Horcrux/Patronus systemd images: script-based initramfs (same as the OpenRC images); systemd runs from the real root.\n# setup-rootfs.sh lists every module that is or needs systemd.\nomit_dracutmodules+=" %s "\nadd_dracutmodules+=" horcrux-scripted-init "\n' "$sdmods" > /etc/dracut.conf.d/05-init.conf
 fi
 # root on ZFS (Horcrux, Patronus): put the zfs dracut module into the generic initramfs when it is installed
 if [ -d /usr/lib/dracut/modules.d/90zfs ]; then echo 'add_dracutmodules+=" zfs "' >> /etc/dracut.conf.d/live.conf; fi
@@ -169,6 +169,7 @@ lsinitrd "/boot/initramfs-${kver}.img" > /tmp/initrd.lst 2>&1
 if [ -d /usr/lib/dracut/modules.d/90zfs ] && ! grep -Eq '/(zfs|spl)\.ko' /tmp/initrd.lst; then
   echo "FATAL: the initramfs of $kver has no zfs module although zfs is installed: the installed system could not import its pool" >&2; exit 1
 fi
+if [ "$INIT" = systemd ] && grep -Eq ' (usr/)?bin/systemctl$' /tmp/initrd.lst; then echo "FATAL: the script-based initramfs contains systemctl (zfs-load-key.sh would wait for systemd forever)" >&2; exit 1; fi
 grep -Eq 'squashfs' /tmp/initrd.lst || grep -q '/squashfs\.ko' "/lib/modules/$kver/modules.builtin" || { echo "FATAL: the initramfs of $kver has no squashfs support" >&2; exit 1; }
 rm -f /tmp/dracut.log /tmp/initrd.lst
 ls -l /boot

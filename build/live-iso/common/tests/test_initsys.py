@@ -138,6 +138,7 @@ class LiveUnits(unittest.TestCase):
         self.assertIn("systemctl mask serial-getty@.service", s)
         self.assertIn('systemd|systemd-*|dracut-systemd) echo "$n"', s)       # every systemd* dracut module omitted
         self.assertIn('omit_dracutmodules+=" %s "', s)
+        self.assertIn('add_dracutmodules+=" horcrux-scripted-init "', s)      # no systemctl in the script initrd (zfs-load-key.sh)
         self.assertIn('rm -f "$ROOT/.dockerenv"', open(os.path.join(COMMON, "assemble-iso.sh")).read())
 
 
