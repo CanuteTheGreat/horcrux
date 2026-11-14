@@ -2190,7 +2190,7 @@ class Runner:
             time.sleep(15)
         else:
             _, dg = ssh(FWD_SSH, self.key, init_cmds.boot_diag_cmd(self.a.init))
-            print("[INFO] zram diagnostics: " + re.sub(r"\s+", " ", dg)[:400])
+            print("[INFO] zram diagnostics: " + re.sub(r"\s+", " ", dg)[:1800])
         sec, cur = {}, None
         for ln in sw.replace("\r", "").splitlines():
             if ln.strip() in ("ACTIVE", "FSTAB", "BLK", "FILES", "END"):

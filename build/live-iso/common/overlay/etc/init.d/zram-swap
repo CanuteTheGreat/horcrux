@@ -5,6 +5,21 @@ depend() {
 	need localmount
 	after modules
 }
+# one attempt: allocate a zram device, size it, mkswap + swapon. mkswap/swapon can hit EBUSY while udev still probes the freshly created
+# device (a slow first boot, aarch64 under TCG): retry them, and never swallow a failure (a missed swapon used to leave zram devices but no swap).
+zram_try() {
+	dev=$(zramctl --find --size "${size_kb}KiB" --algorithm "${zram_algo:-zstd}" 2>/dev/null) || dev=$(zramctl --find --size "${size_kb}KiB" 2>&1) || { echo "zram-swap: zramctl --find failed: $dev" >&2; dev=; return 1; }
+	i=0
+	while [ "$i" -lt 10 ]; do
+		i=$((i + 1))
+		command -v udevadm >/dev/null 2>&1 && udevadm settle --timeout=10 >/dev/null 2>&1
+		out=$(mkswap -L zram-swap "$dev" 2>&1) && out=$(swapon --priority 100 "$dev" 2>&1) && return 0
+		echo "zram-swap: $dev try $i: $out" >&2
+		sleep 1
+	done
+	swapoff "$dev" 2>/dev/null; zramctl --reset "$dev" >/dev/null 2>&1
+	return 1
+}
 start() {
 	ebegin "Setting up zram swap"
 	[ -r /etc/conf.d/zram-swap ] && . /etc/conf.d/zram-swap
@@ -13,11 +28,14 @@ start() {
 	size_kb=$(( mem_kb * ${zram_percent:-100} / 100 ))
 	max_kb=$(( ${zram_max_mb:-8192} * 1024 ))
 	[ "$size_kb" -gt "$max_kb" ] && size_kb=$max_kb
-	dev=$(zramctl --find --size "${size_kb}KiB" --algorithm "${zram_algo:-zstd}" 2>/dev/null) || dev=$(zramctl --find --size "${size_kb}KiB")
-	if [ -z "$dev" ]; then eend 1 "no zram device"; return 1; fi
-	mkswap -L zram-swap "$dev" >/dev/null && swapon --priority 100 "$dev"
-	echo "$dev" > /run/zram-swap.dev
-	eend $?
+	n=0; rc=1
+	while [ "$n" -lt 3 ]; do
+		n=$((n + 1))
+		if zram_try; then rc=0; break; fi
+		sleep 2
+	done
+	if [ "$rc" = 0 ]; then echo "$dev" > /run/zram-swap.dev; else echo "zram-swap: no working zram swap after $n attempts" >&2; fi
+	eend $rc
 }
 stop() {
 	ebegin "Removing zram swap"
