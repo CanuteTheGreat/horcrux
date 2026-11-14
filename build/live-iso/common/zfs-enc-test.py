@@ -905,7 +905,7 @@ class ZRun(qt.Runner):
         end = time.time() + qt.T(240)
         o = ""
         while time.time() < end:
-            rc, o = self.sh("pgrep -x gdm >/dev/null && echo GDM; pgrep -f gnome-shell >/dev/null && echo SHELL; pgrep -x NetworkManager >/dev/null && echo NM; "
+            rc, o = self.sh("pgrep -x gdm >/dev/null && echo GDM; pgrep -x gnome-shell >/dev/null && echo SHELL; pgrep -x NetworkManager >/dev/null && echo NM; "
                             + init_cmds.running_list_sh("gdm|xdm|elogind|logind|NetworkManager|dbus") + "; id owner")
             if "GDM" in o and "SHELL" in o:
                 break

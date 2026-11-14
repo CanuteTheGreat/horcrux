@@ -153,6 +153,9 @@ def enable(inst, svc, level="default"):
         dm = display_manager_unit(inst.target)
         if dm:
             inst.run(["systemctl", "enable", dm], chroot=True, check=False)
+            # the image's default target is multi-user (setup-rootfs.sh): display-manager.service is WantedBy=graphical.target,
+            # so without this the installed desktop boots to a text login (OpenRC starts it in the default runlevel)
+            inst.run(["systemctl", "set-default", "graphical.target"], chroot=True, check=False)
         return
     for cmd in enable_cmds(init, svc, level):
         inst.run(cmd, chroot=True, check=False)

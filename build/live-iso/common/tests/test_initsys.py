@@ -67,7 +67,8 @@ class TargetInit(unittest.TestCase):
         self.assertTrue(initsys.exists("display-manager", r))
         initsys.enable(i, "display-manager")
         initsys.enable(i, "cupsd")
-        self.assertEqual(i.cmds, [["systemctl", "enable", "gdm.service"], ["systemctl", "enable", "cups.service"]])
+        self.assertEqual(i.cmds, [["systemctl", "enable", "gdm.service"],
+                                  ["systemctl", "set-default", "graphical.target"], ["systemctl", "enable", "cups.service"]])
 
     def test_exists(self):
         r = mkroot("systemd")
