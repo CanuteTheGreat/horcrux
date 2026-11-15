@@ -39,7 +39,11 @@ RUN_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddre
 echo "runner at $RUN_IP"
 
 echo "== OpenLDAP"
-docker run -d --name "$ID-ldap" --network "$NET" --network-alias ldap debian:bookworm-slim sleep 3600 >/dev/null
+# slapd 2.5 sizes its connection table from RLIMIT_NOFILE and exits with status 1 at once when the
+# limit is the ~1 billion some Docker daemons hand to containers by default (runs 16514/16536: apt
+# fine, slapd never up, "slapd is not running" after 180 s; reproduced with --ulimit
+# nofile=1073741816, fine with 8192). Pin a sane limit instead of inheriting the daemon default.
+docker run -d --name "$ID-ldap" --network "$NET" --network-alias ldap --ulimit nofile=8192:8192 debian:bookworm-slim sleep 3600 >/dev/null
 docker exec "$ID-ldap" bash -c '
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -50,8 +54,14 @@ slapd slapd/password1 password ldap-admin-pass
 slapd slapd/password2 password ldap-admin-pass
 slapd slapd/no_configuration boolean false
 EOF
-apt-get update -qq >/dev/null
-apt-get install -y -qq slapd ldap-utils >/dev/null
+# a mirror hiccup makes `apt-get update -qq` exit 0 without an index: retry until slapd has a candidate
+for t in 1 2 3 4 5; do
+  apt-get update -qq >/dev/null 2>&1 || true
+  apt-cache policy slapd | grep -q "Candidate: [0-9]" && break
+  sleep 3
+done
+apt-get install -y -qq -o Acquire::Retries=5 slapd ldap-utils >/dev/null
+echo "slapd container: nofile limit $(ulimit -n)"
 (slapd -h "ldap:///" -u openldap -g openldap || true)
 # slapd needs well over 30 s to answer on a loaded runner or a nested-KVM lab guest (run 99521:
 # the old 30 s loop fell through and ldapadd died with exit 255): wait up to 180 s, and fail
@@ -65,6 +75,8 @@ for i in $(seq 1 180); do
 done
 if [ -z "$ready" ]; then
   echo "slapd did not answer within 180 s" >&2
+  echo "--- slapd in the foreground (-d 1), 5 s:" >&2
+  (timeout 5 slapd -d 1 -h "ldap:///" -u openldap -g openldap 2>&1 | tail -25; echo "slapd exit status: ${PIPESTATUS[0]}") >&2 || true
   (kill -0 "$(cat /run/slapd/slapd.pid 2>/dev/null)" 2>/dev/null && echo "slapd is running but not answering") >&2 || echo "slapd is not running" >&2
     exit 1
 fi

@@ -22,14 +22,28 @@ pub fn ContainerList() -> impl IntoView {
         // on the (slower) power overview that only adds the save-state
         // hints: a stalled overview used to leave a just-stopped container
         // showing "running" (UI E2E flake on main).
+        //
+        // Chromium aborts in-flight fetches with net::ERR_NETWORK_CHANGED when
+        // a container's veth appears/disappears, and the reload that follows a
+        // Stop lands exactly then. A GET is safe to repeat, so retry transport
+        // errors instead of leaving the old (stale \"running\") list on screen.
         spawn_local(async move {
-            match api::get_containers().await {
-                Ok(container_list) => {
-                    set_containers.set(container_list);
-                    set_error.set(None);
-                }
-                Err(e) => {
-                    set_error.set(Some(e.message));
+            let mut attempt = 0;
+            loop {
+                match api::get_containers().await {
+                    Ok(container_list) => {
+                        set_containers.set(container_list);
+                        set_error.set(None);
+                        break;
+                    }
+                    Err(e) if api::is_transport_error(&e.message) && attempt < 10 => {
+                        attempt += 1;
+                        gloo_timers::future::TimeoutFuture::new(500).await;
+                    }
+                    Err(e) => {
+                        set_error.set(Some(e.message));
+                        break;
+                    }
                 }
             }
             set_loading.set(false);
