@@ -27,9 +27,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker run -d --name "$NAME" --privileged --memory 3g --memory-swap 3g "$IMAGE" sleep 3000 >/dev/null
+docker run -d --name "$NAME" --privileged --cgroupns=private --memory 3g --memory-swap 3g "$IMAGE" sleep 3000 >/dev/null
 # Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
 bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
+# cgroup v2 nesting (what docker:dind's entrypoint does): the sibling's cgroup namespace root
+# holds its processes, and the no-internal-processes rule then forbids enabling domain
+# controllers (memory, io) for child cgroups, so crun fails every limited container with
+# "opening file memory.max for writing: No such file or directory". Move every process into
+# the leaf /init and delegate the controllers BEFORE podman first runs: podman's own probe
+# otherwise turns the root "domain threaded", after which memory/io can never be enabled.
+docker exec "$NAME" sh -c '
+set -e
+cg=/sys/fs/cgroup
+[ -f $cg/cgroup.controllers ] || { echo "cgroup v1 host: nothing to delegate"; exit 0; }
+echo "sibling cgroup: $(cat /proc/self/cgroup) type=$(cat $cg/cgroup.type)"
+echo "available controllers: $(cat $cg/cgroup.controllers)"
+mkdir -p $cg/init
+for i in 1 2 3 4 5; do
+  for p in $(cat $cg/cgroup.procs); do echo "$p" > $cg/init/cgroup.procs 2>/dev/null || :; done
+  [ -z "$(cat $cg/cgroup.procs)" ] && break
+done
+for c in memory pids cpu io; do
+  grep -qw "$c" $cg/cgroup.controllers || { echo "controller $c not available to the sibling"; exit 1; }
+  echo "+$c" > $cg/cgroup.subtree_control
+done
+echo "delegated (cgroup.subtree_control): $(cat $cg/cgroup.subtree_control)"
+for c in memory pids cpu io; do
+  grep -qw "$c" $cg/cgroup.subtree_control || { echo "controller $c NOT delegated"; exit 1; }
+done
+'
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$TESTBIN" "$NAME":/usr/local/bin/it
 docker exec "$NAME" bash -c '

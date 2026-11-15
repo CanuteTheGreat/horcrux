@@ -91,6 +91,66 @@ impl Container {
 /// Shared by docker.rs and podman.rs, either of which may be compiled out.
 pub const HORCRUX_ID_LABEL: &str = "horcrux.id";
 
+/// cgroup v2 interface files an OCI runtime writes for a container's limits,
+/// and the controller that provides each.
+#[cfg(any(feature = "docker", feature = "podman", test))]
+const CGROUP_LIMIT_FILES: &[(&str, &str)] = &[
+    ("memory.swap.max", "memory"),
+    ("memory.max", "memory"),
+    ("memory.high", "memory"),
+    ("memory.low", "memory"),
+    ("pids.max", "pids"),
+    ("cpu.max", "cpu"),
+    ("cpu.weight", "cpu"),
+    ("cpuset.cpus", "cpuset"),
+    ("io.max", "io"),
+    ("io.weight", "io"),
+];
+
+/// Turn a runtime failure caused by an undelegated cgroup v2 controller into a
+/// clear "this node lacks X" error (424 `cgroup-controller-missing`).
+///
+/// crun/runc report it as e.g. `opening file memory.max for writing: No such
+/// file or directory`: the container's cgroup exists, but its parent never
+/// enabled that controller in `cgroup.subtree_control` (a nested or
+/// hand-configured cgroup tree, a host booted with the controller disabled).
+/// The limit the user asked for is never dropped: the request fails and says
+/// what the node is missing and how to fix it.
+#[cfg(any(feature = "docker", feature = "podman", test))]
+pub(crate) fn cgroup_controller_error(
+    runtime: &str,
+    stderr: &str,
+) -> Option<horcrux_common::Error> {
+    let lower = stderr.to_ascii_lowercase();
+    if !(lower.contains("no such file or directory") || lower.contains("enoent")) {
+        return None;
+    }
+    let (file, controller) = CGROUP_LIMIT_FILES
+        .iter()
+        .find(|(f, _)| stderr.contains(f))?;
+    Some(horcrux_common::Error::NodeLacks {
+        reason: "cgroup-controller-missing",
+        message: format!(
+            "{runtime} could not apply this container's {controller} limit: the node's cgroup v2 \
+             tree does not delegate the {controller} controller to containers ({file} is missing)."
+        ),
+        hint: format!(
+            "Enable the {controller} controller for container cgroups (list it in the parent's \
+             cgroup.subtree_control, e.g. `echo +{controller} > /sys/fs/cgroup/cgroup.subtree_control` \
+             once no processes are left in that cgroup, or Delegate= for a systemd slice), or \
+             remove the limit from the container."
+        ),
+    })
+}
+
+/// The error for a failed `docker|podman create|start`: the cgroup-controller
+/// case gets its own explanation, anything else keeps the runtime's message.
+#[cfg(any(feature = "docker", feature = "podman"))]
+pub(crate) fn runtime_failure(runtime: &str, what: &str, stderr: &str) -> horcrux_common::Error {
+    cgroup_controller_error(runtime, stderr)
+        .unwrap_or_else(|| horcrux_common::Error::System(format!("{what}: {stderr}")))
+}
+
 /// `docker/podman create` flags for the user-supplied options (everything
 /// that goes before the image argument; `command` goes after it).
 pub(crate) fn oci_option_args(opts: &ContainerOptions) -> Vec<String> {
@@ -1445,6 +1505,35 @@ impl ContainerManager {
 mod tests {
     use super::*;
 
+    #[test]
+    fn undelegated_cgroup_controller_is_a_clear_node_error() {
+        let crun =
+            "Error: crun: opening file `memory.max` for writing: No such file or directory: \
+                    OCI runtime attempted to invoke a command that was not found";
+        match cgroup_controller_error("Podman", crun) {
+            Some(horcrux_common::Error::NodeLacks {
+                reason,
+                message,
+                hint,
+            }) => {
+                assert_eq!(reason, "cgroup-controller-missing");
+                assert!(message.contains("memory controller"), "{message}");
+                assert!(hint.contains("+memory"), "{hint}");
+                assert!(hint.contains("remove the limit"), "{hint}");
+            }
+            other => panic!("expected NodeLacks, got {other:?}"),
+        }
+        let runc = "OCI runtime create failed: runc create failed: unable to start container \
+                    process: error during container init: openat2 /sys/fs/cgroup/docker/x/pids.max: \
+                    no such file or directory";
+        assert!(matches!(
+            cgroup_controller_error("Docker", runc),
+            Some(horcrux_common::Error::NodeLacks { ref message, .. }) if message.contains("pids")
+        ));
+        // unrelated failures keep the runtime's own message
+        assert!(cgroup_controller_error("Podman", "Error: image not known").is_none());
+        assert!(cgroup_controller_error("Podman", "stat /x: no such file or directory").is_none());
+    }
     #[test]
     fn create_reservation_is_exclusive_and_released_on_drop() {
         let set = Arc::new(Mutex::new(InFlight::default()));

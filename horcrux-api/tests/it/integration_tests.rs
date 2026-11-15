@@ -2315,13 +2315,22 @@ async fn test_stack_networking_and_options() {
         .unwrap()
         .iter()
         .any(|e| e == "ROLE=db"));
-    // busybox nslookup only tries `db.<host search domain>`; ping resolves
-    // through the normal resolver path (Docker's embedded DNS).
-    let dns = docker(&["exec", "itstack_web", "ping", "-c", "1", "-W", "3", "db"]);
+    // Name resolution AND reachability between services: 'db' reaches 'web'
+    // by its service name over TCP. (Not ICMP: Podman drops CAP_NET_RAW by
+    // default, so busybox ping is refused there while Docker allows it.)
+    let dns = docker(&[
+        "exec",
+        "itstack_db",
+        "sh",
+        "-c",
+        "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | nc -w 3 web 80",
+    ]);
+    let reply = String::from_utf8_lossy(&dns.stdout);
     assert!(
-        dns.status.success(),
-        "service 'db' must resolve from 'web': {}",
-        String::from_utf8_lossy(&dns.stdout)
+        dns.status.success() && reply.starts_with("HTTP/1."),
+        "service 'web' must resolve and answer from 'db': {} {}",
+        reply,
+        String::from_utf8_lossy(&dns.stderr)
     );
 
     let r = client

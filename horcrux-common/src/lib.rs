@@ -1133,6 +1133,17 @@ pub enum Error {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// The feature works, but this node lacks something it needs (a kernel
+    /// facility, a delegated cgroup controller, a tool). The API answers 424
+    /// with the stable `reason`, what is missing (`message`) and what to do
+    /// (`hint`).
+    #[error("{message} {hint}")]
+    NodeLacks {
+        reason: &'static str,
+        message: String,
+        hint: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

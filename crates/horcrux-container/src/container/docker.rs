@@ -74,10 +74,11 @@ impl DockerManager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("docker create failed: {}", stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to create Docker container: {}",
-                stderr
-            )));
+            return Err(super::runtime_failure(
+                "Docker",
+                "Failed to create Docker container",
+                &stderr,
+            ));
         }
 
         let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -126,10 +127,11 @@ impl DockerManager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("docker start failed: {}", stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to start Docker container: {}",
-                stderr
-            )));
+            return Err(super::runtime_failure(
+                "Docker",
+                "Failed to start Docker container",
+                &stderr,
+            ));
         }
 
         info!("Docker container {} started successfully", container.id);

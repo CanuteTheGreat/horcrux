@@ -108,10 +108,11 @@ impl PodmanManager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("podman create failed: {}", stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to create Podman container: {}",
-                stderr
-            )));
+            return Err(super::runtime_failure(
+                "Podman",
+                "Failed to create Podman container",
+                &stderr,
+            ));
         }
 
         let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -160,10 +161,11 @@ impl PodmanManager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("podman start failed: {}", stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to start Podman container: {}",
-                stderr
-            )));
+            return Err(super::runtime_failure(
+                "Podman",
+                "Failed to start Podman container",
+                &stderr,
+            ));
         }
 
         info!("Podman container {} started successfully", container.id);
