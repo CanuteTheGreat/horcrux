@@ -55,11 +55,20 @@ def req(method, path, body=None, expect=200, timeout=900):
     r.add_header("Content-Type", "application/json")
     if TOKEN[0]:
         r.add_header("Authorization", "Bearer " + TOKEN[0])
-    try:
-        with urllib.request.urlopen(r, timeout=timeout, context=CTX) as resp:
-            status, text = resp.status, resp.read().decode()
-    except urllib.error.HTTPError as e:
-        status, text = e.code, e.read().decode()
+    # /lxc/templates* talks to the real internet (images.linuxcontainers.org); its
+    # transient 5xx (run 16260: catalog 503) must not fail the run: retry with backoff.
+    upstream = path.startswith("/lxc/templates")
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(r, timeout=timeout, context=CTX) as resp:
+                status, text = resp.status, resp.read().decode()
+        except urllib.error.HTTPError as e:
+            status, text = e.code, e.read().decode()
+        if upstream and status in (500, 502, 503, 504) and attempt < 5:
+            log(f"transient upstream error {status} on {method} {path}, retry {attempt + 1}/5")
+            time.sleep(10 * (attempt + 1))
+            continue
+        break
     if expect is not None and status != expect:
         fail(f"{method} {path} -> {status} (expected {expect}): {text[:600]}")
     try:

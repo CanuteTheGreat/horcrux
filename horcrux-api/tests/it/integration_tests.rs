@@ -33,6 +33,19 @@ fn create_client() -> Client {
         .expect("Failed to create HTTP client")
 }
 
+/// Client for the stack tests that drive the runner host's shared Docker
+/// daemon. `docker rm`/`stop` latency belongs to that daemon, not to Horcrux:
+/// on a busy runner (other jobs' containers, the host's disk-guard cleanup)
+/// a stack removal took 87 s and the 30 s client of `create_client` timed
+/// out. `test_stack_stop_is_concurrent` uses it too and asserts concurrency on elapsed time instead.
+fn create_stack_client() -> Client {
+    Client::builder()
+        .timeout(Duration::from_secs(240))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .expect("Failed to create HTTP client")
+}
+
 /// Assert the request reached the server AND got a 2xx status (printing the
 /// body on failure). `response.is_ok()` alone only proves *some* HTTP
 /// response came back - a 401/404/500 passed, which is how most of this
@@ -2180,17 +2193,27 @@ async fn test_container_lifecycle() {
 
     // 7. Out-of-band stop is reflected by the list (reconciliation)
     assert!(docker(&["stop", "-t", "1", id]).status.success());
-    let list: Vec<serde_json::Value> = client
-        .get(format!("{}/containers", API_BASE))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let mine = list.iter().find(|c| c["id"] == id).expect("listed");
-    assert_eq!(mine["status"], "stopped");
+    // The list reconciles against the daemon on every call, but a loaded shared
+    // Docker daemon can still report the old state for a moment after `docker stop`
+    // returned (run 16348: still "running"): poll for up to 20 s before judging.
+    let mut last = serde_json::Value::Null;
+    for _ in 0..40 {
+        let list: Vec<serde_json::Value> = client
+            .get(format!("{}/containers", API_BASE))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        last = list.iter().find(|c| c["id"] == id).expect("listed")["status"].clone();
+        if last == "stopped" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert_eq!(last, "stopped", "out-of-band stop reflected by the list");
 
     // 8. Clone -> a real, registered container built from a commit
     let r = client
@@ -2241,7 +2264,7 @@ async fn test_container_lifecycle() {
 /// to be parsed and silently dropped).
 #[tokio::test]
 async fn test_stack_networking_and_options() {
-    let client = create_client();
+    let client = create_stack_client();
     let token = admin_token(&client).await;
     let name = "itstack";
     let _ = client
@@ -2324,10 +2347,13 @@ async fn purge_stack(client: &Client, token: &str, name: &str, services: &[&str]
 /// Stopping a stack stops its services concurrently. Each busybox `sleep`
 /// ignores SIGTERM, so docker waits out its 10 s grace period per service:
 /// stopping three of them one after another took ~30 s, and the dashboard /
-/// any client with a 30 s timeout (this one) failed.
+/// any client with a 30 s timeout failed.
 #[tokio::test]
 async fn test_stack_stop_is_concurrent() {
-    let client = create_client();
+    // The 240 s client: concurrency is asserted by `took` below (sequential stops
+    // need >= 30 s), not by the client timeout. A 30 s client turned a slow shared
+    // Docker daemon on a busy runner into a bare TimedOut (run 16295).
+    let client = create_stack_client();
     let token = admin_token(&client).await;
     let name = "itstopstack";
     let services = ["a", "b", "c"];
@@ -2360,11 +2386,12 @@ async fn test_stack_stop_is_concurrent() {
         .bearer_auth(&token)
         .send()
         .await
-        .expect("stopping a 3-service stack must answer within the 30 s client timeout");
+        .expect("stopping a 3-service stack must answer");
     let took = started.elapsed();
     assert!(r.status().is_success(), "stop: {}", r.status());
+    // sequential = 3 x 10 s grace = 30 s+; concurrent = ~10 s plus daemon latency
     assert!(
-        took < Duration::from_secs(22),
+        took < Duration::from_secs(27),
         "3 services must stop concurrently (~10 s), took {took:?}"
     );
     for svc in services {
@@ -2393,7 +2420,7 @@ async fn test_stack_stop_is_concurrent() {
 /// on other failures, later ones) survived `DELETE /api/stacks/<name>`.
 #[tokio::test]
 async fn test_failed_stack_deploy_rolls_back() {
-    let client = create_client();
+    let client = create_stack_client();
     let token = admin_token(&client).await;
     let name = "itfailstack";
     let services = ["good", "bad"];
@@ -2498,7 +2525,7 @@ async fn test_failed_stack_deploy_rolls_back() {
 /// volume keeps its data, env can be merged in, a bad image rolls back.
 #[tokio::test]
 async fn test_stack_update_rolling_keeps_volumes() {
-    let client = create_client();
+    let client = create_stack_client();
     let token = admin_token(&client).await;
     let name = "itupstack";
     let services = ["web", "db"];
