@@ -41,6 +41,7 @@ spec.loader.exec_module(uc)
 UA = {"User-Agent": "overlay-security-check/1"}
 EXPLOITED = set()
 gh_remaining = [None]
+ghsa_skipped = []
 
 
 def http(url, data=None, headers=None, timeout=45):
@@ -190,11 +191,14 @@ def osv_query(eco, name, ver):
 def ghsa_query(repo, ver):
     if gh_remaining[0] is not None and gh_remaining[0] < 3:
         print("  ! GitHub API rate limit reached, skipping GHSA for", repo, file=sys.stderr)
+        ghsa_skipped.append(repo)
         return []
     h = {"Accept": "application/vnd.github+json"}
     if os.environ.get("GITHUB_TOKEN"):
         h["Authorization"] = "Bearer " + os.environ["GITHUB_TOKEN"]
     d, hdr = jget(f"https://api.github.com/repos/{repo}/security-advisories?state=published&per_page=100", headers=h)
+    if d is None:
+        ghsa_skipped.append(repo)
     if hdr is not None:
         gh_remaining[0] = int(hdr.get("X-RateLimit-Remaining", 99))
     out = []
@@ -390,6 +394,8 @@ def main():
             opened += 1
     print(f"\nSECURITY {os.environ.get('FORGEJO_REPO', '')}: {checked} packages checked against OSV/GHSA, "
           f"{len(feed)} GLSAs scanned, {opened} new issue(s)")
+    if ghsa_skipped:
+        print(f"  WARNING: GitHub advisories skipped for {len(ghsa_skipped)} repo(s) (API rate limit; set GITHUB_TOKEN): {', '.join(ghsa_skipped)}")
     if nosrc:
         print("  no public advisory source:", "; ".join(nosrc))
 
