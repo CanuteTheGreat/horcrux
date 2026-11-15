@@ -460,6 +460,9 @@ def main():
         page.locator("#create-container-btn").click()
         page.wait_for_url(f"{BASE}/containers/create")
         page.fill("#ct-name", CT)
+        # This suite verifies effects with the docker CLI; Podman is the form's
+        # default runtime, so pick Docker explicitly (Podman: ci.yml "Podman e2e").
+        page.locator("#ct-runtime").select_option("docker")
         page.fill("#ct-image", "busybox:latest")
         page.fill("#ct-memory", "64")
         page.fill("#ct-env", "E2E=1")
@@ -508,6 +511,7 @@ def main():
 
         # ---- events feed is a readable table -------------------------------
         page.goto(f"{BASE}/containers/events")
+        page.locator("select:has(option[value=docker])").first.select_option("docker")
         page.get_by_role("button", name="Connect").click()
         expect(page.get_by_text("● live")).to_be_visible(timeout=30000)
         docker("stop", "-t", "1", EV_CT, check=True)
@@ -519,6 +523,7 @@ def main():
         # ---- stacks: shared network + DNS + ports; remove updates list -----
         page.goto(f"{BASE}/containers/stacks")
         page.get_by_placeholder("stack name").fill(STACK)
+        page.locator("select:has(option[value=docker])").first.select_option("docker")
         page.locator("textarea").fill(
             "services:\n"
             "  cache:\n"
