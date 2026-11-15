@@ -15,7 +15,7 @@ KEYWORDS="amd64 arm64"
 
 # No variant flag = the headless Server. The image layer (project/variants/<v>/portage/package.use/horcrux-release) or the system's own
 # package.use sets the edition (gnome-light = GNOME, xfce); the flag is part of the binary package, so a cached binpkg of another edition is never reused.
-# VARIANT/VARIANT_ID are the EDITION only: a machine/host name (hogsmeade, ...) never belongs in os-release.
+# VARIANT/VARIANT_ID are the EDITION only: a machine/host name (owner-ws, ...) never belongs in os-release.
 IUSE="gnome-light xfce"
 REQUIRED_USE="?? ( gnome-light xfce )"
 

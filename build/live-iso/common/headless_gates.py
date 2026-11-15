@@ -204,7 +204,7 @@ def clock_gate(sh, step, host_now=time.time, timeout=480, label="months-off-rtc-
 
 
 # Docker (>= 28) sets the iptables FORWARD policy to DROP; every other base chain also sees forwarded packets, so libvirt/Horcrux NAT VMs lost the internet
-# (HOGSMEADE 2026-11-12). horcrux-core ships /etc/docker/daemon.json {"ip-forward-no-drop": true}. The netns stands in for a NAT-network VM: a veth with
+# (owner-ws 2026-11-12). horcrux-core ships /etc/docker/daemon.json {"ip-forward-no-drop": true}. The netns stands in for a NAT-network VM: a veth with
 # its own accept+masquerade nft table (what libvirt installs for virbr0) must reach the outside (10.0.2.2, the QEMU user-net gateway) WHILE dockerd runs.
 DOCKER_FWD_CHECK = r'''
 cfg=0; grep -Eq '"ip-forward-no-drop"[[:space:]]*:[[:space:]]*true' /etc/docker/daemon.json 2>/dev/null && cfg=1

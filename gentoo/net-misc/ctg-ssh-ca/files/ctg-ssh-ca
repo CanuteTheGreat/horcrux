@@ -8,7 +8,7 @@
 #   renew-host [--force]      renew /etc/ssh/ssh_host_ed25519_key-cert.pub by proof of possession
 #   renew-user [KEY] [--force]  renew ~/.ssh/id_ed25519-cert.pub (or fetch an approved one)
 #   enroll [KEY]              make KEY (default ~/.ssh/id_ed25519, created if missing) and ask for a cert; the
-#                             owner approves with `ctg-ssh-ca-admin approve` on crystalcave, the next renew-user installs it
+#                             owner approves with `ctg-ssh-ca-admin approve` on the control host, the next renew-user installs it
 #   install-host-cert FILE|-  (root) install a host certificate, enable HostCertificate in sshd, reload sshd
 #   fetch-krl                 (root) refresh /var/lib/ctg-ssh-ca/krl used by sshd RevokedKeys
 set -u

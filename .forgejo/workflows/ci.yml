@@ -95,6 +95,20 @@ jobs:
 
   # Owner rule 2026-10-30: mobile UI follows the device's light/dark setting (cheap static check;
   # rendered light/dark proof: horcrux-mobile/tests/render_theme.py).
+  public-leak-guard:
+    # Public repo: no owner-identifying hostnames/addresses/presence language in files or in the pushed commit messages.
+    # Owner-specific content lives in the private overlay (ctg-private-overlay). See ci/check-public-leaks.py.
+    runs-on: linux-any
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Leak guard (files)
+        run: python3 ci/check-public-leaks.py
+      - name: Leak guard (PR commit messages)
+        if: github.event_name == 'pull_request'
+        run: python3 ci/check-public-leaks.py --commits "origin/${{ github.base_ref }}..HEAD"
+
   mobile-theme:
     name: Mobile theme (light/dark)
     runs-on: linux-any
@@ -152,7 +166,7 @@ jobs:
     # image is pinned by sha256 digest to a single-platform (amd64-only)
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
-    # the race against the working beauxbatons runner (~every other run).
+    # the race against the working the emulated runner host runner (~every other run).
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
@@ -173,7 +187,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
-        # catthehacker/ubuntu:act-latest job containers on the beauxbatons
+        # catthehacker/ubuntu:act-latest job containers on the the emulated runner host
         # runner are reused across runs rather than recreated per-job, and
         # node has been observed vanishing mid-job (after an apt-get
         # install of unrelated packages) between 2026-10-04 and
@@ -238,7 +252,7 @@ jobs:
     # image is pinned by sha256 digest to a single-platform (amd64-only)
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
-    # the race against the working beauxbatons runner (~every other run).
+    # the race against the working the emulated runner host runner (~every other run).
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     # Memory (2026-11-06): sampled anon peak 5.4-5.5 GiB (all-features test build + k3s/LDAP/QEMU tests), so
@@ -318,7 +332,7 @@ jobs:
           bash ci/install-s3-gateway.sh
 
       - name: Ensure Node.js is present (self-heal)
-        # catthehacker/ubuntu:act-latest job containers on the beauxbatons
+        # catthehacker/ubuntu:act-latest job containers on the the emulated runner host
         # runner are reused across runs rather than recreated per-job, and
         # node has been observed vanishing mid-job (after an apt-get
         # install of unrelated packages) between 2026-10-04 and
@@ -704,7 +718,7 @@ jobs:
     # image is pinned by sha256 digest to a single-platform (amd64-only)
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
-    # the race against the working beauxbatons runner (~every other run).
+    # the race against the working the emulated runner host runner (~every other run).
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
@@ -734,7 +748,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
-        # catthehacker/ubuntu:act-latest job containers on the beauxbatons
+        # catthehacker/ubuntu:act-latest job containers on the the emulated runner host
         # runner are reused across runs rather than recreated per-job, and
         # node has been observed vanishing mid-job (after an apt-get
         # install of unrelated packages) between 2026-10-04 and
@@ -773,7 +787,7 @@ jobs:
         # treat the build as a cross-compile and pass arch-specific flags
         # like "-m64" to whatever "gcc" happens to be on PATH -- fine on
         # a genuine x86_64 runner, but this "x86_64"-labeled job can
-        # actually land in an arm64-native container (beauxbatons is real
+        # actually land in an arm64-native container (the emulated runner host is real
         # Apple Silicon; see the Gentoo Docker Build job's own comments on
         # this), where the installed gcc is arm64-native and rejects
         # "-m64" outright (confirmed failing in CI run 2497: "gcc: error:
@@ -807,7 +821,7 @@ jobs:
     # image is pinned by sha256 digest to a single-platform (amd64-only)
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
-    # the race against the working beauxbatons runner (~every other run).
+    # the race against the working the emulated runner host runner (~every other run).
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
@@ -839,7 +853,7 @@ jobs:
         # prebuilt binary release instead - avoids building lightningcss
         # from source entirely, and is faster too.
         #
-        # This job is labeled `runs-on: linux-cross-x86_64`, but the beauxbatons runner
+        # This job is labeled `runs-on: linux-cross-x86_64`, but the the emulated runner host runner
         # (the designated non-AWS fallback, see standing CI notes) is actual
         # Apple Silicon hardware and does not always honor an amd64 container
         # platform for this job -- confirmed 2026-10-02 via `rustc`'s own
@@ -861,7 +875,7 @@ jobs:
           trunk --version
 
       - name: Ensure Node.js is present (self-heal)
-        # catthehacker/ubuntu:act-latest job containers on the beauxbatons
+        # catthehacker/ubuntu:act-latest job containers on the the emulated runner host
         # runner are reused across runs rather than recreated per-job, and
         # node has been observed vanishing mid-job (after an apt-get
         # install of unrelated packages) between 2026-10-04 and
@@ -913,7 +927,7 @@ jobs:
     # image is pinned by sha256 digest to a single-platform (amd64-only)
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
-    # the race against the working beauxbatons runner (~every other run).
+    # the race against the working the emulated runner host runner (~every other run).
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
@@ -1000,7 +1014,7 @@ jobs:
     # image is pinned by sha256 digest to a single-platform (amd64-only)
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
-    # the race against the working beauxbatons runner (~every other run).
+    # the race against the working the emulated runner host runner (~every other run).
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
@@ -1049,15 +1063,15 @@ jobs:
         # plain `docker build` (even with the BuildKit backend). Without
         # an explicit --build-arg, the Dockerfile's `ARG TARGETARCH=amd64`
         # default wins regardless of host arch, so an arm64 runner (e.g.
-        # beauxbatons) still pulls gentoo/stage3:amd64-systemd and falls
+        # the emulated runner host) still pulls gentoo/stage3:amd64-systemd and falls
         # straight back into the same qemu-user cross-arch emulation that
         # SIGABRTs Gentoo sandbox's personality() probe mid-build
         # ("unknown x86_64 (CS) personality", confirmed via CI run
         # 2406/job 11524 even after adding the ARG).
         #
         # `uname -m` is NOT a reliable way to detect the right stage3
-        # variant here: the beauxbatons runner is literally named/labeled
-        # "beauxbatons-x86-emulated" in the task log -- its *job container*
+        # variant here: the the emulated runner host runner is literally named/labeled
+        # "emulated-x86-runner" in the task log -- its *job container*
         # itself runs under x86_64 emulation (to satisfy the `runs-on:
         # x86_64` label on real Apple Silicon hardware), so `uname -m`
         # inside the job shell reports x86_64 even though the real Docker

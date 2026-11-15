@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The dashboard's unmanaged-libvirt banner never lists the source of a completed import.
 
-Class of bug (owner, 2026-11-13): HOGSMEADE showed both "Old sources of imported VMs can be cleaned up
-(captainjacksparrow, redweek-win11)" and "2 unmanaged libvirt VM(s) ... [Import into Horcrux]" for the same two
+Class of bug (owner, 2026-11-13): owner-ws showed both "Old sources of imported VMs can be cleaned up
+(example-vm, redweek-win11)" and "2 unmanaged libvirt VM(s) ... [Import into Horcrux]" for the same two
 domains. A source belongs only in the cleanup line.
 
 The libvirt list is mocked in the browser (Playwright routes): one domain that is the source of a completed import
@@ -25,7 +25,7 @@ def dom(name, imported_as=None, state=None):
             "import_state": state}
 
 
-LIST = {"nodes": [{"node": "hogsmeade", "local": True, "error": None, "available": True, "domains": [
+LIST = {"nodes": [{"node": "owner-ws", "local": True, "error": None, "available": True, "domains": [
     dom("imported-source"),  # imported_as null: the pre-fix server answer; the cleanup offer must still hide it
     dom("really-unmanaged"),
     dom("failed-import", state="last import failed: no space"),

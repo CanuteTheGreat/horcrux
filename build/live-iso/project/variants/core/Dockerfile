@@ -4,7 +4,7 @@
 #   core            this layer = sys-apps/horcrux-core (clock rules + chrony + the NetworkManager/dhcpcd clock hooks, first-boot network wait, overlay
 #                   sync config, backup, ZFS dist-kernel rule). NO display stack, NO desktop, NO machine-specific application.
 #   desktop edition project/variants/gnome-light (GNOME) FROM this image: only adds the desktop; its package gnome-extra/horcrux-gnome-defaults depends on core
-#   machine layers  project/variants/{gringotts,hogshead,hogsmeade,...}: the owner's own apps on top of an edition
+#   machine layers  project/variants/{gringotts,hogshead,owner-ws,...}: the owner's own apps on top of an edition
 # The overlay packages are always built from this tree (--usepkg-exclude: a cached binary package of an older build of the same version is never reused); everything else uses the binhost.
 # Idempotent: applying it to an image that already has the core (a REUSE_ROOTFS base) is a no-op.
 ARG BASE

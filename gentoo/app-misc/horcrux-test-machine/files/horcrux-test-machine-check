@@ -81,9 +81,17 @@ def config_violations(root, deny, bad_repos):
     return v
 
 
+def read_policy(policy, name):
+    """The shipped list plus every policy.d/*.<name> (extra, site-specific entries shipped by other packages)."""
+    out = read_list(os.path.join(policy, name))
+    for extra in sorted(glob.glob(os.path.join(policy, "policy.d", "*." + name))):
+        out += read_list(extra)
+    return out
+
+
 def check(root, policy):
-    deny = read_list(os.path.join(policy, "personal-apps.denylist"))
-    entries = read_list(os.path.join(policy, "personal-paths.denylist"))
+    deny = read_policy(policy, "personal-apps.denylist")
+    entries = read_policy(policy, "personal-paths.denylist")
     paths = [e for e in entries if not e.startswith("repo:")]
     bad_repos = {e[5:] for e in entries if e.startswith("repo:")}
     allow = read_list(os.path.join(policy, "world.allowlist"))

@@ -49,8 +49,8 @@ pkg_postinst() {
 		[[ -f ${EROOT}/etc/cron.d/horcrux-backup ]] && ewarn "${EROOT}/etc/cron.d/horcrux-backup is left from an earlier revision: delete it (config-protected files are not removed when edited)."
 		return 0
 	fi
-	elog "Provision the credentials once (from crystalcave, over ssh stdin, root 0600):"
+	elog "Provision the credentials once (from the control host, over ssh stdin, root 0600):"
 	elog "  /etc/ctg-backup/env      RESTIC_REPOSITORY=s3:https://s3.us-west-002.backblazeb2.com/ctg-backups/<host>, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, RESTIC_PASSWORD_FILE=/etc/ctg-backup/repo.pw"
-	elog "  /etc/ctg-backup/repo.pw  repo password (escrow: crystalcave ~/.hermes/secrets/restic/<host>.pw)"
+	elog "  /etc/ctg-backup/repo.pw  repo password (escrow: the control host ~/.hermes/secrets/restic/<host>.pw)"
 	elog "Until then the cron wrapper logs 'not provisioned' and does nothing."
 }

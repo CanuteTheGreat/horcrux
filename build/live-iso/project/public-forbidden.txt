@@ -13,7 +13,6 @@ app-antivirus/clamav
 net-im/discord
 games-util/steam-launcher
 games-util/steam-meta
-# HOGSMEADE-only personal apps (app-misc/hogsmeade-apps and app-misc/hogsmeade-steam, owner's Windows inventory)
 net-im/slack
 net-im/zoom
 net-im/signal-desktop-bin
@@ -33,11 +32,5 @@ app-admin/proton-pass-bin
 sys-auth/proton-authenticator-bin
 net-analyzer/caido-bin
 media-video/davinci-resolve
-app-misc/hogsmeade-sudo
-app-misc/hogsmeade-agent-account
 acct-user/hermes-agent
-app-misc/hogsmeade-user-groups
-app-misc/hogsmeade-b2-mounts
-app-misc/hogsmeade-ci-idle-gate
-app-misc/hogsmeade-local-llm
 sci-ml/ollama-bin

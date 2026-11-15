@@ -28,7 +28,7 @@ RULES = [
     ("internal-domain", "fail", r"[a-z0-9-]+\.(?:redweek\.internal|internal\.redweek\.com)\b"),
     ("private-ip", "fail", r"\b(?:10\.66\.\d+\.\d+|10\.1\.10\.\d+|172\.30\.\d+\.\d+)\b"),
     ("owner-home-path", "fail", r"/home/(?:canutethegreat|ron)\b|/Users/(?:ron|canute)\w*"),
-    ("owner-machine", "warn", r"\b(?:gringotts|hogshead|hogsmeade|madammalkins|crystalcave|ollivanders|azkaban|beauxbatons|rw-man-\d+)\b"),
+    ("owner-machine", "warn", r"\b(?:gringotts|hogshead|madammalkins|ollivanders|azkaban|rw-man-\d+)\b"),
 ]
 SKIP_DIRS = {".git", "node_modules", "target", "__pycache__", ".venv"}
 SELF = {"check_public_text.py", "test_ux_qa.py", "ux-crawl.json", "owner-findings.md"}

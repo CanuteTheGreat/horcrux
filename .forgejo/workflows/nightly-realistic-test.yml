@@ -44,7 +44,7 @@ jobs:
 
       - name: Ensure Node.js is present (self-heal)
         # This job's container (catthehacker/ubuntu:act-latest) is reused
-        # by the beauxbatons runner across many job runs instead of being
+        # by the the emulated runner host runner across many job runs instead of being
         # recreated per-run (confirmed via `docker ps -a` in a prior failed
         # run showing other jobs' containers still alive hours later). On
         # 2026-10-05 node vanished mid-job from a long-lived container
@@ -65,7 +65,7 @@ jobs:
         uses: https://github.com/dtolnay/rust-toolchain@stable
 
       # --- Architecture note -------------------------------------------
-      # UTM (/Applications/UTM.app on beauxbatons) was evaluated for real
+      # UTM (/Applications/UTM.app on the emulated runner host) was evaluated for real
       # hardware-accelerated VM boot (HVF for same-arch guests, a patched
       # JIT-accelerated QEMU for x86_64-on-arm64). It was NOT used here:
       # utmctl only works via macOS Apple Events from the interactive GUI
@@ -74,7 +74,7 @@ jobs:
       # /Applications, no macOS binaries, different kernel/OS entirely
       # from the logged-in GUI session that owns UTM). Reaching UTM would
       # require a separate *host-mode* (non-container) runner execution
-      # path, which beauxbatons-x86-emulated is not currently registered
+      # path, which emulated-x86-runner is not currently registered
       # for, and would add GUI-session-availability as a new failure mode
       # for marginal benefit: our boot target (CirrOS, ~20MB) reaches its
       # login prompt in well under a minute under plain QEMU/TCG software
@@ -139,7 +139,7 @@ jobs:
       - name: Ensure Node.js is present (self-heal, pre-cache)
         # Second check, right before the next node-dependent (JS) action.
         # This job's container (catthehacker/ubuntu:act-latest) is reused
-        # by the beauxbatons runner across many job runs instead of being
+        # by the the emulated runner host runner across many job runs instead of being
         # recreated per-run (confirmed via `docker ps -a` in a prior failed
         # run showing other jobs' containers still alive hours later). On
         # 2026-10-05 node vanished mid-job from a long-lived container
@@ -163,7 +163,7 @@ jobs:
         # syscall-level denial. That points at Docker Desktop's Enhanced
         # Container Isolation (or an equivalent seccomp/AppArmor
         # profile) blocking CLONE_NEWNS outright for job containers on
-        # beauxbatons, which no amount of in-container root/privileged
+        # the emulated runner host, which no amount of in-container root/privileged
         # tricks can work around - it has to be disabled/exempted at
         # the Docker Desktop/runner config level on the host itself
         # (owner action, not a repo fix).
@@ -204,7 +204,7 @@ jobs:
         # These two scenarios need no mount-namespace tricks at all, so
         # they run unconditionally regardless of the CLONE_NEWNS probe
         # above - real signal every night even while the CNI sub-test
-        # is blocked by beauxbatons' host-level isolation policy.
+        # is blocked by the emulated runner host' host-level isolation policy.
         env:
           NIGHTLY_VM_STORAGE: /tmp/horcrux-nightly/vms
         run: |

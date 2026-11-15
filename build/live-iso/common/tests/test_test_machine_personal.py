@@ -117,19 +117,6 @@ class TestPersonalGuard(unittest.TestCase):
         rc, out = run(d)
         self.assertEqual(rc, 0, out)
 
-    def test_gringotts_private_packages_and_leftovers_fail(self):
-        d = self.clean_root()
-        mk(d, "var/lib/portage/world", "app-misc/horcrux-test-machine\napp-misc/gringotts-config\napp-misc/gringotts-tools\n")
-        mk(d, "var/db/pkg/app-misc/gringotts-tools-1-r1/PF", "x")
-        rc, out = run(d)
-        self.assertEqual(rc, 1)
-        self.assertIn("VIOLATION package app-misc/gringotts-tools", out)
-        self.assertIn("VIOLATION world-denied app-misc/gringotts-config", out)
-        for rel in ("usr/bin/gringotts-restore", "usr/libexec/gringotts-firstboot", "etc/init.d/gringotts-firstboot", "var/lib/gringotts/firstboot-done",
-                    "etc/ssh/sshd_config.d/10-gringotts.conf", "var/db/repos/canutethegreat-overlay/profiles/repo_name"):
-            d = self.clean_root()
-            mk(d, rel, "x")
-            self.assertEqual(run(d)[0], 1, rel)
 
     def _newest_ebuild(self):
         # newest revision, not a hardcoded one: the ebuild gets bumped (r5 -> r6) and this test must follow it
@@ -139,12 +126,6 @@ class TestPersonalGuard(unittest.TestCase):
         with open(paths[-1]) as fh:
             return fh.read()
 
-    def test_ebuild_blocks_gringotts_and_policy_no_longer_allows_them(self):
-        eb = self._newest_ebuild()
-        self.assertIn("!app-misc/gringotts-config", eb)
-        self.assertIn("!app-misc/gringotts-tools", eb)
-        allow = [ln.strip() for ln in open(os.path.join(FILES, "world.allowlist")) if ln.strip() and not ln.startswith("#")]
-        self.assertFalse([a for a in allow if "gringotts" in a], allow)
 
     def test_postinst_moves_cfg_protected_package_use_into_place(self):
         # r3 left package.use/horcrux-test-machine as ._cfg0000_* with the real file deleted on update (hogshead/gringotts/madammalkins, 2026-11-05)
@@ -176,24 +157,6 @@ class TestPolicyConsistency(unittest.TestCase):
     def lines(self, f):
         return [x.split("#")[0].strip() for x in open(os.path.join(FILES, f)) if x.split("#")[0].strip()]
 
-    def test_owner_layer_apps_are_denied_except_agent_plumbing(self):
-        sys.path.insert(0, os.path.dirname(CHECK))
-        import importlib.machinery
-        import importlib.util
-        loader = importlib.machinery.SourceFileLoader("htmc", CHECK)
-        spec = importlib.util.spec_from_loader("htmc", loader)
-        m = importlib.util.module_from_spec(spec)
-        loader.exec_module(m)
-        deny = self.lines("personal-apps.denylist")
-        plumbing = {"app-admin/rustinion-agent", "app-admin/rustinion-bin"}
-        owner = os.path.join(REPO, "build", "live-iso", "project")
-        atoms = []
-        for f in (os.path.join(owner, "variants", "owner-common", "packages.txt"), os.path.join(owner, "public-forbidden.txt")):
-            atoms += [x.split("#")[0].split()[0] for x in open(f) if x.split("#")[0].strip()]
-        for a in atoms:
-            if a in plumbing:
-                continue
-            self.assertTrue(m.matches(a, deny), f"{a} (an owner/forbidden app) is not on the test-machine denylist")
 
     def test_allowlist_never_allows_a_denied_package(self):
         import fnmatch

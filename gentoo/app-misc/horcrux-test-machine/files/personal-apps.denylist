@@ -1,5 +1,4 @@
-# Packages that must NEVER be installed on a TEST machine (gringotts, hogshead, madammalkins): the owner's personal apps.
-# Test machines run the public Horcrux editions + test tooling + machine HARDWARE enablement only (owner order 2026-11-05).
+# Packages that must NEVER be installed on a TEST machine: personal apps. Machine/owner-specific names live in policy.d/ (private package).
 # One shell glob per line on cat/pkg. Enforced by horcrux-test-machine-check (lab hx-invariants) and by blockers in the ebuild.
 # NOT here (they are agent plumbing the test machines need): app-admin/rustinion-agent, app-backup/restic, net-misc/ctg-ssh-ca-fleet.
 # Tailscale is retired (2026-11-10, WireGuard hub on kingscross replaces it): it must be ABSENT from every test machine
@@ -60,7 +59,6 @@ net-analyzer/nmap
 net-analyzer/rustscan
 sys-cluster/keepalived
 # the owner's private image packages (private SSH-key bundle, restore tool, private config)
-app-misc/gringotts-*
 games-util/geforcenow*
 games-util/heroic*
 games-util/steam*
@@ -70,12 +68,5 @@ media-video/makemkv*
 dev-util/android-studio*
 net-analyzer/caido*
 media-video/davinci-resolve*
-app-misc/hogsmeade-sudo*
-app-misc/hogsmeade-agent-account*
 acct-user/hermes-agent*
-app-misc/hogsmeade-user-groups*
-app-misc/hogsmeade-b2-mounts*
-app-misc/hogsmeade-ci-idle-gate*
-# HOGSMEADE's idle-gated local LLM (the RTX 5090 box only; owner layer, public-forbidden)
-app-misc/hogsmeade-local-llm*
 sci-ml/ollama-bin*

@@ -74,7 +74,7 @@ COPY project/public-forbidden.txt /tmp/public-forbidden.txt
 # the Desktop image marks itself (the installer offers the desktop profile only when this exists); slim down again
 # Size: the ISO must stay below the 2 GiB release-asset limit. Firmware for hardware that is not in an x86 laptop/desktop
 # (Snapdragon SoCs, server/SmartNICs) is ~900 MB of the uncompressed image; the server image keeps it.
-# KEEP_DEV=1 (build.sh passes the environment variable; private machine images such as hogsmeade that compile kernel modules, NVIDIA userland and apps on top of this
+# KEEP_DEV=1 (build.sh passes the environment variable; private machine images such as owner-ws that compile kernel modules, NVIDIA userland and apps on top of this
 # layer and have no 2 GiB limit): headers, static libs and the LLVM tools stay. Without it every later source build dies on a missing header
 # (2026-11-10: gui-libs/egl-gbm, `EGL/egl.h: No such file or directory`, libglvnd's headers were stripped here).
 ARG KEEP_DEV=

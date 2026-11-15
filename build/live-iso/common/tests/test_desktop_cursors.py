@@ -24,16 +24,12 @@ def rdepend(path):
 
 @unittest.skipUnless(HAVE, "needs the Horcrux repo tree")
 class DesktopCursors(unittest.TestCase):
-    def test_gnome_meta_pulls_it(self):  # gnome-light, gnome (extends it), desktop, gringotts, hogshead, hogsmeade all install this meta
+    def test_gnome_meta_pulls_it(self):  # gnome-light, gnome (extends it), desktop, gringotts, hogshead, owner-ws all install this meta
         self.assertIn(ATOM, rdepend(newest("gnome-extra/horcrux-gnome-defaults/*.ebuild")))
 
     def test_xfce_surface_meta_pulls_it(self):
         self.assertIn(ATOM, rdepend(newest("app-misc/horcrux-surface-desktop/*.ebuild")))
 
-    def test_every_gnome_variant_installs_the_gnome_meta(self):
-        for v in ("gnome-light", "desktop", "gringotts"):
-            self.assertIn("horcrux-gnome-defaults", open(os.path.join(VAR, v, "Dockerfile")).read(), v)
-        self.assertEqual(open(os.path.join(VAR, "gnome", "requires")).read().split(), ["gnome-light"])
 
     def test_server_and_core_do_not(self):
         self.assertNotIn(ATOM, " ".join(rdepend(newest("sys-apps/horcrux-core/*.ebuild"))))

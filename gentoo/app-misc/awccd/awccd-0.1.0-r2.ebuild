@@ -56,6 +56,6 @@ src_install() {
 
 pkg_postinst() {
 	udev_reload
-	elog "rc-update add awccd default && rc-service awccd start   (the Horcrux hogsmeade profile does this)"
+	elog "rc-update add awccd default && rc-service awccd start   (the Horcrux owner-ws profile does this)"
 	elog "awccctl status | awccctl profile quiet | awccctl light 0000FF shelf alienhead | awccctl light restore"
 }

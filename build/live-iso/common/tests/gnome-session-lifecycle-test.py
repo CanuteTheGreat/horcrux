@@ -4,7 +4,7 @@
 Why: on OpenRC, gnome-session-openrc runs gnome-shell & co. as OpenRC USER services. The user runlevel (service user.<name>, started by
 pam_openrc) is shared by every login of the user and only stops with the LAST one. An ssh login of the desktop user (agents, scripts) kept it
 alive across a GNOME logout, supervise-daemon respawned gnome-shell into the closed session, that shell held the seat, and the next login got
-mutter "Failed to take control of the session: ... EBUSY" and no mouse/keyboard (HOGSMEADE, 2026-11-13). The fix lives in
+mutter "Failed to take control of the session: ... EBUSY" and no mouse/keyboard (owner-ws, 2026-11-13). The fix lives in
 gnome-base/gnome-session-openrc-49.2-r2::horcrux (session-scoped user services) plus sys-auth/horcrux-ssh-pam (ssh logins start no OpenRC user
 services). This test reproduces the owner's sequence on an installed GNOME VM:
 
@@ -266,7 +266,7 @@ class Run:
         ok, retried, errors = self.ssh_burst()
         self.check(n, "ssh-burst", ok == 20, f"{ok}/20 parallel `ssh {a.user}@vm true` succeeded ({retried} retried after sshd MaxStartups drops)"
                    + (f"; errors: {errors[:3]}" if errors else ""))
-        # an agent/script session of the same user that stays open across the GNOME logout (what kept the runlevel alive on HOGSMEADE)
+        # an agent/script session of the same user that stays open across the GNOME logout (what kept the runlevel alive on owner-ws)
         held = subprocess.Popen(vm.ssh_argv(a.user, "sleep 100000"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(3)
         self.check(n, "ssh-held-open", held.poll() is None, "a held ssh session of the user is open during the logout")
@@ -304,7 +304,7 @@ class Run:
         dup = supervisors(vm, self.uid, a.user)
         self.check(n, "no-duplicate-supervisors", not dup, f"{dup or 'none'}")
         # screen sharing: xdg-desktop-portal must have picked the GNOME backend, which needs XDG_CURRENT_DESKTOP & co. in the user bus's
-        # activation environment (HOGSMEADE 2026-11-13: no ScreenCast interface, OBS/browser screen sharing broken)
+        # activation environment (owner-ws 2026-11-13: no ScreenCast interface, OBS/browser screen sharing broken)
         cast = self.wait(lambda: self.screencast_types() or None, 40, step=4)
         self.check(n, "portal-screencast", bool(cast), f"org.freedesktop.portal.ScreenCast AvailableSourceTypes={cast or self.last_cast}")
 

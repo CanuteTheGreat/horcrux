@@ -4,7 +4,7 @@
 	<maintainer type="person"><email>ron@errant.solutions</email><name>Errant Solutions</name></maintainer>
 	<use>
 		<flag name="gnome-light">GNOME (light) desktop edition (default without it: Server)</flag>
-		<flag name="hogsmeade">Machine layer: Hogsmeade</flag>
+		<flag name="owner-ws">Machine layer: owner-ws</flag>
 		<flag name="hogshead">Machine layer: Hogshead</flag>
 		<flag name="gringotts">Machine layer: Gringotts</flag>
 		<flag name="surface">Machine layer: Surface</flag>

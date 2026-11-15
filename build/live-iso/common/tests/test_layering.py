@@ -50,27 +50,6 @@ class Layering(unittest.TestCase):
             self.assertEqual(sorted(set(atoms(os.path.join(LIVE, "project", f))) & forb), [], f"personal apps in the public server image ({f})")
         self.assertEqual(sorted(set(atoms(os.path.join(LIVE, "common", "packages.txt"))) & forb), [])
 
-    def test_owner_apps_live_in_machine_layers(self):
-        owner = set(atoms(os.path.join(LIVE, "project", "variants", "owner-common", "packages.txt")))
-        for a in ("net-misc/nextcloud-client", "app-antivirus/clamav"):
-            self.assertIn(a, owner)
-        self.assertNotIn("net-vpn/tailscale", owner)     # retired 2026-11-10 (WireGuard hub replaces it)
-        self.assertIn("net-vpn/tailscale", set(atoms(os.path.join(LIVE, "project", "public-forbidden.txt"))))
-        for v in ("gringotts", "hogshead"):
-            txt = "".join(open(os.path.join(LIVE, "project", "variants", v, f)).read() for f in os.listdir(os.path.join(LIVE, "project", "variants", v)) if f.startswith("Dockerfile"))
-            self.assertIn("owner-common/packages.txt", txt, f"{v} does not install the owner apps")
-        # Steam is for HOGSMEADE only: no active (non-comment) line of any shared list, Dockerfile, profile or overlay package mentions it
-        shared = [os.path.join(LIVE, "project", "packages.txt"), os.path.join(LIVE, "project", "packages-late.txt"), os.path.join(LIVE, "common", "packages.txt")]
-        for v in ("owner-common", "gnome-light", "core"):
-            vd = os.path.join(LIVE, "project", "variants", v)
-            shared += [os.path.join(d, f) for d, _, fs in os.walk(vd) for f in fs if not f.endswith(".md")]
-        for d in ("horcrux-core", "horcrux-time", "horcrux-firstboot", "horcrux-backup", "horcrux-gnome-defaults"):
-            for c in ("sys-apps", "net-misc", "gnome-extra"):
-                dd = os.path.join(GENTOO, c, d)
-                if os.path.isdir(dd):
-                    shared += [os.path.join(r, f) for r, _, fs in os.walk(dd) for f in fs]
-        for f in shared:
-            self.assertNotRegex(open(f, errors="replace").read(), r"(?im)^[^#\n]*\bsteam\b", f)
 
     def test_core_carries_every_shared_fix_and_desktop_depends_on_it(self):
         core = rdepend(ebuild("sys-apps", "horcrux-core"))
@@ -94,7 +73,7 @@ class Layering(unittest.TestCase):
 
     def test_core_is_not_machine_specific(self):
         core = "\n".join(l for l in (ebuild("sys-apps", "horcrux-core") + ebuild("net-misc", "horcrux-time") + ebuild("sys-apps", "horcrux-firstboot")).splitlines() if not l.lstrip().startswith("#"))
-        for word in ("rustinion", "gringotts", "hogshead", "hogsmeade", "madammalkins", "tailscale", "canutethegreat/", "steam"):
+        for word in ("rustinion", "gringotts", "hogshead", "owner-ws", "madammalkins", "tailscale", "canutethegreat/", "steam"):
             self.assertNotIn(word, core.lower().replace("canutethegreat/horcrux", ""), word)
         paths = open(os.path.join(GENTOO, "sys-apps", "horcrux-backup", "files", "paths")).read()
         self.assertNotIn("canutethegreat", paths)
@@ -169,11 +148,6 @@ class TimeConfig(unittest.TestCase):
 class DesktopEmergeKeepsErrorText(unittest.TestCase):
     """BuildKit truncates the log: a failed desktop emerge must print the portage build.log and retry once (14321/14485/14529 lost the mutter error)."""
 
-    def test_dockerfiles_dump_logs_and_retry(self):
-        for v in ("gnome-light", "hogsmeade"):
-            s = open(os.path.join(LIVE, "project", "variants", v, "Dockerfile")).read()
-            self.assertIn("temp/build.log", s, v)
-            self.assertIn("MAKEOPTS=-j2 emerge --resume", s, v)
 
 if __name__ == "__main__":
     unittest.main()

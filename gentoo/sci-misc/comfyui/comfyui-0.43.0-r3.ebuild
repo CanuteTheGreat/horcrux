@@ -62,5 +62,5 @@ src_install() {
 
 pkg_postinst() {
 	elog "ComfyUI listens on 127.0.0.1:8188 unless /etc/conf.d/comfyui(.local) sets COMFYUI_LISTEN: rc-update add comfyui default"
-	elog "Models: comfyui-fetch-models (manifest /usr/share/comfyui/models-manifest.tsv from sci-misc/comfyui-models-manifest or hogsmeade-tools)"
+	elog "Models: comfyui-fetch-models (manifest /usr/share/comfyui/models-manifest.tsv from sci-misc/comfyui-models-manifest or owner-ws-tools)"
 }

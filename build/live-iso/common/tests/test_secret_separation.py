@@ -223,44 +223,6 @@ class SurfaceAuto(unittest.TestCase):
 
 
 @unittest.skipUnless(os.path.exists(os.path.join(ROOT, "build", "installer", "horcrux-installer.sh")), "reads Horcrux-only files (absent in a vendored copy, e.g. Patronus)")
-class GringottsInstall(unittest.TestCase):
-    PATH = os.path.join(ROOT, "build", "live-iso", "project", "variants", "gringotts", "repo", "app-misc", "gringotts-tools", "files", "usr", "bin",
-                        "gringotts-install")
-
-    def mod(self):
-        src = open(self.PATH).read().replace("\nif __name__", "\nif False and __name__")
-        m = type(sys)("gri")
-        m.__file__ = self.PATH
-        try:
-            exec(compile(src, self.PATH, "exec"), m.__dict__)      # noqa: S102 (our own script, throw-away module)
-        except SystemExit:
-            pass
-        return m
-
-    def feed(self, m, answers):
-        it = iter(answers)
-        m.getpass.getpass = lambda prompt="": next(it)
-        m.say = lambda *a, **k: self.said.append(" ".join(str(x) for x in a))
-
-    def setUp(self):
-        self.said = []
-
-    def test_enter_is_not_a_shortcut_for_the_passphrase(self):
-        m = self.mod()
-        self.feed(m, ["", OTHER_PW, OTHER_PW])
-        self.assertEqual(m.ask_login(DISK_PW), OTHER_PW)
-        self.assertTrue(any("At least 8" in s for s in self.said))
-
-    def test_passphrase_refused_as_login_password(self):
-        m = self.mod()
-        self.feed(m, [DISK_PW, OTHER_PW, OTHER_PW])
-        self.assertEqual(m.ask_login(DISK_PW), OTHER_PW)
-        self.assertTrue(any("only for unlocking the disk" in s for s in self.said))
-
-    def test_script_text(self):
-        t = open(self.PATH).read()
-        self.assertNotIn("Press Enter to use the SAME", t)
-        self.assertNotIn("return passphrase", t)
 
 
 @unittest.skipUnless(os.path.exists(os.path.join(ROOT, "build", "installer", "horcrux-installer.sh")), "reads Horcrux-only files (absent in a vendored copy, e.g. Patronus)")

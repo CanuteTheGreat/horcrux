@@ -15,7 +15,7 @@ if [ -z "$DEV" ]; then
 fi
 }
 pick
-# softdog is ALWAYS armed as well: gringotts' iTCO_wdt (Lenovo ThinkBook 16 G6 IRL, TCO_LOCK set) accepts the pets but never
+# softdog is ALWAYS armed as well: a test laptop' iTCO_wdt (Lenovo ThinkBook 16 G6 IRL, TCO_LOCK set) accepts the pets but never
 # resets the machine (a SIGSTOPped pet for 7 min and a killed pet for 2 min: no reset), so a wedged userspace/scheduler would
 # not recover there. softdog resets the machine when the pet stops; it cannot save a dead CPU, but that needs working hardware.
 HW=$DEV

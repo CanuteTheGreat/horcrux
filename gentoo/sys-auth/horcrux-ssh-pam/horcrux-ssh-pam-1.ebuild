@@ -14,7 +14,7 @@ KEYWORDS="amd64 arm64"
 # pam_openrc counts every PAM login of a user and stops the user's OpenRC user runlevel (user.<name>: the default user runlevel plus the GNOME
 # session's gnome-shell, gsd-*, ...) only with the LAST one. An ssh login therefore kept a logged-out GNOME session's services running, and
 # supervise-daemon respawned gnome-shell into the closed session: the next GNOME login on that seat failed with mutter
-# "Failed to take control of the session: EBUSY" and had no mouse and keyboard (HOGSMEADE, 2026-11-13; agents ssh in as the desktop user).
+# "Failed to take control of the session: EBUSY" and had no mouse and keyboard (owner-ws, 2026-11-13; agents ssh in as the desktop user).
 # gnome-base/gnome-session-openrc-49.2-r2::horcrux makes the GNOME session own its services; this package additionally keeps ssh out of the
 # user runlevel entirely, on every edition (server too: an ssh login never starts the user's desktop/user services).
 # OpenSSH >= 10.0 has PAMServiceName; the drop-in sorts before Gentoo's 9999999gentoo-pam.conf (sshd: first value wins).

@@ -1698,7 +1698,7 @@ mod tests {
             // cleanup record (name only), VM 100 exists
             RecordedSource {
                 vm_id: "100".into(),
-                name: Some("captainjacksparrow".into()),
+                name: Some("example-vm".into()),
                 uuid: None,
             },
             // saved XML (uuid + name), VM 101 exists
@@ -1715,7 +1715,7 @@ mod tests {
             },
         ];
         let o = |d: &str, u: &str| source_owner(&sources, &ids, d, u);
-        assert_eq!(o("captainjacksparrow", "any").as_deref(), Some("100"));
+        assert_eq!(o("example-vm", "any").as_deref(), Some("100"));
         assert_eq!(
             o("renamed-in-libvirt", "uuid-win11").as_deref(),
             Some("101")
@@ -1739,7 +1739,7 @@ mod tests {
         let list = ListResponse {
             available: true,
             domains: vec![
-                dom("captainjacksparrow", o("captainjacksparrow", "u")),
+                dom("example-vm", o("example-vm", "u")),
                 dom("genuinely-unmanaged", o("genuinely-unmanaged", "u")),
             ],
         };

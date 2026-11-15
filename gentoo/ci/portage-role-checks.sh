@@ -1,5 +1,5 @@
 #!/bin/bash
-# Real-Portage checks of the 2026-11 role/manager packages, in the image builder's rootfs container (never on crystalcave; run on rw-man-01).
+# Real-Portage checks of the 2026-11 role/manager packages, in the image builder's rootfs container (never on the control host; run on rw-man-01).
 # usage (on rw-man-01, repo rsynced to /tmp/lab-unblock):  docker run --rm -v /tmp/lab-unblock:/src:ro -v $PWD/gentoo/ci/portage-role-checks.sh:/c.sh --memory=4g <rootfs image> bash /c.sh
 # 1) sys-apps/horcrux-role-containers resolves with ONLY the files repo-config ships (keywords + USE);  2) app-emulation/horcrux-bin resolves (qemu[spice]);
 # 3) the horcrux-bin ebuild installs a tarball in the exact layout Dockerfile.app produces and fails loudly without one.

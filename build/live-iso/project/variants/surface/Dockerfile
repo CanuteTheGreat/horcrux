@@ -21,7 +21,7 @@ COPY common/overlay/ /tmp/hxlive/common/
 COPY project/overlay/ /tmp/hxlive/project/
 COPY common/portage/package.use/ /tmp/hxlive/portage-use/
 COPY common/portage-gui/package.use /tmp/hxlive/portage-use/gui
-COPY project/variants/hogshead/overlay/usr/bin/horcrux-orphans /tmp/hxlive/horcrux-orphans
+COPY project/variants/surface/overlay/usr/bin/horcrux-orphans /tmp/hxlive/horcrux-orphans
 RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache"; cd /tmp/hxlive; \
     rm -rf project/usr/share/horcrux project/etc/init.d/t2fanrd project/etc/init.d/tiny-dfr project/etc/init.d/horcrux-api project/etc/conf.d/horcrux-api \

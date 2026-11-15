@@ -257,7 +257,7 @@ HD 4000 acceleration under Mesa; HiDPI scale feel; battery reporting; UEFI quirk
 * kernel v7.2: `drivers/net/wireless/marvell/mwifiex/pcie_quirks.c`, `drivers/hid/hid-ids.h`, `hid-quirks.c`, `drivers/acpi/button.c`
 * docs/T2-MACS.md (kernel 7.2 pin because of OpenZFS), Gentoo handbook (XFS)
 
-**Nextcloud:** no desktop client on this device (tiny disk, owner decision): web only, in the browser. `~/.ssh` is a normal local directory; keys/config are pushed from crystalcave after first boot, never baked in.
+**Nextcloud:** no desktop client on this device (tiny disk, owner decision): web only, in the browser. `~/.ssh` is a normal local directory; keys/config are pushed from the control host after first boot, never baked in.
 
 
 ## Login policy: no autologin, separate secrets, the owner's host name (2026-11-03)

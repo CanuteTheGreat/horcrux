@@ -30,7 +30,7 @@ jobs:
     # image is pinned by sha256 digest to a single-platform (amd64-only)
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
-    # the race against the working beauxbatons runner (~every other run).
+    # the race against the working the emulated runner host runner (~every other run).
     # act-latest is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     container: catthehacker/ubuntu:act-latest
@@ -60,7 +60,7 @@ jobs:
 
       - name: Ensure Node.js is present (self-heal)
         # Same root cause as ci.yml's identical step (added in fb065bd):
-        # catthehacker/ubuntu:act-latest job containers on the beauxbatons
+        # catthehacker/ubuntu:act-latest job containers on the the emulated runner host
         # runner are reused across runs rather than recreated per-job, and
         # node has been observed vanishing mid-job (after an apt-get
         # install of unrelated packages) between 2026-10-04 and

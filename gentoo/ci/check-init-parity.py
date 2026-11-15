@@ -16,8 +16,6 @@ import os, re, sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 EXEMPT = {
-    # HOGSMEADE machine layer: its GNOME-on-OpenRC session is being fixed by another workstream; unit added in phase 2.
-    "app-misc/hogsmeade-tools": "hogsmeade machine layer (phase 2)",
 }
 INIT_HALF = {
     # GNOME's session manager on OpenRC; systemd systems run ::gentoo gnome-base/gnome-session (horcrux-gnome-defaults).

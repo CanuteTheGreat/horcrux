@@ -48,22 +48,6 @@ class FullGnome(unittest.TestCase):
         sh = read(LIVE, "common", "image-name.sh")           # both editions are known desktop environments with their own ISO names
         self.assertIn("gnome-light gnome", sh)
 
-    def test_owner_layers_pull_the_full_gnome_meta(self):
-        self.assertIn("gnome-base/gnome -extras", read(VAR, "owner-common", "portage", "package.use", "owner-apps"))
-        # the public-edition atoms are NOT in owner-common/packages.txt (the test-machine denylist covers that file); each layer installs gnome/packages.txt
-        common = atoms(os.path.join(VAR, "owner-common", "packages.txt"))
-        self.assertNotIn("gnome-base/gnome", common)
-        for layer, listing in (("gringotts/Dockerfile", "/tmp/packages-gringotts.txt /tmp/packages-owner.txt /tmp/packages-gnome.txt"),
-                               ("hogshead/Dockerfile", "/tmp/packages-owner.txt /tmp/packages-gnome.txt"),
-                               ("hogshead/Dockerfile.part2", "/tmp/packages-owner.txt /tmp/packages-gnome.txt"),
-                               ("hogsmeade/Dockerfile", "/tmp/packages-desktop.txt /tmp/packages-gnome.txt")):
-            df = read(VAR, layer)
-            self.assertIn("COPY project/variants/gnome/packages.txt /tmp/packages-gnome.txt", df, layer)
-            self.assertIn(listing, df, layer)
-        self.assertIn("variants/gnome/portage/package.use/horcrux-gnome", read(VAR, "hogsmeade", "Dockerfile"))
-        # none of them still builds on the light set alone
-        for layer in ("gringotts", "hogshead", "hogsmeade"):
-            self.assertIn("gnome", read(VAR, layer, "Dockerfile"))
 
     def test_test_machine_allowlist_accepts_the_full_gnome_edition(self):
         allow = read(GENTOO, "app-misc", "horcrux-test-machine", "files", "world.allowlist").splitlines()

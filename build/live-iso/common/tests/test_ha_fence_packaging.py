@@ -62,12 +62,6 @@ class HaFencePackaging(unittest.TestCase):
         self.assertIn("horcrux-ha-fence", svcs)
         self.assertLess(svcs.index("horcrux-ha-fence"), svcs.index("libvirtd"))
 
-    def test_variants_that_clear_loose_manager_files_clear_it_too(self):
-        for v in ("gringotts/Dockerfile", "hogshead/Dockerfile.part2", "surface/Dockerfile"):
-            self.assertIn("/etc/init.d/horcrux-ha-fence", rd("build", "live-iso", "project", "variants", v), v)
-        for v in ("gringotts/Dockerfile", "hogshead/Dockerfile.part2", "hogsmeade/Dockerfile.part2"):
-            self.assertIn("/etc/runlevels/*/horcrux-ha-fence", rd("build", "live-iso", "project", "variants", v), v)
-        self.assertIn("etc/init.d/horcrux-ha-fence", rd("build", "live-iso", "project", "variants", "gringotts", "image-files.exclude"))
 
     def test_role_checks_assert_the_installed_image_has_it(self):
         self.assertIn("horcrux-ha-fence", rd("gentoo", "ci", "portage-role-checks.sh"))

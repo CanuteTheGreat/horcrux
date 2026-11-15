@@ -1,4 +1,4 @@
-//! Per-page `<title>`: "VMs · Horcrux", "captainjacksparrow · Console · Horcrux".
+//! Per-page `<title>`: "VMs · Horcrux", "example-vm · Console · Horcrux".
 //!
 //! `title_for(path)` is pure (unit-tested; every route in `lib.rs` has an entry, see the test
 //! `every_route_has_its_own_title`). Pages whose subject has a name (a VM, a container) call
@@ -204,8 +204,8 @@ mod tests {
         assert_eq!(title_for("/vms", None), "VMs · Horcrux");
         assert_eq!(title_for("/", None), "Dashboard · Horcrux");
         assert_eq!(
-            title_for("/vms/abc/console", Some("captainjacksparrow")),
-            "captainjacksparrow · Console · Horcrux"
+            title_for("/vms/abc/console", Some("example-vm")),
+            "example-vm · Console · Horcrux"
         );
         assert_eq!(
             title_for("/vms/abc/console", None),

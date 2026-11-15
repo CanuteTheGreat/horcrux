@@ -457,8 +457,8 @@ class RtcSync(unittest.TestCase):
 class WifiToIwd(unittest.TestCase):
     """NetworkManager's iwd backend only autoconnects networks that have a /var/lib/iwd file (hogshead first boot)."""
 
-    NM = ("[connection]\nid=Hogsmead Station\ntype=wifi\ninterface-name=wlp229s0\nautoconnect=true\n\n"
-          "[wifi]\nssid=Hogsmead Station\nmode=infrastructure\n\n[wifi-security]\nkey-mgmt=wpa-psk\npsk=correct horse battery\n")
+    NM = ("[connection]\nid=Example Station\ntype=wifi\ninterface-name=wlp229s0\nautoconnect=true\n\n"
+          "[wifi]\nssid=Example Station\nmode=infrastructure\n\n[wifi-security]\nkey-mgmt=wpa-psk\npsk=correct horse battery\n")
     EAP = "[connection]\nid=corp\ntype=wifi\n\n[wifi]\nssid=Corp\n\n[wifi-security]\nkey-mgmt=wpa-eap\n"
 
     def setUp(self):
@@ -466,26 +466,26 @@ class WifiToIwd(unittest.TestCase):
         self.root = self.tmp.name
         self.nm = os.path.join(self.root, "etc/NetworkManager/system-connections")
         os.makedirs(self.nm)
-        for fn, txt in (("Hogsmead Station.nmconnection", self.NM), ("Corp.nmconnection", self.EAP), ("wired.nmconnection", "[connection]\nid=w\ntype=ethernet\n")):
+        for fn, txt in (("Example Station.nmconnection", self.NM), ("Corp.nmconnection", self.EAP), ("wired.nmconnection", "[connection]\nid=w\ntype=ethernet\n")):
             open(os.path.join(self.nm, fn), "w").write(txt)
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def test_parse_skips_enterprise_and_wired(self):
-        self.assertEqual(S.nm_wifi_networks(self.nm), [("Hogsmead Station", "correct horse battery")])
+        self.assertEqual(S.nm_wifi_networks(self.nm), [("Example Station", "correct horse battery")])
 
     def test_psk_file_written_0600_and_pin_dropped(self):
         out = S.carry_wifi_to_iwd(self.root, sources=(self.nm,))
-        path = os.path.join(self.root, "var/lib/iwd/Hogsmead Station.psk")
+        path = os.path.join(self.root, "var/lib/iwd/Example Station.psk")
         self.assertEqual(out, [path])
         self.assertEqual(open(path).read(), "[Security]\nPassphrase=correct horse battery\n")
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
-        self.assertNotIn("interface-name", open(os.path.join(self.nm, "Hogsmead Station.nmconnection")).read())
+        self.assertNotIn("interface-name", open(os.path.join(self.nm, "Example Station.nmconnection")).read())
 
     def test_existing_iwd_file_is_kept(self):
         os.makedirs(os.path.join(self.root, "var/lib/iwd"))
-        p = os.path.join(self.root, "var/lib/iwd/Hogsmead Station.psk")
+        p = os.path.join(self.root, "var/lib/iwd/Example Station.psk")
         open(p, "w").write("[Security]\nPassphrase=other\n")
         self.assertEqual(S.carry_wifi_to_iwd(self.root, sources=(self.nm,)), [])
         self.assertIn("other", open(p).read())

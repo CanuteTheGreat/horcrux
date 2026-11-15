@@ -90,7 +90,7 @@ class SessionScoping(unittest.TestCase):
             self.assertIn("pam_new.so", r.stdout)
 
     def test_session_env_reaches_dbus_activation_environment(self):
-        """HOGSMEADE 2026-11-13: the user bus's activation environment had no XDG_CURRENT_DESKTOP, xdg-desktop-portal picked no GNOME
+        """owner-ws 2026-11-13: the user bus's activation environment had no XDG_CURRENT_DESKTOP, xdg-desktop-portal picked no GNOME
         backend and there was no ScreenCast (OBS / browser screen sharing broken). The leader and gnome-session-init-* push it."""
         p4 = (GSO / "files" / "0004-session-scoped-user-services.patch").read_text()
         self.assertIn("cmd_activation_env", p4)

@@ -123,7 +123,7 @@ class WiredIntoTheHarness(unittest.TestCase):
 
 
 class DockerForwardGate(unittest.TestCase):
-    """Docker's FORWARD DROP killed libvirt NAT VMs (HOGSMEADE 2026-11-12): horcrux-core ships daemon.json ip-forward-no-drop, the gate proves it"""
+    """Docker's FORWARD DROP killed libvirt NAT VMs (owner-ws 2026-11-12): horcrux-core ships daemon.json ip-forward-no-drop, the gate proves it"""
 
     def run_gate(self, out):
         steps = []

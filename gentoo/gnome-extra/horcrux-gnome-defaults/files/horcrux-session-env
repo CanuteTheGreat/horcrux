@@ -4,7 +4,7 @@
 #
 # Why: on OpenRC the user's dbus-daemon is a user service started BEFORE gnome-shell, so everything it D-Bus-activates (GNOME Settings, Nautilus, Text
 # Editor, the portals, ...) inherits a bare environment: no XDG_CURRENT_DESKTOP, WAYLAND_DISPLAY, XDG_DATA_DIRS, ... GNOME Settings then exits with
-# "Running gnome-control-center is only supported under GNOME and Unity" and never opens (HOGSMEADE, 2026-11-11).
+# "Running gnome-control-center is only supported under GNOME and Unity" and never opens (owner-ws, 2026-11-11).
 #
 # Runs as an XDG autostart entry (gnome-session-openrc starts those only after gnome-shell is up), once per login. Values come from this process's
 # environment, falling back to the running gnome-shell's (which imported the gdm session leader's environment) and to the live sockets. Only an explicit
@@ -59,7 +59,7 @@ fi
 
 [ -n "$HX_NO_PORTAL" ] && exit 0
 # match the command line: the process name is cut to 15 characters ("xdg-desktop-por"), so `pgrep -x xdg-desktop-portal` never matched
-# and a portal activated before this update kept running without a GNOME backend (no ScreenCast; HOGSMEADE 2026-11-13)
+# and a portal activated before this update kept running without a GNOME backend (no ScreenCast; owner-ws 2026-11-13)
 pp=$(pgrep -u "$UIDN" -f '^/usr/(lib|libexec)[^ ]*/xdg-desktop-portal( |$)' 2>/dev/null | head -n1)
 if [ -n "$pp" ] && ! tr '\0' '\n' < "$PROC/$pp/environ" 2>/dev/null | grep -q '^XDG_CURRENT_DESKTOP='; then
 	if rc-service -U xdg-desktop-portal status >/dev/null 2>&1; then

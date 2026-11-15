@@ -1,3 +1,0 @@
-# GURU packages (proton-vpn-gtk-app and its python deps) are testing-only
-*/*::guru ~amd64
-app-admin/rustinion-agent ~amd64

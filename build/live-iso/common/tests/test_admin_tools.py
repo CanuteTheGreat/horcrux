@@ -40,7 +40,7 @@ class GentoolkitEverywhere(unittest.TestCase):
         q = open(os.path.join(COMMON, "qemu-test.py")).read()
         self.assertIn("HG.admin_tools_gate", q)
         m = re.search(r"def ssh_checks\(self\):.*?(?=\n    def |\nclass |\ndef |\Z)", q, re.S)
-        self.assertIn("HG.admin_tools_gate", m.group(0))   # ssh_checks runs for server, gnome-light, hogsmeade and Patronus alike
+        self.assertIn("HG.admin_tools_gate", m.group(0))   # ssh_checks runs for server, gnome-light, owner-ws and Patronus alike
 
     @unittest.skipUnless(os.path.exists(T2), "Horcrux repo tree only")
     def test_hogshead_t2_live_has_gentoolkit(self):

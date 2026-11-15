@@ -12,7 +12,7 @@ Before this change Horcrux was OpenRC-only in practice. This is the audit, what 
 | other Rust call sites (`ha_fence_agent.rs`, `guest_state/agent.rs`, `horcrux-cluster/corosync.rs`, `horcrux-nas/shares/ftp.rs`) | rc-service direct | systemctl direct, each with private detection | phase 2: move onto `init` (trait must move to `horcrux-common` for the crates) |
 | ebuilds horcrux-bin / horcrux (api, guests, ha-fence) | initd | **done**: `horcrux-api.service`, `horcrux-guests.service`, `horcrux-ha-fence.service` | start the units in a systemd VM (phase 3) |
 | machine layer: firstboot, timesync, touchbar (+ shared script), t2fanrd, tiny-dfr, awccd, comfyui, horcrux-test-machine | initd | **done**: unit beside every initd, `|| ( openrc systemd )` RDEPEND, revbump | runtime test on real hardware where possible |
-| `app-misc/hogsmeade-tools` | initd | none | phase 2; exempt in the gate (another agent owns the GNOME-on-OpenRC fix) |
+| `app-misc/owner-ws-tools` | initd | none | phase 2; exempt in the gate (another agent owns the GNOME-on-OpenRC fix) |
 | parity gate | none | none | **done**: `gentoo/ci/check-init-parity.py` (initd without unit fails; exempt list may only shrink) |
 | live ISO rootfs (`setup-rootfs.sh`, `Dockerfile.rootfs`, `/etc/init.d/live-*`, zram-swap, live-serial) | ok | **phase 3**: `INIT=systemd build.sh` (stage3 `*-systemd`, ctg binhost systemd lane, binpkg cache per arch+init), `live-*.service` + `zram-swap.service` run the SAME scripts through `live-openrc-compat`, tty1 via a getty@tty1 drop-in, stock serial-getty masked | see "Phase 3" |
 | installer (`liveinst`, `project/overlay`) init choice | ok | **phase 3**: `liveinst/initsys.py` (target init from the copied root, OpenRC name -> unit map, getty drop-ins, `systemctl enable` in the chroot) | none: the installed system runs the ISO's init |
@@ -27,7 +27,7 @@ Before this change Horcrux was OpenRC-only in practice. This is the audit, what 
 - Binhost: amd64/systemd tier 35 timed out three runs because `evolution` (-> webkit-gtk, hours) sat in it, starving tiers 36-41 and 90 (neovim, pahole, linux-firmware, gentoo-xcursors, nodejs never reached). Evolution moved to heavy tier `91-heavy-gnome-mail`; the heavy-only continuation chains while a run finishes a heavy tier. No new tier: the four lanes already exist. samba/avahi/bind per-lane coverage is documented in gentoo-binhost `docs/OPERATIONS.md` (official-binhost binaries count as covered; bind is never built in any lane).
 
 ## Ordered plan
-1. Phase 2: remaining Rust call sites onto `init`; hogsmeade-tools unit after its OpenRC fix lands; exempt list to empty.
+1. Phase 2: remaining Rust call sites onto `init`; owner-ws-tools unit after its OpenRC fix lands; exempt list to empty.
 2. Phase 3: systemd live ISO, server first (live-* units, stage3 systemd rootfs, installer), then `live-iso-server-systemd-x86_64.yml` on rw-man-01 (KVM, one ISO build at a time; the aarch64 TCG lane stays OpenRC until x86 is green); GNOME/XFCE after.
 3. Phase 4: docs and an INIT dimension in every edition's matrix.
 

@@ -45,7 +45,7 @@ jobs:
 
       - name: Ensure Node.js is present (self-heal)
         # This job's container (catthehacker/ubuntu:act-latest) is reused
-        # by the beauxbatons runner across many job runs instead of being
+        # by the the emulated runner host runner across many job runs instead of being
         # recreated per-run (confirmed via `docker ps -a` in a prior failed
         # run showing other jobs' containers still alive hours later). On
         # 2026-10-05 node vanished mid-job from a long-lived container
@@ -167,7 +167,7 @@ jobs:
         # commits 4a5ab32/c7abfee): `ip netns add` needs CLONE_NEWNS, and
         # Docker Desktop's Enhanced Container Isolation (or an equivalent
         # seccomp/AppArmor profile) denies it outright for job containers
-        # on beauxbatons - confirmed via `unshare --mount` itself failing
+        # on the emulated runner host - confirmed via `unshare --mount` itself failing
         # with a flat "Operation not permitted", not an ownership nuance
         # workaroundable from inside the container. That's a host/runner
         # config decision for the owner, not something any workflow-level

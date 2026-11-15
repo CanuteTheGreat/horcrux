@@ -20,8 +20,7 @@ PUBLIC_URL = {
     "patronus": r"^https://(patronus\.errant\.solutions(/|$)|github\.com/CanuteTheGreat/patronus(/|$))",
 }
 EDITIONS = {"server", "gnome", "xfce", "desktop", "router", "firewall", "appliance"}
-MACHINES = ("hogsmeade", "hogshead", "gringotts", "madammalkins", "surface", "test-machine", "test machine", "ollivanders", "crystalcave",
-            "azkaban", "beauxbatons", "rw-man")
+MACHINES = ("hogshead", "gringotts", "madammalkins", "surface", "test-machine", "test machine", "ollivanders", "azkaban", "rw-man")
 
 
 def parse(text):

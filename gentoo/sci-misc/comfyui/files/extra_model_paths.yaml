@@ -1,5 +1,5 @@
 # models live outside the package (rpool/comfyui); refill them with comfyui-fetch-models
-hogsmeade:
+owner-ws:
     base_path: /var/lib/comfyui/
     checkpoints: models/checkpoints
     clip_vision: models/clip_vision

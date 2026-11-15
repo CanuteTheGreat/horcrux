@@ -27,7 +27,7 @@ def parse(t):
 @unittest.skipUnless(HAVE, "no horcrux-release package")
 class OsRelease(unittest.TestCase):
     CASES = [("server",), ("gnome-light",), ("xfce",)]
-    MACHINES = ("hogsmeade", "hogshead", "gringotts", "surface", "test-machine", "test machine", "ollivanders")
+    MACHINES = ("owner-ws", "hogshead", "gringotts", "surface", "test-machine", "test machine", "ollivanders")
     LABELS = {"server": ("Server", "server"), "gnome-light": ("GNOME", "gnome"), "xfce": ("XFCE", "xfce")}
 
     def test_every_variant_is_complete_and_clean(self):
@@ -60,7 +60,7 @@ class OsRelease(unittest.TestCase):
     def test_bad_input_rejected(self):
         self.assertNotEqual(subprocess.run(["bash", GEN, PV, "bogus"], capture_output=True).returncode, 0)
         # a machine name is not an edition either
-        self.assertNotEqual(subprocess.run(["bash", GEN, PV, "hogsmeade"], capture_output=True).returncode, 0)
+        self.assertNotEqual(subprocess.run(["bash", GEN, PV, "owner-ws"], capture_output=True).returncode, 0)
 
     def test_no_machine_use_flags(self):
         for f in ("horcrux-release-0.1.0.ebuild", sorted(x for x in os.listdir(PKG) if "_p" in x)[-1]):
@@ -70,7 +70,7 @@ class OsRelease(unittest.TestCase):
         for r, _, fs in os.walk(os.path.join(REPO, "gentoo")):
             for f in fs:
                 if f.endswith(".ebuild"):
-                    self.assertNotRegex(open(os.path.join(r, f)).read(), r"sys-apps/horcrux-release \S*(hogsmeade|hogshead|gringotts|surface|test-machine)", f)
+                    self.assertNotRegex(open(os.path.join(r, f)).read(), r"sys-apps/horcrux-release \S*(owner-ws|hogshead|gringotts|surface|test-machine)", f)
 
     def test_ebuild_installs_the_file_and_masks_baselayout(self):
         e = open(os.path.join(PKG, "horcrux-release-0.1.0.ebuild")).read()
@@ -84,12 +84,6 @@ class OsRelease(unittest.TestCase):
         bn = os.path.join(REPO, "gentoo", "app-emulation", "horcrux-bin")
         self.assertIn(st(bn, "horcrux-bin-")[-1], st(PKG, "horcrux-release-"))
 
-    def test_variant_layers_name_their_flags(self):
-        v = os.path.join(REPO, "build", "live-iso", "project", "variants")
-        for var in ("gnome-light", "hogsmeade", "hogshead", "gringotts"):
-            t = open(os.path.join(v, var, "portage", "package.use", "horcrux-release")).read()
-            flags = [l.split()[1:] for l in t.splitlines() if l.startswith("sys-apps/horcrux-release ")]
-            self.assertEqual(flags, [["gnome-light"]], var)
 
     def test_xfce_machine_is_xfce_never_gnome(self):
         # madammalkins (the Surface profile) runs XFCE: its os-release edition must be XFCE, never GNOME

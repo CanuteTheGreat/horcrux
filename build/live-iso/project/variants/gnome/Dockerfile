@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 # Horcrux gnome variant = the FULL GNOME desktop edition (os-release VARIANT "GNOME"): the gnome-light layer (BASE; build.sh chains it through `requires`)
 # + gnome-base/gnome with its default apps (gnome-extra/horcrux-gnome-extras: gnome-extra-apps minus Epiphany and the apps that need systemd).
-# The public small option stays variants/gnome-light. The owner's own machine layers (hogsmeade, hogshead, gringotts) install the same packages.txt.
+# The public small option stays variants/gnome-light. The owner's own machine layers (owner-ws, hogshead, gringotts) install the same packages.txt.
 ARG BASE
 FROM ${BASE}
 ARG ARCH=x86_64

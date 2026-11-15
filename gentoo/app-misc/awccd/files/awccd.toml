@@ -1,4 +1,4 @@
-# /etc/awccd.toml: awccd configuration (clean-room spec: ctg-infrastructure hosts/hogsmeade/awcc-re/linux-awcc-daemon-spec.md)
+# /etc/awccd.toml: awccd configuration (clean-room spec: the private ctg-infrastructure spec)
 [thermal]
 default_mode = "balanced-performance"     # falls back to "balanced" when the firmware does not offer it
 game_mode = "balanced-performance"

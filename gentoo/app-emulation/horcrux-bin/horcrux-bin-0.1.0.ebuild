@@ -36,7 +36,7 @@ SLOT="0"
 KEYWORDS="amd64 arm64 riscv"
 
 # qemu[zstd]: qcow2 images with zstd compression (libvirt / virt-manager default on some distros) are imported with qemu-img; without
-# USE=zstd qemu-img answers "unknown compression type: 1" and the VM importer cannot read the disk (HOGSMEADE 2026-11-12).
+# USE=zstd qemu-img answers "unknown compression type: 1" and the VM importer cannot read the disk (owner-ws 2026-11-12).
 RDEPEND="
 	acct-group/horcrux-admin
 	acct-group/kvm
