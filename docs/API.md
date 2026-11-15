@@ -799,67 +799,39 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "user_data": {
-    "users": [
-      {
-        "name": "admin",
-        "password": "hashed_password",
-        "ssh_authorized_keys": [
-          "ssh-rsa AAAAB3NzaC1yc2E..."
-        ],
-        "sudo": "ALL=(ALL) NOPASSWD:ALL"
-      }
-    ],
-    "packages": ["nginx", "postgresql", "redis"],
-    "runcmd": [
-      "systemctl enable nginx",
-      "systemctl start nginx"
-    ]
-  },
-  "network_config": {
+  "hostname": "web-server-01",
+  "user": { "name": "admin", "plain_password": null, "password": null, "sudo": true, "shell": null },
+  "ssh_keys": ["ssh-ed25519 AAAAC3... admin@host"],
+  "packages": ["nginx"],
+  "runcmd": ["systemctl enable --now nginx"],
+  "network": {
     "version": 2,
-    "ethernets": {
-      "eth0": {
-        "addresses": ["192.168.1.100/24"],
-        "gateway4": "192.168.1.1",
-        "nameservers": {
-          "addresses": ["8.8.8.8", "8.8.4.4"]
-        }
-      }
-    }
-  },
-  "meta_data": {
-    "instance_id": "vm-100",
-    "local_hostname": "web-server-01"
+    "ethernets": [
+      { "name": "eth0", "dhcp4": false, "addresses": ["192.168.1.100/24"],
+        "gateway4": "192.168.1.1", "nameservers": ["8.8.8.8"] }
+    ]
   }
 }
 ```
+
+The seed is attached to the VM as a CD-ROM at its next start. The SSH keys are
+written to user-data (`ssh_authorized_keys`) and to meta-data (`public-keys`), so
+minimal guests such as CirrOS that only read meta-data get them too.
 
 **Response**:
 ```json
 {
   "vm_id": "100",
-  "iso_path": "/var/lib/horcrux/cloudinit/vm-100-cloudinit.iso",
-  "message": "Cloud-init ISO generated successfully"
+  "iso_path": "/var/lib/horcrux/cloudinit/cloudinit-100.iso",
+  "attached_as": "/var/lib/horcrux/vms/100.cidata.iso"
 }
 ```
 
-**User Data Format**:
-The `user_data` field supports standard cloud-config YAML directives:
-- `users` - User accounts to create
-- `packages` - Packages to install
-- `runcmd` - Commands to run on first boot
-- `write_files` - Files to create
-- `bootcmd` - Commands to run early in boot
-- `ssh_authorized_keys` - Global SSH keys
-
-**Network Config Format**:
-Uses Netplan v2 format for network configuration.
+**Fields**: `hostname` (meta-data `local-hostname` and cloud-config `hostname`), `user`, `ssh_keys`, `packages` and `runcmd` become cloud-config directives; `network` becomes a Netplan v2 network-config.
 
 **Status Codes**:
-- `201 Created` - ISO generated successfully
+- `200 OK` - ISO generated and attached
 - `404 NOT_FOUND` - VM does not exist
-- `422 VALIDATION_ERROR` - Invalid cloud-init configuration
 - `500 INTERNAL_ERROR` - ISO generation failed
 
 ### Delete Cloud-Init ISO

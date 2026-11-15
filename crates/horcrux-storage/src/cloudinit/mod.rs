@@ -61,7 +61,7 @@ impl CloudInitManager {
         tokio::fs::create_dir_all(&temp_dir).await?;
 
         // Generate meta-data
-        let meta_data = self.generate_meta_data(&config.hostname);
+        let meta_data = self.generate_meta_data(&config.hostname, &config.ssh_keys);
         let meta_data_path = temp_dir.join("meta-data");
         tokio::fs::write(&meta_data_path, meta_data).await?;
 
@@ -94,12 +94,18 @@ impl CloudInitManager {
     /// subset), while CirrOS and other minimal NoCloud implementations
     /// only accept JSON - a `key: value` file made them reject the whole
     /// seed and fall back to minutes of EC2 metadata retries.
-    fn generate_meta_data(&self, hostname: &str) -> String {
-        let mut s = serde_json::json!({
+    fn generate_meta_data(&self, hostname: &str, ssh_keys: &[String]) -> String {
+        let mut meta = serde_json::json!({
             "instance-id": uuid::Uuid::new_v4().to_string(),
             "local-hostname": hostname,
-        })
-        .to_string();
+        });
+        // SSH keys also travel as meta-data `public-keys` (the NoCloud/EC2
+        // convention): cloud-init reads them from there as well as from
+        // user-data, and CirrOS and other minimal guests only read meta-data.
+        if !ssh_keys.is_empty() {
+            meta["public-keys"] = serde_json::json!(ssh_keys);
+        }
+        let mut s = meta.to_string();
         s.push('\n');
         s
     }
@@ -321,12 +327,18 @@ mod tests {
     #[tokio::test]
     async fn test_generate_meta_data() {
         let manager = CloudInitManager::new(PathBuf::from("/tmp/cloudinit"));
-        let meta_data = manager.generate_meta_data("test-vm");
+        let meta_data = manager.generate_meta_data("test-vm", &[]);
 
         // JSON (valid YAML too), so JSON-only NoCloud readers accept it.
         let v: serde_json::Value = serde_json::from_str(&meta_data).expect("meta-data is JSON");
         assert_eq!(v["local-hostname"], "test-vm");
         assert!(uuid::Uuid::parse_str(v["instance-id"].as_str().unwrap()).is_ok());
+        assert!(v.get("public-keys").is_none(), "no keys, no public-keys");
+
+        let keys = vec!["ssh-ed25519 AAAA test@x".to_string()];
+        let v: serde_json::Value =
+            serde_json::from_str(&manager.generate_meta_data("test-vm", &keys)).unwrap();
+        assert_eq!(v["public-keys"][0], "ssh-ed25519 AAAA test@x");
     }
 
     #[tokio::test]
