@@ -139,9 +139,13 @@ BDEPEND=""
 # so cargo_gen_config() never runs and any later cargo_env/cargo_src_compile
 # call dies with: "FATAL: please call cargo_gen_config before using cargo_env"
 # Define src_unpack explicitly to run both (live ebuild: use cargo_live_src_unpack).
+# cargo.eclass (2026-11-04) runs `cargo fetch` in the current directory (WORKDIR after git-r3 returns), not ${S}:
+# "could not find Cargo.toml in .../work". Run it from the checkout (same fix as gentoo/app-emulation/horcrux).
 src_unpack() {
 	git-r3_src_unpack
+	pushd "${S}" >/dev/null || die
 	cargo_live_src_unpack
+	popd >/dev/null || die
 }
 
 # Cargo features mapping to USE flags
