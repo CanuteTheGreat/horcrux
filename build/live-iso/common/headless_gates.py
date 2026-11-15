@@ -243,7 +243,9 @@ def docker_forward_gate(sh, step, slow=1.0):
     """horcrux-core's daemon.json keeps Docker from dropping forwarded traffic; with Docker installed a NAT-style netns still reaches the outside"""
     # dockerd's first start (containerd, overlay/zfs graph driver, iptables chains) takes far longer than 60 s under TCG emulation (aarch64 run 2690:
     # DOCKER-DOWN while every other line was fine); the in-guest wait scales with the harness timeout factor like the ssh timeout does
-    rc, o = sh(f"HXW={int(60 * max(slow, 1.0))}; export HXW; " + b64("sh", DOCKER_FWD_CHECK), 180)
+    # outer budget: two docker waits of up to HXW s each plus two `service docker restart`/start cycles and the pings; 180 s timed out on the aarch64
+    # zfs-mirror image (run 2815 step docker-does-not-break-vm-nat-forwarding 'timeout' after every other check passed), the caller scales it by SLOW
+    rc, o = sh(f"HXW={int(60 * max(slow, 1.0))}; export HXW; " + b64("sh", DOCKER_FWD_CHECK), 300)
     o = (o or "").replace("\r", "")
     cfg = re.search(r"(?m)^CFG 1$", o) is not None
     absent = "DOCKER-ABSENT" in o
