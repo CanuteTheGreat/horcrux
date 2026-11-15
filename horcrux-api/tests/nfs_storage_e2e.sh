@@ -5,10 +5,17 @@
 # delete a volume, check the file really lands on the server's export.
 # The server must outlive the client mount: the trap unmounts first, removes the
 # client, then the server (a loopback or orphaned NFS mount wedges the container).
-# Usage: horcrux-api/tests/nfs_storage_e2e.sh <horcrux-api binary> [image]
+# The server image is not the client image on purpose: Ubuntu 24.04's
+# nfs-ganesha 5.7 answers READ_PLUS badly, so a kernel NFS client that uses it
+# (Debian 13's 6.12, the lab CI guests) fails the first read of every file the
+# client just wrote (qemu-img: \"Could not read qcow2 header: Input/output
+# error\") while 4.1 mounts and 6.8-kernel hosts pass. Debian trixie's
+# nfs-ganesha 6.5 serves it correctly on every client kernel tried.
+# Usage: horcrux-api/tests/nfs_storage_e2e.sh <horcrux-api binary> [image] [server image]
 set -euo pipefail
-BIN=${1:?usage: $0 <horcrux-api binary> [image]}
+BIN=${1:?usage: $0 <horcrux-api binary> [image] [server image]}
 IMAGE=${2:-ubuntu:24.04}
+SRV_IMAGE=${3:-${HX_NFS_SERVER_IMAGE:-debian:trixie}}
 TAG="${HX_RUN_TAG:-$$}"
 NET="horcrux-nfs-e2e-$TAG"; SRV="horcrux-nfs-srv-$TAG"; CLI="horcrux-nfs-cli-$TAG"
 
@@ -22,7 +29,7 @@ trap cleanup EXIT
 
 docker network create "$NET" >/dev/null
 # /srv/export must be a real (non-overlay) filesystem: ganesha needs file handles.
-docker run -d --name "$SRV" --network "$NET" --privileged -v /srv/export --memory 1g "$IMAGE" sleep 1800 >/dev/null
+docker run -d --name "$SRV" --network "$NET" --privileged -v /srv/export --memory 1g "$SRV_IMAGE" sleep 1800 >/dev/null
 docker run -d --name "$CLI" --network "$NET" --privileged --memory 1g "$IMAGE" sleep 1800 >/dev/null
 docker cp "$BIN" "$CLI":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/nfs_storage_e2e.py" "$CLI":/tmp/nfs_storage_e2e.py
