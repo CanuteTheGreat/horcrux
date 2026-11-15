@@ -162,6 +162,15 @@ class DockerForwardGate(unittest.TestCase):
             eb = "".join(open(os.path.join(gentoo, f)).read() for f in os.listdir(gentoo) if f.endswith(".ebuild"))
             self.assertIn("daemon.json", eb)
 
+    def test_netns_veth_has_fixed_macs_so_udev_cannot_rewrite_them(self):
+        # a late udev MACAddressPolicy=persistent rewrite stales the netns' neighbour entry for the gateway (aarch64 run 2884)
+        self.assertRegex(HG.DOCKER_FWD_CHECK, r"ip link add hxfwdt-h address ([0-9a-f]{2}:){5}[0-9a-f]{2} type veth peer name hxfwdt-n address ([0-9a-f]{2}:){5}[0-9a-f]{2}")
+        self.assertIn("NETNS-PING-AFTER-RESTART-OK", HG.DOCKER_FWD_CHECK)
+
+    def test_dhcpcd_ignores_container_and_vm_plumbing(self):
+        sr = open(os.path.join(ROOT, "setup-rootfs.sh")).read()
+        self.assertRegex(sr, r"denyinterfaces veth\* docker\* br-\* virbr\* vmbr\*")
+
     def test_wired_into_the_harness(self):
         self.assertIn("HG.docker_forward_gate(", open(os.path.join(ROOT, "qemu-test.py")).read())
 

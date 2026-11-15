@@ -92,6 +92,9 @@ for t in ttyS0 ttyS1 ttyAMA0 hvc0; do grep -qx $t /etc/securetty 2>/dev/null || 
 # Wi-Fi is handled by iwd (it also does DHCP for wlan), wired NICs by dhcpcd
 mkdir -p /etc/iwd && printf '[General]\nEnableNetworkConfiguration=true\n' > /etc/iwd/main.conf
 grep -q '^denyinterfaces' /etc/dhcpcd.conf 2>/dev/null || printf '\ndenyinterfaces wlan* wlp*\n' >> /etc/dhcpcd.conf
+# dhcpcd manages physical wired NICs only: container/VM plumbing (docker0, br-*, veth*, virbr*, vmbr*, tap*) is owned by Docker/libvirt/Horcrux, and dhcpcd
+# on it adds IPv4LL addresses + 169.254/16 routes and reacts to every link event of every container (observed on a veth: carrier flaps, a 169.254 address)
+grep -q '^denyinterfaces .*veth' /etc/dhcpcd.conf 2>/dev/null || printf 'denyinterfaces veth* docker* br-* virbr* vmbr* tap*\n' >> /etc/dhcpcd.conf
 
 # --- time: months-off hardware clocks (a stick or board whose RTC battery is flat, a VM) must end up right ----------------------
 # chronyd steps the clock (not slews) at start-up and on the first measurements after the network came up, and writes it to the RTC (rtcsync);

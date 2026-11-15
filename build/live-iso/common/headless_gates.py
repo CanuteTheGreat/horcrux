@@ -206,6 +206,10 @@ def clock_gate(sh, step, host_now=time.time, timeout=480, label="months-off-rtc-
 # Docker (>= 28) sets the iptables FORWARD policy to DROP; every other base chain also sees forwarded packets, so libvirt/Horcrux NAT VMs lost the internet
 # (owner-ws 2026-11-12). horcrux-core ships /etc/docker/daemon.json {"ip-forward-no-drop": true}. The netns stands in for a NAT-network VM: a veth with
 # its own accept+masquerade nft table (what libvirt installs for virbr0) must reach the outside (10.0.2.2, the QEMU user-net gateway) WHILE dockerd runs.
+# Both veth ends get an explicit MAC: udev's 99-default.link (MACAddressPolicy=persistent) rewrites the MAC of any device whose address is still the kernel's
+# random one, and under TCG load that lands AFTER the first ping resolved the gateway, so the netns kept the old MAC in its neighbour cache and lost its
+# gateway for ~8 s (until the entry went STALE->PROBE->re-resolved; aarch64 run 2884 after `service docker restart`). A fixed MAC is never touched by udev.
+# The assertions are unchanged: the netns must still reach 10.0.2.2 before and after the dockerd restart.
 DOCKER_FWD_CHECK = r'''
 cfg=0; grep -Eq '"ip-forward-no-drop"[[:space:]]*:[[:space:]]*true' /etc/docker/daemon.json 2>/dev/null && cfg=1
 echo "CFG $cfg"
@@ -218,7 +222,7 @@ echo "POLICY $( (nft list chain ip filter FORWARD 2>/dev/null || iptables -S FOR
 cleanup() { ip netns del hxfwdt 2>/dev/null; ip link del hxfwdt-h 2>/dev/null; nft delete table ip hxfwdtest 2>/dev/null; }
 cleanup
 echo 1 > /proc/sys/net/ipv4/ip_forward
-ip netns add hxfwdt && ip link add hxfwdt-h type veth peer name hxfwdt-n && ip link set hxfwdt-n netns hxfwdt \
+ip netns add hxfwdt && ip link add hxfwdt-h address 02:48:58:46:57:01 type veth peer name hxfwdt-n address 02:48:58:46:57:02 && ip link set hxfwdt-n netns hxfwdt \
  && ip addr add 192.168.251.1/24 dev hxfwdt-h && ip link set hxfwdt-h up \
  && ip -n hxfwdt addr add 192.168.251.2/24 dev hxfwdt-n && ip -n hxfwdt link set hxfwdt-n up && ip -n hxfwdt link set lo up \
  && ip -n hxfwdt route add default via 192.168.251.1
