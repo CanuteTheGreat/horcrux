@@ -560,6 +560,15 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "iSCSI storage pool"
           timeout 900 bash horcrux-api/tests/iscsi_storage_e2e.sh target/debug/horcrux-api
 
+      - name: "Ceph RBD storage pool (real single-node Ceph cluster: capacity, create/grow/delete images)"
+        # ceph_storage_e2e.sh bootstraps a mon + mgr + bluestore OSD in a container,
+        # adds a pool by RADOS pool name, checks the refused cases, the pool's real
+        # capacity, and that creating, listing, growing and deleting volumes through
+        # the API made, resized and removed the RBD images (checked with rbd info).
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Ceph storage pool"
+          timeout 1200 bash horcrux-api/tests/ceph_storage_e2e.sh target/debug/horcrux-api
+
       - name: "Open vSwitch (real ovsdb/ovs-vswitchd: bridges, VLAN + VXLAN ports, OpenFlow rules)"
         # ovs_e2e.sh runs the API next to a real Open vSwitch in a privileged
         # sibling container: bridge/port/flow lifecycle checked with ovs-vsctl,

@@ -79,6 +79,13 @@ impl CephManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            // An image of that name already exists: a conflict (409), not a server error.
+            if stderr.contains("already exists") || stderr.contains("File exists") {
+                return Err(horcrux_common::Error::AlreadyExists(format!(
+                    "Volume {} already exists in pool {}",
+                    volume_name, pool_path
+                )));
+            }
             error!("Failed to create Ceph RBD image: {}", stderr);
             return Err(horcrux_common::Error::System(format!(
                 "Failed to create Ceph RBD image: {}",
