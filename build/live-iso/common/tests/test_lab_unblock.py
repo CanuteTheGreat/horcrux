@@ -178,6 +178,11 @@ class ProductBlockers(unittest.TestCase):
                     t = open(os.path.join(root, fn), errors="replace").read()
                     self.assertNotRegex(t, r"(?m)^[^#\n]*\s-spice\b", os.path.join(root, fn))
 
+    def test_live_image_nftables_has_json_for_netavark(self):
+        # podman is in the live package list; netavark needs nftables[json] and emerge --noreplace has no autounmask
+        use = _rd("build", "live-iso", "project", "portage", "package.use", "horcrux-virt")
+        self.assertRegex(use, r"(?m)^net-firewall/nftables .*\bjson\b")
+
     def test_container_role_package(self):
         eb = _rd("gentoo", "sys-apps", "horcrux-role-containers", "horcrux-role-containers-1.ebuild")
         for atom in ("app-containers/incus", "app-containers/podman", "app-containers/buildah"):
