@@ -20,7 +20,7 @@ mkfs.vfat -F32 -n ESP ${d}p1 >/dev/null 2>&1; mkfs.vfat -F32 -n ESP2 ${d}p2 >/de
 udevadm trigger --subsystem-match=block --action=change; udevadm settle --timeout=30 >/dev/null 2>&1; sleep 2
 for p in 1 2 3; do echo "IGN p$p $(udevadm info -q property ${d}p$p 2>/dev/null | grep -c '^UDISKS_IGNORE=1')"; done
 if command -v udisksctl >/dev/null && udisksctl dump >/dev/null 2>&1; then
-  for p in 1 2 3; do echo "HINT p$p $(udisksctl dump 2>/dev/null | awk -v dev="$(basename $d)p$p" '/^\/org\/freedesktop\/UDisks2\/block_devices\//{blk=($0 ~ dev"$")} blk && /HintIgnore:/{print $2; exit}')"; done
+  for p in 1 2 3; do echo "HINT p$p $(udisksctl dump 2>/dev/null | awk -v dev="$(basename $d)p$p" '/^\/org\/freedesktop\/UDisks2\/block_devices\//{blk=($0 ~ dev":?$")} blk && /HintIgnore:/{print $2; exit}')"; done
 fi
 losetup -d $d; rm -f "$f"
 echo "UDISKS-DONE"

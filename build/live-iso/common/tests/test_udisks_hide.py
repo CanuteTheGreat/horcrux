@@ -31,6 +31,28 @@ def hidden(**kv):
     return False
 
 
+class HintAwk(unittest.TestCase):
+    """the guest-side `udisksctl dump` parser: udisks prints block-device headers WITH a trailing colon (the first gnome-light-systemd
+    run, 3000, got empty HINT values because the awk matched the device name at end of line)"""
+    DUMP = (
+        "/org/freedesktop/UDisks2/block_devices/loop0p1:\n  org.freedesktop.UDisks2.Block:\n    HintIgnore:                 false\n"
+        "/org/freedesktop/UDisks2/block_devices/loop0p2:\n  org.freedesktop.UDisks2.Block:\n    HintIgnore:                 true\n"
+        "/org/freedesktop/UDisks2/block_devices/loop10p2:\n  org.freedesktop.UDisks2.Block:\n    HintIgnore:                 false\n"
+    )
+
+    def hint(self, dev):
+        m = re.search(r"awk -v dev=\"\$\(basename \$d\)p\$p\" '([^']*)'", UG.CHECK)
+        self.assertTrue(m, "hint awk not found in the guest script")
+        r = subprocess.run(["awk", "-v", "dev=" + dev, m.group(1)], input=self.DUMP, capture_output=True, text=True)
+        return r.stdout.strip()
+
+    def test_header_with_trailing_colon(self):
+        self.assertEqual(self.hint("loop0p1"), "false")
+        self.assertEqual(self.hint("loop0p2"), "true")
+        self.assertEqual(self.hint("loop10p2"), "false")
+        self.assertEqual(self.hint("loop9p9"), "")
+
+
 @unittest.skipUnless(os.path.isfile(RULES), "no horcrux-core rules")
 class Rules(unittest.TestCase):
     def test_zfs_members_and_zvols(self):
