@@ -38,12 +38,14 @@ app-containers/skopeo
 app-containers/docker
 app-containers/docker-cli
 
-# LXC/LXD containers
+# LXC containers
 app-containers/lxc
-# app-containers/lxd
 
-# Incus (LXD fork)
+# Incus: the preferred system-container/VM runtime (LXD fork). Enable it
+# through horcrux-role-containers (on by default there); LXD is only the
+# supported secondary, install it explicitly if a host needs it.
 # app-containers/incus
+# app-containers/lxd
 
 # Container networking
 app-containers/cni-plugins

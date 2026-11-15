@@ -26,7 +26,7 @@ SLOT="0"
 # feature (src_configure) that gates real code: a disabled backend is not
 # compiled in, its API routes answer 404 and the web UI hides it (via
 # GET /api/features). gentoo/ci/use-matrix.sh proves this in CI.
-# Virtualization backends: qemu (default), lxd, incus
+# Virtualization backends: qemu (default), incus (preferred system containers/VMs), lxd (supported secondary)
 # Container runtimes: lxc, podman (preferred OCI runtime, USE default), docker (secondary)
 # Platform features: backup (default), cluster (+HA), kubernetes, nas
 # Build options: cli, monitoring, systemd, webui (default)

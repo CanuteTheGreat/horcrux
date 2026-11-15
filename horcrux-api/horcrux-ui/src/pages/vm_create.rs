@@ -4,7 +4,7 @@ use leptos::*;
 use leptos_router::*;
 
 /// (value, label) of every VM hypervisor, in menu order.
-const HYPERVISORS: [(&str, &str); 3] = [("qemu", "QEMU/KVM"), ("lxd", "LXD"), ("incus", "Incus")];
+const HYPERVISORS: [(&str, &str); 3] = [("qemu", "QEMU/KVM"), ("incus", "Incus"), ("lxd", "LXD")];
 
 fn hypervisor_from(value: &str) -> VmHypervisor {
     match value {

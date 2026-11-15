@@ -84,13 +84,14 @@ pub fn build_request(
     })
 }
 
-/// (value, label) of every container runtime, in menu order.
+/// (value, label) of every container runtime, in menu order (Incus before
+/// LXD: Incus is the preferred system-container runtime).
 const RUNTIMES: [(&str, &str); 5] = [
     ("podman", "Podman"),
     ("docker", "Docker"),
     ("lxc", "LXC"),
-    ("lxd", "LXD"),
     ("incus", "Incus"),
+    ("lxd", "LXD"),
 ];
 
 /// Raw values of the LXC section of the form.

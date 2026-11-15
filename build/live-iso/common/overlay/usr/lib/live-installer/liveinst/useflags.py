@@ -106,7 +106,7 @@ GROUPS = ["Security and cryptography", "Networking", "Virtualization and contain
 _G_NAMES = {
     "Security and cryptography": "ssl openssl gnutls pam seccomp caps hardened pie ssp selinux apparmor tpm tpm2 pkcs11 sasl kerberos gcrypt nettle ldap smartcard libressl",
     "Networking": "ipv6 dhcp dns http2 http3 curl nftables iptables netlink bridge vpn wifi wireless networkmanager samba nfs snmp sctp",
-    "Virtualization and containers": "kvm qemu libvirt spice vnc usbredir virgl xen lxc docker virtual virt-network vhost-net vhost-user-fs numa",
+    "Virtualization and containers": "kvm qemu libvirt spice vnc usbredir virgl xen lxc incus lxd docker virtual virt-network vhost-net vhost-user-fs numa",
     "Storage and file systems": "lvm raid zfs xfs btrfs device-mapper cryptsetup udev nvme iscsi fuse acl xattr ceph",
     "Graphics and desktop": "X wayland gtk gtk3 gtk4 qt5 qt6 opengl vulkan gui cairo png jpeg svg opengl egl gles2 xcb",
     "Audio and video": "alsa pulseaudio pipewire sound ffmpeg gstreamer v4l jack vaapi vdpau opus flac mp3 vorbis",

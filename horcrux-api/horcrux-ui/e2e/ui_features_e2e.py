@@ -111,12 +111,12 @@ def main():
         opts = page.locator("#ct-runtime option")
         expect(opts.first).to_be_attached(timeout=20000)
         runtimes = opts.evaluate_all("els => els.map(e => e.value)")
-        want = [r for r in ("podman", "docker", "lxc", "lxd", "incus") if r in feats]
+        want = [r for r in ("podman", "docker", "lxc", "incus", "lxd") if r in feats]
         assert runtimes == want, f"[{MODE}] runtime options {runtimes}, expected {want}"
         assert page.locator("#ct-runtime").input_value() == want[0]
 
         page.goto(f"{BASE}/vms/create")
-        hv_want = [h for h in ("qemu", "lxd", "incus") if h in feats]
+        hv_want = [h for h in ("qemu", "incus", "lxd") if h in feats]
         if hv_want:
             expect(page.locator("#vm-hypervisor option").first).to_be_attached(timeout=20000)
             hvs = page.locator("#vm-hypervisor option").evaluate_all("els => els.map(e => e.value)")

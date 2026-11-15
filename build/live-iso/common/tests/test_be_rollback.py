@@ -97,6 +97,15 @@ class DataIsolation(unittest.TestCase):
         self.assertTrue(all(x["safe"] for x in self.check(table)))
 
 
+class DataPaths(unittest.TestCase):
+    def test_incus_data_is_isolated_by_default_and_lxd_stays_supported(self):
+        paths = BE.conf("/nonexistent/horcrux-be.conf")["DATA_PATHS"].split()
+        self.assertIn("/var/lib/incus", paths)
+        self.assertIn("/var/lib/lxd", paths)
+        # Incus (preferred) is listed before LXD
+        self.assertLess(paths.index("/var/lib/incus"), paths.index("/var/lib/lxd"))
+
+
 class Installer(unittest.TestCase):
     def test_vm_storage_is_a_shared_dataset(self):
         sys.path.insert(0, os.path.join(T.HERE, "..", "overlay", "usr", "lib", "live-installer"))

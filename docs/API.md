@@ -257,7 +257,7 @@ Authorization: Bearer <token>
 
 **Query Parameters**:
 - `status` (optional) - Filter by status: `running`, `stopped`, `paused`
-- `hypervisor` (optional) - Filter by hypervisor: `qemu`, `lxd`, `incus`
+- `hypervisor` (optional) - Filter by hypervisor: `qemu`, `incus`, `lxd`
 - `limit` (optional) - Maximum number of results (default: 100)
 - `offset` (optional) - Pagination offset (default: 0)
 

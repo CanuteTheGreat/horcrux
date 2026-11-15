@@ -625,12 +625,20 @@ impl ContainerManager {
     #[cfg(any(feature = "lxd", feature = "incus"))]
     pub async fn reconcile_instances(&self) {
         use crate::console::lxd::{Backend, Client};
-        #[allow(unused_mut)]
-        let mut daemons: Vec<(ContainerRuntime, Backend)> = Vec::new();
-        #[cfg(feature = "lxd")]
-        daemons.push((ContainerRuntime::Lxd, Backend::Lxd));
-        #[cfg(feature = "incus")]
-        daemons.push((ContainerRuntime::Incus, Backend::Incus));
+        let mut daemons: Vec<(ContainerRuntime, Backend)> = vec![
+            #[cfg(feature = "lxd")]
+            (ContainerRuntime::Lxd, Backend::Lxd),
+            #[cfg(feature = "incus")]
+            (ContainerRuntime::Incus, Backend::Incus),
+        ];
+        // Preferred runtime first (Incus, then LXD), so when both daemons
+        // hold a container of the same name the preferred one is reconciled first.
+        daemons.sort_by_key(|(rt, _)| {
+            horcrux_core::features::INSTANCE_RUNTIME_PREFERENCE
+                .iter()
+                .position(|p| p == rt)
+                .unwrap_or(usize::MAX)
+        });
         for (runtime, backend) in daemons {
             let client = Client::quick(backend);
             if !client.available() {

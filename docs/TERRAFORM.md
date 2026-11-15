@@ -72,7 +72,7 @@ Manages a virtual machine.
 resource "horcrux_vm" "web_server" {
   id           = "vm-100"
   name         = "web-server"
-  hypervisor   = "Qemu"      # Qemu, Lxd, Incus
+  hypervisor   = "Qemu"      # Qemu, Incus, Lxd
   architecture = "X86_64"    # X86_64, Aarch64, Riscv64
 
   cpus      = 4

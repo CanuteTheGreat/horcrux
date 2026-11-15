@@ -34,7 +34,8 @@ src_install() {
 
 pkg_postinst() {
 	elog "Container role installed. Enable what you use (none of it is started by default):"
-	elog "  rc-update add incus default && rc-service incus start      # then: incus admin init --minimal"
+	elog "  OpenRC:   rc-update add incus default && rc-service incus start      # then: incus admin init --minimal"
+	elog "  systemd:  systemctl enable --now incus.socket incus.service          # then: incus admin init --minimal"
 	elog "  Podman is daemonless; rootless needs subuid/subgid for the user:  usermod --add-subuids 100000-165535 --add-subgids 100000-165535 <user>"
 	elog "  Buildah / Skopeo: nothing to start."
 }

@@ -94,7 +94,7 @@ horcrux vm clone <template-id> --name new-vm
 
 ### Containers (`container`)
 
-Manage containers (Docker, Podman, LXC, LXD, Incus):
+Manage containers (Docker, Podman, LXC, Incus, LXD; Incus is preferred over LXD):
 
 ```bash
 # List all containers

@@ -225,4 +225,22 @@ mod tests {
         assert!(rc.contains("horcrux-api guests stop"));
         assert!(rc.contains("horcrux-api guests boot"));
     }
+
+    /// Incus and LXD are ordered before the guests unit under BOTH init
+    /// systems (OpenRC and systemd), Incus (the preferred runtime) first.
+    #[test]
+    fn both_inits_order_incus_then_lxd() {
+        let rc = include_str!("../../../../deploy/openrc/horcrux-guests");
+        let after = rc
+            .lines()
+            .find(|l| l.trim_start().starts_with("after "))
+            .expect("after line");
+        assert!(after.find("incus").unwrap() < after.find("lxd").unwrap());
+        let unit = include_str!("../../../../deploy/systemd/horcrux-guests.service");
+        let after = unit
+            .lines()
+            .find(|l| l.starts_with("After="))
+            .expect("After=");
+        assert!(after.find("incus.service").unwrap() < after.find("lxd.service").unwrap());
+    }
 }

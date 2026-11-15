@@ -37,7 +37,7 @@ def conf(path=CONF):
     c = {"POOL": "rpool", "KEEP": "5", "AUTO_SNAPSHOT": "yes", "TIMEOUT": "5", "CMDLINE": "", "KERNEL_GLOB": "*",
          "BOOT_MAX_USED_PCT": "80", "BOOT_MIN_FREE_MB": "32",
          # directories that hold user data / VM disks: they MUST be their own datasets (outside rpool/ROOT), or a rollback would lose them
-         "DATA_PATHS": "/home /var/lib/libvirt /var/lib/horcrux/vms /var/lib/docker /var/lib/lxc"}
+         "DATA_PATHS": "/home /var/lib/libvirt /var/lib/horcrux/vms /var/lib/docker /var/lib/lxc /var/lib/incus /var/lib/lxd"}
     try:
         for line in open(path):
             m = re.match(r'^\s*([A-Z_]+)\s*=\s*"?([^"\n]*)"?\s*$', line)

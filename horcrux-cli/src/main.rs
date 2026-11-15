@@ -577,7 +577,7 @@ enum ContainerCommands {
         /// Container name
         #[arg(short, long)]
         name: String,
-        /// Container runtime (podman [default], docker, lxc, lxd, incus)
+        /// Container runtime (podman [default], docker, lxc, incus, lxd; incus is the preferred system-container runtime)
         #[arg(short, long, default_value = "podman")]
         runtime: String,
         /// Image (podman/docker) or LXC template: distro/release[/variant]

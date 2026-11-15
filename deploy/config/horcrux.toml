@@ -134,8 +134,9 @@ default_runtime = "lxc"
 lxc_enabled = true
 podman_enabled = true   # preferred OCI runtime
 docker_enabled = true   # secondary
+# Incus is the preferred system-container/VM runtime; LXD stays supported
+incus_enabled = true
 lxd_enabled = false
-incus_enabled = false
 
 [backup]
 # Backup settings

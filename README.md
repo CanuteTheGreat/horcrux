@@ -36,7 +36,7 @@ functionality (VMs, containers, storage, clustering, firewall, backups, RBAC) on
 Gentoo, with a Rust API server, a Rust/WASM web UI, a CLI and a Terraform provider.
 It differs from Proxmox in a few deliberate ways:
 
-- **More backends:** QEMU/KVM, LXD and Incus for VMs; LXC, LXD, Incus, Docker and Podman for containers.
+- **More backends:** QEMU/KVM, Incus and LXD for VMs; Incus (preferred), LXD, LXC, Docker and Podman for containers. Incus is the preferred system-container/VM runtime; LXD stays supported as the secondary.
 - **Kubernetes management:** connect or provision k3s/kubeadm clusters, workloads, Helm.
 - **Mixed-architecture clusters:** x86_64, aarch64 and riscv64 nodes in one cluster.
 - **Gentoo-native:** ebuilds and USE flags select which features get built.
@@ -67,8 +67,8 @@ Known gaps and caveats:
 
 ### Virtualization and containers
 
-- **Hypervisors:** QEMU/KVM, LXD, Incus.
-- **Container runtimes:** LXC, LXD, Incus, Podman (preferred OCI runtime, the default for containers and stacks) and Docker (secondary). Override per request with `runtime=docker`, or host-wide with `HORCRUX_OCI_RUNTIME=docker`.
+- **Hypervisors:** QEMU/KVM, Incus (preferred), LXD.
+- **Container runtimes:** LXC, Incus (preferred system containers), LXD, Podman (preferred OCI runtime, the default for containers and stacks) and Docker (secondary). Override per request with `runtime=docker`, or host-wide with `HORCRUX_OCI_RUNTIME=docker`.
 - **Templates:** full and linked clones, cloud-init.
 - **Console access:** VNC (noVNC in the browser via a WebSocket proxy; QEMU listens on 127.0.0.1 with a per-start password), SPICE, serial console, headless VMs.
 
@@ -250,7 +250,7 @@ are meant to run in CI; the unit tests run anywhere.
 └───────────────────┬─────────────────────────┘
 ┌───────────────────┴─────────────────────────┐
 │        Hypervisors & Storage Backends       │
-│  QEMU │ LXD │ Incus │ Docker │ Podman       │
+│  QEMU │ Incus │ LXD │ Docker │ Podman       │
 │  ZFS │ Ceph │ LVM │ iSCSI │ Directory       │
 └─────────────────────────────────────────────┘
 ```

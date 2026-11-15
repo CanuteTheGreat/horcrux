@@ -178,6 +178,39 @@ pub fn default_oci_runtime() -> ContainerRuntime {
     )
 }
 
+/// System-container/VM runtimes in the order Horcrux prefers them: Incus
+/// first (the maintained fork, owner rule "favor incus over lxd"), LXD as
+/// the supported secondary. Every place that picks between the two when
+/// the caller named none (defaults, menu order, reconcile order) goes
+/// through this list.
+pub const INSTANCE_RUNTIME_PREFERENCE: [ContainerRuntime; 2] =
+    [ContainerRuntime::Incus, ContainerRuntime::Lxd];
+
+/// Same preference for VM hypervisors (QEMU is a different kind of
+/// backend and is never chosen through this).
+pub const INSTANCE_HYPERVISOR_PREFERENCE: [VmHypervisor; 2] =
+    [VmHypervisor::Incus, VmHypervisor::Lxd];
+
+/// First of Incus, LXD for which `usable` holds.
+pub fn preferred_instance_runtime(
+    usable: impl Fn(&ContainerRuntime) -> bool,
+) -> Option<ContainerRuntime> {
+    INSTANCE_RUNTIME_PREFERENCE
+        .iter()
+        .find(|r| usable(r))
+        .cloned()
+}
+
+/// First of Incus, LXD for which `usable` holds.
+pub fn preferred_instance_hypervisor(
+    usable: impl Fn(&VmHypervisor) -> bool,
+) -> Option<VmHypervisor> {
+    INSTANCE_HYPERVISOR_PREFERENCE
+        .iter()
+        .find(|h| usable(h))
+        .cloned()
+}
+
 #[derive(Debug, Serialize)]
 pub struct FeaturesResponse {
     pub version: &'static str,
@@ -266,6 +299,34 @@ fn check_named_runtime(rt: &str) -> Result<(), Response> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incus_is_preferred_over_lxd() {
+        // both usable: Incus
+        assert_eq!(
+            preferred_instance_runtime(|_| true),
+            Some(ContainerRuntime::Incus)
+        );
+        assert_eq!(
+            preferred_instance_hypervisor(|_| true),
+            Some(VmHypervisor::Incus)
+        );
+        // only LXD usable: LXD stays supported
+        assert_eq!(
+            preferred_instance_runtime(|r| *r == ContainerRuntime::Lxd),
+            Some(ContainerRuntime::Lxd)
+        );
+        assert_eq!(
+            preferred_instance_hypervisor(|h| *h == VmHypervisor::Lxd),
+            Some(VmHypervisor::Lxd)
+        );
+        // neither: no choice is invented
+        assert_eq!(preferred_instance_runtime(|_| false), None);
+        assert_eq!(preferred_instance_hypervisor(|_| false), None);
+        // the lists themselves put Incus first
+        assert_eq!(INSTANCE_RUNTIME_PREFERENCE[0], ContainerRuntime::Incus);
+        assert_eq!(INSTANCE_HYPERVISOR_PREFERENCE[0], VmHypervisor::Incus);
+    }
 
     #[test]
     fn table_matches_compiled_features() {
