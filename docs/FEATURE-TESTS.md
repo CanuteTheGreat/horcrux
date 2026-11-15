@@ -9,7 +9,7 @@ Generated from the lab's feature matrix (`scripts/lab/vmcluster/matrix.py` in th
 
 **Test column.** `vmc:` = the VM-cluster suite; `ci:` = an e2e that exists and runs in CI containers (to be ported into the VM cluster); `rust:` = `horcrux-api/tests/it` suite against a live server; `lab:` = lab-laptop job; `-` = **no e2e test yet**.
 
-**Coverage (2026-11-10).** 73 features claimed. Passing e2e in the VM cluster: **53**; failing: **1**; written, not yet run: 1; e2e exists in CI only: 10; hardware-only: 4; no e2e test: **4**.
+**Coverage (2026-11-10).** 73 features claimed. Passing e2e in the VM cluster: **53**; failing: **1**; written, not yet run: 1; e2e exists in CI only: 11; hardware-only: 4; no e2e test: **3**.
 
 A failing feature, or a claimed-but-missing one, is a bug: it is filed in qa-findings/horcrux.md and fixed (or the claim is corrected here and in the docs).
 
@@ -78,7 +78,7 @@ A failing feature, or a claimed-but-missing one, is a bug: it is filed in qa-fin
 | `sto.volumes-content` | Storage | storage pools, volumes, content | API storage | rust: storage_volume_tests, storage_content_tests | VM | e2e exists in CI containers, not yet moved into the VM cluster |
 | `sto.nfs` | Storage | NFS pool by `server:/export`: real capacity, volume create/list/refuse duplicate/delete on the server's export, remove unmounts | docs | ci: tests/nfs_storage_e2e.sh (nfs-ganesha server container + kernel client) | VM | pass, 2026-11-14 (rw-man-01 run; CI step "NFS storage pool") |
 | `sto.iscsi` | Storage | iSCSI pool by `iscsi://portal/iqn`: a portal that does not offer the IQN is refused, adding logs in, the target's LUNs are listed as volumes (`lunN`, real size, raw), a VM can use a LUN's device path, a write lands in the target, remove logs out | docs | ci: tests/iscsi_storage_e2e.sh (tgt target container + kernel initiator) | VM | pass, 2026-11-14 (rw-man-01 run; found and fixed: pools had no volumes, no login, 0 GB capacity, any IQN accepted; CI step "iSCSI storage pool") |
-| `sto.ceph` | Storage | Ceph storage backend | docs | - | VM | no end-to-end test exists (gap) |
+| `sto.ceph` | Storage | Ceph RBD storage pools: add by RADOS pool name, real capacity, create / list / grow / delete images | docs | horcrux-api/tests/ceph_storage_e2e.sh (CI: Ceph RBD step) | VM | pass, 2026-11-14 (rw-man-01, real single-node Ceph 19.2 mon+mgr+OSD; found and fixed: the pool reported 0/0 GB so no volume could be created, a duplicate create was a 500, a shrink was a 500) |
 | `sto.replication` | Storage | replication job: VM snapshot -> zfs send|receive to a second node, data identical | API replication | vmc: storetests.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `bak.backup-restore` | Storage | backup a RUNNING VM (zstd and dedup), verify, delete it, restore over it and to a new id: data written in the guest is identical | API backups | vmc: storetests.py | VM | pass, 2026-11-09 (VM cluster run 1109-1429) |
 | `sto.snapshot-schedules` | Storage | snapshot schedules: cron schedule snapshots by itself, retention prunes only its own, disable/delete stop it (quotas: no test yet) | API snapshot-schedules | ci: tests/snapshot_schedule_e2e.sh (real qcow2) | VM | pass, 2026-11-13 (rw-man-01 run; CI step "Snapshot schedules") |

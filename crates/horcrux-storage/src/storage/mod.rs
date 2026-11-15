@@ -97,6 +97,39 @@ pub fn parse_zfs_capacity(line: &str) -> Option<(u64, u64)> {
     Some(((used + avail) / gb, avail / gb))
 }
 
+/// (total, available) GB of a Ceph pool, from `ceph df --format json`: a Ceph
+/// pool's path is the RADOS pool NAME, so statvfs on it fails and the pool used
+/// to report 0 GB (every `rbd create` was then refused by the space check).
+/// `max_avail` is what the pool can still store (replication and the fullest
+/// OSD already taken into account); total = stored raw bytes in the pool + that.
+pub fn ceph_capacity_gb(pool: &str) -> Option<(u64, u64)> {
+    // HORCRUX_CEPH_BIN lets tests (and unusual installs) point at another ceph binary.
+    let bin = std::env::var_os("HORCRUX_CEPH_BIN").unwrap_or_else(|| "ceph".into());
+    let out = std::process::Command::new(bin)
+        .args(["--connect-timeout", "5", "df", "--format", "json"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_ceph_df(&String::from_utf8_lossy(&out.stdout), pool)
+}
+
+/// Parse `ceph df --format json` into (total, available) GB of `pool`.
+pub fn parse_ceph_df(json: &str, pool: &str) -> Option<(u64, u64)> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let p = v
+        .get("pools")?
+        .as_array()?
+        .iter()
+        .find(|p| p.get("name").and_then(|n| n.as_str()) == Some(pool))?;
+    let st = p.get("stats")?;
+    let avail = st.get("max_avail")?.as_u64()?;
+    let used = st.get("stored").and_then(|u| u.as_u64()).unwrap_or(0);
+    let gb = 1024 * 1024 * 1024;
+    Some(((used + avail) / gb, avail / gb))
+}
+
 /// How the manager measures a pool's filesystem: `fs_capacity_gb`
 /// (tests substitute a fake to pin or move the numbers).
 pub type CapacityProbe = fn(&str) -> Option<(u64, u64)>;
@@ -104,6 +137,7 @@ pub type CapacityProbe = fn(&str) -> Option<(u64, u64)>;
 /// A statvfs on a hung NFS/CIFS/GlusterFS mount can block for minutes:
 /// past this the pool keeps its last known numbers.
 const CAPACITY_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const CEPH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// Pools whose capacity is the filesystem's (statvfs on the pool path).
 fn measured_by_statvfs(t: &StorageType) -> bool {
@@ -116,6 +150,12 @@ fn measured_by_statvfs(t: &StorageType) -> bool {
             | StorageType::CephFs
             | StorageType::BtrFs
     )
+}
+
+/// Pools measured by a probe: statvfs for filesystem pools, `zfs list` for ZFS,
+/// `ceph df` for Ceph RBD.
+fn measured_by_probe(t: &StorageType) -> bool {
+    measured_by_statvfs(t) || matches!(t, StorageType::Zfs | StorageType::Ceph)
 }
 
 /// Defence in depth: every backend re-checks each name it joins onto a pool
@@ -256,6 +296,7 @@ pub struct StorageManager {
     capacity_probe: CapacityProbe,
     /// Same for ZFS pools (dataset names, measured with `zfs list`).
     zfs_probe: CapacityProbe,
+    ceph_probe: CapacityProbe,
     /// Pools whose last measurement hasn't returned yet (hung mount): not
     /// probed again until it does, so blocked threads don't pile up.
     measuring: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
@@ -286,6 +327,7 @@ impl StorageManager {
             store: None,
             capacity_probe: fs_capacity_gb,
             zfs_probe: zfs_capacity_gb,
+            ceph_probe: ceph_capacity_gb,
             measuring: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
@@ -345,6 +387,7 @@ impl StorageManager {
     pub fn with_capacity_probe(mut self, probe: CapacityProbe) -> Self {
         self.capacity_probe = probe;
         self.zfs_probe = probe;
+        self.ceph_probe = probe;
         self
     }
 
@@ -352,6 +395,8 @@ impl StorageManager {
     fn probe_for(&self, t: &StorageType) -> CapacityProbe {
         if matches!(t, StorageType::Zfs) {
             self.zfs_probe
+        } else if matches!(t, StorageType::Ceph) {
+            self.ceph_probe
         } else {
             self.capacity_probe
         }
@@ -359,8 +404,7 @@ impl StorageManager {
 
     /// Measure real capacity for filesystem-backed pools.
     fn refresh_capacity(probe: CapacityProbe, pool: &mut StoragePool) {
-        if measured_by_statvfs(&pool.storage_type) || matches!(pool.storage_type, StorageType::Zfs)
-        {
+        if measured_by_probe(&pool.storage_type) {
             if let Some((total, available)) = probe(&pool.path) {
                 pool.total = total;
                 pool.available = available;
@@ -375,14 +419,11 @@ impl StorageManager {
     /// statvfs runs off the async workers with a timeout: a pool whose
     /// mount doesn't answer keeps its last numbers.
     async fn refresh_pools(&self, only: Option<&str>) {
-        let targets: Vec<(String, String, CapacityProbe)> = {
+        let targets: Vec<(String, String, CapacityProbe, std::time::Duration)> = {
             let pools = self.pools.read().await;
             pools
                 .values()
-                .filter(|p| {
-                    measured_by_statvfs(&p.storage_type)
-                        || matches!(p.storage_type, StorageType::Zfs)
-                })
+                .filter(|p| measured_by_probe(&p.storage_type))
                 .filter(|p| only.is_none_or(|id| p.id == id))
                 .filter(|p| p.source.is_none() || nfs::is_mounted(&p.path))
                 .map(|p| {
@@ -390,13 +431,24 @@ impl StorageManager {
                         p.id.clone(),
                         p.path.clone(),
                         self.probe_for(&p.storage_type),
+                        // `ceph df` starts a client and asks the monitors: slower than statvfs
+                        if p.storage_type == StorageType::Ceph {
+                            CEPH_PROBE_TIMEOUT
+                        } else {
+                            CAPACITY_PROBE_TIMEOUT
+                        },
                     )
                 })
                 .collect()
         };
-        let deadline = tokio::time::Instant::now() + CAPACITY_PROBE_TIMEOUT;
+        let wait = targets
+            .iter()
+            .map(|t| t.3)
+            .max()
+            .unwrap_or(CAPACITY_PROBE_TIMEOUT);
+        let deadline = tokio::time::Instant::now() + wait;
         let mut running = Vec::new();
-        for (id, path, probe) in targets {
+        for (id, path, probe, _) in targets {
             {
                 let mut busy = self.measuring.lock().unwrap_or_else(|e| e.into_inner());
                 if !busy.insert(id.clone()) {
@@ -964,9 +1016,24 @@ impl StorageManager {
             StorageType::Lvm => run_tool("lvextend", &["-L", &size_arg, &target])
                 .await
                 .map(|_| ()),
-            StorageType::Ceph => run_tool("rbd", &["resize", "--size", &size_arg, &target])
-                .await
-                .map(|_| ()),
+            StorageType::Ceph => {
+                // rbd refuses a shrink without --allow-shrink, but with a 500:
+                // say so up front as a bad request.
+                let info = run_tool("rbd", &["info", "--format", "json", &target]).await?;
+                let cur = serde_json::from_str::<serde_json::Value>(&info)
+                    .ok()
+                    .and_then(|v| v.get("size").and_then(|s| s.as_u64()));
+                if cur.is_some_and(|c| new_size_gb.saturating_mul(gb) < c) {
+                    return Err(horcrux_common::Error::InvalidConfig(format!(
+                        "Volume {} is {} GB; shrinking is not supported",
+                        volume_name,
+                        cur.unwrap_or(0).div_ceil(gb)
+                    )));
+                }
+                run_tool("rbd", &["resize", "--size", &size_arg, &target])
+                    .await
+                    .map(|_| ())
+            }
             ref t => Err(unsupported("Resizing volumes", t)),
         }
     }
@@ -1233,13 +1300,8 @@ mod tests {
         StorageManager::refresh_capacity(fake_fs, &mut gp);
         assert_eq!((gp.total, gp.available), (10, 4));
 
-        // Block pools (LVM/Ceph/iSCSI) and S3 aren't statvfs'd.
-        for t in [
-            StorageType::Lvm,
-            StorageType::Ceph,
-            StorageType::Iscsi,
-            StorageType::S3,
-        ] {
+        // Block pools (LVM/iSCSI) and S3 aren't statvfs'd.
+        for t in [StorageType::Lvm, StorageType::Iscsi, StorageType::S3] {
             let mut bp = pool("b", t.clone(), "tank/vms");
             bp.available = 7;
             m.pools.write().await.insert("b".into(), bp.clone());
@@ -1281,6 +1343,38 @@ mod tests {
         );
         assert_eq!(parse_zfs_capacity("-\t-\n"), None);
         assert_eq!(parse_zfs_capacity(""), None);
+    }
+
+    /// A Ceph pool's path is a RADOS pool name: it is measured from `ceph df`
+    /// (it used to stay at 0 GB, so every rbd create was refused).
+    #[test]
+    fn parse_ceph_df_reads_the_named_pool() {
+        let df = r#"{"stats":{"total_bytes":3221225472},"pools":[
+            {"name":"hxpool","id":1,"stats":{"stored":1073741824,"max_avail":3031954944}},
+            {"name":".mgr","id":2,"stats":{"stored":459280,"max_avail":99}}]}"#;
+        // 1 GiB stored + 2.82 GiB free = 3.82 -> 3; 2.82 -> 2
+        assert_eq!(parse_ceph_df(df, "hxpool"), Some((3, 2)));
+        assert_eq!(parse_ceph_df(df, "nopool"), None);
+        assert_eq!(parse_ceph_df("{}", "hxpool"), None);
+        assert_eq!(parse_ceph_df("not json", "hxpool"), None);
+    }
+
+    #[tokio::test]
+    async fn ceph_pool_capacity_is_measured() {
+        fn fs_none(_: &str) -> Option<(u64, u64)> {
+            None
+        }
+        fn ceph_fake(p: &str) -> Option<(u64, u64)> {
+            (p == "rbdpool").then_some((8, 6))
+        }
+        let mut m = StorageManager::new().with_capacity_probe(fs_none);
+        m.ceph_probe = ceph_fake;
+        m.pools
+            .write()
+            .await
+            .insert("c".into(), pool("c", StorageType::Ceph, "rbdpool"));
+        let p = m.get_pool("c").await.unwrap();
+        assert_eq!((p.total, p.available), (8, 6));
     }
 
     /// `zfs_capacity_gb` runs `zfs list` and reports (used + avail, avail) in GB;
