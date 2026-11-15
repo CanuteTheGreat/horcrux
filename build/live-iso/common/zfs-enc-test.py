@@ -176,6 +176,32 @@ class ZRun(qt.Runner):
     def sh(self, cmd, timeout=60):
         return qt.ssh(qt.FWD_SSH, self.key, cmd, timeout=timeout)
 
+    TRANSPORT_LOST = re.compile(r"closed by remote host|Connection reset|Broken pipe|Connection refused|kex_exchange_identification|Connection timed out", re.I)
+
+    def sh_resilient(self, cmd, timeout=60, label="cmd", boot_id=None, attempts=3):
+        """`sh` for a LONG idempotent command right after a hibernate resume: when sshd drops the transport mid-command (rc 255, 'closed by remote
+        host') the guest is still the same resumed system and the command's effect (a scrub) is intact, so re-attach over a fresh session and run it
+        again. The caller's assertion on the output is unchanged. Every drop is explained (boot id, uptime, sshd state, log tail, dmesg) in
+        res['ssh_transport_loss'] and printed, so a product cause (sshd restarted by a resume hook, guest reset) is visible, never silently retried."""
+        rc, o = self.sh(cmd, timeout=timeout)
+        for n in range(1, attempts):
+            if rc != 255 or not self.TRANSPORT_LOST.search(o):
+                break
+            up = self.wait_ssh(180)
+            _r, diag = self.sh("echo BOOT=$(cat /proc/sys/kernel/random/boot_id); uptime; "
+                               "{ rc-service sshd status 2>&1 || systemctl status sshd ssh 2>&1 | head -5; } | head -5; "
+                               "ps -o pid,lstart,args -C sshd | head -5; "
+                               "{ tail -n 25 /var/log/messages /var/log/auth.log 2>/dev/null; journalctl -b -u sshd -u ssh -n 25 --no-pager 2>/dev/null; } | grep -iE 'sshd|ssh|chrony|time|clock|hx-|kill' | tail -15; "
+                               "dmesg | tail -15", timeout=40)
+            same = bool(boot_id) and boot_id in diag
+            msg = f"{label}: ssh transport lost on attempt {n} ({o.strip()[:120]!r}); re-attached={up}; same boot id={same}\n{diag.strip()}"
+            print("[DIAG] " + msg, flush=True)
+            self.res.setdefault("ssh_transport_loss", []).append(msg)
+            if not up:
+                break
+            rc, o = self.sh(cmd, timeout=timeout)
+        return rc, o
+
     def vga_stable(self, vm, label, timeout=360):
         """wait until the VGA console shows something and then stops changing (= the passphrase prompt)"""
         end = time.time() + qt.T(timeout)
@@ -680,7 +706,8 @@ class ZRun(qt.Runner):
             self.res["resume_dmesg"] = "\n".join(ls)
             rc, o = self.sh("zpool status -x; zpool status rpool | grep -E 'state|errors'; zfs get -H -o value keystatus rpool; test -e /run/hx/key && echo KEYLEFT || echo nokey")
             self.step("pool-healthy-after-resume", "all pools are healthy" in o and "available" in o and "KEYLEFT" not in o, o.strip().replace("\n", " | ")[:300])
-            rc, o = self.sh("zpool scrub -w rpool; zpool status rpool | grep -E 'scan:|errors:|state:'", timeout=int(qt.T(600)))
+            rc, o = self.sh_resilient("zpool scrub -w rpool; zpool status rpool | grep -E 'scan:|errors:|state:'", timeout=int(qt.T(600)),
+                                      label="scrub-after-resume", boot_id=before["boot_id"])
             self.step("scrub-clean-after-resume", rc == 0 and "with 0 errors" in o and "No known data errors" in o, o.strip().replace("\n", " | ")[:300])
             self.sh("poweroff", timeout=10)
             self.wait_exit(vm)
