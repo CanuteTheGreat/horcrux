@@ -1,20 +1,5 @@
-From: Horcrux <horcrux@errant.solutions>
-Subject: [PATCH] session-scoped user services: stop with the graphical session, never respawn into a dead one
+Horcrux OpenRC session scoping for gnome-session-openrc 50 (ported from the 49.2 patch series): gsd meta services are not supervised, gsd audio starts after PipeWire, gnome-shell stays on the OpenRC user bus, session-scoped user services with gnome-session-openrc-helper (teardown/preclean/guard/activation-env)
 
-The OpenRC user runlevel is shared by every login of the user (pam_openrc stops it only with the LAST session), so an ssh/su
-login kept gnome-shell & co. running after a GNOME logout and supervise-daemon respawned gnome-shell into the closed session:
-it grabbed the seat (mutter: "Failed to take control of the session: EBUSY") and the next login had no mouse and keyboard.
-
-* gnome-session-openrc-helper: teardown (stop the session's services), preclean (a new session removes the stale state of an
-  earlier one, kills a stale compositor of another session) and guard (exec gnome-shell only while its session is alive)
-* leader-openrc: records the logind session, runs preclean before starting and teardown (own setsid, bounded) when the session ends
-* gnome-shell-{wayland,x11}[.gnome-login]: command runs through the guard, so a supervise-daemon respawn after the session is
-  gone fails instead of starting a compositor
-* activation-env: the session's desktop identity (XDG_CURRENT_DESKTOP, XDG_SESSION_TYPE/DESKTOP, DESKTOP_SESSION) and
-  WAYLAND_DISPLAY/DISPLAY go into the user bus's D-Bus activation environment (gnome-shell's start_pre before the shell can activate the portal, gnome-session-init-*
-  once the compositor is up, which restarts portal processes started without it); without it xdg-desktop-portal had no GNOME backend and no ScreenCast (no screen sharing)
-
----
 diff --git a/data/gnome-session-openrc-helper b/data/gnome-session-openrc-helper
 new file mode 100755
 index 0000000..8d76cc0
@@ -285,10 +270,10 @@ index 0000000..8d76cc0
 +	*) echo "usage: ${0##*/} teardown|preclean [SESSION_ID] | guard CMD... | alive SESSION_ID | activation-env" >&2; exit 2 ;;
 +esac
 diff --git a/data/meson.build b/data/meson.build
-index d21f1d5..20215a4 100644
+index 5d5f3b0..a093364 100644
 --- a/data/meson.build
 +++ b/data/meson.build
-@@ -61,6 +61,13 @@ install_data(
+@@ -51,6 +51,13 @@ install_data(
    install_dir: session_libexecdir
  )
  
@@ -302,10 +287,10 @@ index d21f1d5..20215a4 100644
  # Create services like gnome-session.{gnome,gnome-login,...}
  gnome_sessions = [ 'gnome', 'gnome-login', 'gnome-initial-setup' ]
  targets = [
-diff --git a/data/openrc/gnome-session-init-wayland b/data/openrc/gnome-session-init-wayland
-index 388199b..9b8e02c 100755
---- a/data/openrc/gnome-session-init-wayland
-+++ b/data/openrc/gnome-session-init-wayland
+diff --git a/data/openrc/gnome-session-init b/data/openrc/gnome-session-init
+index 0e04111..d2f6623 100755
+--- a/data/openrc/gnome-session-init
++++ b/data/openrc/gnome-session-init
 @@ -10,6 +10,12 @@ command="/usr/libexec/gnome-session-ctl"
  command_args="--signal-init"
  pidfile="${XDG_RUNTIME_DIR}/gnome-session-init.pid"
@@ -317,33 +302,27 @@ index 388199b..9b8e02c 100755
 +}
 +
  depend() {
- 	after gnome-shell-wayland
+ 	after gnome-shell
  }
-diff --git a/data/openrc/gnome-session-init-x11 b/data/openrc/gnome-session-init-x11
-index bb61899..69a75c0 100755
---- a/data/openrc/gnome-session-init-x11
-+++ b/data/openrc/gnome-session-init-x11
-@@ -10,6 +10,12 @@ command="/usr/libexec/gnome-session-ctl"
- command_args="--signal-init"
- pidfile="${XDG_RUNTIME_DIR}/gnome-session-init.pid"
+diff --git a/data/openrc/gnome-settings-daemon b/data/openrc/gnome-settings-daemon
+index 00ff34c..f64c7ca 100755
+--- a/data/openrc/gnome-settings-daemon
++++ b/data/openrc/gnome-settings-daemon
+@@ -1,6 +1,5 @@
+ #!/sbin/openrc-run
  
-+# the compositor is up: D-Bus-activated services (portals, Settings, Files) get the session environment incl. its display
-+start_pre() {
-+	/usr/libexec/gnome-session-openrc-helper activation-env
-+	return 0
-+}
-+
- depend() {
- 	after gnome-shell-x11
- }
-diff --git a/data/openrc/gnome-shell-wayland b/data/openrc/gnome-shell-wayland
-index b478d00..e21fa76 100755
---- a/data/openrc/gnome-shell-wayland
-+++ b/data/openrc/gnome-shell-wayland
-@@ -8,8 +8,10 @@ error_logger="logger"
+-supervisor=supervise-daemon
+ description="GNOME Settings Daemon"
+ #pidfile="/tmp/gnome-shell.pid"
+ 
+diff --git a/data/openrc/gnome-shell b/data/openrc/gnome-shell
+index 43f8c8a..24707f6 100755
+--- a/data/openrc/gnome-shell
++++ b/data/openrc/gnome-shell
+@@ -8,11 +8,13 @@ error_logger="logger"
  
  supervisor=supervise-daemon
- description="GNOME Shell (wayland)"
+ description="GNOME Shell"
 -command="/usr/bin/gnome-shell"
 -command_args="--wayland"
 +# supervise-daemon respawns the command itself: the guard starts gnome-shell only while the graphical session that owns this
@@ -352,20 +331,28 @@ index b478d00..e21fa76 100755
 +command_args="guard /usr/bin/gnome-shell --wayland"
  notify="socket:ready"
  
- pidfile="${XDG_RUNTIME_DIR}/gnome-shell-wayland.pid"
-@@ -37,4 +39,8 @@ start_pre()
- 	# the leader (gdm-wayland-session) runs under its own private bus; the session services and the
- 	# gsd daemons are on the OpenRC user bus: keep the shell there or gsd-media-keys cannot grab keys
- 	export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+-pidfile="${XDG_RUNTIME_DIR}/gnome-shell.pid"
++pidfile="${XDG_RUNTIME_DIR}/gnome-shell-wayland.pid"
+ _gsl_file="${XDG_RUNTIME_DIR}/gnome-session-leader.pid"
+ 
+ depend()
+@@ -33,4 +35,12 @@ start_pre()
+ 	while read -d $'\0' line ; do
+ 		export "${line}"
+ 	done < /proc/$(cat ${_gsl_file})/environ
++
++	# the leader (gdm-wayland-session) runs under its own private bus; the session services and the
++	# gsd daemons are on the OpenRC user bus: keep the shell there or gsd-media-keys cannot grab keys
++	export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
 +
 +	# the session's desktop identity goes into the user bus's activation environment BEFORE gnome-shell starts: the shell
 +	# D-Bus-activates xdg-desktop-portal right away, and the portal picks its backends (ScreenCast) from XDG_CURRENT_DESKTOP
 +	/usr/libexec/gnome-session-openrc-helper activation-env
  }
-diff --git a/data/openrc/gnome-shell-wayland.gnome-login b/data/openrc/gnome-shell-wayland.gnome-login
-index 398c60c..687061c 100755
---- a/data/openrc/gnome-shell-wayland.gnome-login
-+++ b/data/openrc/gnome-shell-wayland.gnome-login
+diff --git a/data/openrc/gnome-shell.gnome-login b/data/openrc/gnome-shell.gnome-login
+index 33c34a8..687061c 100755
+--- a/data/openrc/gnome-shell.gnome-login
++++ b/data/openrc/gnome-shell.gnome-login
 @@ -8,8 +8,10 @@ error_logger="logger"
  
  supervisor=supervise-daemon
@@ -379,51 +366,34 @@ index 398c60c..687061c 100755
  notify="socket:ready"
  
  pidfile="${XDG_RUNTIME_DIR}/gnome-shell-gdm.pid"
-diff --git a/data/openrc/gnome-shell-x11 b/data/openrc/gnome-shell-x11
-index e44c80f..8eeb027 100755
---- a/data/openrc/gnome-shell-x11
-+++ b/data/openrc/gnome-shell-x11
-@@ -8,8 +8,10 @@ error_logger="logger"
- 
- supervisor=supervise-daemon
- description="GNOME Shell (x11)"
--command="/usr/bin/gnome-shell"
--command_args="--x11"
-+# supervise-daemon respawns the command itself: the guard starts gnome-shell only while the graphical session that owns this
-+# service is alive (a respawn into a closed session would grab the seat and the next login would have no input)
-+command="/usr/libexec/gnome-session-openrc-helper"
-+command_args="guard /usr/bin/gnome-shell --x11"
- notify="socket:ready"
- 
- pidfile="${XDG_RUNTIME_DIR}/gnome-shell-x11.pid"
-@@ -37,4 +39,8 @@ start_pre()
- 	# the leader (gdm-wayland-session) runs under its own private bus; the session services and the
- 	# gsd daemons are on the OpenRC user bus: keep the shell there or gsd-media-keys cannot grab keys
- 	export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+@@ -33,4 +35,8 @@ start_pre()
+ 	while read -d $'\0' line ; do
+ 		export "${line}"
+ 	done < /proc/$(cat ${_gsl_file})/environ
 +
-+	# the session's desktop identity goes into the user bus's activation environment BEFORE gnome-shell starts: the shell
-+	# D-Bus-activates xdg-desktop-portal right away, and the portal picks its backends (ScreenCast) from XDG_CURRENT_DESKTOP
-+	/usr/libexec/gnome-session-openrc-helper activation-env
++	# the leader (gdm-wayland-session) runs under its own private bus; the session services and the
++	# gsd daemons are on the OpenRC user bus: keep the shell there or gsd-media-keys cannot grab keys
++	export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
  }
-diff --git a/data/openrc/gnome-shell-x11.gnome-login b/data/openrc/gnome-shell-x11.gnome-login
-index 4900b00..ac35115 100755
---- a/data/openrc/gnome-shell-x11.gnome-login
-+++ b/data/openrc/gnome-shell-x11.gnome-login
-@@ -8,8 +8,10 @@ error_logger="logger"
- 
- supervisor=supervise-daemon
- description="GNOME Shell (login)"
--command="/usr/bin/gnome-shell"
--command_args="--x11 --mode=gdm"
-+# supervise-daemon respawns the command itself: the guard starts gnome-shell only while the graphical session that owns this
-+# service is alive (a respawn into a closed session would grab the seat and the next login would have no input)
-+command="/usr/libexec/gnome-session-openrc-helper"
-+command_args="guard /usr/bin/gnome-shell --x11 --mode=gdm"
- notify="socket:ready"
- 
- pidfile="${XDG_RUNTIME_DIR}/gnome-shell-gdm.pid"
+diff --git a/data/openrc/gsd b/data/openrc/gsd
+index 23a045b..bb4b174 100755
+--- a/data/openrc/gsd
++++ b/data/openrc/gsd
+@@ -9,3 +9,12 @@ command="/usr/libexec/${RC_SVCNAME}"
+ command_args=""
+ command_background="true"
+ pidfile="${XDG_RUNTIME_DIR}/${RC_SVCNAME}.pid"
++
++depend() {
++	case "${RC_SVCNAME}" in
++	gsd-media-keys|gsd-sound)
++		want pipewire-pulse wireplumber
++		after pipewire-pulse wireplumber
++		;;
++	esac
++}
 diff --git a/src/leader-openrc.c b/src/leader-openrc.c
-index a000ee9..e572517 100644
+index a7eeb8c..39f2a7c 100644
 --- a/src/leader-openrc.c
 +++ b/src/leader-openrc.c
 @@ -26,6 +26,11 @@
@@ -475,9 +445,9 @@ index a000ee9..e572517 100644
  static gboolean
  leader_term_or_int_signal_cb (gpointer data)
  {
-@@ -162,6 +197,10 @@ main (int argc, char **argv)
-         target = g_strdup_printf ("gnome-session-%s.%s",
-                                   session_type ? session_type : "wayland", session_name);
+@@ -156,6 +191,10 @@ main (int argc, char **argv)
+ 
+         target = g_strdup_printf ("gnome-session.%s", session_name);
  
 +        /* a stale earlier session of this user (leader gone, session closed, a supervised gnome-shell that was respawned
 +           into it) is cleaned up first, so this login can always take control of the seat */
@@ -486,7 +456,7 @@ index a000ee9..e572517 100644
          RC_SERVICE state = rc_service_state(target);
          switch (state)
          {
-@@ -191,6 +230,16 @@ main (int argc, char **argv)
+@@ -185,6 +224,16 @@ main (int argc, char **argv)
          // because we later get at /proc/{whatami}/environ. Later this
          // shouldn't be the case, but it is for now.
          pid_t whatami = getpid();
@@ -503,7 +473,7 @@ index a000ee9..e572517 100644
          pid_path = g_build_filename (g_get_user_runtime_dir (),
                                       "gnome-session-leader.pid",
                                       NULL);
-@@ -201,6 +250,11 @@ main (int argc, char **argv)
+@@ -195,6 +244,11 @@ main (int argc, char **argv)
                  g_error("Couldn't write PID to file %s: %s", pid_path, error->message);
          }
  
@@ -515,7 +485,7 @@ index a000ee9..e572517 100644
          // No way that i'm aware of to enter a user runlevel from librc :/
          gchar *rl_argv[] = { "/sbin/openrc", "-U", "gnome-session", NULL };
          if (!async_run_cmd(rl_argv, &error))
-@@ -227,5 +281,8 @@ main (int argc, char **argv)
+@@ -221,5 +275,8 @@ main (int argc, char **argv)
          g_unix_signal_add (SIGINT, leader_term_or_int_signal_cb, &ctx);
  
          g_main_loop_run (ctx.loop);

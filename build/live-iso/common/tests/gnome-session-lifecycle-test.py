@@ -5,7 +5,7 @@ Why: on OpenRC, gnome-session-openrc runs gnome-shell & co. as OpenRC USER servi
 pam_openrc) is shared by every login of the user and only stops with the LAST one. An ssh login of the desktop user (agents, scripts) kept it
 alive across a GNOME logout, supervise-daemon respawned gnome-shell into the closed session, that shell held the seat, and the next login got
 mutter "Failed to take control of the session: ... EBUSY" and no mouse/keyboard (owner-ws, 2026-11-13). The fix lives in
-gnome-base/gnome-session-openrc-49.2-r2::horcrux (session-scoped user services) plus sys-auth/horcrux-ssh-pam (ssh logins start no OpenRC user
+gnome-base/gnome-session-openrc-50.0::horcrux (session-scoped user services) plus sys-auth/horcrux-ssh-pam (ssh logins start no OpenRC user
 services). This test reproduces the owner's sequence on an installed GNOME VM:
 
     cycle N:  GNOME login at the greeter (QMP key events)  ->  20 parallel `ssh USER@vm true` + one ssh session of USER held open

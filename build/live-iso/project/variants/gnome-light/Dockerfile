@@ -43,7 +43,7 @@ COPY --from=hxfull / /var/db/repos/horcrux/
 RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     install -D -m644 /var/db/repos/horcrux/sys-apps/horcrux-repo-config/files/horcrux.conf /etc/portage/repos.conf/horcrux.conf; \
     emerge --update --newuse --usepkg=n --getbinpkg=n --select gnome-extra/horcrux-gnome-defaults; \
-    # GNOME under OpenRC = gnome-base/gnome-session-openrc-49.2-r2::horcrux (pulled by horcrux-gnome-defaults; its patches used to be /etc/portage/patches in this image):\
+    # GNOME under OpenRC = gnome-base/gnome-session-openrc-50.0::horcrux (pulled by horcrux-gnome-defaults; its patches used to be /etc/portage/patches in this image):\
     # gsd meta services without a supervisor, gsd audio after PipeWire, gnome-shell on the user bus, and session-scoped user services (a GNOME logout stops the\
     # session's services even while an ssh login of the user keeps the OpenRC user runlevel alive; no gnome-shell respawn into a closed session)\
     # systemd image: upstream gnome-session (systemd user units, systemd-logind) as on any systemd distribution; gnome-session-openrc must not be there
@@ -53,8 +53,8 @@ RUN set -e; unset ARCH; export FEATURES="-ccache"; \
     qlist -IRv gnome-base/gnome-session-openrc | grep -q '::horcrux'; test ! -e /etc/portage/patches/gnome-base/gnome-session-openrc; \
     if grep -q supervise-daemon /etc/user/init.d/gnome-settings-daemon-wayland /etc/user/init.d/gnome-settings-daemon-x11; then echo 'gsd supervisor patch not applied'; exit 1; fi; \
     grep -q 'want pipewire-pulse wireplumber' /etc/user/init.d/gsd || { echo 'gsd audio ordering patch not applied'; exit 1; }; \
-    grep -q 'keep the shell there' /etc/user/init.d/gnome-shell-wayland || { echo 'gnome-shell user-bus patch not applied'; exit 1; }; \
-    test -x /usr/libexec/gnome-session-openrc-helper && grep -q 'command_args="guard /usr/bin/gnome-shell' /etc/user/init.d/gnome-shell-wayland || { echo 'session-scoping patch not applied'; exit 1; }; \
+    grep -q 'keep the shell there' /etc/user/init.d/gnome-shell || { echo 'gnome-shell user-bus patch not applied'; exit 1; }; \
+    test -x /usr/libexec/gnome-session-openrc-helper && grep -q 'command_args="guard /usr/bin/gnome-shell' /etc/user/init.d/gnome-shell || { echo 'session-scoping patch not applied'; exit 1; }; \
     fi; \
     test -s /etc/dconf/db/local && test -f /etc/dconf/profile/user && qfile -q /etc/dconf/db/local && qfile -q /etc/portage/repos.conf/horcrux.conf; \
     # GATE: the os-release names this edition (sys-apps/horcrux-release[gnome-light]; the core layer built the Server one)

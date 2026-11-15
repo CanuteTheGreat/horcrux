@@ -1,4 +1,4 @@
-"""GNOME on OpenRC: session-scoped user services (gnome-base/gnome-session-openrc-49.2-r2::horcrux) and ssh logins without OpenRC user services
+"""GNOME on OpenRC: session-scoped user services (gnome-base/gnome-session-openrc-50.0::horcrux) and ssh logins without OpenRC user services
 (sys-auth/horcrux-ssh-pam, pulled by sys-apps/horcrux-core on every edition). Static checks of the repo tree; the behaviour itself is proven by
 gnome-session-lifecycle-test.py on an installed GNOME VM. Skipped in the vendored copy of common/ in Patronus."""
 import os
@@ -40,19 +40,20 @@ class SessionScoping(unittest.TestCase):
 
     def test_gnome_session_openrc_ships_all_fixes_and_never_edits_etc_portage(self):
         t = self.ebuild(GSO, "gnome-session-openrc-*.ebuild")
-        for p in ("0001-gsd-meta-service-no-supervisor", "0002-gsd-audio-after-pipewire", "0003-shell-keep-user-bus",
-                  "0004-session-scoped-user-services"):
-            self.assertIn(p, t)
-            self.assertTrue((GSO / "files" / f"{p}.patch").is_file(), p)
+        p4 = (GSO / "files" / "0001-horcrux-session-scoped-user-services.patch").read_text()
+        self.assertTrue((GSO / "files" / "0001-horcrux-session-scoped-user-services.patch").is_file())
         self.assertNotRegex(t, r"\brm\b[^\n]*etc/portage", "the ebuild must not modify the admin's /etc/portage")
-        self.assertIn("eapply_user", t)
-        self.assertRegex((GSO / "Manifest").read_text(), r"(?m)^DIST gnome-session-openrc-49\.2\.tar\.gz ")
-        p4 = (GSO / "files" / "0004-session-scoped-user-services.patch").read_text()
+        self.assertRegex((GSO / "Manifest").read_text(), r"(?m)^DIST gnome-session-openrc-50\.0\.tar\.gz ")
         for verb in ("teardown", "preclean", "guard"):
             self.assertIn(f"cmd_{verb}", p4)
         self.assertIn('run_helper ("teardown"', p4)
         self.assertIn('run_helper ("preclean"', p4)
-        self.assertEqual(len(re.findall(r'^\+command_args="guard /usr/bin/gnome-shell', p4, re.M)), 4)
+        # gsd audio after PipeWire, gsd meta services unsupervised, shell on the user bus
+        self.assertIn("want pipewire-pulse wireplumber", p4)
+        self.assertIn("-supervisor=supervise-daemon", p4)
+        self.assertIn('DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"', p4)
+        # upstream 50 is Wayland-only: gnome-shell and gnome-shell.gnome-login are the two guarded services
+        self.assertEqual(len(re.findall(r'^\+command_args="guard /usr/bin/gnome-shell', p4, re.M)), 2)
 
     def test_images_no_longer_ship_the_user_patches(self):
         self.assertFalse(list((LIVE / "project" / "variants").glob("*/portage/patches/gnome-base/gnome-session-openrc/*")))
@@ -92,15 +93,14 @@ class SessionScoping(unittest.TestCase):
     def test_session_env_reaches_dbus_activation_environment(self):
         """owner-ws 2026-11-13: the user bus's activation environment had no XDG_CURRENT_DESKTOP, xdg-desktop-portal picked no GNOME
         backend and there was no ScreenCast (OBS / browser screen sharing broken). The leader and gnome-session-init-* push it."""
-        p4 = (GSO / "files" / "0004-session-scoped-user-services.patch").read_text()
+        p4 = (GSO / "files" / "0001-horcrux-session-scoped-user-services.patch").read_text()
         self.assertIn("cmd_activation_env", p4)
         self.assertIn('run_helper ("activation-env", NULL)', p4)
         # the leader pushes before it enters the gnome-session runlevel (before anything can activate the portal)
         self.assertLess(p4.index('run_helper ("activation-env", NULL)'), p4.index('"/sbin/openrc", "-U", "gnome-session"'))
-        for kind in ("wayland", "x11"):
-            for svc in (f"gnome-session-init-{kind}", f"gnome-shell-{kind}"):
-                self.assertRegex(p4, rf"diff --git a/data/openrc/{svc} [^\n]*\n(?:[^d][^\n]*\n)*?\+\t/usr/libexec/"
-                                     r"gnome-session-openrc-helper activation-env")
+        for svc in ("gnome-session-init", "gnome-shell"):
+            self.assertRegex(p4, rf"diff --git a/data/openrc/{svc} [^\n]*\n(?:[^d][^\n]*\n)*?\+\t/usr/libexec/"
+                                 r"gnome-session-openrc-helper activation-env")
         # run the helper's activation-env with a fake dbus-update-activation-environment
         lines, on = [], False
         for line in p4.splitlines():
@@ -138,7 +138,7 @@ class SessionScoping(unittest.TestCase):
         # the kernel cuts comm to 15 characters ("xdg-desktop-por"): `pgrep -x xdg-desktop-portal` can never match
         for f in (G / "gnome-extra" / "horcrux-gnome-defaults" / "files" / "horcrux-session-env",):
             self.assertNotRegex(re.sub(r"(?m)^\s*#.*$", "", f.read_text()), r"pgrep[^\n]*-x xdg-desktop-portal")
-        self.assertNotRegex((GSO / "files" / "0004-session-scoped-user-services.patch").read_text(), r"pgrep[^\n]*-x xdg-desktop-portal")
+        self.assertNotRegex((GSO / "files" / "0001-horcrux-session-scoped-user-services.patch").read_text(), r"pgrep[^\n]*-x xdg-desktop-portal")
 
 
 if __name__ == "__main__":
