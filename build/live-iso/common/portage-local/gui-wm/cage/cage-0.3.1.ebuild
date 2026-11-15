@@ -13,7 +13,7 @@ KEYWORDS="amd64 arm64 riscv"
 
 RDEPEND="
 	dev-libs/wayland
-	gui-libs/wlroots:0.19[session]
+	gui-libs/wlroots:0.20[session]
 	x11-libs/libxkbcommon
 "
 DEPEND="${RDEPEND}
