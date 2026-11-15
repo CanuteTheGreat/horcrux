@@ -223,10 +223,10 @@ class Tests:
             vm.snap_when(lambda t: all(norm(w) in norm(t) for w in want), " ")
             self.step("grub-menu-reached", self.menu_ready(vm))
             end = time.time() + T(5)
-            while vm.snap is None and time.time() < end:
+            while vm.snap_text is None and time.time() < end:
                 time.sleep(0.1)
             vm.send(" ")                                   # any key cancels GRUB's countdown (already sent by the capture hook; repeat is harmless): the VGA checks below must not race the default entry booting
-            scr = vm.snap if vm.snap is not None else vm.screen()
+            scr = vm.snap_text if vm.snap_text is not None else vm.screen()
             vm.shot("grub-menu")
             missing = [w for w in want if norm(w) not in norm(scr)]
             self.step("serial-menu-lists-every-entry", not missing, f"missing: {missing}; screen was: {' / '.join(l.strip() for l in scr.splitlines() if l.strip())[:700]!r}" if missing else f"{len(want)} entries on the serial console")
