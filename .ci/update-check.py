@@ -27,7 +27,17 @@ import fnmatch, glob, json, os, re, subprocess, sys, tempfile, urllib.request
 CFG = ".nvchecker/nvchecker.toml"
 SEC = ".nvchecker/security.toml"
 EXCL = ".nvchecker/excluded.txt"
-DIRS = [d for d in os.environ.get("OVERLAY_DIRS", ".").split(":") if d]
+DIRS_FILE = ".nvchecker/overlay-dirs.txt"  # repo default for OVERLAY_DIRS (colon-separated), used when the env is unset
+
+
+def _dirs():
+    v = os.environ.get("OVERLAY_DIRS")
+    if v is None and os.path.exists(DIRS_FILE):
+        v = open(DIRS_FILE).read().strip()
+    return [d for d in (v if v is not None else ".").split(":") if d]
+
+
+DIRS = _dirs()
 
 
 def sections(path):
@@ -37,6 +47,19 @@ def sections(path):
         if m:
             names.append(m.group(1))
     return names
+
+
+def github_sourced(pkg, cfg_text):
+    """True when the nvchecker section for pkg uses a GitHub source (anonymous API calls are rate limited)."""
+    m = re.search(r'(?ms)^\["?' + re.escape(pkg) + r'"?\]\s*$(.*?)(?=^\[|\Z)', cfg_text)
+    return bool(m and re.search(r'(?m)^\s*source\s*=\s*"github"', m.group(1)))
+
+
+def rate_limited(pkg, msg, cfg_text, have_key):
+    """GitHub rate limit / anonymous no-result is infrastructure noise, not a broken source."""
+    if re.search(r"rate.?limit|API rate|\b403\b|\b429\b", msg, re.I):
+        return True
+    return (not have_key) and msg.strip() == "no-result" and github_sourced(pkg, cfg_text)
 
 
 def vkey(v):
@@ -197,7 +220,11 @@ def main():
             print("[dry-run] would open:", title); continue
         open_issue(title, body)
         print("opened:", title)
+    have_key = bool(keyfile and os.path.exists(keyfile) and "github" in open(keyfile).read().lower())
     for p, msg in errors.items():
+        if rate_limited(p, msg, cfg, have_key):
+            print(f"WARNING: {p}: {msg} (GitHub rate limit / no result without a key; not filing 'source broken')")
+            continue
         title = f"update-check: source broken: {p}"
         if dry or title in titles:
             print("broken source:", p, msg); continue
