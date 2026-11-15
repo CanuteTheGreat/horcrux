@@ -1800,11 +1800,13 @@ mod tests {
             let dir = scratch("faketools");
             let log = dir.join("calls.log");
             std::fs::write(&log, "").unwrap();
-            for tool in ["iscsiadm", "mount", "umount"] {
+            for tool in ["iscsiadm", "mount", "umount", "rbd"] {
                 let body = format!(
                     "#!/bin/sh\necho \"{tool} $*\" >> {log}\n\
                      if [ \"{tool}\" = iscsiadm ] && [ \"$2\" = session ]; then\n\
-                     echo 'tcp: [1] 10.9.9.9:3260,1 iqn.hx-test:rm1 (non-flash)'\nfi\nexit 0\n",
+                     echo 'tcp: [1] 10.9.9.9:3260,1 iqn.hx-test:rm1 (non-flash)'\nfi\n\
+                     if [ \"{tool}\" = rbd ] && [ \"$1\" = info ]; then\n\
+                     echo '{{\"size\": 2147483648}}'\nfi\nexit 0\n",
                     log = log.display()
                 );
                 let f = dir.join(tool);
@@ -1940,6 +1942,65 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         assert!(seen, "no iscsiadm --login for the stored iSCSI pool");
+    }
+
+    /// A Ceph volume grows (also to its exact size) and is never shrunk:
+    /// the size comes from `rbd info`, the grow goes through `rbd resize`.
+    #[tokio::test]
+    async fn ceph_resize_refuses_a_shrink_and_allows_same_or_larger() {
+        fake_tool_log(); // fake rbd: every image is 2 GiB
+        let m = pinned();
+        m.pools
+            .write()
+            .await
+            .insert("cr".into(), pool("cr", StorageType::Ceph, "hxrbd-resize"));
+        let err = m.resize_volume("cr", "disk1", 1).await;
+        assert!(
+            matches!(err, Err(horcrux_common::Error::InvalidConfig(_))),
+            "{err:?}"
+        );
+        assert!(calls_matching("resize --size 1G hxrbd-resize/disk1").is_empty());
+        m.resize_volume("cr", "disk1", 2).await.unwrap();
+        m.resize_volume("cr", "disk1", 3).await.unwrap();
+        assert_eq!(
+            calls_matching("resize --size 2G hxrbd-resize/disk1").len(),
+            1
+        );
+        assert_eq!(
+            calls_matching("resize --size 3G hxrbd-resize/disk1").len(),
+            1
+        );
+    }
+
+    /// `ceph_capacity_gb` runs `ceph df --format json`, reports the named
+    /// pool in GB, and is None when ceph fails or is missing. (The only
+    /// test that sets HORCRUX_CEPH_BIN.)
+    #[test]
+    fn ceph_capacity_gb_runs_ceph_and_reports_its_numbers() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("ceph-bin");
+        let fake = |name: &str, body: &str| {
+            let f = dir.join(name);
+            std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+            f
+        };
+        let df =
+            r#"{"pools":[{"name":"hxpool","stats":{"stored":1073741824,"max_avail":3031954944}}]}"#;
+        let ok = fake(
+            "ceph-ok",
+            &format!("[ \"$*\" = '--connect-timeout 5 df --format json' ] || exit 9\necho '{df}'"),
+        );
+        let bad = fake("ceph-bad", &format!("echo '{df}'; exit 1"));
+        std::env::set_var("HORCRUX_CEPH_BIN", &ok);
+        assert_eq!(ceph_capacity_gb("hxpool"), Some((3, 2)));
+        assert_eq!(ceph_capacity_gb("nopool"), None);
+        std::env::set_var("HORCRUX_CEPH_BIN", &bad);
+        assert_eq!(ceph_capacity_gb("hxpool"), None);
+        std::env::set_var("HORCRUX_CEPH_BIN", dir.join("no-such-ceph"));
+        assert_eq!(ceph_capacity_gb("hxpool"), None);
+        std::env::remove_var("HORCRUX_CEPH_BIN");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
