@@ -8,6 +8,7 @@
 use super::StoragePool;
 use horcrux_common::Result;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
 use tracing::{error, info};
@@ -31,8 +32,22 @@ impl IscsiManager {
         // Parse iSCSI target from pool path
         let target = IscsiTarget::parse(&pool.path)?;
 
-        // Check if target is reachable
-        self.discover_target(&target.portal).await?;
+        // The portal must answer and offer this very target: discovery
+        // succeeding for some other IQN used to pass, and the pool then
+        // had no disks at all.
+        let offered = self.discover_target(&target.portal).await?;
+        if !offered.iter().any(|t| t == &target.iqn) {
+            return Err(horcrux_common::Error::InvalidConfig(format!(
+                "Portal {} does not offer target {} (it offers: {})",
+                target.portal,
+                target.iqn,
+                if offered.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    offered.join(", ")
+                }
+            )));
+        }
 
         Ok(())
     }
@@ -187,6 +202,70 @@ impl IscsiManager {
             .collect();
 
         Ok(devices)
+    }
+
+    /// Log in to the pool's target and wait until its LUNs appear as block
+    /// devices. Safe to repeat (an existing session is kept).
+    pub async fn attach(&self, target: &IscsiTarget) -> Result<Vec<IscsiLun>> {
+        self.login_target(target).await?;
+        for _ in 0..40 {
+            let luns = Self::list_luns(target);
+            if !luns.is_empty() {
+                return Ok(luns);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        Err(horcrux_common::Error::System(format!(
+            "Logged in to {} but no LUN showed up as a block device within 20 s",
+            target.iqn
+        )))
+    }
+
+    /// Log out of the pool's target (no error when there is no session).
+    pub async fn detach(&self, target: &IscsiTarget) -> Result<()> {
+        let sessions = self.list_sessions().await.unwrap_or_default();
+        if !sessions.iter().any(|s| s.iqn == target.iqn) {
+            return Ok(());
+        }
+        self.logout_target(target).await
+    }
+
+    /// The LUNs of a logged-in target, from the stable udev links
+    /// (`/dev/disk/by-path/ip-<portal>-iscsi-<iqn>-lun-<n>`), sorted by LUN.
+    pub fn list_luns(target: &IscsiTarget) -> Vec<IscsiLun> {
+        Self::list_luns_in(Path::new("/dev/disk/by-path"), target)
+    }
+
+    pub(crate) fn list_luns_in(dir: &Path, target: &IscsiTarget) -> Vec<IscsiLun> {
+        let prefix = target.lun_link_prefix();
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return out;
+        };
+        for e in rd.flatten() {
+            let file = e.file_name().to_string_lossy().to_string();
+            let Some(n) = file
+                .strip_prefix(&prefix)
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let path = e.path();
+            let size_bytes = std::fs::canonicalize(&path)
+                .ok()
+                .and_then(|dev| dev.file_name().map(|d| d.to_string_lossy().to_string()))
+                .and_then(|d| std::fs::read_to_string(format!("/sys/class/block/{d}/size")).ok())
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .map(|sectors| sectors * 512)
+                .unwrap_or(0);
+            out.push(IscsiLun {
+                lun: n,
+                path: path.to_string_lossy().to_string(),
+                size_bytes,
+            });
+        }
+        out.sort_by_key(|l| l.lun);
+        out
     }
 
     /// Create an iSCSI volume (LUN)
@@ -388,7 +467,45 @@ pub struct IscsiTarget {
     pub iqn: String,    // iSCSI Qualified Name (e.g., "iqn.2024-01.com.example:storage")
 }
 
+/// One LUN of a logged-in target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IscsiLun {
+    pub lun: u32,
+    /// Stable udev link (`/dev/disk/by-path/...-lun-N`).
+    pub path: String,
+    pub size_bytes: u64,
+}
+
 impl IscsiTarget {
+    /// The portal as udev names it: the port is always present.
+    pub fn portal_with_port(&self) -> String {
+        if self.portal.contains(':') {
+            self.portal.clone()
+        } else {
+            format!("{}:3260", self.portal)
+        }
+    }
+
+    /// File-name prefix of this target's LUN links in /dev/disk/by-path.
+    pub fn lun_link_prefix(&self) -> String {
+        format!("ip-{}-iscsi-{}-lun-", self.portal_with_port(), self.iqn)
+    }
+
+    /// Stable device path of LUN `n`.
+    pub fn lun_path(&self, n: u32) -> String {
+        format!("/dev/disk/by-path/{}{}", self.lun_link_prefix(), n)
+    }
+
+    /// Volume name of LUN `n` in a pool (`lun0`, `lun1`, ...).
+    pub fn volume_name(n: u32) -> String {
+        format!("lun{n}")
+    }
+
+    /// LUN number of a volume name made by `volume_name`.
+    pub fn parse_volume_name(name: &str) -> Option<u32> {
+        name.strip_prefix("lun")?.parse().ok()
+    }
+
     /// Parse iSCSI target from path string
     pub fn parse(path: &str) -> Result<Self> {
         // Expected format: "iscsi://portal:port/iqn"
@@ -469,5 +586,37 @@ mod tests {
     fn test_invalid_iscsi_path() {
         let path = "invalid://path";
         assert!(IscsiTarget::parse(path).is_err());
+    }
+
+    #[test]
+    fn lun_links_and_names() {
+        let t = IscsiTarget::parse("iscsi://10.0.0.5/iqn.2024-01.com.example:s").unwrap();
+        assert_eq!(
+            t.lun_path(2),
+            "/dev/disk/by-path/ip-10.0.0.5:3260-iscsi-iqn.2024-01.com.example:s-lun-2"
+        );
+        assert_eq!(IscsiTarget::volume_name(3), "lun3");
+        assert_eq!(IscsiTarget::parse_volume_name("lun3"), Some(3));
+        assert_eq!(IscsiTarget::parse_volume_name("disk3"), None);
+        assert_eq!(IscsiTarget::parse_volume_name("lunx"), None);
+    }
+
+    #[test]
+    fn list_luns_reads_only_this_targets_links() {
+        let d = std::env::temp_dir().join(format!("hx-iscsi-luns-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let t = IscsiTarget::parse("iscsi://10.0.0.5:3260/iqn.x:a").unwrap();
+        for f in [
+            "ip-10.0.0.5:3260-iscsi-iqn.x:a-lun-1",
+            "ip-10.0.0.5:3260-iscsi-iqn.x:a-lun-0",
+            "ip-10.0.0.5:3260-iscsi-iqn.x:a-lun-0-part1",
+            "ip-10.0.0.5:3260-iscsi-iqn.x:b-lun-0",
+            "pci-0000:00:1f.2-ata-1",
+        ] {
+            std::fs::write(d.join(f), b"").unwrap();
+        }
+        let luns = IscsiManager::list_luns_in(&d, &t);
+        assert_eq!(luns.iter().map(|l| l.lun).collect::<Vec<_>>(), vec![0, 1]);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }

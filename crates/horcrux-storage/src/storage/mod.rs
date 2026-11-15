@@ -319,6 +319,18 @@ impl StorageManager {
                         }
                     });
                 } else {
+                    if pool.storage_type == StorageType::Iscsi {
+                        // Sessions don't survive a reboot: log in again.
+                        if let Ok(t) = iscsi::IscsiTarget::parse(&pool.path) {
+                            tokio::spawn(async move {
+                                let _ = tokio::time::timeout(
+                                    std::time::Duration::from_secs(60),
+                                    iscsi::IscsiManager::new().login_target(&t),
+                                )
+                                .await;
+                            });
+                        }
+                    }
                     Self::refresh_capacity(mgr.probe_for(&pool.storage_type), &mut pool);
                 }
                 pools.insert(pool.id.clone(), pool);
@@ -510,6 +522,15 @@ impl StorageManager {
             pool.source = Some(pool.path.clone());
             pool.path = dir;
         }
+        if pool.storage_type == StorageType::Iscsi {
+            // Log in so the target's LUNs are block devices, and report
+            // their real size (capacity was 0 and the pool had no disks).
+            let target = iscsi::IscsiTarget::parse(&pool.path)?;
+            let luns = self.iscsi.attach(&target).await?;
+            let bytes: u64 = luns.iter().map(|l| l.size_bytes).sum();
+            pool.total = bytes / (1024 * 1024 * 1024);
+            pool.available = pool.total;
+        }
         Self::refresh_capacity(self.probe_for(&pool.storage_type), &mut pool);
 
         config_store::put_opt(&self.store, kinds::STORAGE_POOL, &pool.id, &pool).await?;
@@ -535,6 +556,13 @@ impl StorageManager {
                     tracing::warn!("Storage pool {}: unmounting {}: {}", id, p.path, e);
                 } else {
                     let _ = tokio::fs::remove_dir(&p.path).await;
+                }
+            }
+            if p.storage_type == StorageType::Iscsi {
+                if let Ok(t) = iscsi::IscsiTarget::parse(&p.path) {
+                    if let Err(e) = self.iscsi.detach(&t).await {
+                        tracing::warn!("Storage pool {}: iSCSI logout: {}", id, e);
+                    }
                 }
             }
         }
@@ -710,6 +738,15 @@ impl StorageManager {
             StorageType::Zfs => format!("/dev/zvol/{}/{}", pool.path, name),
             StorageType::Lvm => format!("/dev/{}/{}", pool.path, name),
             StorageType::Ceph => format!("rbd:{}/{}", pool.path, name),
+            StorageType::Iscsi => {
+                let target = iscsi::IscsiTarget::parse(&pool.path)?;
+                let n = iscsi::IscsiTarget::parse_volume_name(name).ok_or_else(|| {
+                    horcrux_common::Error::NotFound(format!(
+                        "No LUN named {name} (iSCSI volumes are lun0, lun1, ...)"
+                    ))
+                })?;
+                target.lun_path(n)
+            }
             ref t => return Err(unsupported("Named volumes", t)),
         })
     }
@@ -811,6 +848,18 @@ impl StorageManager {
                         format: "rbd".into(),
                         size_bytes: it.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
                         allocated_bytes: 0,
+                    });
+                }
+            }
+            StorageType::Iscsi => {
+                let target = iscsi::IscsiTarget::parse(&pool.path)?;
+                for l in iscsi::IscsiManager::list_luns(&target) {
+                    out.push(VolumeInfo {
+                        name: iscsi::IscsiTarget::volume_name(l.lun),
+                        path: l.path,
+                        format: "raw".into(),
+                        size_bytes: l.size_bytes,
+                        allocated_bytes: l.size_bytes,
                     });
                 }
             }

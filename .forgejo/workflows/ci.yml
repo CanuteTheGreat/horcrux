@@ -550,6 +550,16 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "NFS storage pool"
           bash horcrux-api/tests/nfs_storage_e2e.sh target/debug/horcrux-api
 
+      - name: "iSCSI storage pool (real tgt target, kernel initiator, LUNs as volumes)"
+        # iscsi_storage_e2e.sh adds a pool by iscsi://portal/iqn against a tgt
+        # target in a sibling container, checks the refused cases, the logged-in
+        # session, the LUNs as volumes with their real size, a write through a
+        # volume's device path into the target's backing file, and that removing
+        # the pool logs out. Skips when the host cannot load iscsi_tcp.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "iSCSI storage pool"
+          timeout 900 bash horcrux-api/tests/iscsi_storage_e2e.sh target/debug/horcrux-api
+
       - name: "Open vSwitch (real ovsdb/ovs-vswitchd: bridges, VLAN + VXLAN ports, OpenFlow rules)"
         # ovs_e2e.sh runs the API next to a real Open vSwitch in a privileged
         # sibling container: bridge/port/flow lifecycle checked with ovs-vsctl,
