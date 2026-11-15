@@ -12,10 +12,10 @@ S="${WORKDIR}"
 LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64"
-# One package for the owner's test laptops (a test laptop, a test laptop, a test laptop): installed ONLY there, never in a public image.
+# One package for the owner's test laptops (the lab test laptops): installed ONLY there, never in a public image.
 # `emerge -C` it to get normal power saving back (and see the README for the encryption side).
 # +plain: this machine boots WITHOUT disk encryption (ZFS root or XFS/LVM): unlock module off, resume + zfs/lvm conf only. Enable it ONLY after the disks are really unencrypted (-plain while a LUKS root still exists, or the machine cannot boot).
-# +gnome (a test laptop, a test laptop) / xfce (a test laptop, per-login xfconf power settings: the XFCE defaults file is owned by horcrux-surface-desktop).
+# +gnome / xfce (per-login xfconf power settings: the XFCE defaults file is owned by horcrux-surface-desktop).
 IUSE="+gnome +plain smallram xfce"
 
 RDEPEND="

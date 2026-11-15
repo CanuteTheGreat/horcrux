@@ -33,7 +33,7 @@ KEYWORDS="amd64 arm64"
 # sys-auth/horcrux-ssh-pam (-r2): ssh logins do not start or hold the user's OpenRC user services (pam_openrc stops them only with the user's LAST
 #   login, so an ssh session kept a logged-out GNOME session's gnome-shell alive; also keeps servers' ssh logins from spawning user services).
 # /usr/lib/udev/rules.d/80-horcrux-udisks-hide.rules: UDISKS_IGNORE for ZFS pool members/zvols, the installer's mirror ESP/boot copies and the swap, so
-#   GNOME Files / Thunar (udisks2+gvfs) never list rpool, boot2, ESP2 ... as removable drives (HOGSMEADE 2026-11-13). Init-neutral: plain udev rules.
+#   GNOME Files / Thunar (udisks2+gvfs) never list rpool, boot2, ESP2 ... as removable drives (observed on a desktop install). Init-neutral: plain udev rules.
 RDEPEND="
 	sys-auth/horcrux-ssh-pam
 	net-misc/chrony
