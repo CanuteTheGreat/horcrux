@@ -3,6 +3,8 @@
 
 EAPI=8
 
+inherit udev
+
 DESCRIPTION="Horcrux core: the headless hypervisor/server base every Horcrux install is made of (clock, first boot, backup, overlay sync, ZFS rules); desktops depend on it"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 S="${WORKDIR}"
@@ -30,6 +32,8 @@ KEYWORDS="amd64 arm64"
 #   (QEMU gate docker-does-not-break-vm-nat-forwarding checks it everywhere and does the netns forwarding test where Docker exists).
 # sys-auth/horcrux-ssh-pam (-r2): ssh logins do not start or hold the user's OpenRC user services (pam_openrc stops them only with the user's LAST
 #   login, so an ssh session kept a logged-out GNOME session's gnome-shell alive; also keeps servers' ssh logins from spawning user services).
+# /usr/lib/udev/rules.d/80-horcrux-udisks-hide.rules: UDISKS_IGNORE for ZFS pool members/zvols, the installer's mirror ESP/boot copies and the swap, so
+#   GNOME Files / Thunar (udisks2+gvfs) never list rpool, boot2, ESP2 ... as removable drives (HOGSMEADE 2026-11-13). Init-neutral: plain udev rules.
 RDEPEND="
 	sys-auth/horcrux-ssh-pam
 	net-misc/chrony
@@ -50,6 +54,8 @@ src_install() {
 	newins "${FILESDIR}"/package.use horcrux-core
 	insinto /etc/docker
 	newins "${FILESDIR}"/docker-daemon.json daemon.json
+	insinto /usr/lib/udev/rules.d
+	doins "${FILESDIR}"/80-horcrux-udisks-hide.rules
 	# marker: this is a Horcrux install (the installer, the QEMU gates and `horcrux-time-config` read it)
 	insinto /usr/share/horcrux
 	newins - core-release <<-EOF
@@ -60,4 +66,9 @@ src_install() {
 pkg_postinst() {
 	elog "Horcrux core installed. Check the clock rules: horcrux-time-config check; enable at boot: rc-update add chronyd default; rc-update add horcrux-timesync default;"
 	elog "rc-update add horcrux-firstboot default (the installer does all three)."
+	udev_reload
+	# re-evaluate the already-present disks now (no reboot, no session restart) so udisks drops the system storage at once
+	if [[ -z ${ROOT} ]] && command -v udevadm >/dev/null 2>&1; then
+		udevadm trigger --subsystem-match=block --action=change || true
+	fi
 }
