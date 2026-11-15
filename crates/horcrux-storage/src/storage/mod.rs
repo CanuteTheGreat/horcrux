@@ -302,6 +302,12 @@ pub struct StorageManager {
     measuring: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
+/// Combined size of an iSCSI target's LUNs in whole GB.
+fn luns_total_gb(luns: &[iscsi::IscsiLun]) -> u64 {
+    let bytes: u64 = luns.iter().map(|l| l.size_bytes).sum();
+    bytes / (1024 * 1024 * 1024)
+}
+
 impl Default for StorageManager {
     fn default() -> Self {
         Self::new()
@@ -579,8 +585,7 @@ impl StorageManager {
             // their real size (capacity was 0 and the pool had no disks).
             let target = iscsi::IscsiTarget::parse(&pool.path)?;
             let luns = self.iscsi.attach(&target).await?;
-            let bytes: u64 = luns.iter().map(|l| l.size_bytes).sum();
-            pool.total = bytes / (1024 * 1024 * 1024);
+            pool.total = luns_total_gb(&luns);
             pool.available = pool.total;
         }
         Self::refresh_capacity(self.probe_for(&pool.storage_type), &mut pool);
@@ -1783,6 +1788,158 @@ mod tests {
         let (total, _) = fs_capacity_gb(d.to_str().unwrap()).unwrap();
         assert_eq!(pools[0].total, total);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // ---- tools faked on PATH (iscsiadm / mount / umount) -----------------
+    // Every call is appended to one log; tests grep it for their own unique
+    // pool path / IQN, so parallel tests don't interfere.
+    fn fake_tool_log() -> &'static std::path::Path {
+        static LOG: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        LOG.get_or_init(|| {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = scratch("faketools");
+            let log = dir.join("calls.log");
+            std::fs::write(&log, "").unwrap();
+            for tool in ["iscsiadm", "mount", "umount"] {
+                let body = format!(
+                    "#!/bin/sh\necho \"{tool} $*\" >> {log}\n\
+                     if [ \"{tool}\" = iscsiadm ] && [ \"$2\" = session ]; then\n\
+                     echo 'tcp: [1] 10.9.9.9:3260,1 iqn.hx-test:rm1 (non-flash)'\nfi\nexit 0\n",
+                    log = log.display()
+                );
+                let f = dir.join(tool);
+                std::fs::write(&f, body).unwrap();
+                std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let old = std::env::var("PATH").unwrap_or_default();
+            std::env::set_var("PATH", format!("{}:{old}", dir.display()));
+            log
+        })
+    }
+
+    fn calls_matching(needle: &str) -> Vec<String> {
+        std::fs::read_to_string(fake_tool_log())
+            .unwrap()
+            .lines()
+            .filter(|l| l.contains(needle))
+            .map(String::from)
+            .collect()
+    }
+
+    #[test]
+    fn iscsi_pool_total_is_the_luns_summed_in_whole_gb() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let lun = |n, size_bytes| iscsi::IscsiLun {
+            lun: n,
+            path: format!("/dev/x{n}"),
+            size_bytes,
+        };
+        assert_eq!(luns_total_gb(&[]), 0);
+        assert_eq!(luns_total_gb(&[lun(0, 5 * GIB + 7), lun(1, 2 * GIB)]), 7);
+        assert_eq!(luns_total_gb(&[lun(0, 3 * GIB - 1)]), 2);
+        assert_eq!(luns_total_gb(&[lun(0, 40 * GIB)]), 40);
+    }
+
+    #[tokio::test]
+    async fn remove_pool_unmounts_only_network_pools_with_a_source() {
+        fake_tool_log();
+        let m = pinned();
+        let nfs_dir = scratch("rm-nfs-src");
+        let bare_dir = scratch("rm-nfs-nosrc");
+        let dir_dir = scratch("rm-dir-src");
+        let mut with_src = pool("rm-a", StorageType::Nfs, nfs_dir.to_str().unwrap());
+        with_src.source = Some("hx-srv:/rm-a".into());
+        let bare = pool("rm-b", StorageType::Nfs, bare_dir.to_str().unwrap());
+        let mut dir_src = pool("rm-c", StorageType::Directory, dir_dir.to_str().unwrap());
+        dir_src.source = Some("hx-srv:/rm-c".into());
+        for p in [&with_src, &bare, &dir_src] {
+            m.pools.write().await.insert(p.id.clone(), p.clone());
+        }
+
+        m.remove_pool("rm-a").await.unwrap();
+        assert_eq!(calls_matching(nfs_dir.to_str().unwrap()).len(), 1);
+        assert!(!nfs_dir.exists(), "mount point removed after the unmount");
+
+        m.remove_pool("rm-b").await.unwrap();
+        m.remove_pool("rm-c").await.unwrap();
+        assert!(calls_matching(bare_dir.to_str().unwrap()).is_empty());
+        assert!(calls_matching(dir_dir.to_str().unwrap()).is_empty());
+        assert!(bare_dir.exists() && dir_dir.exists());
+        assert!(m.list_pools().await.is_empty());
+        let _ = std::fs::remove_dir_all(&bare_dir);
+        let _ = std::fs::remove_dir_all(&dir_dir);
+    }
+
+    #[tokio::test]
+    async fn remove_pool_logs_out_of_an_iscsi_target() {
+        fake_tool_log();
+        let m = pinned();
+        m.pools.write().await.insert(
+            "rm-i".into(),
+            pool(
+                "rm-i",
+                StorageType::Iscsi,
+                "iscsi://10.9.9.9:3260/iqn.hx-test:rm1",
+            ),
+        );
+        m.remove_pool("rm-i").await.unwrap();
+        let logouts = calls_matching("--logout");
+        assert!(
+            logouts.iter().any(|l| l.contains("iqn.hx-test:rm1")),
+            "{logouts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_volume_remounts_a_lost_network_mount_only() {
+        fake_tool_log();
+        // Not mounted any more: the export is mounted again first.
+        let lost = scratch("cv-lost");
+        let mut p = pool("cv-lost", StorageType::Nfs, lost.to_str().unwrap());
+        p.source = Some("hx-srv-lost:/exp".into());
+        p.available = 10;
+        let m = pinned();
+        m.pools.write().await.insert(p.id.clone(), p);
+        let _ = m.create_volume("cv-lost", "v1", 1).await;
+        assert_eq!(calls_matching("hx-srv-lost:/exp").len(), 1);
+
+        // Still mounted (/proc is in /proc/mounts): no second mount.
+        let mut q = pool("cv-up", StorageType::Nfs, "/proc");
+        q.source = Some("hx-srv-up:/exp".into());
+        q.available = 10;
+        m.pools.write().await.insert(q.id.clone(), q);
+        let _ = m.create_volume("cv-up", "v1", 1).await;
+        assert!(calls_matching("hx-srv-up:/exp").is_empty());
+        let _ = std::fs::remove_dir_all(&lost);
+    }
+
+    #[tokio::test]
+    async fn loading_an_iscsi_pool_logs_in_again_in_the_background() {
+        fake_tool_log();
+        let db = Arc::new(Database::new("sqlite::memory:").await.unwrap());
+        db.migrate().await.unwrap();
+        let store = Some(ConfigStore::new(&db));
+        let iscsi_pool = pool(
+            "wd-i",
+            StorageType::Iscsi,
+            "iscsi://10.9.9.9:3260/iqn.hx-test:wd",
+        );
+        config_store::put_opt(&store, kinds::STORAGE_POOL, "wd-i", &iscsi_pool)
+            .await
+            .unwrap();
+        let _mgr = StorageManager::with_database(db).await.unwrap();
+        let mut seen = false;
+        for _ in 0..50 {
+            if calls_matching("--login")
+                .iter()
+                .any(|l| l.contains("iqn.hx-test:wd"))
+            {
+                seen = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(seen, "no iscsiadm --login for the stored iSCSI pool");
     }
 
     #[test]
