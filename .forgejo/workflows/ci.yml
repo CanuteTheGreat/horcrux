@@ -143,6 +143,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s ci/ux-qa -p 'test_*.py'
       - run: python3 ci/ux-qa/check_owner_findings.py
+      - name: live-installer common/ matches TREE.sha256 (a common/ edit without --write-hash fails every live-iso variant hours later)
+        run: build/live-iso/sync-common.sh --check
       - run: python3 ci/ux-qa/check_public_text.py docs README.md --baseline ci/ux-qa/public-text-baseline.json
       - name: os-release rendered by the package passes the installed-system rules
         run: |
