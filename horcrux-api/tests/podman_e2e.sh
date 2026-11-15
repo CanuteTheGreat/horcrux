@@ -37,7 +37,10 @@ set -e
 for i in 1 2 3; do apt-get update -qq && break; sleep 5; done
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq podman netavark aardvark-dns crun iproute2 iputils-ping \
   curl libvirt0 libpam0g >/dev/null
-command -v docker >/dev/null 2>&1 && { echo "docker CLI present in the podman sibling"; exit 1; }
+# the CI image ships a docker CLI; drop it so nothing can silently fall back to Docker
+for d in $(type -ap docker 2>/dev/null); do rm -f "$d"; done
+hash -r
+command -v docker >/dev/null 2>&1 && { echo "docker CLI still present in the podman sibling"; exit 1; }
 mkdir -p /etc/containers/registries.conf.d
 echo "unqualified-search-registries = [\"docker.io\"]
 short-name-mode = \"permissive\"" > /etc/containers/registries.conf.d/00-hx.conf

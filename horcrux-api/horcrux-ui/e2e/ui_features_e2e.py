@@ -111,7 +111,7 @@ def main():
         opts = page.locator("#ct-runtime option")
         expect(opts.first).to_be_attached(timeout=20000)
         runtimes = opts.evaluate_all("els => els.map(e => e.value)")
-        want = [r for r in ("docker", "podman", "lxc", "lxd", "incus") if r in feats]
+        want = [r for r in ("podman", "docker", "lxc", "lxd", "incus") if r in feats]
         assert runtimes == want, f"[{MODE}] runtime options {runtimes}, expected {want}"
         assert page.locator("#ct-runtime").input_value() == want[0]
 
