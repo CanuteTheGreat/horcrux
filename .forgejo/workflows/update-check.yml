@@ -1,0 +1,41 @@
+# Daily: ask upstream for the newest release of every package listed in
+# .nvchecker/nvchecker.toml and open one issue per new version (deduplicated),
+# then check every packaged upstream for security advisories (OSV, GitHub, GLSA)
+# and open one "security:" issue per advisory that affects the shipped version.
+name: update-check
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      selftest_pkg:
+        description: "category/package=oldversion: pretend the overlay is that old (opens a real update-check issue, close it afterwards)"
+        required: false
+        default: ""
+      selftest_sec:
+        description: "category/package=oldversion: pretend that version for the security check (opens at most one real security issue, close it afterwards)"
+        required: false
+        default: ""
+jobs:
+  check:
+    runs-on: colo-light-x86_64
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: nvchecker + security feed
+        env:
+          FORGEJO_API: ${{ github.server_url }}/api/v1
+          FORGEJO_REPO: ${{ github.repository }}
+          SELFTEST_OLD: ${{ inputs.selftest_pkg }}
+          SELFTEST_SEC: ${{ inputs.selftest_sec }}
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OVERLAY_DIRS: "gentoo:build/live-iso/common/portage-local"
+        run: |
+          python3 -m venv "$RUNNER_TEMP/nv"
+          "$RUNNER_TEMP/nv/bin/pip" install -q nvchecker aiohttp packaging
+          export PATH="$RUNNER_TEMP/nv/bin:$PATH"
+          export NEWVER_OUT="$RUNNER_TEMP/upstream.json" UPSTREAM_JSON="$RUNNER_TEMP/upstream.json"
+          rc=0
+          if [ -z "$SELFTEST_SEC" ]; then python3 .ci/update-check.py || rc=$?; fi
+          if [ -z "$SELFTEST_OLD" ]; then python3 .ci/security-check.py || rc=$?; fi
+          exit $rc

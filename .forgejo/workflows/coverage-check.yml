@@ -1,0 +1,19 @@
+# Gate: every ebuild must be watched (nvchecker + security mapping) or exempt with a reason.
+name: coverage-check
+on:
+  push:
+  pull_request:
+jobs:
+  coverage:
+    runs-on: colo-light-x86_64
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: watched-or-exempt check + its tests
+        env:
+          OVERLAY_DIRS: "gentoo:build/live-iso/common/portage-local"
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cv"
+          "$RUNNER_TEMP/cv/bin/pip" install -q tomli
+          "$RUNNER_TEMP/cv/bin/python" .ci/test_coverage_check.py
+          "$RUNNER_TEMP/cv/bin/python" .ci/coverage-check.py

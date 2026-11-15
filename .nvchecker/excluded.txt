@@ -1,0 +1,7 @@
+# First-party / account packages: released by this repo's own CI, no external upstream.
+acct-*/*                  # account packages
+*/horcrux*                # first-party Horcrux packages
+app-admin/rustinion-agent # first-party, released by its own repo's CI
+app-misc/awccd            # first-party daemon (this repo)
+app-misc/*-tools          # first-party helper packages
+net-misc/ctg-ssh-ca       # first-party

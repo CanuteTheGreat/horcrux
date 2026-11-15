@@ -1,0 +1,49 @@
+# nvchecker sources for the THIRD-PARTY ebuilds shipped in gentoo/ (and the in-image portage-local
+# repo). First-party packages are released by their own CI and are listed in excluded.txt.
+
+["sci-misc/comfyui"]
+source = "github"
+github = "Comfy-Org/ComfyUI"
+use_latest_release = true
+prefix = "v"
+
+# pgsty/mc and pgsty/silo tag RELEASE.2026-11-12T00-00-00Z -> ebuild PV 20261112
+["app-misc/mcli-bin"]
+source = "github"
+github = "pgsty/mc"
+use_latest_release = true
+from_pattern = '^RELEASE\.(\d{4})-(\d\d)-(\d\d)T.*'
+to_pattern = '\1\2\3'
+
+["app-misc/silo-bin"]
+source = "github"
+github = "pgsty/silo"
+use_latest_release = true
+from_pattern = '^RELEASE\.(\d{4})-(\d\d)-(\d\d)T.*'
+to_pattern = '\1\2\3'
+
+["sys-apps/tiny-dfr"]
+source = "github"
+github = "AsahiLinux/tiny-dfr"
+use_max_tag = true
+include_regex = '^v\d+\.\d+\.\d+$'
+prefix = "v"
+
+["gnome-extra/gnome-shell-extension-appindicator"]
+source = "github"
+github = "ubuntu/gnome-shell-extension-appindicator"
+use_latest_release = true
+prefix = "v"
+
+["gnome-base/gnome-session-openrc"]
+source = "github"
+github = "swagtoy/gnome-session-openrc"
+use_latest_release = true
+prefix = "v"
+
+["gui-wm/cage"]
+source = "github"
+github = "cage-kiosk/cage"
+use_max_tag = true
+include_regex = '^v\d+\.\d+\.\d+$'
+prefix = "v"

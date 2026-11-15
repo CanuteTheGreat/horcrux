@@ -1,0 +1,5 @@
+# Security-advisory sources (.ci/security-check.py); github-sourced nvchecker entries are derived automatically.
+
+["sys-apps/t2fanrd"]
+github = "GnomedDev/T2FanRD"
+no_version_check = "pinned to an upstream commit (no tags or releases published): watched for advisories only"
