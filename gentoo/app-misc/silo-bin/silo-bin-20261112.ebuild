@@ -6,8 +6,8 @@ EAPI=8
 # Silo: the community-maintained MinIO fork (PGSTY) that still publishes
 # release binaries after MinIO stopped shipping them in 2025. Horcrux's S3
 # gateway (USE=s3-gateway) runs it; `minio` itself also works if installed.
-MY_REL="RELEASE.2026-10-18T00-00-00Z"
-MY_PV="20261018000000.0.0"
+MY_REL="RELEASE.2026-11-12T00-00-00Z"
+MY_PV="20261112000000.0.0"
 
 DESCRIPTION="S3-compatible object storage server (community MinIO fork)"
 HOMEPAGE="https://github.com/pgsty/silo"

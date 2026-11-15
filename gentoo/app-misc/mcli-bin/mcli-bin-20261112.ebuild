@@ -6,8 +6,8 @@ EAPI=8
 # mcli: the MinIO client from the community fork (PGSTY), installed as
 # `mcli` so it never collides with app-misc/mc (Midnight Commander).
 # Horcrux's S3 gateway (USE=s3-gateway) administers its server with it.
-MY_REL="RELEASE.2026-10-18T00-00-00Z"
-MY_PV="20261018000000.0.0"
+MY_REL="RELEASE.2026-11-12T00-00-00Z"
+MY_PV="20261112000000.0.0"
 
 DESCRIPTION="MinIO client (mcli) for S3-compatible object storage"
 HOMEPAGE="https://github.com/pgsty/mc"
