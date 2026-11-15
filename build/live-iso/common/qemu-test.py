@@ -830,6 +830,21 @@ def serial_tail(vm, n=12):
         return f" (no serial tail: {e})"
 
 
+def stall_diag(vm, ssh_rc, ssh_out):
+    """When the guest answers neither web nor ssh after a reset (lab hogshead/gringotts, daily 12986: 'Connection timed out during banner
+    exchange', no cause visible), the ssh diag is empty. Say whether QEMU is alive, how loaded the HOST is, and what the serial console
+    last printed, so a stall on a slow zfs+swtpm guest can be told from a hung product."""
+    bits = []
+    try:
+        bits.append(f"qemu {'alive' if vm.p.poll() is None else 'exited rc=' + str(vm.p.poll())}")
+        bits.append("host load " + "/".join(f"{x:.1f}" for x in os.getloadavg()) + f" on {os.cpu_count()} cpu")
+    except Exception as e:  # diagnostics must never mask the failure
+        bits.append(f"(no host info: {e})")
+    if ssh_rc != 0:
+        bits.append(serial_tail(vm, 10).strip(" |"))
+    return " [guest unreachable: " + "; ".join(bits)[:900] + "]"
+
+
 # Every entry point (qemu-test.py main, boot-modes-test.py, zfs-enc-test.py, surface tests) builds its own args namespace: an option added to
 # the CLI later (--headless-gates) must not raise AttributeError in a script that never defines it. Runner fills in what is missing.
 ARG_DEFAULTS = {"headless_gates": False, "init": "openrc"}
@@ -1900,6 +1915,8 @@ class Runner:
             rc, o = ssh(FWD_SSH, self.key, f"{init_cmds.service_status_cmd(self.a.init, self.P['svc'])}; ls -la /var/lib/{a.project}; tail -n 8 /var/log/{a.project}/web-error.log; nft list ruleset 2>&1 | grep -n {P['port']} | head -5; ss -ltn | grep {P['port']}")
             print("[DIAG] " + o.replace("\n", "\n[DIAG] "))
             diag = " [no answer: " + err3 + "; " + re.sub(r"\s+", " ", o)[:200] + "]" if c3 == 0 else ""
+            if c3 == 0:
+                diag += stall_diag(vm, rc, o)
         else:
             diag = ""
         self.step("console-menu-factory-reset", c3 == 200 and c2 != 200, f"factory defaults: new password -> {c3}, password from before the reset -> {c2}" + diag)
