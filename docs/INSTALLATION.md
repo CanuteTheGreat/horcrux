@@ -42,7 +42,7 @@
 **Optional (for full features):**
 - QEMU/KVM (for virtual machines)
 - LXC (for containers)
-- Docker or Podman (for container support)
+- Podman (preferred) or Docker (for container support)
 - Open vSwitch (for advanced networking)
 - ZFS, Ceph, or LVM (for advanced storage)
 
@@ -232,7 +232,7 @@ sudo ebuild horcrux-0.1.0.ebuild manifest
 sudo emerge -av app-emulation/horcrux
 
 # Or with specific features
-sudo USE="qemu lxc docker cluster" emerge -av app-emulation/horcrux
+sudo USE="qemu lxc podman cluster" emerge -av app-emulation/horcrux
 ```
 
 ### USE Flags
@@ -241,8 +241,8 @@ sudo USE="qemu lxc docker cluster" emerge -av app-emulation/horcrux
 |----------|-------------|---------|
 | `qemu` | Enable QEMU/KVM support | Yes |
 | `lxc` | Enable LXC container support | Yes |
-| `docker` | Enable Docker support | No |
-| `podman` | Enable Podman support | No |
+| `podman` | Enable Podman support (preferred OCI runtime) | Yes |
+| `docker` | Enable Docker support (secondary) | No |
 | `cluster` | Enable clustering features | No |
 | `backup` | Enable backup features | No |
 | `gpu` | Enable GPU passthrough | No |

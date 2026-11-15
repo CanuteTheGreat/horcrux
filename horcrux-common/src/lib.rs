@@ -948,12 +948,12 @@ impl std::fmt::Display for VmStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ContainerRuntime {
-    Lxc,   // LXC
-    Lxd,   // LXD (can do containers)
-    Incus, // Incus (LXD fork, can do containers)
+    Lxc,    // LXC
+    Lxd,    // LXD (can do containers)
+    Incus,  // Incus (LXD fork, can do containers)
+    Docker, // Docker (secondary OCI runtime)
     #[default]
-    Docker, // Docker
-    Podman, // Podman (daemonless Docker alternative)
+    Podman, // Podman (preferred OCI runtime; daemonless, rootful or rootless)
 }
 
 /// OCI-runtime (Docker/Podman) creation options: what a user fills in on

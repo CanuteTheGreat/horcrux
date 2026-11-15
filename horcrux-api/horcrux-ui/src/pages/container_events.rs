@@ -69,7 +69,7 @@ pub fn parse_event(line: &str) -> EventRow {
 
 #[component]
 pub fn ContainerEventsPage() -> impl IntoView {
-    let (runtime, set_runtime) = create_signal("docker".to_string());
+    let (runtime, set_runtime) = create_signal("podman".to_string());
     let (events, set_events) = create_signal(Vec::<String>::new());
     let (connected, set_connected) = create_signal(false);
 
@@ -127,8 +127,8 @@ pub fn ContainerEventsPage() -> impl IntoView {
                 <h1>"Events"</h1>
                 <div class="header-actions">
                     <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>
-                        <option value="docker">"Docker"</option>
                         <option value="podman">"Podman"</option>
+                        <option value="docker">"Docker"</option>
                     </select>
                     <button class="btn btn-primary" on:click=connect>"Connect"</button>
                     <span>{move || if connected.get() { "● live" } else { "○ disconnected" }}</span>

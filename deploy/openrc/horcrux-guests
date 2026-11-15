@@ -10,8 +10,8 @@ description="Horcrux guests: save state on host shutdown, resume on boot"
 # (the state files are written there) and the network.
 depend() {
 	need horcrux localmount
-	use net netmount docker incus lxd lxc
-	after horcrux docker incus lxd lxc netmount
+	use net netmount podman podman-restart docker incus lxd lxc
+	after horcrux podman podman-restart docker incus lxd lxc netmount
 }
 
 start() {

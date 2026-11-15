@@ -27,7 +27,7 @@ SLOT="0"
 # compiled in, its API routes answer 404 and the web UI hides it (via
 # GET /api/features). gentoo/ci/use-matrix.sh proves this in CI.
 # Virtualization backends: qemu (default), lxd, incus
-# Container runtimes: lxc, docker, podman
+# Container runtimes: lxc, podman (preferred OCI runtime, USE default), docker (secondary)
 # Platform features: backup (default), cluster (+HA), kubernetes, nas
 # Build options: cli, monitoring, systemd, webui (default)
 # NAS protocols: smb, nfs-server, afp, webdav, ftp
@@ -35,7 +35,7 @@ SLOT="0"
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
 # NAS storage: nas-zfs, nas-btrfs, nas-mdraid, nas-lvm
 IUSE="
-	+backup cli +cluster docker incus kubernetes ldap lxc lxd +monitoring +pam podman +qemu systemd +webui
+	+backup cli +cluster docker incus kubernetes ldap lxc lxd +monitoring +pam +podman +qemu systemd +webui
 	nas smb nfs-server afp webdav ftp
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
@@ -377,6 +377,9 @@ pkg_postinst() {
 		optfeature "emulated TPM 2.0 for QEMU VMs" app-crypt/swtpm
 		optfeature "Corosync quorum checks for clusters (USE=cluster works without it)" sys-cluster/corosync
 		optfeature "saving the state of running containers (Guest Power: CRIU stateful stop)" sys-process/criu
+	fi
+	if use podman; then
+		elog "Podman is the preferred OCI runtime (Docker is secondary). OpenRC: rc-update add podman default; rc-update add podman-restart default. systemd: systemctl enable --now podman.socket podman-restart.service."
 	fi
 	elog ""
 	elog "Horcrux ${PV} - Gentoo Virtualization Platform"

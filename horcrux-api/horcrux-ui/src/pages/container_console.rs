@@ -49,7 +49,7 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
             .get_untracked()
             .get("runtime")
             .cloned()
-            .unwrap_or_else(|| "docker".to_string()),
+            .unwrap_or_else(|| "podman".to_string()),
     );
     create_effect(move |_| {
         if let Some(rt) = query.get().get("runtime") {
@@ -176,8 +176,8 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
                 <h1>{title} " — " {container_id}</h1>
                 <div class="header-actions">
                     <select id="console-runtime" prop:value=runtime on:change=move |ev| set_runtime.set(event_target_value(&ev))>
-                        <option value="docker" selected=move || runtime.get() == "docker">"Docker"</option>
                         <option value="podman" selected=move || runtime.get() == "podman">"Podman"</option>
+                        <option value="docker" selected=move || runtime.get() == "docker">"Docker"</option>
                         <option value="lxc" selected=move || runtime.get() == "lxc">"LXC"</option>
                         <option value="lxd" selected=move || runtime.get() == "lxd">"LXD"</option>
                         <option value="incus" selected=move || runtime.get() == "incus">"Incus"</option>

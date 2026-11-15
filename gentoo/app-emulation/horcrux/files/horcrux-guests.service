@@ -6,7 +6,7 @@ Documentation=https://github.com/CanuteTheGreat/horcrux/blob/main/docs/SAVE_STAT
 # ExecStop runs - the API (which does the saving), the container runtimes
 # (CRIU needs them), local and remote storage (the state files are written
 # there) and the network.
-After=horcrux.service network-online.target local-fs.target remote-fs.target docker.service containerd.service incus.service lxd.service lxc.service
+After=horcrux.service network-online.target local-fs.target remote-fs.target podman.socket podman.service podman-restart.service docker.service containerd.service incus.service lxd.service lxc.service
 Wants=horcrux.service network-online.target
 
 [Service]

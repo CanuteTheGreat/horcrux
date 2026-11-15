@@ -254,7 +254,24 @@ pub fn read_container_blkio_stats(container_id: &str) -> io::Result<(u64, u64)> 
     }
 }
 
-/// Get container metrics via Docker API (alternative method)
+/// Podman's docker-compatible API socket (rootful).
+const PODMAN_SOCK: &str = "/run/podman/podman.sock";
+
+/// Engine API client: `DOCKER_HOST` if set, else Podman's compatible socket
+/// when present (Podman is the preferred runtime), else Docker's default.
+fn connect_engine() -> io::Result<bollard::Docker> {
+    let explicit = std::env::var("DOCKER_HOST")
+        .map(|h| !h.is_empty())
+        .unwrap_or(false);
+    let r = if !explicit && Path::new(PODMAN_SOCK).exists() {
+        bollard::Docker::connect_with_unix(PODMAN_SOCK, 120, bollard::API_DEFAULT_VERSION)
+    } else {
+        bollard::Docker::connect_with_local_defaults()
+    };
+    r.map_err(|e| io::Error::other(format!("Container engine API unavailable: {}", e)))
+}
+
+/// Get container metrics via the engine API (Podman preferred, Docker too)
 pub async fn get_docker_container_stats(container_id: &str) -> io::Result<ContainerMetrics> {
     // Try Docker API first (requires bollard and Docker daemon)
     if let Ok(stats) = get_docker_container_stats_via_api(container_id).await {
@@ -372,12 +389,10 @@ fn get_container_init_pid(container_id: &str) -> io::Result<u32> {
 /// Get container stats via Docker API using bollard
 async fn get_docker_container_stats_via_api(container_id: &str) -> io::Result<ContainerMetrics> {
     use bollard::container::StatsOptions;
-    use bollard::Docker;
     use futures::StreamExt;
 
     // Connect to Docker API
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| io::Error::other(format!("Docker API unavailable: {}", e)))?;
+    let docker = connect_engine()?;
 
     let stats_options = StatsOptions {
         stream: false,
@@ -449,9 +464,9 @@ async fn get_docker_container_stats_via_api(container_id: &str) -> io::Result<Co
     ))
 }
 
-/// Get all containers from Docker
+/// Get all running containers (Podman and Docker)
 pub fn list_running_containers() -> io::Result<Vec<String>> {
-    // Try Docker API first
+    // Try the engine API first (Podman preferred)
     if let Ok(containers) = tokio::runtime::Handle::try_current() {
         if let Ok(result) = containers.block_on(list_containers_via_docker_api()) {
             return Ok(result);
@@ -461,13 +476,22 @@ pub fn list_running_containers() -> io::Result<Vec<String>> {
     // Fall back to scanning cgroups
     let mut containers = Vec::new();
 
-    if let Ok(entries) = fs::read_dir("/sys/fs/cgroup/system.slice") {
+    for dir in [
+        "/sys/fs/cgroup/machine.slice",
+        "/sys/fs/cgroup/system.slice",
+    ] {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("docker-") && name.ends_with(".scope") {
+            if (name.starts_with("docker-") || name.starts_with("libpod-"))
+                && name.ends_with(".scope")
+            {
                 // Extract container ID
                 let id = name
                     .strip_prefix("docker-")
+                    .or_else(|| name.strip_prefix("libpod-"))
                     .and_then(|s| s.strip_suffix(".scope"))
                     .map(|s| s.to_string());
                 if let Some(id) = id {
@@ -483,10 +507,8 @@ pub fn list_running_containers() -> io::Result<Vec<String>> {
 /// List containers via Docker API
 async fn list_containers_via_docker_api() -> io::Result<Vec<String>> {
     use bollard::container::ListContainersOptions;
-    use bollard::Docker;
 
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| io::Error::other(format!("Docker API unavailable: {}", e)))?;
+    let docker = connect_engine()?;
 
     let options = Some(ListContainersOptions::<String> {
         all: false, // Only running containers

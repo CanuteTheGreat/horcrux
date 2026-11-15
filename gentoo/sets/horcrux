@@ -29,14 +29,14 @@ app-emulation/spice-gtk
 # CONTAINER RUNTIMES
 # =============================================================================
 
-# Docker (most common)
-app-containers/docker
-app-containers/docker-cli
-
-# Podman (rootless alternative)
+# Podman (preferred OCI runtime: rootful or rootless, docker-compatible API socket)
 app-containers/podman
 app-containers/buildah
 app-containers/skopeo
+
+# Docker (secondary OCI runtime)
+app-containers/docker
+app-containers/docker-cli
 
 # LXC/LXD containers
 app-containers/lxc

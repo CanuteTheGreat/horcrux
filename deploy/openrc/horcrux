@@ -23,6 +23,7 @@ RC_ULIMIT="-n 1048576 -u 512"
 # Dependencies
 depend() {
 	need net
+	use podman docker
 	use dns logger
 	after firewall
 }

@@ -86,13 +86,16 @@ CONFIG_FUSE_FS=y
 ```bash
 # OpenRC
 rc-update add libvirtd default
-rc-update add docker default
+rc-update add podman default          # preferred OCI runtime (docker-compatible socket)
+rc-update add podman-restart default  # restart containers with a restart policy at boot
+rc-update add docker default          # optional, secondary
 rc-update add sshd default
 rc-update add nftables default
 
 # SystemD
 systemctl enable libvirtd
-systemctl enable docker
+systemctl enable --now podman.socket podman-restart.service   # preferred OCI runtime
+systemctl enable docker                                       # optional, secondary
 systemctl enable sshd
 systemctl enable nftables
 ```
@@ -177,7 +180,7 @@ cat /proc/cgroups
 modprobe overlay
 
 # Check Docker service
-rc-service docker status
+rc-service podman status
 journalctl -u docker  # SystemD
 ```
 

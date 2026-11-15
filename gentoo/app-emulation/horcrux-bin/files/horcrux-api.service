@@ -1,7 +1,7 @@
 [Unit]
 Description=Horcrux API server and web UI (https://:8006)
 Documentation=https://horcrux.errant.solutions/docs/
-After=network-online.target local-fs.target libvirtd.service docker.service
+After=network-online.target local-fs.target libvirtd.service podman.socket docker.service
 Wants=network-online.target
 
 [Service]

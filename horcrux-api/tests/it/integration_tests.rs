@@ -2033,8 +2033,15 @@ async fn test_storage_snapshots() {
         .await;
 }
 
+/// OCI CLI the container/stack tests drive and the runtime they ask the API
+/// for: `HORCRUX_TEST_OCI=podman` runs them against Podman (the "Podman e2e"
+/// CI step), default `docker` (the Test job's runner daemon).
+fn oci() -> String {
+    std::env::var("HORCRUX_TEST_OCI").unwrap_or_else(|_| "docker".into())
+}
+
 fn docker(args: &[&str]) -> std::process::Output {
-    std::process::Command::new("docker")
+    std::process::Command::new(oci())
         .args(args)
         .output()
         .expect("docker CLI must be installed for the container tests")
@@ -2087,7 +2094,7 @@ async fn test_container_lifecycle() {
         .post(format!("{}/containers", API_BASE))
         .bearer_auth(&token)
         .json(&json!({
-            "id": id, "name": id, "runtime": "docker", "memory": 64, "cpus": 1,
+            "id": id, "name": id, "runtime": oci(), "memory": 64, "cpus": 1,
             "rootfs": "busybox:latest", "status": "stopped",
             "env": ["IT=1"], "ports": ["8080"],
             "command": ["httpd", "-f", "-p", "8080"]
@@ -2116,11 +2123,11 @@ async fn test_container_lifecycle() {
 
     // Duplicate id -> 422; invalid input -> 422 (not a docker error / 500).
     for bad in [
-        json!({"id": id, "name": id, "runtime": "docker", "memory": 64, "cpus": 1,
+        json!({"id": id, "name": id, "runtime": oci(), "memory": 64, "cpus": 1,
                "rootfs": "busybox:latest", "status": "stopped"}),
-        json!({"id": "it-bad", "name": "bad name", "runtime": "docker", "memory": 64,
+        json!({"id": "it-bad", "name": "bad name", "runtime": oci(), "memory": 64,
                "cpus": 1, "rootfs": "busybox:latest", "status": "stopped"}),
-        json!({"id": "it-bad", "name": "it-bad", "runtime": "docker", "memory": 64,
+        json!({"id": "it-bad", "name": "it-bad", "runtime": oci(), "memory": 64,
                "cpus": 1, "rootfs": "busybox:latest", "status": "stopped",
                "ports": ["http"]}),
     ] {
@@ -2281,7 +2288,7 @@ async fn test_stack_networking_and_options() {
     let r = client
         .post(format!("{}/stacks", API_BASE))
         .bearer_auth(&token)
-        .json(&json!({"name": name, "compose_yaml": compose, "runtime": "docker"}))
+        .json(&json!({"name": name, "compose_yaml": compose, "runtime": oci()}))
         .send()
         .await
         .unwrap();
@@ -2363,7 +2370,7 @@ async fn test_stack_stop_is_concurrent() {
     let r = client
         .post(format!("{}/stacks", API_BASE))
         .bearer_auth(&token)
-        .json(&json!({"name": name, "compose_yaml": compose, "runtime": "docker"}))
+        .json(&json!({"name": name, "compose_yaml": compose, "runtime": oci()}))
         .send()
         .await
         .unwrap();
@@ -2430,7 +2437,7 @@ async fn test_failed_stack_deploy_rolls_back() {
     let r = client
         .post(format!("{}/stacks", API_BASE))
         .bearer_auth(&token)
-        .json(&json!({"name": name, "compose_yaml": compose, "runtime": "docker"}))
+        .json(&json!({"name": name, "compose_yaml": compose, "runtime": oci()}))
         .send()
         .await
         .unwrap();
@@ -2484,7 +2491,7 @@ async fn test_failed_stack_deploy_rolls_back() {
     let r = client
         .post(format!("{}/stacks", API_BASE))
         .bearer_auth(&token)
-        .json(&json!({"name": name, "compose_yaml": good_only, "runtime": "docker"}))
+        .json(&json!({"name": name, "compose_yaml": good_only, "runtime": oci()}))
         .send()
         .await
         .unwrap();
@@ -2497,7 +2504,7 @@ async fn test_failed_stack_deploy_rolls_back() {
     let r = client
         .post(format!("{}/stacks", API_BASE))
         .bearer_auth(&token)
-        .json(&json!({"name": name, "compose_yaml": compose, "runtime": "docker"}))
+        .json(&json!({"name": name, "compose_yaml": compose, "runtime": oci()}))
         .send()
         .await
         .unwrap();
@@ -2549,7 +2556,7 @@ async fn test_stack_update_rolling_keeps_volumes() {
     let r = client
         .post(format!("{}/stacks", API_BASE))
         .bearer_auth(&token)
-        .json(&json!({"name": name, "compose_yaml": v1, "runtime": "docker"}))
+        .json(&json!({"name": name, "compose_yaml": v1, "runtime": oci()}))
         .send()
         .await
         .unwrap();

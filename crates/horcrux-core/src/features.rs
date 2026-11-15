@@ -130,14 +130,52 @@ pub fn require_vm_hypervisor(h: &VmHypervisor) -> horcrux_common::Result<()> {
     }
 }
 
-/// The Docker/Podman runtime used when a request does not name one:
-/// docker when compiled in, otherwise podman.
-pub fn default_oci_runtime() -> ContainerRuntime {
-    if cfg!(feature = "docker") || !cfg!(feature = "podman") {
-        ContainerRuntime::Docker
-    } else {
-        ContainerRuntime::Podman
+/// Pure preference order for the OCI runtime used when a request names
+/// none: Podman first, Docker second.
+///
+/// * both compiled in: Podman when its binary is installed, else Docker when
+///   Docker is installed, else Podman (the preferred one reports "missing").
+/// * only one compiled in: that one.
+/// * neither compiled in (route group is gated off anyway): Podman.
+pub fn choose_oci_runtime(
+    podman_compiled: bool,
+    docker_compiled: bool,
+    podman_present: bool,
+    docker_present: bool,
+) -> ContainerRuntime {
+    match (podman_compiled, docker_compiled) {
+        (true, false) | (false, false) => ContainerRuntime::Podman,
+        (false, true) => ContainerRuntime::Docker,
+        (true, true) => {
+            if !podman_present && docker_present {
+                ContainerRuntime::Docker
+            } else {
+                ContainerRuntime::Podman
+            }
+        }
     }
+}
+
+fn binary_on_path(bin: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
+        .unwrap_or(false)
+}
+
+/// The Docker/Podman runtime used when a request does not name one
+/// (`HORCRUX_OCI_RUNTIME=docker|podman` overrides the detection).
+pub fn default_oci_runtime() -> ContainerRuntime {
+    match std::env::var("HORCRUX_OCI_RUNTIME").ok().as_deref() {
+        Some("docker") if cfg!(feature = "docker") => return ContainerRuntime::Docker,
+        Some("podman") if cfg!(feature = "podman") => return ContainerRuntime::Podman,
+        _ => {}
+    }
+    choose_oci_runtime(
+        cfg!(feature = "podman"),
+        cfg!(feature = "docker"),
+        binary_on_path("podman"),
+        binary_on_path("docker"),
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -252,6 +290,22 @@ mod tests {
         );
         let e = not_compiled("Container runtime", "podman").to_string();
         assert!(e.contains("USE=podman"), "{e}");
+    }
+
+    #[test]
+    fn oci_runtime_prefers_podman_over_docker() {
+        use ContainerRuntime::{Docker, Podman};
+        assert_eq!(ContainerRuntime::default(), Podman);
+        // both compiled, both installed / neither installed: podman
+        assert_eq!(choose_oci_runtime(true, true, true, true), Podman);
+        assert_eq!(choose_oci_runtime(true, true, false, false), Podman);
+        assert_eq!(choose_oci_runtime(true, true, true, false), Podman);
+        // docker only when podman is absent and docker present
+        assert_eq!(choose_oci_runtime(true, true, false, true), Docker);
+        // single compiled-in runtime wins; neither -> podman
+        assert_eq!(choose_oci_runtime(false, true, true, true), Docker);
+        assert_eq!(choose_oci_runtime(true, false, false, true), Podman);
+        assert_eq!(choose_oci_runtime(false, false, false, false), Podman);
     }
 
     #[test]

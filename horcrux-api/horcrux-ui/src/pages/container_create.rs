@@ -86,8 +86,8 @@ pub fn build_request(
 
 /// (value, label) of every container runtime, in menu order.
 const RUNTIMES: [(&str, &str); 5] = [
-    ("docker", "Docker"),
     ("podman", "Podman"),
+    ("docker", "Docker"),
     ("lxc", "LXC"),
     ("lxd", "LXD"),
     ("incus", "Incus"),
@@ -187,7 +187,7 @@ impl LxcForm {
 #[component]
 pub fn ContainerCreate() -> impl IntoView {
     let (name, set_name) = create_signal(String::new());
-    let (runtime, set_runtime) = create_signal("docker".to_string());
+    let (runtime, set_runtime) = create_signal("podman".to_string());
     let (image, set_image) = create_signal(String::new());
     let (memory, set_memory) = create_signal("512".to_string());
     let (cpus, set_cpus) = create_signal("1".to_string());

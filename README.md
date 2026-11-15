@@ -68,7 +68,7 @@ Known gaps and caveats:
 ### Virtualization and containers
 
 - **Hypervisors:** QEMU/KVM, LXD, Incus.
-- **Container runtimes:** LXC, LXD, Incus, Docker, Podman.
+- **Container runtimes:** LXC, LXD, Incus, Podman (preferred OCI runtime, the default for containers and stacks) and Docker (secondary). Override per request with `runtime=docker`, or host-wide with `HORCRUX_OCI_RUNTIME=docker`.
 - **Templates:** full and linked clones, cloud-init.
 - **Console access:** VNC (noVNC in the browser via a WebSocket proxy; QEMU listens on 127.0.0.1 with a per-start password), SPICE, serial console, headless VMs.
 
@@ -157,7 +157,7 @@ sudo mkdir -p /var/db/repos/local/app-emulation/horcrux
 sudo cp deploy/gentoo/horcrux-0.1.0.ebuild /var/db/repos/local/app-emulation/horcrux/
 cd /var/db/repos/local/app-emulation/horcrux
 sudo ebuild horcrux-0.1.0.ebuild manifest
-sudo USE="qemu lxc docker" emerge -av app-emulation/horcrux
+sudo USE="qemu lxc podman" emerge -av app-emulation/horcrux
 sudo systemctl enable --now horcrux-api
 ```
 
@@ -169,8 +169,8 @@ A live `horcrux-9999.ebuild` is also in `deploy/gentoo/`.
 |------|-------------|---------|
 | `qemu` | QEMU/KVM virtualization | on |
 | `lxc` | LXC containers | on |
-| `docker` | Docker integration | on |
-| `podman` | Podman integration | off |
+| `podman` | Podman integration (preferred OCI runtime) | on |
+| `docker` | Docker integration (secondary) | on |
 | `cluster` | Clustering and HA (`/ha/*` pages, node list, create/join, failover) | on |
 | `backup` | Backup compression | on |
 | `gpu` | GPU passthrough | off |

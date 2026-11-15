@@ -8,7 +8,7 @@ use leptos::*;
 
 #[component]
 pub fn ContainerNetworksPage() -> impl IntoView {
-    let (runtime, set_runtime) = create_signal("docker".to_string());
+    let (runtime, set_runtime) = create_signal("podman".to_string());
     let (networks, set_networks) = create_signal(Vec::<api::ContainerNetworkInfo>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
@@ -77,8 +77,8 @@ pub fn ContainerNetworksPage() -> impl IntoView {
                 <p class="subtitle">"Docker/Podman bridge networks (not Horcrux SDN - see Network page for that)."</p>
                 <div class="header-actions">
                     <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>
-                        <option value="docker">"Docker"</option>
                         <option value="podman">"Podman"</option>
+                        <option value="docker">"Docker"</option>
                     </select>
                     <input
                         type="text"

@@ -1,6 +1,6 @@
 [Unit]
 Description=Horcrux API Server
-After=network.target
+After=network.target podman.socket docker.service
 
 [Service]
 Type=simple

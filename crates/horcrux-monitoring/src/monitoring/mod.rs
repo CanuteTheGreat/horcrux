@@ -524,19 +524,21 @@ impl MonitoringManager {
     }
 
     async fn discover_containers() -> Result<Vec<String>> {
-        // Try Docker first
-        if let Ok(output) = tokio::process::Command::new("docker")
-            .arg("ps")
-            .arg("--format")
-            .arg("{{.ID}}")
-            .output()
-            .await
-        {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let ids: Vec<String> = stdout.lines().map(|s| s.trim().to_string()).collect();
-                if !ids.is_empty() {
-                    return Ok(ids);
+        // Podman first (preferred OCI runtime), then Docker
+        for bin in ["podman", "docker"] {
+            if let Ok(output) = tokio::process::Command::new(bin)
+                .arg("ps")
+                .arg("--format")
+                .arg("{{.ID}}")
+                .output()
+                .await
+            {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let ids: Vec<String> = stdout.lines().map(|s| s.trim().to_string()).collect();
+                    if !ids.is_empty() {
+                        return Ok(ids);
+                    }
                 }
             }
         }

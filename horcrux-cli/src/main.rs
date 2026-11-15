@@ -577,10 +577,10 @@ enum ContainerCommands {
         /// Container name
         #[arg(short, long)]
         name: String,
-        /// Container runtime (lxc, docker, podman, lxd, incus)
-        #[arg(short, long, default_value = "docker")]
+        /// Container runtime (podman [default], docker, lxc, lxd, incus)
+        #[arg(short, long, default_value = "podman")]
         runtime: String,
-        /// Image (docker/podman) or LXC template: distro/release[/variant]
+        /// Image (podman/docker) or LXC template: distro/release[/variant]
         /// (e.g. alpine/3.22, debian/bookworm) or the path of a rootfs tarball in
         /// the server's image directory (HORCRUX_IMAGE_DIR)
         #[arg(short, long)]

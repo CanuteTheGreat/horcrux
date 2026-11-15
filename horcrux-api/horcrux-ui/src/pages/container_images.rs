@@ -4,7 +4,7 @@ use leptos::*;
 
 #[component]
 pub fn ImagesPage() -> impl IntoView {
-    let (runtime, set_runtime) = create_signal("docker".to_string());
+    let (runtime, set_runtime) = create_signal("podman".to_string());
     let (images, set_images) = create_signal(Vec::<api::ImageInfo>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
@@ -74,8 +74,8 @@ pub fn ImagesPage() -> impl IntoView {
                 <h1>"Images"</h1>
                 <div class="header-actions">
                     <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>
-                        <option value="docker">"Docker"</option>
                         <option value="podman">"Podman"</option>
+                        <option value="docker">"Docker"</option>
                     </select>
                     <input
                         type="text"

@@ -505,6 +505,23 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Firewall apply (real nftables)"
           bash horcrux-api/tests/firewall_nft_e2e.sh target/debug/horcrux-api
 
+      - name: Podman e2e (container + stack suites against real Podman, no Docker)
+        # Podman is the preferred OCI runtime. The Test job's own container tests use the runner's
+        # Docker daemon (kept: Docker is the secondary runtime); this runs the same lifecycle and
+        # stack suites (create/start/stop/pause, clone, networking + DNS, rollback, rolling update)
+        # against real Podman in a privileged sibling that has no docker at all, and asserts that a
+        # request naming no runtime lands on Podman (USE=docker and USE=podman both compiled in).
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Podman e2e"
+          cargo test --all-features -p horcrux-api --test it --no-run --message-format=json > /tmp/podman-build.json
+          TESTBIN=$(python3 -c 'import json,sys
+          for l in open("/tmp/podman-build.json"):
+              try: m=json.loads(l)
+              except Exception: continue
+              if m.get("reason")=="compiler-artifact" and m.get("executable") and m["target"]["name"]=="it": print(m["executable"])')
+          test -x "$TESTBIN"
+          bash horcrux-api/tests/podman_e2e.sh target/debug/horcrux-api "$TESTBIN"
+
       - name: SDN networks + policies (real CNI plugins, real nftables)
         # sdn_cni_e2e.sh runs the built API in a privileged sibling
         # container with the real bridge/host-local CNI plugins: attaches

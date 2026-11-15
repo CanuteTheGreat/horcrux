@@ -132,8 +132,8 @@ default_runtime = "lxc"
 
 # Enable container runtimes
 lxc_enabled = true
-docker_enabled = true
-podman_enabled = true
+podman_enabled = true   # preferred OCI runtime
+docker_enabled = true   # secondary
 lxd_enabled = false
 incus_enabled = false
 

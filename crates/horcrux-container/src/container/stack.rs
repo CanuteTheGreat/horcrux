@@ -609,8 +609,8 @@ impl StackManager {
         }
         let (old_compose, _) = Self::validate_compose(&stack.compose_yaml)?;
         let runtime = match stack.runtime.as_str() {
-            "podman" => ContainerRuntime::Podman,
-            _ => ContainerRuntime::Docker,
+            "docker" => ContainerRuntime::Docker,
+            _ => ContainerRuntime::Podman,
         };
         let current = self.get_stack(&stack.id).await?;
         let find_old = |name: &str| current.services.iter().find(|s| s.service_name == name);
