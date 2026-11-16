@@ -41,5 +41,38 @@ class StallDiag(unittest.TestCase):
         self.assertIn("guest unreachable", load().stall_diag(object(), 255, ""))
 
 
+class SerialProbe(unittest.TestCase):
+    def fake(self, menu=True):
+        import threading
+        vm = types.SimpleNamespace(lock=threading.Lock(), raw=b"", sent=[])
+        def send(s):
+            vm.sent.append(s)
+            if s == "\r" and menu:
+                vm.raw += b"Enter an option: "
+            if s.startswith("echo DIAG-S"):
+                vm.raw += b"DIAG-S-42\nlo UNKNOWN 127.0.0.1/8\nenp0s2 DOWN 10.77.0.1/24\nLISTEN 0 128 0.0.0.0:22\nDIAG-E-42\n"
+        vm.send = send
+        def expect_raw(pat, timeout, consume=True):
+            import re
+            m = re.search(pat.encode() if isinstance(pat, str) else pat, vm.raw)
+            return m
+        vm.expect_raw = expect_raw
+        return vm
+
+    def test_alive_guest_dumps_network(self):
+        vm = self.fake()
+        d = load().serial_probe(vm, 1)
+        self.assertIn("answers", d)
+        self.assertIn("enp0s2 DOWN", d)
+        self.assertIn("8\r", vm.sent)
+
+    def test_silent_guest(self):
+        d = load().serial_probe(self.fake(menu=False), 1)
+        self.assertIn("SILENT", d)
+
+    def test_never_raises(self):
+        self.assertIn("serial probe failed", load().serial_probe(object(), 1))
+
+
 if __name__ == "__main__":
     unittest.main()

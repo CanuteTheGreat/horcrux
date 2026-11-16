@@ -830,6 +830,32 @@ def serial_tail(vm, n=12):
         return f" (no serial tail: {e})"
 
 
+def serial_probe(vm, wait=25):
+    """Last resort when web AND ssh are silent after a reset (lab hogshead plain runs, 1 in ~10): ask the guest over the serial console.
+    Enter tells whether the console menu still answers (kernel + userland alive); option 8 (Shell) then dumps network, listeners, load and
+    the kernel log, so the stall is named (net down, daemon dead, guest hung) instead of guessed. Prints everything, returns a short summary."""
+    try:
+        with vm.lock:
+            vm.raw = b""
+        vm.send("\r")
+        alive = vm.expect_raw("Enter an option", 15) is not None
+        out = ""
+        if alive:
+            vm.send("8\r")
+            time.sleep(2)
+            cmds = ("echo DIAG-S-$((6*7)); ip -br a; ip r; ss -ltn | head -12; uptime; free -m | head -2; ps -eo stat,comm | sort | uniq -c | sort -rn | head -6; "
+                    "(rc-status -c 2>/dev/null; systemctl --failed --no-legend 2>/dev/null) | head -8; dmesg 2>/dev/null | tail -12; echo DIAG-E-$((6*7))")
+            vm.send(cmds + "\r")
+            m = vm.expect_raw(r"(?s)DIAG-S-42.*?DIAG-E-42", wait)
+            out = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", m.group(0).decode(errors="replace")) if m else "<<no shell answer>>"
+            vm.send("exit\r")
+        print("--- serial probe (guest console menu %s) ---\n%s\n---" % ("answers" if alive else "SILENT", out), flush=True)
+        facts = [l.strip() for l in out.splitlines() if re.match(r"\s*(lo|enp\S*|eth\S*|LISTEN|\d+:\d+:\d+ up)", l) or "LISTEN" in l][:6]
+        return " [serial probe: console menu " + ("answers" if alive else "SILENT (guest hung?)") + ("; " + " // ".join(facts) if facts else "") + "]"
+    except Exception as e:  # diagnostics must never mask the failure
+        return f" [serial probe failed: {e}]"
+
+
 def stall_diag(vm, ssh_rc, ssh_out):
     """When the guest answers neither web nor ssh after a reset (lab hogshead/gringotts, daily 12986: 'Connection timed out during banner
     exchange', no cause visible), the ssh diag is empty. Say whether QEMU is alive, how loaded the HOST is, and what the serial console
@@ -1917,6 +1943,8 @@ class Runner:
             diag = " [no answer: " + err3 + "; " + re.sub(r"\s+", " ", o)[:200] + "]" if c3 == 0 else ""
             if c3 == 0:
                 diag += stall_diag(vm, rc, o)
+                if rc != 0:
+                    diag += serial_probe(vm)
         else:
             diag = ""
         self.step("console-menu-factory-reset", c3 == 200 and c2 != 200, f"factory defaults: new password -> {c3}, password from before the reset -> {c2}" + diag)
