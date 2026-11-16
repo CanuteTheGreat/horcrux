@@ -1995,15 +1995,28 @@ class Runner:
                     return False, o
                 time.sleep(3)
 
-        kb.text((pam or "root") + "\n")
-        tty1_wait(r"login -- |sudo|console-menu|-?bash|-?sh$", 90)   # agetty hands over to login once the user name is in
-        time.sleep(T(3))                                     # the password prompt is drawn after PAM starts the conversation
-        kb.text(PW + "\n")
-        if pam:                                              # root is locked: the administrator's profile runs `sudo console-menu`, which asks again
-            tty1_wait(r"sudo", 90)
-            time.sleep(T(3))
+        found, o = False, ""
+        for attempt in (1, 2, 3):
+            # A keystroke batch can be lost (agetty flushes the tty input when it redraws its prompt; run 17265: the guest was
+            # up over ssh and tty1 still showed a bare agetty). Retry the whole login instead of failing on one lost key.
+            last = attempt == 3
+            kb.text((pam or "root") + "\n")
+            ok, o = tty1_wait(r"login -- |sudo|console-menu|-?bash|-?sh$", 90 if last else 40)   # agetty hands over to login once the user name is in
+            if not ok:
+                time.sleep(T(5))
+                continue
+            time.sleep(T(3))                                 # the password prompt is drawn after PAM starts the conversation
             kb.text(PW + "\n")
-        found, o = tty1_wait(r"console-menu", 120)
+            if pam:                                          # root is locked: the administrator's profile runs `sudo console-menu`, which asks again
+                ok, o = tty1_wait(r"sudo|console-menu", 90 if last else 40)
+                if ok and "console-menu" not in o:
+                    time.sleep(T(3))
+                    kb.text(PW + "\n")
+            found, o = tty1_wait(r"console-menu", 120 if last else 60)
+            if found:
+                break
+            print(f"[vga-login] attempt {attempt}: no console-menu on tty1 yet: {re.sub(chr(10), ' | ', o)[:160]}")
+            time.sleep(T(5))
         time.sleep(2)
         vm.shot("vga-console-menu")
         rc, o2 = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep '[c]onsole-menu'")
