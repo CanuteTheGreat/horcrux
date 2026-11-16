@@ -23,6 +23,10 @@ KEYWORDS="~alpha amd64 ~arm arm64 ~loong ~ppc ~ppc64 ~riscv ~sparc x86"
 #    a new session cleans up what an old one left, and gnome-shell only (re)starts while its session is alive
 #    (gnome-session-openrc-helper). The helper's activation-env also gives the user bus's D-Bus activation environment the session's
 #    XDG_CURRENT_DESKTOP & co., so xdg-desktop-portal picks its GNOME backend (ScreenCast / screen sharing).
+#  - gnome-session-service (an OpenRC user service) starts with the environment of the user's supervisor, which has no desktop identity, and
+#    hands it to every app it autostarts: NotShowIn=GNOME entries (nm-applet) started anyway and apps picked non-GNOME defaults (grey
+#    Nextcloud tray icon). gnome-session-service-wrapper now loads XDG_CURRENT_DESKTOP, XDG_SESSION_DESKTOP, DESKTOP_SESSION & co. from the
+#    session leader first (gnome-session-openrc-helper session-env). -r1.
 #    Upstream issue with this patch: https://github.com/swagtoy/gnome-session-openrc/issues/12
 COMMON_DEPEND="
 	>=dev-libs/glib-2.82.0:2

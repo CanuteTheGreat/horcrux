@@ -1,11 +1,11 @@
-Horcrux OpenRC session scoping for gnome-session-openrc 50 (ported from the 49.2 patch series): gsd meta services are not supervised, gsd audio starts after PipeWire, gnome-shell stays on the OpenRC user bus, session-scoped user services with gnome-session-openrc-helper (teardown/preclean/guard/activation-env)
+Horcrux OpenRC session scoping for gnome-session-openrc 50 (ported from the 49.2 patch series): gsd meta services are not supervised, gsd audio starts after PipeWire, gnome-shell stays on the OpenRC user bus, session-scoped user services with gnome-session-openrc-helper (teardown/preclean/guard/activation-env/session-env), the session's desktop identity (XDG_CURRENT_DESKTOP & co.) in gnome-session-service's own environment
 
 diff --git a/data/gnome-session-openrc-helper b/data/gnome-session-openrc-helper
 new file mode 100755
-index 0000000..8d76cc0
+index 0000000..d04fcd3
 --- /dev/null
 +++ b/data/gnome-session-openrc-helper
-@@ -0,0 +1,263 @@
+@@ -0,0 +1,292 @@
 +#!/bin/sh
 +#
 +# Session scoping for the OpenRC user services of a GNOME session.
@@ -31,6 +31,14 @@ index 0000000..8d76cc0
 +#              picks no GNOME backend, there is no ScreenCast interface and screen sharing (OBS, browsers, Teams) is broken. Run by the
 +#              leader before the session's services start and by gnome-session-init-* once gnome-shell is up; a portal that was
 +#              activated without the desktop name is stopped so the next request activates it with the session's environment.
++#
++#   session-env
++#              print `export NAME='value'` lines with the session's desktop identity (XDG_CURRENT_DESKTOP, XDG_SESSION_DESKTOP, DESKTOP_SESSION,
++#              ...), for gnome-session-service-wrapper. gnome-session-service is an OpenRC user service: it inherits the environment of the
++#              user's openrc-user supervisor (root's supervise-daemon), which has none of these, and every app it autostarts inherits that.
++#              Without XDG_CURRENT_DESKTOP the OnlyShowIn/NotShowIn keys of autostart entries are ignored (nm-applet, which says
++#              NotShowIn=GNOME, autostarts and shows a second network icon) and apps pick non-GNOME defaults (the Nextcloud tray icon is the
++#              monochrome one). Under systemd the apps get them from the systemd user manager.
 +#
 +# Everything works on the caller's own XDG_RUNTIME_DIR and uid; nothing here touches another user's or another session's
 +# services.
@@ -191,6 +199,31 @@ index 0000000..8d76cc0
 +	printf '%s' "$v"
 +}
 +
++# session_var plus the defaults of a GNOME session that gives neither the value nor anything to derive it from
++session_value() {
++	local val
++	val=$(session_var "$1")
++	case "$1" in
++	XDG_CURRENT_DESKTOP) [ -n "$val" ] || val=GNOME ;;
++	XDG_SESSION_TYPE) case "$val" in ""|tty) val=wayland ;; esac ;;
++	XDG_SESSION_DESKTOP) [ -n "$val" ] || val=gnome ;;
++	esac
++	printf '%s' "$val"
++}
++
++cmd_session_env() {
++	local v val
++	[ -n "$XDG_RUNTIME_DIR" ] || exit 0
++	for v in XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION GDMSESSION XDG_SESSION_TYPE XDG_MENU_PREFIX; do
++		val=$(session_value "$v")
++		[ -n "$val" ] || continue
++		# the output is eval'ed by the caller: only plain desktop-name characters pass
++		case "$val" in *[!A-Za-z0-9_.:@+-]*) continue ;; esac
++		printf "export %s='%s'\n" "$v" "$val"
++	done
++	exit 0
++}
++
 +# the compositor's sockets: a Wayland socket in our runtime dir, an X display whose server (Xwayland) runs as this user
 +wayland_socket() {
 +	local s
@@ -231,12 +264,7 @@ index 0000000..8d76cc0
 +	bus="${XDG_RUNTIME_DIR}/bus"
 +	[ -S "$bus" ] || exit 0
 +	for v in XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_CLASS XDG_SESSION_ID XDG_MENU_PREFIX; do
-+		val=$(session_var "$v")
-+		case "$v" in
-+		XDG_CURRENT_DESKTOP) [ -n "$val" ] || val=GNOME ;;
-+		XDG_SESSION_TYPE) case "$val" in ""|tty) val=wayland ;; esac ;;
-+		XDG_SESSION_DESKTOP) [ -n "$val" ] || val=gnome ;;
-+		esac
++		val=$(session_value "$v")
 +		[ -n "$val" ] && set="$set $v=$val"
 +	done
 +	val=$(wayland_socket); [ -n "$val" ] && set="$set WAYLAND_DISPLAY=$val"
@@ -267,8 +295,25 @@ index 0000000..8d76cc0
 +	guard)    shift; cmd_guard "$@" ;;
 +	alive)    session_alive "$2" ;;
 +	activation-env) cmd_activation_env ;;
-+	*) echo "usage: ${0##*/} teardown|preclean [SESSION_ID] | guard CMD... | alive SESSION_ID | activation-env" >&2; exit 2 ;;
++	session-env) cmd_session_env ;;
++	*) echo "usage: ${0##*/} teardown|preclean [SESSION_ID] | guard CMD... | alive SESSION_ID | activation-env | session-env" >&2; exit 2 ;;
 +esac
+diff --git a/data/gnome-session-service-wrapper b/data/gnome-session-service-wrapper
+index 208fa6e..7546c14 100755
+--- a/data/gnome-session-service-wrapper
++++ b/data/gnome-session-service-wrapper
+@@ -10,5 +10,11 @@
+ # to be consistent, it is still wired up that way.
+ 
+ PATH="/usr/local/libexec:/usr/libexec:$PATH"
++
++# gnome-session-service and every app it autostarts inherit THIS environment (OpenRC user services start with root's supervise-daemon
++# environment, not the session's). Give it the session's desktop identity from the session leader first: without XDG_CURRENT_DESKTOP the
++# OnlyShowIn/NotShowIn keys of autostart entries are ignored and apps pick non-GNOME defaults.
++eval "$(gnome-session-openrc-helper session-env 2>/dev/null)"
++
+ gnome-session-service "$@"
+ rc-service -U gnome-session-shutdown start
 diff --git a/data/meson.build b/data/meson.build
 index 5d5f3b0..a093364 100644
 --- a/data/meson.build
