@@ -178,7 +178,26 @@ class ZRun(qt.Runner):
 
     TRANSPORT_LOST = re.compile(r"closed by remote host|Connection reset|Broken pipe|Connection refused|kex_exchange_identification|Connection timed out", re.I)
 
-    def sh_resilient(self, cmd, timeout=60, label="cmd", boot_id=None, attempts=3):
+    def vm_death_report(self, vm, label):
+        """The guest's QEMU is gone (a 'closed by remote host' followed by 'Connection refused' on the forward = QEMU exited, not sshd): there is no\n        resumed system to re-attach to, and re-running the command cannot help. Print how QEMU ended (exit status: negative = killed by a signal,\n        0 = the guest powered itself off, with -no-reboot a guest reset/panic also ends it here), its stderr, the job cgroup's OOM counters and the\n        guest's last serial lines (kernel oops/panic, shutdown or hibernate messages), and return the one-line cause for the [FAIL] detail."""
+        rc = vm.p.poll()
+        err = ""
+        try:
+            err = open(f"{vm.out}/{vm.name}-qemu.err", errors="replace").read().strip()[-400:]
+        except OSError:
+            pass
+        ev = ""
+        try:
+            ev = " ".join(open("/sys/fs/cgroup/memory.events").read().split())
+        except OSError:
+            pass
+        tail = qt.serial_tail(vm, 40)
+        msg = f"{label}: QEMU exited during the command (exit status {rc}); qemu stderr: {err!r}; cgroup memory.events: {ev}{tail}"
+        print("[DIAG] " + msg, flush=True)
+        self.res.setdefault("vm_died_during_command", []).append(msg)
+        return msg
+
+    def sh_resilient(self, cmd, timeout=60, label="cmd", boot_id=None, attempts=3, vm=None):
         """`sh` for a LONG idempotent command right after a hibernate resume: when sshd drops the transport mid-command (rc 255, 'closed by remote
         host') the guest is still the same resumed system and the command's effect (a scrub) is intact, so re-attach over a fresh session and run it
         again. The caller's assertion on the output is unchanged. Every drop is explained (boot id, uptime, sshd state, log tail, dmesg) in
@@ -187,6 +206,8 @@ class ZRun(qt.Runner):
         for n in range(1, attempts):
             if rc != 255 or not self.TRANSPORT_LOST.search(o):
                 break
+            if vm is not None and not vm.alive():
+                return rc, o.strip() + " | " + self.vm_death_report(vm, label)
             up = self.wait_ssh(180)
             _r, diag = self.sh("echo BOOT=$(cat /proc/sys/kernel/random/boot_id); uptime; "
                                "{ rc-service sshd status 2>&1 || systemctl status sshd ssh 2>&1 | head -5; } | head -5; "
@@ -707,7 +728,7 @@ class ZRun(qt.Runner):
             rc, o = self.sh("zpool status -x; zpool status rpool | grep -E 'state|errors'; zfs get -H -o value keystatus rpool; test -e /run/hx/key && echo KEYLEFT || echo nokey")
             self.step("pool-healthy-after-resume", "all pools are healthy" in o and "available" in o and "KEYLEFT" not in o, o.strip().replace("\n", " | ")[:300])
             rc, o = self.sh_resilient("zpool scrub -w rpool; zpool status rpool | grep -E 'scan:|errors:|state:'", timeout=int(qt.T(600)),
-                                      label="scrub-after-resume", boot_id=before["boot_id"])
+                                      label="scrub-after-resume", boot_id=before["boot_id"], vm=vm)
             self.step("scrub-clean-after-resume", rc == 0 and "with 0 errors" in o and "No known data errors" in o, o.strip().replace("\n", " | ")[:300])
             self.sh("poweroff", timeout=10)
             self.wait_exit(vm)

@@ -51,5 +51,46 @@ class ShResilient(unittest.TestCase):
         self.assertEqual(len(h.res["ssh_transport_loss"]), 2)
 
 
+class DeadVm(unittest.TestCase):
+    """QEMU gone after a transport drop (run 3150: 'closed by remote host' then 'Connection refused'): no re-attach attempt (wait_ssh would burn 180 s
+    on a dead forward), the failure detail carries how QEMU ended, and the assertion still fails."""
+    def test_dead_vm_is_reported_not_retried(self):
+        h = harness([(255, "Connection to 127.0.0.1 closed by remote host.\n")])
+        waited = []
+        h.wait_ssh = lambda t=0: waited.append(t) or True
+
+        class P:
+            def poll(self):
+                return -9
+
+        class V:
+            p, name, out = P(), "5-boot4-resume", "/nonexistent"
+
+            def alive(self):
+                return False
+        h.vm_death_report = lambda vm, label: "QEMU exited during the command (exit status -9)"
+        rc, o = h.sh_resilient("scrub", vm=V())
+        self.assertEqual(rc, 255)
+        self.assertIn("exit status -9", o)
+        self.assertEqual(waited, [])
+        self.assertEqual(len(h.calls), 1)
+
+    def test_report_names_exit_status_and_survives_missing_files(self):
+        cls = [v for v in vars(zet).values() if isinstance(v, type) and hasattr(v, "vm_death_report")][0]
+        h = cls.__new__(cls)
+        h.res = {}
+
+        class P:
+            def poll(self):
+                return 0
+
+        class V:
+            p, name, out = P(), "5-boot4-resume", "/nonexistent"
+            log = type("L", (), {"name": "/nonexistent/x"})()
+        msg = h.vm_death_report(V(), "scrub-after-resume")
+        self.assertIn("exit status 0", msg)
+        self.assertEqual(len(h.res["vm_died_during_command"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
