@@ -27,6 +27,7 @@ IUSE="awcc systemd"
 # this package any more: a headless server gets the same fixes without a single GNOME package. This package only adds the GNOME defaults below.
 RDEPEND="
 	sys-apps/horcrux-core
+	media-fonts/noto-cjk
 	gnome-base/dconf
 	sys-apps/dbus
 	gnome-base/gnome-control-center
