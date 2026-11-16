@@ -830,7 +830,7 @@ def serial_tail(vm, n=12):
         return f" (no serial tail: {e})"
 
 
-def serial_probe(vm, wait=25):
+def serial_probe(vm, wait=45):
     """Last resort when web AND ssh are silent after a reset (lab hogshead plain runs, 1 in ~10): ask the guest over the serial console.
     Enter tells whether the console menu still answers (kernel + userland alive); option 8 (Shell) then dumps network, listeners, load and
     the kernel log, so the stall is named (net down, daemon dead, guest hung) instead of guessed. Prints everything, returns a short summary."""
@@ -844,13 +844,19 @@ def serial_probe(vm, wait=25):
             vm.send("8\r")
             time.sleep(2)
             cmds = ("echo DIAG-S-$((6*7)); ip -br a; ip r; ss -ltn | head -12; uptime; free -m | head -2; ps -eo stat,comm | sort | uniq -c | sort -rn | head -6; "
-                    "(rc-status -c 2>/dev/null; systemctl --failed --no-legend 2>/dev/null) | head -8; dmesg 2>/dev/null | tail -12; echo DIAG-E-$((6*7))")
+                    "(rc-status -c 2>/dev/null; systemctl --failed --no-legend 2>/dev/null) | head -8; dmesg 2>/dev/null | tail -12; "
+                    # 2026-11-16 (gringotts j05543: guest up 5 min, 22/8443 listening, forwards dead for 180 s): was the ruleset only half loaded after the
+                    # reset (a drop policy without its accept rules), did applyd/web log an error, does the web answer on the guest itself?
+                    "echo NFT-RULES; nft list ruleset 2>&1 | grep -E 'table |chain |policy|dport|iifname' | head -30; "
+                    "echo APPLY-LOGS; tail -n 4 /var/log/patronus/*.log /var/log/horcrux/*.log 2>/dev/null | cut -c1-160; "
+                    "for p in 8443 8006; do ss -ltn | grep -q \":$p \" && echo LOCALWEB-$p-$(curl -sk -m8 -o /dev/null -w %{http_code} https://127.0.0.1:$p/ 2>&1 | tail -c 40); done; "
+                    "echo DIAG-E-$((6*7))")
             vm.send(cmds + "\r")
             m = vm.expect_raw(r"(?s)DIAG-S-42.*?DIAG-E-42", wait)
             out = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", m.group(0).decode(errors="replace")) if m else "<<no shell answer>>"
             vm.send("exit\r")
         print("--- serial probe (guest console menu %s) ---\n%s\n---" % ("answers" if alive else "SILENT", out), flush=True)
-        facts = [l.strip() for l in out.splitlines() if re.match(r"\s*(lo|enp\S*|eth\S*|LISTEN|\d+:\d+:\d+ up)", l) or "LISTEN" in l][:6]
+        facts = [l.strip() for l in out.splitlines() if re.match(r"\s*(lo|enp\S*|eth\S*|\d+:\d+:\d+ up|LOCALWEB-)", l) or "LISTEN" in l or "policy" in l][:12]
         return " [serial probe: console menu " + ("answers" if alive else "SILENT (guest hung?)") + ("; " + " // ".join(facts) if facts else "") + "]"
     except Exception as e:  # diagnostics must never mask the failure
         return f" [serial probe failed: {e}]"
