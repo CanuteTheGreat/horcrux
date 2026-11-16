@@ -731,6 +731,12 @@ class ZRun(qt.Runner):
             c2 = int(kv["C2"]) if (kv.get("C2") or "").isdigit() else -1
             self.step("process-survived-and-still-running", kv.get("PROC") == "ALIVE" and c1 >= before["counter"] and c2 > c1,
                       f"counter before hibernate {before['counter']}, after resume {c1} -> {c2}")
+            if rc != 0 or kv.get("PROC") != "ALIVE" or c2 <= c1:
+                try:
+                    vm.p.wait(timeout=30)       # a guest that died right after the resume: how did QEMU end, what did the guest print last
+                except Exception:
+                    pass
+                self.vm_death_report(vm, "post-resume-first-command") if not vm.alive() else qt.serial_tail(vm, 40)
             ls = [l for l in o.splitlines() if not re.match(r"^[A-Z0-9_]+=", l)]
             self.res["resume_dmesg"] = "\n".join(ls)
             rc, o = self.sh("zpool status -x; zpool status rpool | grep -E 'state|errors'; zfs get -H -o value keystatus rpool; test -e /run/hx/key && echo KEYLEFT || echo nokey")
