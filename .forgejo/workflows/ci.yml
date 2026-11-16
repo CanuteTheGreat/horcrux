@@ -9,9 +9,11 @@ name: CI
 #     Cargo.toml/Cargo.lock or this file changed, on the nightly schedule, on a tag, or on dispatch.
 #   - everything that protects main (check, clippy, Test, UI E2E, themes, audit) runs on PRs and
 #     pushes to main as before.
+# Branch pushes (2026-11-16): CI runs on every branch push, so the merge script needs no pull request; it waits for the
+# branch-head run and fast-forwards main. Plan base for a branch = merge-base with main; a main push at an already-green sha is `dup`.
 on:
   push:
-    branches: [main]
+    branches: ['**']   # every branch push runs CI (no PR needed; ff-merge-when-green.sh waits on the branch-head run)
     tags: ['v*']
   pull_request:
     branches: [main]
@@ -74,6 +76,13 @@ jobs:
             push|pull_request)
               case "$REF" in refs/tags/*) ;; *)
                 base="$BEFORE"; [ "$EVENT" = pull_request ] && base="$PR_BASE"
+                # branch push (no PR): BEFORE is the branch's previous tip or all zeros; diff against the merge-base with main
+                case "$REF" in refs/heads/main) ;; refs/heads/*)
+                  if git fetch -q --no-tags --unshallow origin 2>/dev/null || git fetch -q --no-tags --depth=1000 origin 2>/dev/null; then
+                    git fetch -q --no-tags origin main:refs/remotes/origin/main 2>/dev/null
+                    mb=$(git merge-base refs/remotes/origin/main HEAD 2>/dev/null) && [ -n "$mb" ] && base="$mb"
+                  fi ;;
+                esac
                 heavy=true
                 if [ -n "$base" ] && [ "${base#0000000}" = "$base" ] && git fetch --no-tags --depth=1 origin "$base" 2>/dev/null; then
                   files=$(git diff --name-only "$base" HEAD 2>/dev/null) && {
@@ -87,6 +96,11 @@ jobs:
                   st=$(curl -fsS -H "Authorization: token $TOKEN" "$API/commits/$p2/status" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(any(x.get("context","").startswith("CI / Test (pull_request") and x.get("status")=="success" for x in d.get("statuses",[])))' 2>/dev/null || echo False)
                   [ "$st" = True ] && dup=true
                 fi
+              fi
+              # fast-forward of main to a branch tip that already passed (no PR): same sha, so same bytes
+              if [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then
+                st=$(curl -fsS -H "Authorization: token ${TOKEN}" "$API/commits/${GITHUB_SHA}/statuses?limit=100" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(any(x.get("context","").startswith("CI / Test (push") and x.get("status")=="success" for x in d))' 2>/dev/null || echo False)
+                [ "$st" = True ] && dup=true
               fi ;;
           esac
           echo "event=$EVENT heavy=$heavy dup=$dup"
@@ -106,8 +120,8 @@ jobs:
       - name: Leak guard (files)
         run: python3 ci/check-public-leaks.py
       - name: Leak guard (PR commit messages)
-        if: github.event_name == 'pull_request'
-        run: python3 ci/check-public-leaks.py --commits "origin/${{ github.base_ref }}..HEAD"
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/'))
+        run: python3 ci/check-public-leaks.py --commits "origin/${{ github.base_ref || 'main' }}..HEAD"
 
   mobile-theme:
     name: Mobile theme (light/dark)
