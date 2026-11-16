@@ -325,7 +325,7 @@ def parse_depclean(text):
             continue
         elif not s or s.startswith(">>>") or s.startswith("Packages installed"):
             break
-        out += [atom_of(t) for t in s.split() if re.match(r"^[a-z0-9+_.-]+/\S+-[0-9]", t)]
+        out += [atom_of(t.lstrip("=")) for t in s.split() if re.match(r"^=?[a-z0-9+_.-]+/\S+-[0-9]", t)]  # newer Portage prints =cat/pkg-ver
     return out
 
 

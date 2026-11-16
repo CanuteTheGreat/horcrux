@@ -117,6 +117,11 @@ class ConfigAndParsing(Base):
         self.assertEqual(len(self.m.parse_pending(WORLD_PRETEND)), 2)
         self.assertEqual(self.m.parse_depclean(DEPCLEAN_PRETEND), ["dev-libs/foo", "app-misc/bar"])
 
+    def test_depclean_parser_handles_equals_prefix_and_wrapped_lines(self):
+        txt = "All selected packages: =media-libs/libcdr-0.1.9 =sys-kernel/gentoo-kernel-6.18.62\n  =dev-libs/x-1-r2\n\n>>> 'Selected' packages are slated for removal.\n"
+        self.assertEqual(self.m.parse_depclean(txt), ["media-libs/libcdr", "sys-kernel/gentoo-kernel", "dev-libs/x"])
+        self.assertIn("protected", self.m.depclean_verdict(self.m.parse_depclean(txt), self.conf()))
+
     def test_merged_since_reads_only_new_lines(self):
         with open(self.m.EMERGE_LOG, "w") as f:
             f.write("1:  ::: completed emerge (1 of 1) old/pkg-1 to /\n")
