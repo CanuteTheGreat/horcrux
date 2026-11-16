@@ -1980,13 +1980,35 @@ class Runner:
         kb = Kbd(vm, True)
         vm.shot("vga-console-login")
         pam = self.P.get("web_user")
-        for t in ((pam or "root") + "\n", PW + "\n") + ((PW + "\n",) if pam else ()):     # pam: root is locked, the administrator signs in, sudo asks again
-            kb.text(t)
-            time.sleep(4)
-        time.sleep(4)
+
+        def tty1_wait(pat, secs):
+            """poll the guest (over ssh) until a process on tty1 matches pat; (found, last ps output). The VGA console has no text to wait on,
+            and fixed 4 s sleeps were shorter than a PAM login + sudo + menu start on the emulated aarch64 guest (run 3110: empty ps
+            output, no process on tty1 at all), so every keyboard step now waits for the guest's own progress instead of the clock."""
+            end, o = time.time() + T(secs), ""
+            while True:
+                rc, o = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep -E '^ *tty1 '", timeout=30)
+                o = o if isinstance(o, str) else str(o)
+                if re.search(pat, o):
+                    return True, o
+                if time.time() >= end:
+                    return False, o
+                time.sleep(3)
+
+        kb.text((pam or "root") + "\n")
+        tty1_wait(r"login -- |sudo|console-menu|-?bash|-?sh$", 90)   # agetty hands over to login once the user name is in
+        time.sleep(T(3))                                     # the password prompt is drawn after PAM starts the conversation
+        kb.text(PW + "\n")
+        if pam:                                              # root is locked: the administrator's profile runs `sudo console-menu`, which asks again
+            tty1_wait(r"sudo", 90)
+            time.sleep(T(3))
+            kb.text(PW + "\n")
+        found, o = tty1_wait(r"console-menu", 120)
+        time.sleep(2)
         vm.shot("vga-console-menu")
-        rc, o = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep '[c]onsole-menu'")
-        self.step("console-menu-on-vga-tty1", rc == 0 and "tty1" in o, o.strip()[:100])
+        rc, o2 = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep '[c]onsole-menu'")
+        o = o2 if rc == 0 else (o2 + " | tty1: " + re.sub(r"\s+", " ", o))[:200]
+        self.step("console-menu-on-vga-tty1", rc == 0 and "tty1" in o, o.strip()[:200])
 
     def serial_login(self, vm, pw, expect_ok, user="root"):
         for _ in range(6):
