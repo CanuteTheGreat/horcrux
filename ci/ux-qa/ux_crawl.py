@@ -245,7 +245,12 @@ def main():
     pfail = [re.compile(p, re.I) for p in cfg["private_fail"]]
     pwarn = [re.compile(p, re.I) for p in cfg["private_warn"]]
     bad_text = re.compile(r"\bundefined\b|\bNaN\b|\[object Object\]|missing field|panicked at|Traceback \(most|RUST_BACKTRACE|\{\{|\}\}", re.I)
-    notfound = re.compile(r"\b404\b|page not found|route not found|^not found$", re.I | re.M)
+    # A bare "404" is a number too (a 404 GB disk, 404 MiB free on the runner), so only the
+    # error-shaped forms count: "HTTP 404", "404 Not Found", "Error 404", a lone "404" line.
+    notfound = re.compile(
+        r"\bhttp 404\b|\b404\s*[-:\u2013\u2014]?\s*not found|\berror:?\s*404\b|^\s*404\s*$|page not found|route not found|^not found$",
+        re.I | re.M,
+    )
     findings, pages = [], []
     seen = set()
 
