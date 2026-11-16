@@ -206,8 +206,16 @@ class ZRun(qt.Runner):
         for n in range(1, attempts):
             if rc != 255 or not self.TRANSPORT_LOST.search(o):
                 break
-            if vm is not None and not vm.alive():
-                return rc, o.strip() + " | " + self.vm_death_report(vm, label)
+            if vm is not None:
+                # QEMU may still be mid-exit when ssh reports the drop (run 3168: the forward was already refused but poll() was not yet set): give it
+                # a moment, and always show the guest's last serial lines at the first drop (what the guest was doing as it went down)
+                try:
+                    vm.p.wait(timeout=30)
+                except Exception:
+                    pass
+                if not vm.alive():
+                    return rc, o.strip() + " | " + self.vm_death_report(vm, label)
+                qt.serial_tail(vm, 40)
             up = self.wait_ssh(180)
             _r, diag = self.sh("echo BOOT=$(cat /proc/sys/kernel/random/boot_id); uptime; "
                                "{ rc-service sshd status 2>&1 || systemctl status sshd ssh 2>&1 | head -5; } | head -5; "

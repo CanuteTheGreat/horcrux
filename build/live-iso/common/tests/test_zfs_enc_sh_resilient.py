@@ -63,6 +63,9 @@ class DeadVm(unittest.TestCase):
             def poll(self):
                 return -9
 
+            def wait(self, timeout=None):
+                return -9
+
         class V:
             p, name, out = P(), "5-boot4-resume", "/nonexistent"
 
