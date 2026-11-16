@@ -1133,6 +1133,9 @@ class Installer:
         # post-install console menu: login first (default) or OPNsense-style open console
         if c.get("console_open"):
             self.write("/etc/live-installer/console-open", "1\n")
+            # The open console IS the menu: kernel INFO lines printed later (loop/overlay/module loads, ~20 s after boot) scroll its header
+            # off the 24-row serial console (run 3242 console-menu-shown). Only errors reach the console; dmesg and the journal keep everything.
+            self.write("/etc/sysctl.d/10-live-installer-console.conf", CONSOLE_OPEN_SYSCTL)
             initsys.set_tty1(T, "--noclear -n -l /usr/libexec/console-menu-session")
 
     def cfg_use_flags(self):
@@ -1446,6 +1449,8 @@ def sshd_hardening(password_auth):
             + ("on" if password_auth else "off") + "); /etc/ssh/sshd_config stays the stock openssh file\n"
             + hard + "KbdInteractiveAuthentication no\nPermitEmptyPasswords no\n")
 
+
+CONSOLE_OPEN_SYSCTL = "# live-installer: open console menu: only kernel errors on the console\nkernel.printk = 3 4 1 3\n"
 
 SYSCTL_HARDENING = """# live-installer: Server hardening (not applied to a Workstation install)
 kernel.kptr_restrict = 2

@@ -1991,23 +1991,32 @@ class Runner:
         pam = self.P.get("web_user")
 
         def tty1_wait(pat, secs):
-            """poll the guest (over ssh) until a process on tty1 matches pat; (found, last ps output). The VGA console has no text to wait on,
+            """poll the guest (over ssh) until the processes on tty1 (and the pty children sudo starts for them) match pat; (found, last ps output).
+            pat is a regex applied to the tty1 lines, or a callable applied to the whole listing. The VGA console has no text to wait on,
             and fixed 4 s sleeps were shorter than a PAM login + sudo + menu start on the emulated aarch64 guest (run 3110: empty ps
             output, no process on tty1 at all), so every keyboard step now waits for the guest's own progress instead of the clock."""
             end, o = time.time() + T(secs), ""
             while True:
-                rc, o = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep -E '^ *tty1 '", timeout=30)
+                rc, o = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep -E '^ *(tty1|pts/[0-9]+) '", timeout=30)
                 o = o if isinstance(o, str) else str(o)
-                if re.search(pat, o, re.M):
-                    return True, o
+                t1 = "\n".join(l for l in o.splitlines() if re.match(r"\s*tty1\s", l))
+                if (pat(o) if callable(pat) else re.search(pat, t1, re.M)):
+                    return True, (o if callable(pat) else t1)
                 if time.time() >= end:
-                    return False, o
-                time.sleep(3)
+                    return False, t1
 
         # The administrator's profile runs `sudo /usr/bin/console-menu`: that command line CONTAINS "console-menu" while sudo still waits for the
-        # password, so only a console-menu process that is not sudo's own line proves the menu is up (console-menu is a python script, so its own line is `python3 /usr/bin/console-menu`; the earlier pattern took the waiting sudo for
-        # the menu and skipped typing the sudo password).
-        menu_re = r"^\s*tty1\s+(?!(?:\S*/)?sudo\b)(?:\S+\s+)?\S*console-menu\b"
+        # password, so it alone proves nothing. Once the password is accepted, sudo (use_pty) runs the menu on a pty of its own: the python
+        # process `python3 /usr/bin/console-menu` is then on pts/N while sudo stays on tty1 (run 3242: tty1 showed only sudo, pts/0 the menu, and
+        # the check kept waiting for a python process ON tty1). So the menu is up when its python process runs on tty1 (root's login shell) or
+        # on a pty with sudo's tty1 line as its parent.
+        menu_py = r"^\s*%s\s+(?!(?:\S*/)?sudo\b)(?:\S+\s+)?\S*console-menu\b"
+
+        def menu_up(o):
+            if re.search(menu_py % "tty1", o, re.M):
+                return True
+            return bool(re.search(r"^\s*tty1\s+(?:\S*/)?sudo\b.*console-menu", o, re.M) and re.search(menu_py % r"pts/\d+", o, re.M))
+        menu_re = menu_up
         stage = {}
         found, o = False, ""
         for attempt in (1, 2, 3):
@@ -2023,9 +2032,9 @@ class Runner:
             time.sleep(T(3))                                 # the password prompt is drawn after PAM starts the conversation
             kb.text(PW + "\n")
             if pam:                                          # root is locked: the administrator's profile runs `sudo console-menu`, which asks again
-                ok, o = tty1_wait(r"sudo|" + menu_re, 40 if last else 25)
+                ok, o = tty1_wait(lambda x: bool(re.search(r"^\s*tty1\s.*sudo", x, re.M)) or menu_up(x), 40 if last else 25)
                 stage["pw"] = (ok, re.sub(r"\s+", " ", o)[:80])
-                if not re.search(menu_re, o, re.M):
+                if not menu_up(o):
                     time.sleep(T(3))
                     kb.text(PW + "\n")
             found, o = tty1_wait(menu_re, 120 if last else 60)
@@ -2039,7 +2048,7 @@ class Runner:
         vm.shot("vga-console-menu")
         rc, o2 = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep '[c]onsole-menu'")
         o2 = o2 if isinstance(o2, str) else str(o2)
-        up = rc == 0 and bool(re.search(menu_re, o2, re.M))
+        up = rc == 0 and menu_up(o2)
         if not up:
             rc3, why = ssh(FWD_SSH, self.key, "tail -n 40 /var/log/messages /var/log/auth.log 2>/dev/null | grep -iE 'login|sudo|pam|getty' | tail -n 8", timeout=30)
             print("[vga-login] stages " + repr(stage) + " guest log: " + re.sub(chr(10), " | ", why if isinstance(why, str) else str(why)))
