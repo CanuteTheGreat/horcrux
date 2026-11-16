@@ -215,9 +215,22 @@ cfg=0; grep -Eq '"ip-forward-no-drop"[[:space:]]*:[[:space:]]*true' /etc/docker/
 echo "CFG $cfg"
 if ! command -v dockerd >/dev/null 2>&1; then echo "DOCKER-ABSENT"; ls -d /var/db/pkg/sys-apps/horcrux-core-* >/dev/null 2>&1 || echo "NO-HORCRUX-CORE"; echo "FWD-DONE"; exit 0; fi
 svc() { if [ -d /run/systemd/system ]; then systemctl "$1" "$2"; else rc-service "$2" "$1"; fi; }
+# what a dockerd that never came up leaves behind (a bare "stopped" says nothing): start output + exit code, processes, logs, graph-driver backing fs, kernel messages
+docker_down_diag() {
+  echo "DIAG-BEGIN"; date -u +%T
+  if [ -d /run/systemd/system ]; then systemctl status docker --no-pager -l 2>&1 | tail -n 12; journalctl -u docker -u containerd --no-pager -n 25 2>&1 | cut -c1-200
+  else
+    svc start docker 2>&1 | tail -n 6; echo "start-rc=$?"; rc-service docker status 2>&1 | head -2
+    ls -l /var/log/docker.log /run/docker.pid /run/containerd 2>&1 | head -6; tail -n 25 /var/log/docker.log 2>&1 | cut -c1-200
+    rc-status -a 2>&1 | grep -Ei 'docker|containerd|zfs|net|dhcp' | head -8
+  fi
+  ps -eo pid,etime,stat,args 2>&1 | grep -E 'dockerd|containerd|rc-service|openrc-run|start-stop' | grep -v grep | cut -c1-160 | head -8
+  df -T /var/lib/docker 2>&1 | tail -n 1; grep -E 'zfs|dockerd' /etc/docker/daemon.json 2>&1 | head -3
+  dmesg 2>/dev/null | tail -n 8 | cut -c1-200; free -m | sed -n 2p; echo "DIAG-END"
+}
 svc status docker >/dev/null 2>&1 || svc start docker >/dev/null 2>&1
 n=0; until docker info >/dev/null 2>&1 || [ $n -ge ${HXW:-60} ]; do n=$((n+1)); sleep 1; done
-docker info >/dev/null 2>&1 && echo "DOCKER-UP" || { echo "DOCKER-DOWN"; svc status docker 2>&1 | head -2; tail -n 4 /var/log/docker.log 2>/dev/null; }
+docker info >/dev/null 2>&1 && echo "DOCKER-UP" || { echo "DOCKER-DOWN"; svc status docker 2>&1 | head -2; tail -n 4 /var/log/docker.log 2>/dev/null; docker_down_diag; }
 echo "POLICY $( (nft list chain ip filter FORWARD 2>/dev/null || iptables -S FORWARD 2>/dev/null) | grep -Eo 'policy [a-z]+|-P FORWARD [A-Z]+' | head -1)"
 cleanup() { ip netns del hxfwdt 2>/dev/null; ip link del hxfwdt-h 2>/dev/null; nft delete table ip hxfwdtest 2>/dev/null; }
 cleanup
@@ -256,5 +269,5 @@ def docker_forward_gate(sh, step, slow=1.0):
     # a product that ships neither Docker nor horcrux-core (Patronus) has no daemon.json to check: nothing to prove
     not_applicable = absent and "NO-HORCRUX-CORE" in o
     ok = "FWD-DONE" in o and (not_applicable or cfg and (absent or ("DOCKER-UP" in o and "NETNS-PING-OK" in o and "NETNS-PING-AFTER-RESTART-OK" in o and not re.search(r"(?mi)^POLICY(-AFTER-RESTART)? .*drop", o))))
-    step("docker-does-not-break-vm-nat-forwarding", ok, re.sub(r"\s+", " ", o.strip())[-300:] if not absent or not ok else "not applicable: neither docker nor horcrux-core in this image" if not_applicable else "docker not installed in this image; daemon.json ip-forward-no-drop shipped")
+    step("docker-does-not-break-vm-nat-forwarding", ok, re.sub(r"\s+", " ", o.strip())[-(300 if ok else 3500):] if not absent or not ok else "not applicable: neither docker nor horcrux-core in this image" if not_applicable else "docker not installed in this image; daemon.json ip-forward-no-drop shipped")
     return ok

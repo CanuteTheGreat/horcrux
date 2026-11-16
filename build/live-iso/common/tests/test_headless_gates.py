@@ -1,7 +1,7 @@
 """headless_gates.py: pure-function tests (no VM) + the guest-side scripts run against a fake root."""
 import datetime
 import importlib.util
-import os
+import os, re
 import subprocess
 import sys
 import tempfile
@@ -161,6 +161,20 @@ class DockerForwardGate(unittest.TestCase):
             self.assertIs(json.load(open(os.path.join(gentoo, "files", "docker-daemon.json")))["ip-forward-no-drop"], True)
             eb = "".join(open(os.path.join(gentoo, f)).read() for f in os.listdir(gentoo) if f.endswith(".ebuild"))
             self.assertIn("daemon.json", eb)
+
+    def test_containerd_gets_time_to_open_its_socket_on_a_slow_host(self):
+        # OpenRC's containerd start_post waits 5 s for the socket and marks the service failed otherwise; docker then never starts (aarch64 TCG zfs-mirror, runs 2877/3005)
+        gentoo = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(ROOT)))), "gentoo", "sys-apps", "horcrux-core")
+        if os.path.isdir(gentoo):
+            m = re.search(r"(?m)^containerd_socket_delay=(\d+)$", open(os.path.join(gentoo, "files", "containerd-rc.conf")).read())
+            self.assertTrue(m and int(m.group(1)) >= 60)
+            eb = "".join(open(os.path.join(gentoo, f)).read() for f in os.listdir(gentoo) if f.endswith(".ebuild"))
+            self.assertIn("newins \"${FILESDIR}\"/containerd-rc.conf horcrux-containerd.conf", eb)
+            self.assertIn("insinto /etc/rc.conf.d", eb)
+
+    def test_docker_down_prints_what_the_daemon_left_behind(self):
+        self.assertIn("docker_down_diag", HG.DOCKER_FWD_CHECK)
+        self.assertIn("containerd", HG.DOCKER_FWD_CHECK)
 
     def test_netns_veth_has_fixed_macs_so_udev_cannot_rewrite_them(self):
         # a late udev MACAddressPolicy=persistent rewrite stales the netns' neighbour entry for the gateway (aarch64 run 2884)

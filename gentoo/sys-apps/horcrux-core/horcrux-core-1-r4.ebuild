@@ -30,6 +30,10 @@ KEYWORDS="amd64 arm64"
 #   (owner-ws 2026-11-12: example-vm could not reach ProtonVPN). With this option Docker leaves the policy alone; it still isolates its own
 #   bridges (DOCKER-FORWARD / DOCKER-ISOLATION / per-network DROP of unpublished ports). The file is harmless where Docker is not installed
 #   (QEMU gate docker-does-not-break-vm-nat-forwarding checks it everywhere and does the netns forwarding test where Docker exists).
+# /etc/rc.conf.d/horcrux-containerd.conf (-r4): containerd_socket_delay=120. OpenRC's containerd script gives the daemon 5 s to create its socket, else the service
+#   is marked failed with the daemon still running, and dockerd never starts ("containerd is already running ... cannot start docker as containerd would not
+#   start"). Reproduced on the aarch64 TCG zfs-mirror install (live-iso runs 2877/3005: docker-does-not-break-vm-nat-forwarding DOCKER-DOWN). rc.conf.d/*.conf is
+#   sourced by every OpenRC service script, so the app-containers/containerd-owned /etc/conf.d/containerd stays untouched. Harmless on systemd.
 # sys-auth/horcrux-ssh-pam (-r2): ssh logins do not start or hold the user's OpenRC user services (pam_openrc stops them only with the user's LAST
 #   login, so an ssh session kept a logged-out GNOME session's gnome-shell alive; also keeps servers' ssh logins from spawning user services).
 # /usr/lib/udev/rules.d/80-horcrux-udisks-hide.rules: UDISKS_IGNORE for ZFS pool members/zvols, the installer's mirror ESP/boot copies and the swap, so
@@ -54,6 +58,8 @@ src_install() {
 	newins "${FILESDIR}"/package.use horcrux-core
 	insinto /etc/docker
 	newins "${FILESDIR}"/docker-daemon.json daemon.json
+	insinto /etc/rc.conf.d
+	newins "${FILESDIR}"/containerd-rc.conf horcrux-containerd.conf
 	insinto /usr/lib/udev/rules.d
 	doins "${FILESDIR}"/80-horcrux-udisks-hide.rules
 	# marker: this is a Horcrux install (the installer, the QEMU gates and `horcrux-time-config` read it)
