@@ -1,0 +1,3 @@
+# Horcrux automatic updates: hourly trigger, the program runs the update when INTERVAL_HOURS have passed since the last attempt.
+# Settings: /etc/horcrux/autoupdate.conf. Status: horcrux-autoupdate status | check. Never reboots.
+17 * * * *   root  /usr/sbin/horcrux-autoupdate cron >> /var/log/horcrux-autoupdate/cron.log 2>&1

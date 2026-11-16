@@ -34,6 +34,8 @@ KEYWORDS="amd64 arm64"
 #   is marked failed with the daemon still running, and dockerd never starts ("containerd is already running ... cannot start docker as containerd would not
 #   start"). Reproduced on the aarch64 TCG zfs-mirror install (live-iso runs 2877/3005: docker-does-not-break-vm-nat-forwarding DOCKER-DOWN). rc.conf.d/*.conf is
 #   sourced by every OpenRC service script, so the app-containers/containerd-owned /etc/conf.d/containerd stays untouched. Harmless on systemd.
+# sys-apps/horcrux-autoupdate (-r5): daily `emaint sync` + `emerge -uDN @world` (binhost first), snapshot before, never reboots. Nothing ran `emerge @world` on an
+#   installed machine, so every package (browser, password manager, microcode, grub, xz) stayed at its install-day version until someone updated by hand.
 # sys-auth/horcrux-ssh-pam (-r2): ssh logins do not start or hold the user's OpenRC user services (pam_openrc stops them only with the user's LAST
 #   login, so an ssh session kept a logged-out GNOME session's gnome-shell alive; also keeps servers' ssh logins from spawning user services).
 # /usr/lib/udev/rules.d/80-horcrux-udisks-hide.rules: UDISKS_IGNORE for ZFS pool members/zvols, the installer's mirror ESP/boot copies and the swap, so
@@ -51,6 +53,7 @@ RDEPEND="
 	sys-kernel/installkernel
 	dev-util/pahole
 	sys-apps/horcrux-release
+	sys-apps/horcrux-autoupdate
 "
 
 src_install() {

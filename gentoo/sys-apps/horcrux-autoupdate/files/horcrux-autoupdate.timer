@@ -1,0 +1,10 @@
+[Unit]
+Description=Horcrux automatic updates trigger (hourly; the program decides when an update is due)
+
+[Timer]
+OnCalendar=*:17
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

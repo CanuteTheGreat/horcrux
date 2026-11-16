@@ -41,6 +41,9 @@ jobs:
       - name: Selftest - 3 OpenRC guests on a hub
         run: cd tools/vmtest && python3 -u -m vmtest run scenarios/selftest_alpine.py --out $OUT/selftest
 
+      - name: horcrux-autoupdate in an OpenRC guest (run, lock, failure status, reboot marker, crond trigger)
+        run: cd tools/vmtest && python3 -u -m vmtest run scenarios/autoupdate_openrc.py --out $OUT/autoupdate
+
       - name: Negative test - a failing scenario must fail and leave evidence
         run: |
           cd tools/vmtest

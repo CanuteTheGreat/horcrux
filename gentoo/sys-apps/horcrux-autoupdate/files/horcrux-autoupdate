@@ -1,0 +1,603 @@
+#!/usr/bin/python3
+"""horcrux-autoupdate: keep a Horcrux install up to date through Portage. Never reboots.
+
+  horcrux-autoupdate cron     run when due (>= INTERVAL_HOURS since the last attempt); what cron / the systemd timer call hourly
+  horcrux-autoupdate run      run now (ignores the interval)
+  horcrux-autoupdate status   print the last result (--json for status.json)
+  horcrux-autoupdate check    exit 0 ok / 1 warning / 2 critical, one line of text: for health checks and monitoring agents
+  horcrux-autoupdate pending  list the world updates still pending
+
+One run: lock, `emaint sync -a`, boot-environment snapshot (ZFS root), `emerge -uDN --with-bdeps=y @world` (binary packages from the
+binhost preferred, source build as the fallback), a guarded `emerge --depclean`, `@preserved-rebuild`, `etc-update --preen`. Low CPU and I/O priority.
+Results land in STATE_DIR (status.json, failed, reboot-required) and LOG_DIR (one log per run). A new kernel, microcode or other package that
+needs a reboot is recorded in `reboot-required` (also /run/reboot-required); nothing is rebooted and nothing pops up.
+Policy and knobs: /etc/horcrux/autoupdate.conf (docs/design/autoupdate.md in the repository).
+"""
+import argparse
+import fnmatch
+import glob
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+VERSION = "1"
+CONF = os.environ.get("HX_AU_CONF", "/etc/horcrux/autoupdate.conf")
+STATE_DIR = os.environ.get("HX_AU_STATE", "/var/lib/horcrux-autoupdate")
+LOG_DIR = os.environ.get("HX_AU_LOG", "/var/log/horcrux-autoupdate")
+LOCK = os.environ.get("HX_AU_LOCK", "/run/lock/horcrux-autoupdate.lock")
+EMERGE_LOG = os.environ.get("HX_AU_EMERGE_LOG", "/var/log/emerge.log")
+PRESERVED = os.environ.get("HX_AU_PRESERVED", "/var/lib/portage/preserved_libs_registry")
+RUN_REBOOT_FLAG = os.environ.get("HX_AU_RUN_FLAG", "/run/reboot-required")
+
+# Binary-package managers: Portage matches a binary package by version, and these ebuilds install a tarball fetched at unpack time, so a
+# binary package would silently reinstall an older tarball (same list as horcrux-api's PREBUILT_PACKAGES).
+PREBUILT = ["app-emulation/horcrux-bin"]
+
+DEFAULTS = {
+    "ENABLED": "yes",
+    "INTERVAL_HOURS": "24",       # one attempt per this many hours; the hourly trigger makes a machine that was off at night catch up
+    "SYNC": "yes",
+    "SNAPSHOT": "yes",            # boot-environment / ZFS snapshot before the update (ZFS root only)
+    "DEPCLEAN": "safe",           # safe | no. safe = only when `--pretend` shows no protected package and no more than DEPCLEAN_MAX removals
+    "DEPCLEAN_MAX": "20",
+    "DEPCLEAN_KEEP": "sys-kernel/* sys-fs/zfs-kmod sys-fs/zfs sys-boot/* x11-drivers/nvidia-drivers sys-firmware/* app-emulation/horcrux* sys-apps/horcrux*",
+    "PRESERVED_REBUILD": "yes",
+    "ETC_UPDATE": "preen",        # preen (trivial changes only) | all (--automode -5: replaces edited files) | off
+    "SKIP_ON_BATTERY": "yes",
+    "STALE_DAYS": "3",            # `check` warns after this many days without a successful run, critical after twice that
+    "MAX_RUNTIME_HOURS": "12",
+    "EXTRA_EMERGE_OPTS": "",
+    "REBOOT_PACKAGES": "sys-kernel/gentoo-kernel sys-kernel/gentoo-kernel-bin sys-kernel/vanilla-kernel sys-kernel/vanilla-kernel-bin "
+                       "sys-kernel/linux-firmware sys-firmware/intel-microcode sys-fs/zfs-kmod x11-drivers/nvidia-drivers sys-apps/systemd",
+}
+
+
+def read_conf(path=None):
+    path = path or CONF
+    c = dict(DEFAULTS)
+    try:
+        with open(path) as f:
+            for ln in f:
+                ln = ln.strip()
+                if not ln or ln.startswith("#") or "=" not in ln:
+                    continue
+                k, _, v = ln.partition("=")
+                v = v.strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                    v = v[1:-1]
+                c[k.strip()] = v
+    except OSError:
+        pass
+    return c
+
+
+def yes(v):
+    return str(v).strip().lower() in ("1", "yes", "true", "on")
+
+
+def now():
+    return int(time.time())
+
+
+def iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(t))
+
+
+# ---------------------------------------------------------------- state files
+
+def state_path(name):
+    return os.path.join(STATE_DIR, name)
+
+
+def read_status():
+    try:
+        with open(state_path("status.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_atomic(path, text, mode=0o644):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def write_status(st):
+    write_atomic(state_path("status.json"), json.dumps(st, indent=2, sort_keys=True) + "\n")
+    failed = state_path("failed")
+    if st.get("result") == "failed":
+        write_atomic(failed, f"{iso(st.get('finished', now()))} step={st.get('failed_step', '?')} {st.get('error', '')}\n")
+    elif st.get("result") in ("ok", "disabled"):
+        try:
+            os.unlink(failed)
+        except OSError:
+            pass
+
+
+def boot_time():
+    try:
+        with open("/proc/stat") as f:
+            for ln in f:
+                if ln.startswith("btime "):
+                    return int(ln.split()[1])
+    except OSError:
+        pass
+    return 0
+
+
+def reboot_state():
+    """(needed, reasons). The marker belongs to the boot it was written in: a later boot clears it."""
+    p = state_path("reboot-required")
+    try:
+        mt = os.path.getmtime(p)
+    except OSError:
+        return False, []
+    if mt < boot_time():
+        for f in (p, RUN_REBOOT_FLAG):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        return False, []
+    with open(p) as f:
+        return True, [ln.strip() for ln in f if ln.strip()]
+
+
+def add_reboot_reasons(reasons):
+    old = reboot_state()[1]
+    allr = old + [r for r in reasons if r not in old]
+    if not allr:
+        return
+    write_atomic(state_path("reboot-required"), "\n".join(allr) + "\n")
+    try:
+        write_atomic(RUN_REBOOT_FLAG, "*** System restart required ***\n")
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------- helpers
+
+def sh(argv, log=None, timeout=None, env=None, full=False):
+    """run argv, stream output to the log file object; returns (rc, last 25 lines of output, or all of them with full=True)"""
+    tail = []
+    try:
+        p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", env=env)
+    except OSError as e:
+        if log:
+            log.write(f"cannot run {argv[0]}: {e}\n")
+        return 127, [str(e)]
+    deadline = time.time() + timeout if timeout else None
+    for ln in p.stdout:
+        if log:
+            log.write(ln)
+            log.flush()
+        tail.append(ln.rstrip())
+        if not full:
+            del tail[:-25]
+        if deadline and time.time() > deadline:
+            p.kill()
+            tail.append("killed: maximum runtime exceeded")
+            break
+    return p.wait(), tail
+
+
+def prio(argv):
+    pre = []
+    if shutil.which("nice"):
+        pre += ["nice", "-n", "19"]
+    if shutil.which("ionice"):
+        pre += ["ionice", "-c", "3"]
+    return pre + argv
+
+
+def emerge_opts(conf):
+    o = ["--ask=n", "--color=n", "--nospinner", "--quiet-build=y", "--getbinpkg", "--usepkg"]
+    o += [f"--usepkg-exclude={p}" for p in PREBUILT]
+    o += conf.get("EXTRA_EMERGE_OPTS", "").split()
+    return o
+
+
+def world_args(conf):
+    return emerge_opts(conf) + ["--update", "--deep", "--newuse", "--with-bdeps=y", "--keep-going", "@world"]
+
+
+def on_battery():
+    bat = ac = False
+    for ps in glob.glob("/sys/class/power_supply/*"):
+        try:
+            t = open(os.path.join(ps, "type")).read().strip()
+            if t == "Battery":
+                bat = True
+            elif t == "Mains" and open(os.path.join(ps, "online")).read().strip() == "1":
+                ac = True
+        except OSError:
+            pass
+    return bat and not ac
+
+
+def other_emerge_running():
+    me = os.getpid()
+    for d in glob.glob("/proc/[0-9]*"):
+        try:
+            if int(os.path.basename(d)) == me:
+                continue
+            cmd = open(os.path.join(d, "cmdline"), "rb").read().split(b"\0")
+        except (OSError, ValueError):
+            continue
+        if not cmd or not cmd[0]:
+            continue
+        exe = os.path.basename(cmd[0].decode(errors="replace"))
+        if exe in ("emerge",) or (exe.startswith("python") and len(cmd) > 1 and os.path.basename(cmd[1].decode(errors="replace")) == "emerge"):
+            return True
+    return False
+
+
+def root_zfs():
+    try:
+        for ln in open("/proc/mounts"):
+            f = ln.split()
+            if len(f) >= 3 and f[1] == "/" and f[2] == "zfs":
+                return f[0]
+    except OSError:
+        pass
+    return None
+
+
+def atom_of(cpv):
+    m = re.match(r"^(.*?)-[0-9][0-9A-Za-z._+]*(-r[0-9]+)?$", cpv)
+    return m.group(1) if m else cpv
+
+
+def merged_since(offset, path=None):
+    """category/package names whose merge completed in emerge.log after byte `offset`"""
+    path = path or EMERGE_LOG
+    out = []
+    try:
+        with open(path, errors="replace") as f:
+            f.seek(offset)
+            for ln in f:
+                m = re.search(r"::: completed emerge \(\d+ of \d+\) (\S+) to ", ln)
+                if m:
+                    out.append(atom_of(m.group(1)))
+    except OSError:
+        pass
+    return out
+
+
+def size_of(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def newest_installed_kernel():
+    vs = []
+    for d in glob.glob("/lib/modules/*"):
+        v = os.path.basename(d)
+        if re.match(r"^\d", v) and (os.path.isdir(os.path.join(d, "kernel")) or os.path.exists(os.path.join(d, "modules.dep"))):
+            vs.append(v)
+    if not vs:
+        return None
+
+    def key(v):
+        return [int(x) if x.isdigit() else x for x in re.split(r"[.\-+_]", v)]
+    try:
+        return sorted(vs, key=key)[-1]
+    except TypeError:
+        return sorted(vs)[-1]
+
+
+def reboot_reasons(merged, conf, running=None, newest=None):
+    reasons = []
+    running = running or os.uname().release
+    newest = newest if newest is not None else newest_installed_kernel()
+    if newest and newest != running:
+        reasons.append(f"kernel {running} is running, {newest} is installed")
+    pats = conf.get("REBOOT_PACKAGES", "").split()
+    seen = []
+    for a in merged:
+        if a not in seen and any(fnmatch.fnmatchcase(a, p) for p in pats):
+            seen.append(a)
+    reasons += [f"{a} updated" for a in seen]
+    return reasons
+
+
+def parse_depclean(text):
+    """packages `emerge --depclean --pretend` would remove: the 'All selected packages: a/b-1 c/d-2' line (and its continuation lines)"""
+    out = []
+    on = False
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s.startswith("All selected packages:"):
+            on = True
+            s = s.split(":", 1)[1].strip()
+        elif not on:
+            continue
+        elif not s or s.startswith(">>>") or s.startswith("Packages installed"):
+            break
+        out += [atom_of(t) for t in s.split() if re.match(r"^[a-z0-9+_.-]+/\S+-[0-9]", t)]
+    return out
+
+
+def depclean_verdict(atoms, conf, merged_kernel_pending=False):
+    """None = safe to run, else the reason it is skipped"""
+    keep = conf.get("DEPCLEAN_KEEP", "").split()
+    for a in atoms:
+        if any(fnmatch.fnmatchcase(a, p) for p in keep):
+            return f"would remove protected package {a}"
+    if len(atoms) > int(conf.get("DEPCLEAN_MAX", "20") or 20):
+        return f"would remove {len(atoms)} packages (limit {conf.get('DEPCLEAN_MAX')})"
+    return None
+
+
+def parse_pending(text):
+    return [ln.strip() for ln in text.splitlines() if re.match(r"^\[(ebuild|binary)\s", ln.strip())]
+
+
+# ---------------------------------------------------------------- the run
+
+class Locked(Exception):
+    pass
+
+
+def take_lock(path=None):
+    import fcntl
+    path = path or LOCK
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        raise Locked()
+    return fd
+
+
+def prune_logs(keep=14):
+    logs = sorted(glob.glob(os.path.join(LOG_DIR, "run-*.log")))
+    for p in logs[:-keep]:
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+
+
+def snapshot(log, conf):
+    """(ok, detail). ZFS root: a horcrux-be boot environment snapshot (pruned like every pre-upgrade snapshot), else a plain snapshot."""
+    ds = root_zfs()
+    if not ds or not yes(conf["SNAPSHOT"]):
+        return True, "no ZFS root" if not ds else "disabled"
+    name = time.strftime("pre-upgrade-%Y%m%d-%H%M%S")
+    if shutil.which("horcrux-be"):
+        rc, tail = sh(["horcrux-be", "snapshot", name], log)
+        return rc == 0, f"horcrux-be snapshot {name}" if rc == 0 else "horcrux-be snapshot failed: " + " ".join(tail[-2:])
+    snap = f"{ds}@autoupdate-{time.strftime('%Y%m%d-%H%M%S')}"
+    rc, tail = sh(["zfs", "snapshot", snap], log)
+    if rc == 0:
+        old = subprocess.run(["zfs", "list", "-H", "-t", "snapshot", "-o", "name", "-s", "creation", "-d", "1", ds],
+                             capture_output=True, text=True).stdout.split()
+        mine = [s for s in old if "@autoupdate-" in s]
+        for s in mine[:-5]:
+            sh(["zfs", "destroy", s], log)
+    return rc == 0, snap if rc == 0 else "zfs snapshot failed: " + " ".join(tail[-2:])
+
+
+def do_run(conf, reason="manual", runner=sh):
+    """returns the status dict; the caller has the lock"""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    started = now()
+    st = {"version": VERSION, "host": socket.gethostname(), "started": started, "started_iso": iso(started), "result": "running",
+          "trigger": reason, "steps": {}, "last_success": read_status().get("last_success")}
+    logpath = os.path.join(LOG_DIR, time.strftime("run-%Y%m%d-%H%M%S.log"))
+    st["log"] = logpath
+    write_status(st)
+    failed_step, error = None, ""
+
+    def fail(step, msg):
+        nonlocal failed_step, error
+        if failed_step is None:
+            failed_step, error = step, msg
+
+    with open(logpath, "w") as log:
+        log.write(f"horcrux-autoupdate {VERSION} {iso(started)} trigger={reason}\n")
+        if yes(conf["SYNC"]):
+            rc, tail = runner(prio(["emaint", "sync", "-a"]), log)
+            st["steps"]["sync"] = rc
+            if rc != 0:
+                fail("sync", "emaint sync -a failed: " + " | ".join(tail[-3:]))
+        ok, detail = snapshot(log, conf)
+        st["steps"]["snapshot"] = detail
+        if not ok:
+            fail("snapshot", detail)  # no rollback point: do not touch the system
+        merged = []
+        if failed_step != "snapshot":
+            off = size_of(EMERGE_LOG)
+            rc, tail = runner(prio(["emerge"] + world_args(conf)), log, timeout=int(float(conf["MAX_RUNTIME_HOURS"]) * 3600))
+            st["steps"]["update"] = rc
+            merged = merged_since(off)
+            st["merged"] = len(merged)
+            if rc != 0:
+                fail("update", "emerge @world failed: " + " | ".join(tail[-4:]))
+            elif conf["DEPCLEAN"] == "safe":
+                rc, lines = runner(prio(["emerge", "--ask=n", "--color=n", "--nospinner", "--depclean", "--pretend"]), log, full=True)
+                if rc != 0:
+                    st["steps"]["depclean"] = "skipped: pretend run failed"
+                else:
+                    atoms = parse_depclean("\n".join(lines))
+                    why = depclean_verdict(atoms, conf)
+                    if why:
+                        st["steps"]["depclean"] = f"skipped: {why}"
+                    elif not atoms:
+                        st["steps"]["depclean"] = "nothing to remove"
+                    else:
+                        rc, tail = runner(prio(["emerge", "--ask=n", "--color=n", "--nospinner", "--depclean"]), log)
+                        st["steps"]["depclean"] = f"removed {len(atoms)}" if rc == 0 else rc
+                        if rc != 0:
+                            fail("depclean", "emerge --depclean failed: " + " | ".join(tail[-3:]))
+            else:
+                st["steps"]["depclean"] = "disabled"
+            if failed_step is None and yes(conf["PRESERVED_REBUILD"]) and os.path.exists(PRESERVED) and size_of(PRESERVED) > 3:
+                off2 = size_of(EMERGE_LOG)
+                rc, tail = runner(prio(["emerge"] + emerge_opts(conf) + ["--keep-going", "@preserved-rebuild"]), log)
+                st["steps"]["preserved-rebuild"] = rc
+                merged += merged_since(off2)
+                if rc != 0:
+                    fail("preserved-rebuild", "emerge @preserved-rebuild failed: " + " | ".join(tail[-3:]))
+            if failed_step is None and conf["ETC_UPDATE"] != "off" and shutil.which("etc-update"):
+                args = ["etc-update", "--preen"] if conf["ETC_UPDATE"] == "preen" else ["etc-update", "--automode", "-5"]
+                rc, tail = runner(prio(args), log)
+                st["steps"]["etc-update"] = rc
+                if rc != 0:
+                    fail("etc-update", "etc-update failed: " + " | ".join(tail[-3:]))
+            if failed_step is None:
+                st["config_updates_pending"] = count_config_updates()
+        # a package that needs a reboot counts even when a later step failed
+        reasons = reboot_reasons(merged, conf)
+        if reasons:
+            add_reboot_reasons(reasons)
+        # pending count, after everything
+        if failed_step != "snapshot":
+            rc, lines = runner(prio(["emerge", "--ask=n", "--color=n", "--nospinner", "--pretend", "--update", "--deep", "--newuse",
+                                     "--with-bdeps=y", "@world"]), None, full=True)
+            if rc == 0:
+                st["pending"] = len(parse_pending("\n".join(lines)))
+        log.write(f"result: {'failed ' + failed_step if failed_step else 'ok'}\n")
+    finished = now()
+    st.update({"finished": finished, "finished_iso": iso(finished), "duration": finished - started})
+    needed, why = reboot_state()
+    st["reboot_required"], st["reboot_reasons"] = needed, why
+    if failed_step:
+        st.update({"result": "failed", "failed_step": failed_step, "error": error})
+    else:
+        st.update({"result": "ok", "last_success": finished})
+    write_status(st)
+    prune_logs()
+    sh(["logger", "-t", "horcrux-autoupdate", f"{st['result']}" + (f" ({failed_step}: {error[:200]})" if failed_step else
+                                                                   f" merged={st.get('merged', 0)} pending={st.get('pending', '?')} reboot={needed}")])
+    return st
+
+
+def pretend_text():
+    return "\n".join(sh(["emerge", "--ask=n", "--color=n", "--nospinner", "--pretend", "--update", "--deep", "--newuse", "--with-bdeps=y", "@world"],
+                         None, full=True)[1])
+
+
+def count_config_updates():
+    n = 0
+    try:
+        prot = subprocess.run(["portageq", "envvar", "CONFIG_PROTECT"], capture_output=True, text=True).stdout.split()
+    except OSError:
+        return None
+    for d in prot:
+        for _r, _d, files in os.walk(d):
+            n += sum(1 for f in files if f.startswith("._cfg"))
+    return n
+
+
+def due(conf, st):
+    last = st.get("started") or 0
+    return now() - last >= float(conf["INTERVAL_HOURS"]) * 3600
+
+
+def cmd_run(a, only_if_due):
+    conf = read_conf()
+    if not yes(conf["ENABLED"]):
+        st = {"version": VERSION, "host": socket.gethostname(), "result": "disabled", "finished": now(), "finished_iso": iso(now()),
+              "last_success": read_status().get("last_success")}
+        write_status(st)
+        return 0
+    st0 = read_status()
+    if only_if_due and not due(conf, st0):
+        return 0
+    try:
+        fd = take_lock()
+    except Locked:
+        print("another horcrux-autoupdate run holds the lock", file=sys.stderr)
+        return 0
+    try:
+        if other_emerge_running():
+            print("an emerge is already running; trying again later", file=sys.stderr)
+            return 0  # not a failure, and it does not reset the interval
+        if yes(conf["SKIP_ON_BATTERY"]) and on_battery():
+            print("on battery power; trying again later", file=sys.stderr)
+            return 0
+        st = do_run(conf, "cron" if only_if_due else "manual")
+    finally:
+        os.close(fd)
+    return 0 if st["result"] == "ok" else 1
+
+
+def check_result(conf, st, rb=None):
+    """(code, text) for `check`"""
+    if not yes(conf["ENABLED"]):
+        return 0, "autoupdate disabled by configuration"
+    if not st:
+        return 1, "autoupdate has not run yet"
+    day = 86400
+    stale = float(conf["STALE_DAYS"]) * day
+    t = now()
+    last = st.get("last_success")
+    age = (t - last) if last else None
+    if st.get("result") == "running":
+        if t - st.get("started", t) > float(conf["MAX_RUNTIME_HOURS"]) * 3600 + 3600:
+            return 2, "autoupdate run interrupted (started %s, no result)" % st.get("started_iso")
+    if st.get("result") == "failed":
+        return 2, f"autoupdate FAILED at {st.get('failed_step')}: {st.get('error', '')[:200]} (log {st.get('log')})"
+    if age is None or age > 2 * stale:
+        return 2, "no successful autoupdate for %s" % ("ever" if age is None else f"{age / day:.1f} days")
+    if age > stale:
+        return 1, f"last successful autoupdate {age / day:.1f} days ago"
+    msg = f"autoupdate ok {age / day:.1f} days ago, pending={st.get('pending', '?')}"
+    needed = st.get("reboot_required") if rb is None else rb
+    if needed:
+        msg += ", reboot required: " + "; ".join(st.get("reboot_reasons", []))
+    return 0, msg
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="horcrux-autoupdate", description="automatic Portage updates; never reboots")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("cron", help="run when due")
+    sub.add_parser("run", help="run now")
+    p = sub.add_parser("status")
+    p.add_argument("--json", action="store_true")
+    sub.add_parser("check")
+    sub.add_parser("pending")
+    a = ap.parse_args(argv)
+    if a.cmd in ("cron", "run") and os.geteuid() != 0:
+        print("horcrux-autoupdate: must run as root", file=sys.stderr)
+        return 2
+    if a.cmd == "cron":
+        return cmd_run(a, True)
+    if a.cmd == "run":
+        return cmd_run(a, False)
+    st = read_status()
+    needed, why = reboot_state()
+    if a.cmd == "status":
+        st.update({"reboot_required": needed, "reboot_reasons": why})
+        print(json.dumps(st, indent=2, sort_keys=True) if a.json else
+              "\n".join(f"{k}: {v}" for k, v in sorted(st.items())) or "no run yet")
+        return 0
+    if a.cmd == "check":
+        code, text = check_result(read_conf(), st, needed)
+        print(text)
+        return code
+    if a.cmd == "pending":
+        txt = pretend_text()
+        print("\n".join(parse_pending(txt)))
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
