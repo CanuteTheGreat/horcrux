@@ -222,8 +222,17 @@ def main():
         # mismatched wasm-bindgen build) leaves a BLANK page; fail on any of them.
         js_exceptions = []
         js_panics = []
-        page.on("pageerror", lambda e: js_exceptions.append(f"{page.url}: {e}"))
-        context.on("page", lambda pg: pg.on("pageerror", lambda e: js_exceptions.append(f"{pg.url}: {e}")))
+        # Playwright's injected hit-target check calls root.elementsFromPoint on the
+        # click target's root node; when a list re-renders (reload after Send test)
+        # between its resolve and its check the row is detached, its root is a plain
+        # element, and the injected script itself throws. Not app code (no such call
+        # in the repo); real page errors still fail the run.
+        def _pageerror(e, url):
+            if "root.elementsFromPoint is not a function" in str(e):
+                return
+            js_exceptions.append(f"{url}: {e}")
+        page.on("pageerror", lambda e: _pageerror(e, page.url))
+        context.on("page", lambda pg: pg.on("pageerror", lambda e: _pageerror(e, pg.url)))
         page.on(
             "response",
             lambda r: r.status == 404
