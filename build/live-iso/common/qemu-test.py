@@ -1875,8 +1875,11 @@ class Runner:
         scr = vm.screen()
         vm.snap("console-menu")
         vm.shot("console-menu")
-        self.step("console-menu-shown", "console menu" in scr and "Assign interfaces" in scr and ("Reset a user password" if P.get("web_user") else "Reset the admin password") in scr and "Web UI:" in scr,   # web_auth=pam products reword option 3
-                  "header, interface list, web URL and the numbered options are on the serial console")
+        want = ["console menu", "Assign interfaces", "Reset a user password" if P.get("web_user") else "Reset the admin password", "Web UI:"]   # web_auth=pam products reword option 3
+        missing = [w for w in want if w not in scr]
+        self.step("console-menu-shown", not missing,
+                  "header, interface list, web URL and the numbered options are on the serial console"
+                  + (f" [missing {missing!r}; screen tail: {re.sub(chr(10), ' | ', scr.strip())[-300:]!r}]" if missing else ""))
         t = self.opt(vm, "9")
         self.step("console-menu-status", "Web UI :" in t and "running" in t, re.sub(r"\s+", " ", t)[:120])
         t = self.opt(vm, "7", [("Host name or IP address to ping", "x;reboot")], done=r"Press Enter to return to the menu")
@@ -1989,39 +1992,55 @@ class Runner:
             while True:
                 rc, o = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep -E '^ *tty1 '", timeout=30)
                 o = o if isinstance(o, str) else str(o)
-                if re.search(pat, o):
+                if re.search(pat, o, re.M):
                     return True, o
                 if time.time() >= end:
                     return False, o
                 time.sleep(3)
 
+        # The administrator's profile runs `sudo /usr/bin/console-menu`: that command line CONTAINS "console-menu" while sudo still waits for the
+        # password, so only a console-menu process that is not sudo's own line proves the menu is up (console-menu is a python script, so its own line is `python3 /usr/bin/console-menu`; the earlier pattern took the waiting sudo for
+        # the menu and skipped typing the sudo password).
+        menu_re = r"^\s*tty1\s+(?!(?:\S*/)?sudo\b)(?:\S+\s+)?\S*console-menu\b"
+        stage = {}
         found, o = False, ""
         for attempt in (1, 2, 3):
             # A keystroke batch can be lost (agetty flushes the tty input when it redraws its prompt; run 17265: the guest was
             # up over ssh and tty1 still showed a bare agetty). Retry the whole login instead of failing on one lost key.
             last = attempt == 3
             kb.text((pam or "root") + "\n")
-            ok, o = tty1_wait(r"login -- |sudo|console-menu|-?bash|-?sh$", 90 if last else 40)   # agetty hands over to login once the user name is in
-            if not ok:
-                time.sleep(T(5))
-                continue
+            # Wait for the guest's own progress, but type the NEXT key whether or not the wait matched: a pattern that never matches the guest's
+            # real command line must cost time, not turn into a retyped user name that lands in the password prompt (runs 3152/3170/17466: every
+            # x86_64 VGA login ended on a bare agetty after the polling version of this check; the fixed-sleep version passed).
+            ok, o = tty1_wait(r"\blogin\b|sudo|console-menu|-?bash|-?sh$", 30 if last else 20)   # agetty hands over to login once the user name is in
+            stage["user"] = (ok, re.sub(r"\s+", " ", o)[:80])
             time.sleep(T(3))                                 # the password prompt is drawn after PAM starts the conversation
             kb.text(PW + "\n")
             if pam:                                          # root is locked: the administrator's profile runs `sudo console-menu`, which asks again
-                ok, o = tty1_wait(r"sudo|console-menu", 90 if last else 40)
-                if ok and "console-menu" not in o:
+                ok, o = tty1_wait(r"sudo|" + menu_re, 40 if last else 25)
+                stage["pw"] = (ok, re.sub(r"\s+", " ", o)[:80])
+                if not re.search(menu_re, o, re.M):
                     time.sleep(T(3))
                     kb.text(PW + "\n")
-            found, o = tty1_wait(r"console-menu", 120 if last else 60)
+            found, o = tty1_wait(menu_re, 120 if last else 60)
             if found:
                 break
             print(f"[vga-login] attempt {attempt}: no console-menu on tty1 yet: {re.sub(chr(10), ' | ', o)[:160]}")
+            # a failed login hands tty1 back to a fresh agetty; retype the user name only once it is back at the prompt (not into a password prompt)
+            tty1_wait(r"agetty", 60)
             time.sleep(T(5))
         time.sleep(2)
         vm.shot("vga-console-menu")
         rc, o2 = ssh(FWD_SSH, self.key, "ps -eo tty,args | grep '[c]onsole-menu'")
-        o = o2 if rc == 0 else (o2 + " | tty1: " + re.sub(r"\s+", " ", o))[:200]
-        self.step("console-menu-on-vga-tty1", rc == 0 and "tty1" in o, o.strip()[:200])
+        o2 = o2 if isinstance(o2, str) else str(o2)
+        up = rc == 0 and bool(re.search(menu_re, o2, re.M))
+        if not up:
+            rc3, why = ssh(FWD_SSH, self.key, "tail -n 40 /var/log/messages /var/log/auth.log 2>/dev/null | grep -iE 'login|sudo|pam|getty' | tail -n 8", timeout=30)
+            print("[vga-login] stages " + repr(stage) + " guest log: " + re.sub(chr(10), " | ", why if isinstance(why, str) else str(why)))
+            o = (o2 + " | tty1: " + re.sub(r"\s+", " ", o) + " | stages " + repr(stage))[:300]
+        else:
+            o = o2
+        self.step("console-menu-on-vga-tty1", up, o.strip()[:300])
 
     def serial_login(self, vm, pw, expect_ok, user="root"):
         for _ in range(6):
