@@ -2199,7 +2199,20 @@ async fn test_container_lifecycle() {
     assert!(r.text().await.unwrap().contains("hello-from-exec"));
 
     // 7. Out-of-band stop is reflected by the list (reconciliation)
-    assert!(docker(&["stop", "-t", "1", id]).status.success());
+    // `docker stop` on a loaded shared daemon can fail transiently right after
+    // pause/resume (daemon busy, state still settling): retry, show stderr on failure.
+    let mut stop_err = String::new();
+    let mut stopped = false;
+    for _ in 0..4 {
+        let o = docker(&["stop", "-t", "1", id]);
+        if o.status.success() {
+            stopped = true;
+            break;
+        }
+        stop_err = String::from_utf8_lossy(&o.stderr).to_string();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    assert!(stopped, "docker stop failed 4x: {stop_err}");
     // The list reconciles against the daemon on every call, but a loaded shared
     // Docker daemon can still report the old state for a moment after `docker stop`
     // returned (run 16348: still "running"): poll for up to 20 s before judging.
