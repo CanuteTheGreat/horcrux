@@ -8,14 +8,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "overlay/etc/init.d/zram-swap")
 
 
-def run_start(fail_mkswap):
+def run_start(fail_mkswap, fail_find=0):
     d = tempfile.mkdtemp()
     cnt = os.path.join(d, "n")
     stubs = {
         "modprobe": "exit 0",
         "udevadm": "exit 0",
         "sleep": "exit 0",
-        "zramctl": 'echo /dev/zram0',
+        "zramctl": 'case "$1" in --find) n=$(cat %s/fn 2>/dev/null || echo 0); echo $((n+1)) > %s/fn; [ "$n" -lt %d ] && { echo "zramctl: /dev/zram0: failed to wait for initialized: Success" >&2; exit 1; }; echo /dev/zram0;; *) echo "$@" >> %s/reset;; esac' % (d, d, fail_find, d),
         "swapon": 'echo swapon "$@" >> %s/log' % d,
         "mkswap": 'n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s; [ "$n" -lt %d ] && { echo "mkswap: Device or resource busy" >&2; exit 1; }; exit 0' % (cnt, cnt, fail_mkswap),
     }
@@ -39,6 +39,12 @@ class ZramSwapStart(unittest.TestCase):
         r, log = run_start(3)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("swapon --priority 100 /dev/zram0", log)
+
+    def test_transient_zramctl_find_failure_is_retried_and_stale_devices_released(self):
+        r, log = run_start(0, fail_find=5)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("swapon --priority 100 /dev/zram0", log)
+        self.assertIn("failed to wait for initialized", r.stderr)
 
     def test_permanent_failure_is_reported(self):
         r, log = run_start(10 ** 6)
