@@ -24,6 +24,11 @@ pub struct NicInfo {
     pub is_bond: bool,
     pub bond_mode: Option<String>,
     pub slaves: Vec<String>,
+    /// Bond slaves that are down or report no speed (the bond runs degraded).
+    pub down_slaves: Vec<String>,
+    /// Distinct speeds (Mbit/s, ascending) of the slaves that are up; more
+    /// than one entry means a mixed-speed bond (e.g. 10 GbE + 1 GbE).
+    pub slave_speeds_mbps: Vec<u64>,
     pub sriov_vfs: u32,
 }
 
@@ -110,6 +115,8 @@ pub fn scan_nics(root: &Path) -> Vec<NicInfo> {
                 None
             },
             slaves,
+            down_slaves: Vec::new(),
+            slave_speeds_mbps: Vec::new(),
             sriov_vfs: read_trim(&dir.join("device/sriov_numvfs"))
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
@@ -130,6 +137,20 @@ pub fn scan_nics(root: &Path) -> Vec<NicInfo> {
                     .and_then(|n| n.speed_mbps)
             })
             .collect();
+        nic.down_slaves = nic
+            .slaves
+            .iter()
+            .filter(|s| {
+                !snapshot
+                    .iter()
+                    .any(|n| &&n.name == s && n.up && n.speed_mbps.is_some())
+            })
+            .cloned()
+            .collect();
+        let mut distinct = speeds.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        nic.slave_speeds_mbps = distinct;
         if speeds.is_empty() {
             continue;
         }
@@ -205,6 +226,24 @@ pub fn check_storage_nic(nic: &NicInfo, min_mbps: u64) -> Vec<String> {
         w.push(format!(
             "{}: MTU {} (jumbo frames, MTU 9000, recommended for Ceph/migration)",
             nic.name, nic.mtu
+        ));
+    }
+    for sl in &nic.down_slaves {
+        w.push(format!(
+            "{}: slave {} is down or has no link speed (bond running degraded)",
+            nic.name, sl
+        ));
+    }
+    if nic.slave_speeds_mbps.len() > 1 {
+        let list: Vec<String> = nic
+            .slave_speeds_mbps
+            .iter()
+            .map(|m| speed_label(*m))
+            .collect();
+        w.push(format!(
+            "{}: bond slaves run at different speeds ({}); a bond is only as even as its slowest member",
+            nic.name,
+            list.join(" + ")
         ));
     }
     if nic.is_bond && nic.slaves.len() < 2 {
@@ -324,6 +363,35 @@ mod tests {
         assert_eq!(w.len(), 2);
         assert!(w[0].contains("1 GbE") && w[0].contains("10 GbE"));
         assert!(w[1].contains("MTU 1500"));
+    }
+
+    #[test]
+    fn bond_with_a_down_or_slower_slave_warns() {
+        let t = tempfile::tempdir().unwrap();
+        mk(t.path(), "eth0", "10000", "9000", "up", "ixgbe");
+        mk(t.path(), "eth1", "10000", "9000", "up", "ixgbe");
+        mk_bond(t.path(), "bond0", "802.3ad", "eth0 eth1");
+        let n = scan_nics(t.path());
+        assert!(check_storage_nic(&n[0], 10_000).is_empty());
+
+        // one member falls back to 1 GbE: mixed speeds
+        fs::write(t.path().join("class/net/eth1/speed"), "1000\n").unwrap();
+        let n = scan_nics(t.path());
+        let w = check_storage_nic(&n[0], 10_000);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("1 GbE + 10 GbE"), "{w:?}");
+
+        // one member loses link
+        fs::write(t.path().join("class/net/eth1/speed"), "-1\n").unwrap();
+        fs::write(t.path().join("class/net/eth1/operstate"), "down\n").unwrap();
+        let n = scan_nics(t.path());
+        assert_eq!(n[0].down_slaves, vec!["eth1"]);
+        let w = check_storage_nic(&n[0], 10_000);
+        assert!(
+            w.iter()
+                .any(|x| x.contains("eth1") && x.contains("degraded")),
+            "{w:?}"
+        );
     }
 
     #[test]
