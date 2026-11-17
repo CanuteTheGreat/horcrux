@@ -1071,6 +1071,10 @@ a.stat-card.healthy .stat-value { color: var(--success); }
 .storage-details .label { color: var(--secondary); }
 .storage-details code { overflow-wrap: anywhere; }
 .storage-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+/* An open volumes panel needs the whole row: its table (name, format, sizes, path, grow/delete) is wider than a
+   grid cell and used to spill over the next pool's card, which then took the clicks meant for its buttons. */
+.storage-grid .storage-card:has(.pool-volumes) { grid-column: 1 / -1; }
+.storage-grid .pool-volumes { max-width: 100%; overflow-x: auto; }
 .backend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.5rem 1rem; margin-top: 0.5rem; }
 .backend { display: flex; flex-direction: column; }
 .backend span { color: var(--secondary); font-size: 0.875rem; }

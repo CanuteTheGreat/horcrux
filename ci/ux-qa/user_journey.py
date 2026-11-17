@@ -489,6 +489,23 @@ def main():
                         styled = page.evaluate("""() => ['.storage-overview', '.storage-grid', '.usage-labels']
                             .map(s => document.querySelector(s)).every(e => e && ['grid', 'flex'].includes(getComputedStyle(e).display))""")
                         expect(sid, "storage-styled", styled, "Storage Pools page is unstyled: totals and the pool card render as stacked run-together text")
+                        # the volumes panel stays inside its card (it once spilled over the next card, which took the clicks)
+                        tog = page.locator(".storage-card .pool-volumes-toggle").first
+                        if tog.count():
+                            tog.click()
+                            page.wait_for_timeout(1500)
+                            spill = page.evaluate("""() => { const p = document.querySelector('.storage-card .pool-volumes'); if (!p) return 0;
+                                // content wider than the panel that is not scrolled inside it spills over the neighbour card
+                                const over = getComputedStyle(p).overflowX === 'visible' ? p.scrollWidth - p.clientWidth : 0;
+                                // and every control in the panel takes its own clicks
+                                const blocked = [...p.querySelectorAll('button, input')].filter(e => e.offsetParent !== null).filter(e => {
+                                    const r = e.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+                                    if (x < 0 || x > innerWidth || y < 0 || y > innerHeight) return false;
+                                    const hit = document.elementFromPoint(x, y); return hit && !e.contains(hit) && !p.contains(hit); }).length;
+                                return over + (blocked ? 1000 : 0) }""")
+                            expect(sid, "pool-volumes-inside-card", spill <= 2, f"the open volumes panel sticks out of its pool card by {spill:.0f}px")
+                            j.shot("storage-volumes-open")
+                            tog.click()
                 j.go(routes[0][0])
                 expect(sid, "can-add", page.locator("button, a.btn").filter(has_text=re.compile(add_re, re.I)).count() > 0, f"{routes[0][0]} has no add/create control")
 
