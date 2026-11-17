@@ -844,7 +844,7 @@ fn GitopsTab() -> impl IntoView {
                                 {if s.mode.as_deref() == Some("auto") { "Auto mode applies changes straight away: nothing waits for approval." } else { "Nothing waits for approval. A new commit (or drift from the repository) shows up here." }}
                             </p> }.into_view()
                         } else {
-                            s.pending.iter().cloned().map(|p| {
+                            s.pending.iter().map(|p| {
                                 let (h1, h2) = (p.hash.clone(), p.hash.clone());
                                 view! {
                                     <div class="pending-card" id=format!("decl-pending-{}", p.hash)>

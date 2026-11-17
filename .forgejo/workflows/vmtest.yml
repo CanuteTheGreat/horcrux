@@ -21,7 +21,7 @@ jobs:
     name: vmtest selftest + install smoke (KVM)
     runs-on: kvm-x86_64
     container: catthehacker/ubuntu:act-latest
-    timeout-minutes: 90
+    timeout-minutes: 300
     env:
       VMTEST_CACHE: /tmp/vmtest-cache
       OUT: /tmp/vmtest-out
@@ -32,7 +32,7 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils ovmf python3 curl ca-certificates openssh-client e2fsprogs openssl >/dev/null
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils ovmf python3 curl ca-certificates openssh-client e2fsprogs openssl git zstd >/dev/null
           ls -l /dev/kvm || echo "no /dev/kvm: guests run under TCG (x4 timeouts)"
 
       - name: Unit tests (no QEMU)
@@ -59,6 +59,24 @@ jobs:
         run: |
           curl -fsSL --retry 3 -o /tmp/horcrux.iso https://github.com/CanuteTheGreat/horcrux/releases/download/daily/horcrux-server-openrc-daily-x86_64.iso
           cd tools/vmtest && python3 -u -m vmtest run scenarios/install_smoke.py --arg iso=/tmp/horcrux.iso --out $OUT/install-smoke
+
+      - name: Declarative GitOps on two installed nodes (OpenRC ISO)
+        # Needs a daily that already carries declarative GitOps; until then the preflight says so and skips (never a silent pass:
+        # the notice names the ISO). The scenario's own first check also fails when the API route is missing.
+        run: |
+          iso=horcrux-server-openrc-daily-x86_64.iso
+          bash tools/vmtest/ci/daily-has.sh declarative/gitops/webhook || { echo "::warning::SKIPPED declarative-gitops (openrc): the published daily predates declarative GitOps"; exit 0; }
+          curl -fsSL --retry 3 -o /tmp/dg-openrc.iso https://github.com/CanuteTheGreat/horcrux/releases/download/daily/$iso
+          cd tools/vmtest && python3 -u -m vmtest run scenarios/declarative_gitops.py --arg iso=/tmp/dg-openrc.iso --out $OUT/declarative-gitops-openrc
+          rm -f /tmp/dg-openrc.iso
+
+      - name: Declarative GitOps on two installed nodes (systemd ISO)
+        run: |
+          iso=horcrux-server-systemd-daily-x86_64.iso
+          bash tools/vmtest/ci/daily-has.sh declarative/gitops/webhook || { echo "::warning::SKIPPED declarative-gitops (systemd): the published daily predates declarative GitOps"; exit 0; }
+          curl -fsSL --retry 3 -o /tmp/dg-systemd.iso https://github.com/CanuteTheGreat/horcrux/releases/download/daily/$iso || { echo "::warning::SKIPPED declarative-gitops (systemd): no systemd daily ISO is published yet"; exit 0; }
+          cd tools/vmtest && python3 -u -m vmtest run scenarios/declarative_gitops.py --arg iso=/tmp/dg-systemd.iso --out $OUT/declarative-gitops-systemd
+          rm -f /tmp/dg-systemd.iso
 
       - name: Evidence (always)
         if: always()
