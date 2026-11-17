@@ -74,7 +74,7 @@ fn parses_yaml_and_json_and_derives_subnet_ids() {
 fn rejects_bad_specs_with_clear_messages() {
     for (text, want) in [
         ("version: 2", "not supported"),
-        ("containers: []", "not supported yet"),
+        ("frobnicators: []", "not supported yet"),
         (
             "storage_pools: [{name: a, type: floppy, path: /x}]",
             "unknown storage type",
@@ -207,8 +207,12 @@ fn drift_on_existing_vm_is_reported_and_power_is_reconciled() {
     };
     let s = parse("vms: [{name: app1, memory: 1024, cpus: 2, power: running}]").unwrap();
     let p = plan(&s, &live, false);
-    assert_eq!(actions(&p), ["Blocked vm app1", "Start vm app1"]);
+    // memory is now changed in place (the VM is stopped)
+    assert_eq!(actions(&p), ["Update vm app1", "Start vm app1"]);
     assert!(p.changes[0].details[0].starts_with("memory: 512 -> 1024"));
+    assert_eq!(p.changes[0].fields[0].field, "memory");
+    assert_eq!(p.changes[0].fields[0].expected, "1024");
+    assert_eq!(p.changes[0].fields[0].actual, "512");
     // same config, only a different power state
     let s = parse("vms: [{name: app1, memory: 512, cpus: 2, power: stopped}]").unwrap();
     assert!(plan(&s, &live, false).in_sync());
@@ -232,7 +236,7 @@ fn generated_macs_are_not_drift() {
     assert!(plan(&s, &live, false).in_sync());
     let s = parse("vms: [{name: app1, memory: 512, cpus: 2, hardware: {nets: [{bridge: br1}]}}]")
         .unwrap();
-    assert_eq!(actions(&plan(&s, &live, false)), ["Blocked vm app1"]);
+    assert_eq!(actions(&plan(&s, &live, false)), ["Update vm app1"]);
 }
 
 #[test]
@@ -248,10 +252,24 @@ fn immutable_network_and_pool_changes_are_blocked_not_silently_dropped() {
         vlan_aware: false,
     });
     let p = plan(&s, &live, false);
+    // a tag/alias edit is in place now; moving the VNet to another zone is not
+    assert!(
+        actions(&p).contains(&"Update vnet web".to_string()),
+        "{:?}",
+        actions(&p)
+    );
+    live.vnets[0].zone = "other".into();
+    let p = plan(&s, &live, false);
     assert!(
         actions(&p).contains(&"Blocked vnet web".to_string()),
         "{:?}",
         actions(&p)
     );
     assert!(!actions(&p).iter().any(|a| a.contains("storage_pool")));
+    // a pool's path can't change in place; enabled can
+    live.pools[0].path = "/elsewhere".into();
+    assert!(actions(&plan(&s, &live, false)).contains(&"Blocked storage_pool fast".to_string()));
+    live.pools[0].path = "/srv/fast".into();
+    live.pools[0].enabled = false;
+    assert!(actions(&plan(&s, &live, false)).contains(&"Update storage_pool fast".to_string()));
 }

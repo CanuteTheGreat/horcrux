@@ -7,6 +7,7 @@
 //! validation, diff and export. `exec.rs` talks to the managers; the same
 //! code therefore behaves identically on OpenRC and systemd nodes.
 pub mod exec;
+pub mod kinds;
 
 use crate::api::sdn_zones::{
     parse_cidr, subnet_id, validate_subnet, validate_vnet, validate_zone, Subnet, VNet, Zone,
@@ -48,9 +49,10 @@ pub struct Spec {
     pub networks: Option<NetworksSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vms: Option<Vec<VmSpec>>,
-    /// Sections reserved for later phases: rejected with a clear message.
-    #[serde(flatten, skip_serializing)]
-    pub extra: BTreeMap<String, serde_yaml::Value>,
+    /// Sections of registered kinds (`kinds::registry()`); anything else is
+    /// rejected with a clear message.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -177,10 +179,18 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
             spec.version
         ));
     }
-    if let Some(k) = spec.extra.keys().next() {
-        return Err(format!(
-            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks and vms)"
-        ));
+    for (k, section) in &spec.extra {
+        match kinds::find(k) {
+            Some(kind) => kind.validate(section).map_err(|e| format!("{k}: {e}"))?,
+            None => {
+                let mut known = vec!["storage_pools", "networks", "vms"];
+                known.extend(kinds::keys());
+                return Err(format!(
+                    "section {k:?} is not supported yet (this server manages {})",
+                    known.join(", ")
+                ));
+            }
+        }
     }
     if let Some(pools) = &spec.storage_pools {
         dup("storage pool", pools.iter().map(|p| p.name.as_str()))?;
@@ -297,6 +307,11 @@ pub struct Live {
     pub vnets: Vec<VNet>,
     pub subnets: Vec<Subnet>,
     pub vms: Vec<VmConfig>,
+    /// Live state of the registered kinds (`kinds::registry()`), keyed by
+    /// spec section and shaped like that section.
+    pub extra: BTreeMap<String, serde_json::Value>,
+    /// Kinds whose `gather` failed (section -> message).
+    pub extra_errors: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -307,17 +322,28 @@ pub enum Action {
     Delete,
     Start,
     Stop,
-    /// Differs, but phase 1 cannot change it in place (details say why).
+    /// Differs, but cannot be changed in place (details say why).
     Blocked,
+}
+
+/// One differing field: what the spec wants and what the node has.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FieldDiff {
+    pub field: String,
+    pub expected: String,
+    pub actual: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Change {
-    /// storage_pool | zone | vnet | subnet | vm
+    /// storage_pool | zone | vnet | subnet | vm | (a registered kind's)
     pub kind: String,
     pub name: String,
     pub action: Action,
     pub details: Vec<String>,
+    /// Per-field expected/actual (drift view); empty for create/delete.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<FieldDiff>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -333,20 +359,86 @@ impl Plan {
     pub fn in_sync(&self) -> bool {
         self.changes.is_empty() && self.errors.is_empty()
     }
+    /// Changes that the engine cannot carry out in place.
+    pub fn blocked(&self) -> usize {
+        self.changes
+            .iter()
+            .filter(|c| c.action == Action::Blocked)
+            .count()
+    }
 }
 
-fn ch(kind: &str, name: &str, action: Action, details: Vec<String>) -> Change {
+/// A change without per-field detail (create, delete, power).
+pub fn ch(kind: &str, name: &str, action: Action, details: Vec<String>) -> Change {
     Change {
         kind: kind.into(),
         name: name.into(),
         action,
         details,
+        fields: vec![],
     }
 }
 
-fn diff<T: PartialEq + std::fmt::Debug>(out: &mut Vec<String>, what: &str, live: &T, want: &T) {
-    if live != want {
-        out.push(format!("{what}: {live:?} -> {want:?}"));
+/// Field differences collected while comparing one resource. `field` records
+/// a structured difference (and its text line); `note` adds explanation.
+#[derive(Debug, Default)]
+pub struct Diffs {
+    pub lines: Vec<String>,
+    pub fields: Vec<FieldDiff>,
+}
+
+fn show<T: Serialize + ?Sized>(v: &T) -> String {
+    match serde_json::to_value(v) {
+        Ok(serde_json::Value::String(s)) => s,
+        Ok(serde_json::Value::Null) => "none".into(),
+        Ok(v) => v.to_string(),
+        Err(_) => "?".into(),
+    }
+}
+
+impl Diffs {
+    /// Record `what` if the live value differs from the wanted one.
+    pub fn field<T: PartialEq + Serialize>(&mut self, what: &str, live: &T, want: &T) {
+        if live != want {
+            self.push(what, show(want), show(live));
+        }
+    }
+    /// Record a difference whose values are already rendered.
+    pub fn push(&mut self, what: &str, expected: String, actual: String) {
+        self.lines.push(format!("{what}: {actual} -> {expected}"));
+        self.fields.push(FieldDiff {
+            field: what.into(),
+            expected,
+            actual,
+        });
+    }
+    pub fn note(&mut self, s: impl Into<String>) {
+        self.lines.push(s.into());
+    }
+    /// No field differs (notes don't count).
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
+    pub fn into_change(self, kind: &str, name: &str, action: Action) -> Change {
+        Change {
+            kind: kind.into(),
+            name: name.into(),
+            action,
+            details: self.lines,
+            fields: self.fields,
+        }
+    }
+}
+
+/// Dependency rank of the built-in kinds (see `kinds` for the rest).
+fn rank(kind: &str) -> u32 {
+    match kind {
+        "storage_pool" => 10,
+        "zone" => 20,
+        "vnet" => 30,
+        "subnet" => 40,
+        "vm" => 50,
+        k => kinds::owner_of(k).map(|o| o.rank()).unwrap_or(900),
     }
 }
 
@@ -374,18 +466,24 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
                 vec![format!("{} at {}", w.storage_type, w.path)],
             )),
             Some(l) => {
-                let mut d = Vec::new();
-                diff(
-                    &mut d,
-                    "type",
-                    &pool_type_name(&l.storage_type),
-                    &pool_type_name(&pool_type(&w.storage_type).unwrap_or(l.storage_type.clone())),
-                );
-                diff(&mut d, "path", &l.path, &w.path);
-                diff(&mut d, "enabled", &l.enabled, &w.enabled);
-                if !d.is_empty() {
-                    d.push("pools can't be edited in place yet: remove and re-add it".into());
-                    creates.push(ch("storage_pool", &w.name, Action::Blocked, d));
+                let want_type =
+                    pool_type_name(&pool_type(&w.storage_type).unwrap_or(l.storage_type.clone()));
+                let mut fixed = Diffs::default();
+                fixed.field("type", &pool_type_name(&l.storage_type), &want_type);
+                fixed.field("path", &l.path, &w.path);
+                if !fixed.is_empty() {
+                    fixed.note(
+                        "a pool's type and path can't be edited in place: remove and re-add it",
+                    );
+                    let mut d = fixed;
+                    d.field("enabled", &l.enabled, &w.enabled);
+                    creates.push(d.into_change("storage_pool", &w.name, Action::Blocked));
+                } else {
+                    let mut d = Diffs::default();
+                    d.field("enabled", &l.enabled, &w.enabled);
+                    if !d.is_empty() {
+                        creates.push(d.into_change("storage_pool", &w.name, Action::Update));
+                    }
                 }
             }
         }
@@ -407,20 +505,20 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
             match live.zones.iter().find(|l| l.id == w.id) {
                 None => creates.push(ch("zone", &w.id, Action::Create, vec![w.zone_type.clone()])),
                 Some(l) if l != w => {
-                    let mut d = Vec::new();
-                    diff(&mut d, "type", &l.zone_type, &w.zone_type);
-                    diff(&mut d, "description", &l.description, &w.description);
-                    diff(&mut d, "uplink", &l.uplink, &w.uplink);
-                    diff(&mut d, "local_ip", &l.local_ip, &w.local_ip);
-                    diff(&mut d, "peers", &l.peers, &w.peers);
-                    diff(&mut d, "mtu", &l.mtu, &w.mtu);
-                    diff(&mut d, "dst_port", &l.dst_port, &w.dst_port);
+                    let mut d = Diffs::default();
+                    d.field("type", &l.zone_type, &w.zone_type);
+                    d.field("description", &l.description, &w.description);
+                    d.field("uplink", &l.uplink, &w.uplink);
+                    d.field("local_ip", &l.local_ip, &w.local_ip);
+                    d.field("peers", &l.peers, &w.peers);
+                    d.field("mtu", &l.mtu, &w.mtu);
+                    d.field("dst_port", &l.dst_port, &w.dst_port);
                     let blocked =
                         l.zone_type != w.zone_type && live.vnets.iter().any(|v| v.zone == w.id);
                     if blocked {
-                        d.push("the zone type can't change while VNets use the zone".into());
+                        d.note("the zone type can't change while VNets use the zone");
                     }
-                    creates.push(ch(
+                    creates.push(d.into_change(
                         "zone",
                         &w.id,
                         if blocked {
@@ -428,7 +526,6 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
                         } else {
                             Action::Update
                         },
-                        d,
                     ));
                 }
                 Some(_) => {}
@@ -460,13 +557,18 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
                     ));
                 }
                 Some(l) if l != w => {
-                    let mut d = Vec::new();
-                    diff(&mut d, "zone", &l.zone, &w.zone);
-                    diff(&mut d, "alias", &l.alias, &w.alias);
-                    diff(&mut d, "tag", &l.tag, &w.tag);
-                    diff(&mut d, "vlan_aware", &l.vlan_aware, &w.vlan_aware);
-                    d.push("VNets can't be edited in place yet: delete and re-create it".into());
-                    creates.push(ch("vnet", &w.id, Action::Blocked, d));
+                    let mut d = Diffs::default();
+                    d.field("zone", &l.zone, &w.zone);
+                    let moved = !d.is_empty();
+                    d.field("alias", &l.alias, &w.alias);
+                    d.field("tag", &l.tag, &w.tag);
+                    d.field("vlan_aware", &l.vlan_aware, &w.vlan_aware);
+                    if moved {
+                        d.note("a VNet can't move to another zone: delete and re-create it");
+                        creates.push(d.into_change("vnet", &w.id, Action::Blocked));
+                    } else {
+                        creates.push(d.into_change("vnet", &w.id, Action::Update));
+                    }
                 }
                 Some(_) => {}
             }
@@ -481,11 +583,10 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
             match live.subnets.iter().find(|l| l.id == w.id) {
                 None => creates.push(ch("subnet", &w.id, Action::Create, vec![w.cidr.clone()])),
                 Some(l) if l != w => {
-                    let mut d = Vec::new();
-                    diff(&mut d, "gateway", &l.gateway, &w.gateway);
-                    diff(&mut d, "snat", &l.snat, &w.snat);
-                    d.push("subnets can't be edited in place yet: delete and re-create it".into());
-                    creates.push(ch("subnet", &w.id, Action::Blocked, d));
+                    let mut d = Diffs::default();
+                    d.field("gateway", &l.gateway, &w.gateway);
+                    d.field("snat", &l.snat, &w.snat);
+                    creates.push(d.into_change("subnet", &w.id, Action::Update));
                 }
                 Some(_) => {}
             }
@@ -525,12 +626,6 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
     if let Some(vms) = &spec.vms {
         let pool_known =
             |n: &str| want_pool_names.contains(n) || live.pools.iter().any(|l| l.name == n);
-        let vnet_ids: BTreeSet<&str> = spec
-            .networks
-            .iter()
-            .flat_map(|n| n.vnets.iter().flatten())
-            .map(|v| v.id.as_str())
-            .collect();
         for w in vms {
             for d in &w.disks {
                 if let Some(s) = d.storage.as_deref() {
@@ -540,7 +635,6 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
                     }
                 }
             }
-            let _ = &vnet_ids; // bridges may also be host bridges: checked at apply time
             match live.vms.iter().find(|l| l.name == w.name) {
                 None => {
                     creates.push(ch(
@@ -554,17 +648,44 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
                     }
                 }
                 Some(l) => {
-                    let d = vm_diff(w, l, &live.pools);
-                    if !d.is_empty() {
-                        let mut d = d;
-                        d.push("VMs can't be reconfigured in place yet".into());
-                        creates.push(ch("vm", &w.name, Action::Blocked, d));
+                    let running = matches!(l.status, VmStatus::Running | VmStatus::Paused);
+                    let vd = vm_diff(w, l, &live.pools);
+                    let mut stopped_first = false;
+                    if !vd.blocked.is_empty() {
+                        let mut b = vd.blocked;
+                        // the in-place part still shows, so drift lists every field
+                        for f in vd.update.fields.iter() {
+                            b.push(&f.field, f.expected.clone(), f.actual.clone());
+                        }
+                        creates.push(b.into_change("vm", &w.name, Action::Blocked));
+                    } else if !vd.update.is_empty() {
+                        let mut u = vd.update;
+                        if running && vd.cold {
+                            if w.power == Some(Power::Stopped) {
+                                creates.push(ch(
+                                    "vm",
+                                    &w.name,
+                                    Action::Stop,
+                                    vec!["needed to change CPUs, memory, NICs or disks".into()],
+                                ));
+                                stopped_first = true;
+                                creates.push(u.into_change("vm", &w.name, Action::Update));
+                            } else {
+                                u.note(
+                                    "the VM is running: stop it first (or set power: stopped in \
+                                     the spec) to change CPUs, memory, NICs or add disks",
+                                );
+                                creates.push(u.into_change("vm", &w.name, Action::Blocked));
+                            }
+                        } else {
+                            creates.push(u.into_change("vm", &w.name, Action::Update));
+                        }
                     }
                     match (w.power, &l.status) {
                         (Some(Power::Running), s) if *s != VmStatus::Running => {
                             creates.push(ch("vm", &w.name, Action::Start, vec![]))
                         }
-                        (Some(Power::Stopped), VmStatus::Running) => {
+                        (Some(Power::Stopped), VmStatus::Running) if !stopped_first => {
                             creates.push(ch("vm", &w.name, Action::Stop, vec![]))
                         }
                         _ => {}
@@ -592,14 +713,29 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
-    // Creates/updates run dependency-first (pools, zones, vnets, subnets,
-    // VMs); deletes run in the opposite order (VMs first, pools last).
-    let rank = |k: &str| {
-        ["storage_pool", "zone", "vnet", "subnet", "vm"]
-            .iter()
-            .position(|x| *x == k)
-            .unwrap_or(9)
-    };
+    // registered kinds (containers, users, ...): one section each
+    for (key, section) in &spec.extra {
+        let Some(k) = kinds::find(key) else { continue };
+        if let Some(e) = live.extra_errors.get(key) {
+            p.errors
+                .push(format!("{key}: reading the live state failed: {e}"));
+            continue;
+        }
+        let empty = serde_json::Value::Null;
+        let mut kp = kinds::KindPlan::default();
+        k.plan(
+            section,
+            live.extra.get(key).unwrap_or(&empty),
+            prune,
+            (spec, live),
+            &mut kp,
+        );
+        creates.extend(kp.changes);
+        deletes.extend(kp.deletes);
+        p.errors.extend(kp.errors);
+    }
+
+    // Creates/updates run dependency-first; deletes in the opposite order.
     creates.sort_by_key(|c| rank(&c.kind));
     deletes.sort_by_key(|c| std::cmp::Reverse(rank(&c.kind)));
     p.changes = creates;
@@ -609,23 +745,82 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
 
 /// Differences between a spec VM and the live one, limited to what the spec
 /// states and what Horcrux reports back reliably.
-fn vm_diff(w: &VmSpec, l: &VmConfig, pools: &[crate::storage::StoragePool]) -> Vec<String> {
-    let mut d = Vec::new();
-    diff(&mut d, "hypervisor", &l.hypervisor, &w.hypervisor);
-    diff(&mut d, "memory", &l.memory, &w.memory);
-    diff(&mut d, "cpus", &l.cpus, &w.cpus);
+struct VmDiff {
+    /// Can be changed in place.
+    update: Diffs,
+    /// Cannot (hypervisor, architecture, disk removal/shrink/move, ...).
+    blocked: Diffs,
+    /// The in-place part needs the VM stopped (CPUs, memory, NICs, new disks,
+    /// disk bus); a CD-ROM swap and growing a disk work while it runs.
+    cold: bool,
+}
+
+fn vm_diff(w: &VmSpec, l: &VmConfig, pools: &[crate::storage::StoragePool]) -> VmDiff {
+    let mut u = Diffs::default();
+    let mut b = Diffs::default();
+    let mut cold = false;
+    b.field("hypervisor", &l.hypervisor, &w.hypervisor);
     if let Some(a) = &w.architecture {
-        diff(&mut d, "architecture", &l.architecture, a);
+        b.field("architecture", &l.architecture, a);
+    }
+    let managed_elsewhere = l.hypervisor != VmHypervisor::Qemu;
+    let (mut mem_cpu, mut other) = (Diffs::default(), Diffs::default());
+    mem_cpu.field("memory", &l.memory, &w.memory);
+    mem_cpu.field("cpus", &l.cpus, &w.cpus);
+    if managed_elsewhere && !mem_cpu.is_empty() {
+        for f in &mem_cpu.fields {
+            b.push(&f.field, f.expected.clone(), f.actual.clone());
+        }
+        b.note("CPU and memory of LXD/Incus VMs are managed by LXD/Incus");
+    } else if !mem_cpu.is_empty() {
+        cold = true;
+        for f in &mem_cpu.fields {
+            u.push(&f.field, f.expected.clone(), f.actual.clone());
+        }
     }
     if !w.disks.is_empty() {
         let live_disks: Vec<DiskSpec> = l.disks.iter().map(|x| disk_of(x, pools)).collect();
-        if live_disks.len() != w.disks.len() {
-            d.push(format!("disks: {} -> {}", live_disks.len(), w.disks.len()));
-        } else {
-            for (i, (a, b)) in live_disks.iter().zip(&w.disks).enumerate() {
-                diff(&mut d, &format!("disk{i}.size_gb"), &a.size_gb, &b.size_gb);
-                diff(&mut d, &format!("disk{i}.bus"), &a.bus, &b.bus);
-                diff(&mut d, &format!("disk{i}.storage"), &a.storage, &b.storage);
+        if live_disks.len() > w.disks.len() {
+            b.push(
+                "disks",
+                w.disks.len().to_string(),
+                live_disks.len().to_string(),
+            );
+            b.note("removing a disk detaches data: do it by hand (Disks tab of the VM)");
+        } else if live_disks.len() < w.disks.len() {
+            cold = true;
+            u.push(
+                "disks",
+                w.disks.len().to_string(),
+                live_disks.len().to_string(),
+            );
+        }
+        for (i, (a, s)) in live_disks.iter().zip(&w.disks).enumerate() {
+            if s.size_gb < a.size_gb {
+                b.push(
+                    &format!("disk{i}.size_gb"),
+                    s.size_gb.to_string(),
+                    a.size_gb.to_string(),
+                );
+                b.note("a disk can't shrink");
+            } else if s.size_gb > a.size_gb {
+                u.push(
+                    &format!("disk{i}.size_gb"),
+                    s.size_gb.to_string(),
+                    a.size_gb.to_string(),
+                );
+            }
+            if a.bus != s.bus {
+                cold = true;
+                u.push(&format!("disk{i}.bus"), s.bus.clone(), a.bus.clone());
+            }
+            if a.storage != s.storage && s.storage.is_some() {
+                b.push(
+                    &format!("disk{i}.storage"),
+                    show(&s.storage),
+                    show(&a.storage),
+                );
+                b.note("an existing disk can't move to another pool in place");
             }
         }
     }
@@ -656,13 +851,21 @@ fn vm_diff(w: &VmSpec, l: &VmConfig, pools: &[crate::storage::StoragePool]) -> V
             })
             .collect();
         if live_nets.len() != want_nets.len() || live_nets != want_nets {
-            d.push(format!("nets: {live_nets:?} -> {want_nets:?}"));
+            cold = true;
+            other.push("nets", show(&want_nets), show(&live_nets));
         }
         if hw.cdrom.is_some() {
-            diff(&mut d, "cdrom", &l.hardware.cdrom, &hw.cdrom);
+            other.field("cdrom", &l.hardware.cdrom, &hw.cdrom);
         }
     }
-    d
+    for f in &other.fields {
+        u.push(&f.field, f.expected.clone(), f.actual.clone());
+    }
+    VmDiff {
+        update: u,
+        blocked: b,
+        cold,
+    }
 }
 
 fn pool_name(pools: &[crate::storage::StoragePool], id: &str) -> String {
@@ -739,7 +942,12 @@ pub fn export(live: &Live) -> Spec {
             subnets: Some(subnets),
         }),
         vms: Some(vms),
-        extra: BTreeMap::new(),
+        extra: live
+            .extra
+            .iter()
+            .filter(|(_, v)| !v.is_null())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
     }
 }
 

@@ -14,13 +14,25 @@ use std::sync::Arc;
 static APPLY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub async fn gather(state: &Arc<AppState>) -> Live {
-    Live {
+    let mut live = Live {
         pools: state.storage_manager.list_pools().await,
         zones: sdn::list_zones(State(state.clone())).await.0,
         vnets: sdn::list_vnets(State(state.clone())).await.0,
         subnets: sdn::list_subnets(State(state.clone())).await.0,
         vms: state.vm_manager.list_vms().await,
+        ..Default::default()
+    };
+    for k in super::kinds::registry() {
+        match k.gather(state).await {
+            Ok(v) => {
+                live.extra.insert(k.key().to_string(), v);
+            }
+            Err(e) => {
+                live.extra_errors.insert(k.key().to_string(), e);
+            }
+        }
     }
+    live
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,8 +110,69 @@ async fn run_change(
 ) -> Result<Option<String>, String> {
     let e = |e: &dyn std::fmt::Debug| format!("{e:?}");
     let api = api_msg;
+    if c.action != Action::Blocked {
+        if let Some(k) = super::kinds::owner_of(&c.kind) {
+            let null = serde_json::Value::Null;
+            return k
+                .apply(
+                    state,
+                    spec.extra.get(k.key()).unwrap_or(&null),
+                    live.extra.get(k.key()).unwrap_or(&null),
+                    c,
+                )
+                .await;
+        }
+    }
     match (c.kind.as_str(), c.action) {
         (_, Action::Blocked) => Err(c.details.join("; ")),
+
+        ("storage_pool", Action::Update) => {
+            let w = spec
+                .storage_pools
+                .iter()
+                .flatten()
+                .find(|p| p.name == c.name)
+                .ok_or("not in spec")?;
+            let id = live
+                .pools
+                .iter()
+                .find(|p| p.name == c.name)
+                .map(|p| p.id.clone())
+                .ok_or("pool is gone")?;
+            state
+                .storage_manager
+                .set_pool_enabled(&id, w.enabled)
+                .await
+                .map_err(|x| e(&x))?;
+            Ok(None)
+        }
+        ("vnet", Action::Update) => {
+            let v = spec
+                .networks
+                .iter()
+                .flat_map(|n| n.vnets.iter().flatten())
+                .find(|v| v.id == c.name)
+                .ok_or("not in spec")?
+                .clone();
+            let _ = sdn::update_vnet(State(state.clone()), Path(c.name.clone()), Json(v))
+                .await
+                .map_err(api)?;
+            Ok(None)
+        }
+        ("subnet", Action::Update) => {
+            let sn = spec
+                .networks
+                .iter()
+                .flat_map(|n| n.subnets.iter().flatten())
+                .find(|s| s.id == c.name)
+                .ok_or("not in spec")?
+                .clone();
+            let _ = sdn::update_subnet(State(state.clone()), Path(c.name.clone()), Json(sn))
+                .await
+                .map_err(api)?;
+            Ok(None)
+        }
+        ("vm", Action::Update) => update_vm(state, spec, live, &c.name).await,
 
         ("storage_pool", Action::Create) => {
             let w = spec
@@ -320,4 +393,128 @@ fn api_msg(e: crate::error::ApiError) -> String {
         | E::RateLimited(m) => m,
         other => format!("{other:?}"),
     }
+}
+
+/// Change an existing VM in place through the same managers as the REST
+/// routes: memory/CPUs/NICs/CD-ROM via `update_config`, disk growth and bus
+/// via `update_disk`, extra disks via `add_disk`. Disk removal and pool moves
+/// never get here (the plan marks them blocked).
+async fn update_vm(
+    state: &Arc<AppState>,
+    spec: &Spec,
+    live: &Live,
+    name: &str,
+) -> Result<Option<String>, String> {
+    use crate::vm::hardware::{DiskUpdate, VmConfigUpdate};
+    let w = spec
+        .vms
+        .iter()
+        .flatten()
+        .find(|v| v.name == name)
+        .ok_or("not in spec")?;
+    let l = live
+        .vms
+        .iter()
+        .find(|v| v.name == name)
+        .ok_or("VM is gone")?;
+    let id = l.id.clone();
+    let mut upd = VmConfigUpdate::default();
+    if w.memory != l.memory {
+        upd.memory = Some(w.memory);
+    }
+    if w.cpus != l.cpus {
+        upd.cpus = Some(w.cpus);
+    }
+    if let Some(hw) = &w.hardware {
+        let mut next = l.hardware.clone();
+        let mut changed = false;
+        if !hw.nets.is_empty() || !l.hardware.nets.is_empty() {
+            let mut nets = hw.nets.clone();
+            for (i, n) in nets.iter_mut().enumerate() {
+                // a MAC the spec leaves out stays what the node generated
+                if n.mac.is_none() {
+                    n.mac = l.hardware.nets.get(i).and_then(|x| x.mac.clone());
+                }
+            }
+            if nets != l.hardware.nets {
+                next.nets = nets;
+                changed = true;
+            }
+        }
+        if hw.cdrom.is_some() && hw.cdrom != l.hardware.cdrom {
+            next.cdrom = hw.cdrom.clone();
+            changed = true;
+        }
+        if changed {
+            upd.hardware = Some(next);
+        }
+    }
+    let mut done = Vec::new();
+    if upd.memory.is_some() || upd.cpus.is_some() || upd.hardware.is_some() {
+        if let Some(hw) = &upd.hardware {
+            crate::api::vm_hw::check_host_hardware(state, hw)
+                .await
+                .map_err(api_msg)?;
+        }
+        state
+            .vm_manager
+            .update_config(&id, upd)
+            .await
+            .map_err(|x| format!("{x:?}"))?;
+        done.push("config");
+    }
+    let pools = state.storage_manager.list_pools().await;
+    for (i, s) in w.disks.iter().enumerate() {
+        match l.disks.get(i) {
+            Some(d) => {
+                let mut du = DiskUpdate::default();
+                if s.size_gb > d.size_gb {
+                    du.size_gb = Some(s.size_gb);
+                }
+                if s.bus != d.disk_type {
+                    du.bus = Some(s.bus.clone());
+                }
+                if du.size_gb.is_some() || du.bus.is_some() {
+                    state
+                        .vm_manager
+                        .update_disk(&id, i, du)
+                        .await
+                        .map_err(|x| format!("disk{i}: {x:?}"))?;
+                    done.push("disk");
+                }
+            }
+            None => {
+                let storage = match s.storage.as_deref() {
+                    None => None,
+                    Some(n) => Some(
+                        pools
+                            .iter()
+                            .find(|p| p.name == n)
+                            .map(|p| p.id.clone())
+                            .ok_or_else(|| format!("storage pool {n} does not exist"))?,
+                    ),
+                };
+                let mut ds = crate::vm::hardware::DiskSpec {
+                    size_gb: s.size_gb,
+                    bus: s.bus.clone(),
+                    cache: s.cache.clone(),
+                    discard: s.discard,
+                    ssd: s.ssd,
+                    iothread: s.iothread,
+                    storage,
+                    dir: None,
+                };
+                crate::api::storage_volumes::place_new_disk(state, &mut ds)
+                    .await
+                    .map_err(api_msg)?;
+                state
+                    .vm_manager
+                    .add_disk(&id, ds)
+                    .await
+                    .map_err(|x| format!("disk{i}: {x:?}"))?;
+                done.push("new disk");
+            }
+        }
+    }
+    Ok(Some(format!("updated {}", done.join(", "))))
 }

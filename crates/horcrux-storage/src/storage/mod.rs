@@ -596,6 +596,19 @@ impl StorageManager {
         Ok(pool_clone)
     }
 
+    /// Enable or disable a pool in place (the pool keeps its data and its
+    /// registration; a disabled pool takes no new disks).
+    pub async fn set_pool_enabled(&self, id: &str, enabled: bool) -> Result<StoragePool> {
+        let mut pools = self.pools.write().await;
+        let pool = pools
+            .get_mut(id)
+            .ok_or_else(|| horcrux_common::Error::System(format!("Storage pool {id} not found")))?;
+        pool.enabled = enabled;
+        let updated = pool.clone();
+        config_store::put_opt(&self.store, kinds::STORAGE_POOL, id, &updated).await?;
+        Ok(updated)
+    }
+
     /// Remove a storage pool
     pub async fn remove_pool(&self, id: &str) -> Result<()> {
         let mut pools = self.pools.write().await;

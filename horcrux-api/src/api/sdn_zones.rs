@@ -25,7 +25,7 @@ use crate::error::ApiError;
 use crate::AppState;
 use axum::{
     extract::{Path, State},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -41,10 +41,13 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             get(get_zone).put(update_zone).delete(delete_zone),
         )
         .route("/api/sdn/vnets", get(list_vnets).post(create_vnet))
-        .route("/api/sdn/vnets/:id", delete(delete_vnet))
+        .route("/api/sdn/vnets/:id", put(update_vnet).delete(delete_vnet))
         .route("/api/sdn/vnets/:id/subnets", post(create_subnet))
         .route("/api/sdn/subnets", get(list_subnets))
-        .route("/api/sdn/subnets/:id", delete(delete_subnet))
+        .route(
+            "/api/sdn/subnets/:id",
+            put(update_subnet).delete(delete_subnet),
+        )
         .route(
             "/api/sdn/subnets/:id/ipam",
             get(ipam_list).post(ipam_allocate),
@@ -840,6 +843,172 @@ pub(crate) async fn create_subnet(
             .map_err(internal)?;
     }
     Ok(Json(s))
+}
+
+/// Change a VNet's alias, tag or VLAN awareness in place. The zone and the
+/// id (= bridge name) never change.
+pub(crate) async fn update_vnet(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(want): Json<VNet>,
+) -> Res<VNet> {
+    let cfg = Cfg::new(&state);
+    let old = cfg
+        .vnets()
+        .await
+        .into_iter()
+        .find(|v| v.id == id)
+        .ok_or_else(|| ApiError::NotFound(format!("VNet {id} not found")))?;
+    if want.zone != old.zone {
+        return Err(ApiError::Conflict(
+            "a VNet can't move to another zone: delete and re-create it".into(),
+        ));
+    }
+    let zone = cfg
+        .zones()
+        .await
+        .into_iter()
+        .find(|z| z.id == old.zone)
+        .ok_or_else(|| ApiError::ValidationError(format!("zone {} does not exist", old.zone)))?;
+    let new = VNet {
+        id: id.clone(),
+        zone: old.zone.clone(),
+        alias: want.alias.clone(),
+        tag: want.tag,
+        vlan_aware: want.vlan_aware,
+    };
+    validate_vnet(&new, &zone).map_err(ApiError::ValidationError)?;
+    if let (Some(t), true) = (new.tag, zone.zone_type != "simple") {
+        if cfg
+            .vnets()
+            .await
+            .iter()
+            .any(|x| x.id != id && x.tag == Some(t) && x.zone == new.zone)
+        {
+            return Err(ApiError::Conflict(format!(
+                "tag {t} is already used in zone {}",
+                zone.id
+            )));
+        }
+    }
+    if new == old {
+        return Ok(Json(new));
+    }
+    if new.tag != old.tag {
+        // the carrier device is named after the tag: drop the old one
+        if let Some(car) = carrier_name(&zone, &old) {
+            let _ = run("ip", &["link", "del", "dev", &car]).await;
+        }
+    }
+    let subnets = cfg.subnets().await;
+    apply_vnet(&zone, &new, &subnets)
+        .await
+        .map_err(ApiError::Internal)?;
+    if new.vlan_aware != old.vlan_aware {
+        let on = if new.vlan_aware { "1" } else { "0" };
+        run(
+            "ip",
+            &[
+                "link",
+                "set",
+                "dev",
+                &id,
+                "type",
+                "bridge",
+                "vlan_filtering",
+                on,
+            ],
+        )
+        .await
+        .map_err(ApiError::Internal)?;
+    }
+    cfg.store
+        .put(kinds::SDN_VNET, &id, &new)
+        .await
+        .map_err(internal)?;
+    Ok(Json(new))
+}
+
+/// Change a subnet's gateway or SNAT in place (the CIDR is part of its id).
+pub(crate) async fn update_subnet(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(want): Json<Subnet>,
+) -> Res<Subnet> {
+    let cfg = Cfg::new(&state);
+    let all = cfg.subnets().await;
+    let old = all
+        .iter()
+        .find(|s| s.id == id)
+        .cloned()
+        .ok_or_else(|| ApiError::NotFound(format!("subnet {id} not found")))?;
+    let mut new = old.clone();
+    new.gateway = want.gateway.filter(|g| !g.is_empty());
+    new.snat = want.snat;
+    if new == old {
+        return Ok(Json(new));
+    }
+    let others: Vec<Subnet> = all.iter().filter(|s| s.id != id).cloned().collect();
+    validate_subnet(&new, &others).map_err(ApiError::ValidationError)?;
+    let v = cfg
+        .vnets()
+        .await
+        .into_iter()
+        .find(|v| v.id == old.vnet)
+        .ok_or_else(|| internal("VNet missing"))?;
+    let zone = cfg
+        .zones()
+        .await
+        .into_iter()
+        .find(|z| z.id == v.zone)
+        .ok_or_else(|| internal("zone missing"))?;
+    cfg.store
+        .put(kinds::SDN_SUBNET, &id, &new)
+        .await
+        .map_err(internal)?;
+    let mut now = others;
+    now.push(new.clone());
+    let applied = async {
+        if new.gateway != old.gateway {
+            if let (Some(g), Ok((_, p))) = (&old.gateway, parse_cidr(&old.cidr)) {
+                let _ = run(
+                    "ip",
+                    &["addr", "del", &format!("{g}/{p}"), "dev", &old.vnet],
+                )
+                .await;
+            }
+        }
+        apply_vnet(&zone, &v, &now).await?;
+        apply_nft(&now).await
+    }
+    .await;
+    if let Err(e) = applied {
+        let _ = cfg.store.put(kinds::SDN_SUBNET, &id, &old).await;
+        return Err(ApiError::Internal(e));
+    }
+    if new.gateway != old.gateway {
+        if let Some(g) = &old.gateway {
+            let _ = cfg
+                .store
+                .delete(kinds::SDN_IPAM, &format!("{}/{}", id, g))
+                .await;
+        }
+        if let Some(g) = &new.gateway {
+            let a = Allocation {
+                subnet: id.clone(),
+                ip: g.clone(),
+                hostname: Some("gateway".into()),
+                mac: None,
+                kind: "gateway".into(),
+                created: chrono::Utc::now().to_rfc3339(),
+            };
+            cfg.store
+                .put(kinds::SDN_IPAM, &format!("{}/{}", id, g), &a)
+                .await
+                .map_err(internal)?;
+        }
+    }
+    Ok(Json(new))
 }
 
 pub(crate) async fn delete_subnet(
