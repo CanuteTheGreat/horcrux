@@ -1001,3 +1001,124 @@ async fn gitops_signed_commits_and_webhook() {
     );
     assert_eq!(vm_memory(&api, "gs").await, Some(224));
 }
+
+/// OpenPGP signatures (real gpg): a commit signed by an allowed key is applied,
+/// unsigned ones and ones signed by a key outside the allowed keyring are refused.
+#[tokio::test]
+async fn gitops_openpgp_signed_commits() {
+    let dir = scratch("declarative-gitops-gpg");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let repo = Repo::new(&dir);
+    let home = dir.join("gnupg");
+    std::fs::create_dir_all(&home).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let gpg = |args: &[&str]| -> String {
+        let o = std::process::Command::new("gpg")
+            .env("GNUPGHOME", &home)
+            .args([
+                "--batch",
+                "--yes",
+                "--pinentry-mode",
+                "loopback",
+                "--passphrase",
+                "",
+            ])
+            .args(args)
+            .output()
+            .expect("gpg is needed for the OpenPGP tests");
+        assert!(
+            o.status.success(),
+            "gpg {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    gpg(&[
+        "--quick-generate-key",
+        "CI <ci@example.com>",
+        "ed25519",
+        "sign",
+        "never",
+    ]);
+    gpg(&[
+        "--quick-generate-key",
+        "Rogue <rogue@example.com>",
+        "ed25519",
+        "sign",
+        "never",
+    ]);
+    let allowed = gpg(&["--armor", "--export", "ci@example.com"]);
+    assert!(allowed.contains("BEGIN PGP PUBLIC KEY BLOCK"));
+
+    let commit = |who: &str, mem: u32, msg: &str| -> String {
+        std::fs::write(repo.dir.join("horcrux.yaml"), vm_spec_text("gp", mem)).unwrap();
+        repo.git(&["add", "-A"]);
+        let o = std::process::Command::new("git")
+            .current_dir(&repo.dir)
+            .env("GNUPGHOME", &home)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(["-c", "user.name=CI", "-c", "user.email=ci@example.com"])
+            .args([
+                "-c",
+                "gpg.format=openpgp",
+                "-c",
+                &format!("user.signingkey={who}"),
+            ])
+            .args(["commit", "-q", "-S", "-m", msg])
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        repo.git(&["rev-parse", "HEAD"])
+    };
+
+    let (s, v) = api
+        .put(
+            "/declarative/gitops/config",
+            json!({"url": repo.url(), "mode": "auto", "interval_secs": 3600,
+                   "verify_signatures": true,
+                   "signing": {"format": "gpg", "allowed_signers": allowed}}),
+        )
+        .await;
+    assert_eq!(s, 200, "{v}");
+
+    commit("ci@example.com", 128, "signed with the allowed key");
+    let (s, o) = api.post("/declarative/gitops/sync", json!({})).await;
+    assert_eq!(s, 200, "{o}");
+    assert_eq!(vm_memory(&api, "gp").await, Some(128));
+    let st = git_status(&api).await;
+    assert_eq!(st["signature"], "good", "{st}");
+
+    // unsigned
+    repo.commit("horcrux.yaml", &vm_spec_text("gp", 256), "unsigned");
+    let (s, o) = api.post("/declarative/gitops/sync", json!({})).await;
+    assert_eq!(s, 422, "{o}");
+    assert!(
+        o.to_string().contains("signature verification failed"),
+        "{o}"
+    );
+    assert_eq!(vm_memory(&api, "gp").await, Some(128));
+
+    // signed by a key that is not in the allowed keyring
+    commit("rogue@example.com", 384, "signed by an unknown key");
+    let (s, o) = api.post("/declarative/gitops/sync", json!({})).await;
+    assert_eq!(s, 422, "{o}");
+    assert_eq!(
+        vm_memory(&api, "gp").await,
+        Some(128),
+        "refused commits change nothing"
+    );
+    assert_eq!(git_status(&api).await["signature"], "bad");
+
+    // and back to a good one
+    commit("ci@example.com", 192, "good again");
+    let (s, _) = api.post("/declarative/gitops/sync", json!({})).await;
+    assert_eq!(s, 200);
+    assert_eq!(vm_memory(&api, "gp").await, Some(192));
+}

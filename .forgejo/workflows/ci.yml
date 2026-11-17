@@ -704,6 +704,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash "$GITHUB_WORKSPACE/ci/sysctl-guard.sh" assert
 
+      - name: Declarative CLI (desired, drift, history, rollback, GitOps through the real horcrux binary)
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Declarative CLI"
+          cargo build -p horcrux-cli --bin horcrux
+          bash horcrux-api/tests/declarative_cli_e2e.sh target/debug/horcrux-api target/debug/horcrux
+
       - name: Run tests (no default features)
         # Unit tests of the minimal build. The integration/contract tests
         # need the server, which is the --all-features build started above;
