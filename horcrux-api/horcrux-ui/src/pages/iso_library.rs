@@ -6,7 +6,12 @@ use leptos::*;
 #[component]
 pub fn IsoLibraryPage() -> impl IntoView {
     let (isos, set_isos) = create_signal(Vec::<IsoFile>::new());
+    // `error` belongs to the last page action (delete) and stays until the
+    // next action; the list refresh that follows every action must not wipe it,
+    // or a failed delete flashes for a frame and the page looks silent.
+    // A failed list refresh has its own `load_error`.
     let (error, set_error) = create_signal(None::<String>);
+    let (load_error, set_load_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
     let (iso_dir, set_iso_dir) = create_signal(String::new());
     let (storages, set_storages) = create_signal(Vec::<api::IsoStorage>::new());
@@ -17,9 +22,9 @@ pub fn IsoLibraryPage() -> impl IntoView {
             match api::list_isos().await {
                 Ok(l) => {
                     set_isos.set(l);
-                    set_error.set(None);
+                    set_load_error.set(None);
                 }
-                Err(e) => set_error.set(Some(e.message)),
+                Err(e) => set_load_error.set(Some(e.message)),
             }
             if let Ok(o) = api::get_vm_host_options().await {
                 set_iso_dir.set(o.iso_dir);
@@ -67,6 +72,8 @@ pub fn IsoLibraryPage() -> impl IntoView {
         {
             return;
         }
+        set_error.set(None);
+        set_notice.set(None);
         spawn_local(async move {
             match api::delete_iso(&name, &storage).await {
                 Ok(()) => set_notice.set(Some(format!("{name} deleted"))),
@@ -88,6 +95,7 @@ pub fn IsoLibraryPage() -> impl IntoView {
             </p>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="iso-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="iso-error">{e}</div> })}
+            {move || load_error.get().map(|e| view! { <div class="alert alert-error" id="iso-load-error">{e}</div> })}
 
             <crate::components::IsoAddPanel storages=storages default_storage=default_storage on_added=added prefix="iso"/>
 

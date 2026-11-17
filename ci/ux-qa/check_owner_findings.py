@@ -30,6 +30,12 @@ def check(path, root):
             continue
         if re.match(r"^(cron|manual):", refs[0]):
             continue
+        # `journey:<step>:<check>` = an assertion in the user-journey lane; it must really be in user_journey.py
+        jsrc = open(os.path.join(root, "ci/ux-qa/user_journey.py")).read() if os.path.exists(os.path.join(root, "ci/ux-qa/user_journey.py")) else ""
+        for r in refs:
+            m = re.match(r"^journey:([\w-]+):([\w-]+)$", r)
+            if m and (f'"{m.group(1)}"' not in jsrc or f'"{m.group(2)}"' not in jsrc):
+                probs.append(f"row {n}: journey check `{r}` is not asserted in ci/ux-qa/user_journey.py")
         for r in paths:
             r = r.split("::")[0].split(" ")[0]
             if not os.path.exists(os.path.join(root, r)):
