@@ -127,6 +127,18 @@ class OwnerFindings(unittest.TestCase):
             self.assertTrue(any("gone.py" in p for p in probs))
             self.assertTrue(any("no check" in p for p in probs))
 
+    def test_journey_check_must_exist_in_the_journey_script(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(f"{d}/ci/ux-qa")
+            open(f"{d}/ci/ux-qa/user_journey.py", "w").write('expect("j3-create-vm", "resource-sliders", x, "y")\n')
+            md = ("| # | date | finding | class | check |\n|---|---|---|---|---|\n"
+                  "| 1 | 2026-11-16 | a | x | `journey:j3-create-vm:resource-sliders` |\n"
+                  "| 2 | 2026-11-16 | b | x | `journey:j3-create-vm:made-up` |\n")
+            open(f"{d}/f.md", "w").write(md)
+            probs = of.check(f"{d}/f.md", d)
+            self.assertEqual(len(probs), 1)
+            self.assertIn("made-up", probs[0])
+
 
 if __name__ == "__main__":
     unittest.main()

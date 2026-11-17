@@ -1,0 +1,12 @@
+{
+ "_comment": "Known failing journey checks; a NEW failure fails CI. Each value says what is wrong and who owns it. Remove an entry when its check passes (the run prints 'baseline entry no longer fails').",
+ "journey:j1-login:js-console-errors": "Unauthenticated dashboard fires authenticated API calls before login and logs ~10 401s; the console must be clean on first visit.",
+ "journey:j2-iso-library:empty-state-no-redundant-button": "owner finding 17: ISO Library empty state says 'Download one above' next to a redundant Download button; fix in flight in the ISO Library change.",
+ "journey:j2-iso-library:upload-option": "owner finding 17: ISO Library has no upload; fix in flight in the ISO Library change.",
+ "journey:j3-create-vm:resource-sliders": "owner finding 16: CPU/RAM/disk are bare number boxes; fix in flight in the create-VM form change.",
+ "journey:j3-create-vm:sound-with-vnc": "owner finding 16: sound card is disabled unless the display is SPICE; fix in flight in the create-VM form change.",
+ "journey:j3-create-vm:cdrom-add-iso-from-form": "owner finding 16: no way to add an ISO from the create form; fix in flight in the create-VM form change.",
+ "journey:j3-create-vm:fresh-host-no-bridge": "owner finding 16: a fresh install has no bridge so a VM with a NIC fails at Create (400); form should create one or default to NAT.",
+ "journey:j3-create-vm:nic-by-default": "owner finding 16: new VM form has no NIC by default when the host has no bridge (seen on runners that cannot create one).",
+ "journey:j8-settings:dashboard-mentions-updates": "owner finding 18: nothing tells the admin the node has pending/never-installed updates; needs a dashboard update status card."
+}

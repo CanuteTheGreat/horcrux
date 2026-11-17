@@ -460,6 +460,36 @@ jobs:
           docker info --format 'docker {{.ServerVersion}} on {{.OperatingSystem}}'
           docker pull -q busybox:latest
 
+      - name: User journey (fresh install, first-time admin; VM from an ISO boots, console works, no JS errors)
+        # ci/ux-qa/user_journey.py: log in, fill the ISO Library, create a VM with ISO + NIC + sound + console, boot it to
+        # the ISO (its GRUB prints a marker and powers the guest off), check QEMU got the ISO/NIC/sound and the console
+        # shows the guest, then containers, storage, networks, backups, settings. Fresh data dir = a first install.
+        # Known failures: ci/ux-qa/user-journey-baseline.json; a NEW failure fails the job. Screenshots feed the
+        # per-build LLM review (cron horcrux-ux-review).
+        env:
+          ADMIN_PASSWORD: <redacted:ADMIN_PASSWORD>
+          BASE_URL: https://localhost:8009
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "User journey"
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" grub-pc-bin grub-common xorriso
+          mkdir -p /tmp/journey-data /tmp/journey-cni/bin /tmp/journey-cni/conf.d
+          HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8009 \
+          HORCRUX_DATA_DIR=/tmp/journey-data \
+          HORCRUX_CNI_BIN_DIR=/tmp/journey-cni/bin HORCRUX_CNI_CONF_DIR=/tmp/journey-cni/conf.d \
+          HORCRUX_DATABASE_URL="sqlite:///tmp/journey-data/horcrux.db" \
+          HORCRUX_UI_DIR="$PWD/horcrux-api/horcrux-ui/dist" \
+          HORCRUX_SSL_DIR=/tmp/journey-data/ssl \
+          DOCKER_HOST=unix:///tmp/ux-crawl-no-docker.sock \
+          ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \
+          nohup ./target/debug/horcrux-api > /tmp/horcrux-journey.log 2>&1 &
+          echo $! > /tmp/horcrux-journey.pid
+          for i in $(seq 1 60); do curl -sfk -o /dev/null https://127.0.0.1:8009/api/health && break; sleep 1; done
+          rc=0
+          /tmp/pw/bin/python ci/ux-qa/user_journey.py --report /tmp/user-journey.json --shots /tmp/journey-shots || rc=$?
+          kill "$(cat /tmp/horcrux-journey.pid)" 2>/dev/null || true
+          if [ "$rc" != 0 ]; then tail -40 /tmp/horcrux-journey.log; fi
+          exit $rc
+
       - name: Record host AppArmor sysctls (privileged e2e containers must not change them)
         # kernel.apparmor_restrict_unprivileged_{userns,unconfined} are host-global; the
         # privileged incus/k3s/lxc siblings are hardened (ci/sysctl-guard.sh) and the
