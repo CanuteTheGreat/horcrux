@@ -6,7 +6,12 @@ use leptos::*;
 #[component]
 pub fn IsoLibraryPage() -> impl IntoView {
     let (isos, set_isos) = create_signal(Vec::<IsoFile>::new());
+    // `error` belongs to the last action (download/delete) and stays until the
+    // next action; the list refresh that follows every action must not wipe it,
+    // or a refused download flashes for a frame and the page looks silent.
+    // A failed list refresh has its own `load_error`.
     let (error, set_error) = create_signal(None::<String>);
+    let (load_error, set_load_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
     let (url, set_url) = create_signal(String::new());
     let (filename, set_filename) = create_signal(String::new());
@@ -17,9 +22,9 @@ pub fn IsoLibraryPage() -> impl IntoView {
             match api::list_isos().await {
                 Ok(l) => {
                     set_isos.set(l);
-                    set_error.set(None);
+                    set_load_error.set(None);
                 }
-                Err(e) => set_error.set(Some(e.message)),
+                Err(e) => set_load_error.set(Some(e.message)),
             }
             if let Ok(o) = api::get_vm_host_options().await {
                 set_iso_dir.set(o.iso_dir);
@@ -55,6 +60,8 @@ pub fn IsoLibraryPage() -> impl IntoView {
     let download = move |ev: ev::SubmitEvent| {
         ev.prevent_default();
         let (u, f) = (url.get(), filename.get());
+        set_error.set(None);
+        set_notice.set(None);
         spawn_local(async move {
             let f = f.trim().to_string();
             match api::download_iso(u.trim(), (!f.is_empty()).then_some(f.as_str())).await {
@@ -77,6 +84,8 @@ pub fn IsoLibraryPage() -> impl IntoView {
         {
             return;
         }
+        set_error.set(None);
+        set_notice.set(None);
         spawn_local(async move {
             match api::delete_iso(&name).await {
                 Ok(()) => set_notice.set(Some(format!("{name} deleted"))),
@@ -98,6 +107,7 @@ pub fn IsoLibraryPage() -> impl IntoView {
             </p>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="iso-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="iso-error">{e}</div> })}
+            {move || load_error.get().map(|e| view! { <div class="alert alert-error" id="iso-load-error">{e}</div> })}
 
             <form id="iso-download-form" class="form-row" on:submit=download>
                 <input id="iso-url" type="url" required placeholder="https://.../installer.iso" style="flex: 3"

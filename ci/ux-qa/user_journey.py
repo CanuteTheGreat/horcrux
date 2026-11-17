@@ -58,6 +58,9 @@ state = {"bridge": True}
 findings = []   # {id, sev, detail, step}
 steps = []      # {n, id, title, shot, ok, console_errors, notes}
 _console = []   # console errors seen since the step started
+# 424 = the node lacks a tool/runtime (structured NodeLacks answer the UI turns into an empty state, as ux_crawl.py
+# treats it): not a page error, but reported as a warning so the review sees what the test host was missing.
+_unavailable = []
 
 
 def finding(step, check, detail, sev="fail"):
@@ -169,6 +172,7 @@ def step(j, sid, title):
     class Ctx:
         def __enter__(self_):
             _console.clear()
+            _unavailable.clear()
             self_.f0 = len(findings)
             self_.t = time.time()
             print(f"== {sid}: {title}", flush=True)
@@ -184,7 +188,10 @@ def step(j, sid, title):
             errs = list(dict.fromkeys(_console))
             if errs:
                 finding(sid, "js-console-errors", "; ".join(errs)[:380])
-            steps.append({"id": sid, "title": title, "ok": len(findings) == self_.f0, "console_errors": errs})
+            na = list(dict.fromkeys(_unavailable))
+            if na:
+                finding(sid, "node-lacks", "424 (feature unavailable on this node): " + "; ".join(na)[:340], sev="warn")
+            steps.append({"id": sid, "title": title, "ok": not any(f["sev"] == "fail" for f in findings[self_.f0:]), "console_errors": errs})
             return True   # a failing step never stops the journey
     return Ctx()
 
@@ -223,7 +230,7 @@ def main():
         page = ctx.new_page()
         # "Failed to load resource" console lines carry no URL: failed API calls are recorded from the response instead
         page.on("console", lambda m: _console.append(f"console.{m.type}: {m.text[:160]}") if m.type == "error" and "favicon" not in m.text and "Failed to load resource" not in m.text else None)
-        page.on("response", lambda r: _console.append(f"http {r.status} {r.request.method} {r.url.replace(BASE, '')[:90]}")
+        page.on("response", lambda r: (_unavailable if r.status == 424 else _console).append(f"http {r.status} {r.request.method} {r.url.replace(BASE, '')[:90]}")
                 if r.status >= 400 and "/api/" in r.url and not (r.status == 401 and "/api/auth/" in r.url) and not (r.status == 403 and r.url.endswith("/api/storage/isos/download")) and "favicon" not in r.url else None)
         page.on("pageerror", lambda e: _console.append(f"pageerror: {str(e)[:160]}"))
         j = Journey(page, a.shots)

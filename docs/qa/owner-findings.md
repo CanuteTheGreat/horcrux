@@ -30,6 +30,7 @@ fails when a row names no check or a check file that does not exist. `pending:<b
 | 19 | 2026-11-16 | The host never installed updates and nothing in the UI said so | a node the UI presents as healthy while it is out of date | `journey:j8-settings:dashboard-mentions-updates`, `journey:j8-settings:updates-actionable` |
 | 20 | 2026-11-16 | GNOME top bar showed the nm-applet icon and Nextcloud's tray icon was grey (session environment missing from gnome-session-openrc) | desktop session environment not exported to autostarted apps | `build/live-iso/common/tests/test_sni_chromium.py`, `build/live-iso/common/tests/sni_headless_gate.sh` |
 | 21 | 2026-11-16 | (process) These were all findable by a first-time user's walk-through, but QA only checked pages and single features, and the UX review lane was wedged for 4 days | no end-to-end first-user journey; QA lane silently stuck | `ci/ux-qa/user_journey.py` (journey lane per push in ui-e2e), `cron:horcrux-ux-review` (per-build vision review of the journey screenshots; gate state machine can no longer wedge) |
+| 22 | 2026-11-16 | (found by the UX lane) ISO Library: a refused download URL showed no message; the error was wiped by the list refresh that follows every action | an action's error cleared by a background refresh, so the page looks silent | `journey:j2-iso-library:download-gives-feedback`, `horcrux-api/horcrux-ui/src/pages/iso_library.rs` |
 
 ## How the loop runs
 
