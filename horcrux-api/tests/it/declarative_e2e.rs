@@ -443,9 +443,7 @@ async fn desired_state_drift_history_rollback() {
     assert!(s == 200 || s == 201);
 
     // a bigger apply: new VM + memory change
-    let spec3 = format!(
-        "version: 1\nvms:\n  - {{name: dd-a, memory: 192, cpus: 1, power: stopped}}\n  - {{name: dd-b, memory: 64, cpus: 1, power: stopped}}\n"
-    );
+    let spec3 = "version: 1\nvms:\n  - {name: dd-a, memory: 192, cpus: 1, power: stopped}\n  - {name: dd-b, memory: 64, cpus: 1, power: stopped}\n";
     let (_, v) = api
         .post(
             "/declarative/apply",

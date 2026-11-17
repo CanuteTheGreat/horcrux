@@ -1,6 +1,6 @@
 # Declarative configuration: stored desired state, drift, GitOps, history
 
-Horcrux can describe a node in a spec file (storage pools, SDN, VMs; more kinds are being added), compare it
+Horcrux can describe a node in a spec file (storage pools, SDN, VMs, containers, volumes, users/groups/roles/ACL, firewall, backup jobs, HA groups), compare it
 with the live node and apply only the difference. This page is the operator guide for the parts built on
 top of `plan`/`apply`: the stored **desired spec**, **drift** detection, **GitOps** (follow a git repository),
 and the **apply history** with **rollback**. The spec format itself and the engine's rules are in
@@ -147,6 +147,22 @@ for the latest apply) undoes apply `<id>`:
 Limits worth knowing: a rollback restores configuration, never data (a deleted VM's disk, an overwritten
 volume); sections a kind doesn't expose as lists are restored but not pruned; with GitOps in `auto` mode the
 next sync re-applies the repository head, so roll back by reverting the commit in git.
+
+## Resource kinds and who is applying
+
+The kinds beyond pools, SDN and VMs (containers, volumes, users, groups, roles, ACL, firewall, backup jobs, HA
+groups) are described in `docs/design/declarative-config.md`, with an example in
+`docs/examples/declarative-kinds.yaml`. Two things matter for the features on this page:
+
+* A spec holds **no secrets**: a user's password is an argon2 hash or a `password_ref` (`file:`, `env:`,
+  `vault:`), and `horcrux export` leaves hashes out unless you ask for them (`--include-hashes`, administrators only).
+* Changing **users, groups, roles and ACL** needs an administrator (`Permissions.Modify` on `/`) as the caller.
+  Applies started by a person - `apply`, `desired/apply`, a GitOps `approve`, a rollback - carry that person.
+  Work with no caller (the drift timer, an `auto` GitOps sync running in the background) reads these sections
+  but reports "needs an authenticated administrator" for a change to them; use `approve` mode for specs that
+  manage access control.
+* The firewall refuses a plan that would cut off the API port (`allow_lockout: true` overrides it), and the
+  access kinds refuse to leave the node without an enabled administrator or to delete the calling user.
 
 ## API and CLI reference
 
