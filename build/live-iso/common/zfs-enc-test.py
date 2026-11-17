@@ -173,8 +173,24 @@ class ZRun(qt.Runner):
             time.sleep(4)
         return False
 
-    def sh(self, cmd, timeout=60):
-        return qt.ssh(qt.FWD_SSH, self.key, cmd, timeout=timeout)
+    def sh(self, cmd, timeout=None):
+        # the default scales with the emulation factor: under TCG a command that takes 20 s on KVM (systemctl list-unit-files, qfile) needs minutes
+        return qt.ssh(qt.FWD_SSH, self.key, cmd, timeout=int(qt.T(60)) if timeout is None else timeout)
+
+    def sh_until(self, cmd, ok, label, tries=4, pause=20):
+        """`sh` for a status query that can answer empty or late while an emulated guest is still busy (systemd's manager answers `systemctl list-unit-files`
+        / `--failed` over D-Bus, whose 25 s call timeout expires under TCG load: runs 3161/3281 got an empty enabled list and `timeout` from a guest whose
+        services were fine). Re-ask up to `tries` times until `ok(output)`; the caller asserts on the LAST answer, unchanged. A miss prints the manager state."""
+        rc, o = self.sh(cmd)
+        for _ in range(1, tries):
+            if ok(o):
+                break
+            time.sleep(qt.T(pause))
+            rc, o = self.sh(cmd)
+        if not ok(o):
+            _r, d = self.sh("systemctl is-system-running 2>&1; cat /proc/loadavg; systemctl list-unit-files --state=enabled --no-legend --plain 2>&1 | head -3", timeout=int(qt.T(90)))
+            print(f"[DIAG] {label}: no usable answer after {tries} tries; guest: " + re.sub(r"\s+", " ", d).strip()[:300], flush=True)
+        return rc, o
 
     TRANSPORT_LOST = re.compile(r"closed by remote host|Connection reset|Broken pipe|Connection refused|kex_exchange_identification|Connection timed out", re.I)
 
@@ -530,14 +546,18 @@ class ZRun(qt.Runner):
                   f"{len(merges)} packages in the update list; display packages in it: {gui[:6] or 'none'}; " + re.sub(r"\s+", " ", o)[-160:])
 
     def core_checks(self):
-        rc, o = self.sh("for p in " + " ".join(self.CORE_PKGS) + "; do qlist -I $p || echo MISSING:$p; done; cat /usr/share/horcrux/core-release; horcrux-time-config check; "
-                        "qfile -q /usr/sbin/horcrux-time-config /usr/libexec/horcrux-timesync /usr/libexec/horcrux-firstboot /etc/init.d/horcrux-timesync /etc/init.d/horcrux-firstboot "
-                        "/etc/portage/package.use/horcrux-core /usr/sbin/ctg-restic && echo OWNED; "
-                        "{ " + init_cmds.enabled_list_sh() + "; } | grep -E 'chronyd|horcrux-timesync|horcrux-firstboot|cronie|horcrux-api|sshd' | tr -s ' ' | tr '\\n' ';'")
-        self.step("core-packages-installed-package-owned-and-enabled", "MISSING" not in o and "OWNED" in o and "OK horcrux time config" in o and "horcrux-core" in o
-                  and all(x in o for x in ("chronyd", "horcrux-timesync", "horcrux-firstboot", "horcrux-api")), re.sub(r"\s+", " ", o).strip()[:400])
-        rc, o = self.sh(init_cmds.failed_sh() + "; " + init_cmds.stopped_sh("chronyd|horcrux") + "; echo END; " + init_cmds.running_list_sh("chronyd|horcrux-timesync|horcrux-api|sshd"))
-        self.step("core-services-running-none-crashed", o.split("END")[0].strip() == "" and "chronyd" in o and "horcrux-timesync" in o and "horcrux-api" in o, re.sub(r"\s+", " ", o).strip()[:300])
+        core_cmd = ("for p in " + " ".join(self.CORE_PKGS) + "; do qlist -I $p || echo MISSING:$p; done; cat /usr/share/horcrux/core-release; horcrux-time-config check; "
+                    "qfile -q /usr/sbin/horcrux-time-config /usr/libexec/horcrux-timesync /usr/libexec/horcrux-firstboot /etc/init.d/horcrux-timesync /etc/init.d/horcrux-firstboot "
+                    "/etc/portage/package.use/horcrux-core /usr/sbin/ctg-restic && echo OWNED; "
+                    "{ " + init_cmds.enabled_list_sh() + "; } | grep -E 'chronyd|horcrux-timesync|horcrux-firstboot|cronie|horcrux-api|sshd' | tr -s ' ' | tr '\\n' ';'")
+        pk_ok = lambda o: ("MISSING" not in o and "OWNED" in o and "OK horcrux time config" in o and "horcrux-core" in o
+                           and all(x in o for x in ("chronyd", "horcrux-timesync", "horcrux-firstboot", "horcrux-api")))
+        rc, o = self.sh_until(core_cmd, pk_ok, "core-packages")
+        self.step("core-packages-installed-package-owned-and-enabled", pk_ok(o), re.sub(r"\s+", " ", o).strip()[:400])
+        svc_cmd = init_cmds.failed_sh() + "; " + init_cmds.stopped_sh("chronyd|horcrux") + "; echo END; " + init_cmds.running_list_sh("chronyd|horcrux-timesync|horcrux-api|sshd")
+        svc_ok = lambda o: o.split("END")[0].strip() == "" and "chronyd" in o and "horcrux-timesync" in o and "horcrux-api" in o
+        rc, o = self.sh_until(svc_cmd, svc_ok, "core-services")
+        self.step("core-services-running-none-crashed", svc_ok(o), re.sub(r"\s+", " ", o).strip()[:300])
         rc, o = self.sh("/usr/sbin/ctg-restic-cron backup; echo BACKUP-RC=$?; ctg-restic content; echo CONTENT-RC=$?; ls /etc/cron.d/horcrux-backup; pgrep -x crond >/dev/null && echo CRONDUP; "
                         "grep -c canutethegreat /etc/ctg-backup/paths /etc/ctg-backup/excludes; ls /etc/ctg-backup/required 2>&1 | head -1")
         self.step("backup-in-core-generic-not-provisioned-no-owner-paths", "BACKUP-RC=0" in o and "CONTENT-RC=0" in o and "/etc/cron.d/horcrux-backup" in o and "CRONDUP" in o
@@ -890,9 +910,11 @@ class ZRun(qt.Runner):
     def clock_checks(self):
         """regression gate for gringotts 2026-11-03 (RTC months off, chrony without sources, no clock hook): the dispatcher hook is package-owned,
         chronyd steps (makestep) and is enabled, and a VM booted with a months-off RTC ends up with the right time after the network is up"""
-        rc, o = self.sh("f=/etc/NetworkManager/dispatcher.d/20-horcrux-chrony; test -x $f && echo HOOK; qfile -q $f && echo OWNED; qlist -I net-misc/horcrux-chrony-nm; "
+        clk_cmd = ("f=/etc/NetworkManager/dispatcher.d/20-horcrux-chrony; test -x $f && echo HOOK; qfile -q $f && echo OWNED; qlist -I net-misc/horcrux-chrony-nm; "
                         "grep -h '^makestep' /etc/chrony/chrony.conf /etc/chrony.conf 2>/dev/null | head -2; grep -hE '^rtcsync' /etc/chrony/chrony.conf 2>/dev/null; "
                         "{ " + init_cmds.enabled_list_sh() + "; } | sed -E 's/^[[:space:]]+//' | grep -c '^chronyd '; grep -h '^clock=' /etc/conf.d/hwclock; test -f /usr/lib/live-installer/liveinst/rtc.py && echo RTCPY")
+        clk_ok = lambda o: re.search(r"(?m)^1$", o) is not None      # an empty enabled list under TCG load reads as 0 chronyd entries
+        rc, o = self.sh_until(clk_cmd, clk_ok, "clock-checks")
         self.step("chrony-nm-dispatcher-hook-installed-and-package-owned", "HOOK" in o and "OWNED" in o and "horcrux-chrony-nm" in o, re.sub(r"\s+", " ", o).strip()[:300])
         self.step("chronyd-enabled-makestep-rtcsync-clock-utc", "makestep" in o and "rtcsync" in o and re.search(r"(?m)^1$", o) is not None and 'clock="UTC"' in o and "RTCPY" in o, re.sub(r"\s+", " ", o).strip()[:300])
         rc, o = self.sh("date -u +%s")

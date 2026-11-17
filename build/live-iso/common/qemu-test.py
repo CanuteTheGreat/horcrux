@@ -1978,11 +1978,15 @@ class Runner:
         vm.send("5\r")
         vm.expect_raw("Power off", 20)
         vm.send("y\r")
-        end = time.time() + T(90)
+        # a systemd shutdown of a ZFS-root guest (stop jobs, pool export, PSCI off) runs several times longer under TCG than the OpenRC one:
+        # runs 3161/3281 (aarch64 TCG) still had QEMU alive 270 s after the 'y'. Wait T(300) before judging; the assertion is unchanged and a
+        # miss prints where the shutdown stood.
+        end = time.time() + T(300)
         while vm.alive() and time.time() < end:
             time.sleep(2)
         self.menu_off = True
-        self.step("console-menu-poweroff", not vm.alive(), "option 5 powered the VM off")
+        off = not vm.alive()
+        self.step("console-menu-poweroff", off, "option 5 powered the VM off" + ("" if off else f" (still running {int(T(300))} s after confirming)" + serial_tail(vm, 40)))
 
     def vga_console_check(self, vm):
         """VGA-only run (no serial): log in on tty1 by keyboard; the console menu must be what runs there."""
