@@ -56,7 +56,7 @@ class Journey(unittest.TestCase):
         self.assertEqual(uj.server_argv("x y", prefix=["docker", "exec", "-i", "c"]), ["docker", "exec", "-i", "c", "sh", "-c", "x y"])
 
     def test_page_checks_are_js_functions(self):
-        for js in (uj.REDUNDANT_EMPTY_JS, uj.H_OVERFLOW_JS):
+        for js in (uj.REDUNDANT_EMPTY_JS, uj.H_OVERFLOW_JS, uj.UNSTYLED_TABS_JS):
             self.assertTrue(js.lstrip().startswith("() =>"), js[:40])
         self.assertIn(r"/\babove\b/i", uj.REDUNDANT_EMPTY_JS)
 

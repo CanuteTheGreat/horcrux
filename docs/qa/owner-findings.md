@@ -36,6 +36,7 @@ fails when a row names no check or a check file that does not exist. `pending:<b
 | 25 | 2026-11-17 | (journey lane) Storage Pools page unstyled: totals and the pool card as stacked run-together text ("417.00 GB used84.4%494.00 GB total", "ZFSSnapshots"), the card all green | a page whose classes have no CSS rules | `journey:j6-storage:storage-styled` |
 | 26 | 2026-11-17 | (journey lane) Host Bridges and DHCP & DNS empty states said "Create one above." next to a button that repeated the form above (finding 18's class on two more pages) | redundant control in an empty state | `ci/ux-qa/user_journey.py` (empty-state-no-redundant-button on every J6 page) |
 | 27 | 2026-11-17 | (process) The journey's NIC/bridge path never ran in CI (the job container has no iproute2/CAP_NET_ADMIN) while its checks reported success, and the review lane's journey logged in with a placeholder password and crashed without a report | a check that silently skips the thing it claims to test | `journey:j3-create-vm:nic-path-untested` (warns), `ci/ux-qa/test_user_journey.py` |
+| 28 | 2026-11-17 | (journey lane) System Configuration tabs (also Notifications, Alert Center) rendered as tiny native buttons run together: "GeneralNetworkDNSTime & NTP" | a page whose tab classes have no CSS rules | `ci/ux-qa/user_journey.py` (tabs-styled on every J8 page), `ci/ux-qa/ux_crawl.py` |
 
 ## How the loop runs
 

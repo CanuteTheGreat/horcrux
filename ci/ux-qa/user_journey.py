@@ -224,6 +224,9 @@ def vm_by_name(name):
 REDUNDANT_EMPTY_JS = """() => [...document.querySelectorAll('.no-data, .empty-state')]
   .filter(e => e.offsetParent !== null && /\\babove\\b/i.test(e.innerText) && e.querySelector('button'))
   .map(e => e.innerText.trim().slice(0, 120))"""
+# Tab strips that render as plain run-together buttons (no CSS for the page's tab classes).
+UNSTYLED_TABS_JS = """() => [...document.querySelectorAll('.tab-buttons, .tabs, .dashboard-tabs')]
+  .filter(e => e.offsetParent !== null && getComputedStyle(e).display !== 'flex').map(e => e.className)"""
 # The page scrolls sideways (owner rule: never).
 H_OVERFLOW_JS = "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
 
@@ -514,6 +517,8 @@ def main():
                 j.shot(name)
                 t = j.text()
                 expect("j8-settings", f"{name}-not-blank", len(t) > 150, f"{path} is nearly blank")
+                bad_tabs = page.evaluate(UNSTYLED_TABS_JS)
+                expect("j8-settings", f"{name}-tabs-styled", not bad_tabs, f"{path}: tab strip is unstyled ({bad_tabs})")
                 if name == "updates":
                     expect("j8-settings", "updates-actionable", re.search(r"check|update|upgrade|refresh", t, re.I) is not None, "the updates page offers no way to check for / install updates")
             j.go("/")
