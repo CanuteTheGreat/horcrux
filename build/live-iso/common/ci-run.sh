@@ -17,7 +17,8 @@ ARCH=${ARCH:-$HOST_ARCH}; export ARCH
 VARIANT=${VARIANT:-}; export VARIANT
 . "$HERE/image-name.sh"; export INIT=$IMG_INIT; VPFX="$IMG-"
 . "$HERE/arch/$ARCH.env" || { echo "::error::unsupported ARCH=$ARCH"; exit 1; }
-OUT=${OUT:-$PWD/../../../iso-out}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
+# per-job output dir: the openrc/systemd aarch64 (and x86_64) live-iso jobs can share one runner workspace path; a shared iso-out made one job rm -rf the other's evidence and qemu fail "Failed to get write lock" on target.qcow2
+OUT=${OUT:-$PWD/../../../iso-out-$IMG-$ARCH}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 EVI=$OUT/evidence; rm -rf "$EVI"; mkdir -p "$EVI"
 T0=$(date +%s); sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
 result=pass; failed_step=""; summary=""

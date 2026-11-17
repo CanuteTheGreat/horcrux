@@ -40,4 +40,4 @@ __pycache__/
 
 # live ISO builder outputs
 build/live-iso/project/overlay/usr/bin/
-iso-out/
+iso-out*/
