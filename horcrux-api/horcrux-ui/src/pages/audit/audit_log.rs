@@ -158,7 +158,7 @@ pub fn AuditLogPage() -> impl IntoView {
                 </select>
                 <button id="audit-apply" class="btn btn-primary" on:click=move |_| { page.set(0); reload(); }>"Search"</button>
             </div>
-            <p>{move || format!("{} matching events", total.get())}</p>
+            <p>{move || { let n = total.get(); format!("{} matching event{}", n, if n == 1 { "" } else { "s" }) }}</p>
             <table class="vm-table" id="audit-table">
                 <thead>
                     <tr><th>"Time"</th><th>"Event"</th><th>"Severity"</th><th>"User"</th><th>"From"</th><th>"Resource"</th><th>"Action"</th><th>"Result"</th></tr>
@@ -187,7 +187,7 @@ pub fn AuditLogPage() -> impl IntoView {
             <div class="form-row">
                 <button class="btn btn-sm" disabled=move || page.get() == 0 || view_mode.get() != "all"
                     on:click=move |_| { page.update(|p| *p = p.saturating_sub(1)); reload(); }>"Newer"</button>
-                <button class="btn btn-sm" disabled=move || (page.get() + 1) * PAGE >= total.get() || view_mode.get() != "all"
+                <button class="btn btn-sm" disabled=move || { (page.get() + 1) * PAGE >= total.get() || view_mode.get() != "all" }
                     on:click=move |_| { page.update(|p| *p += 1); reload(); }>"Older"</button>
             </div>
         </div>

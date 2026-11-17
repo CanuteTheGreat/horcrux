@@ -1,4 +1,4 @@
-"""GNOME on OpenRC: session-scoped user services (gnome-base/gnome-session-openrc-50.0::horcrux) and ssh logins without OpenRC user services
+"""GNOME on OpenRC: session-scoped user services (gnome-base/gnome-session-openrc-50.0-r1::horcrux) and ssh logins without OpenRC user services
 (sys-auth/horcrux-ssh-pam, pulled by sys-apps/horcrux-core on every edition). Static checks of the repo tree; the behaviour itself is proven by
 gnome-session-lifecycle-test.py on an installed GNOME VM. Skipped in the vendored copy of common/ in Patronus."""
 import os
@@ -133,6 +133,34 @@ class SessionScoping(unittest.TestCase):
             for kv in ("XDG_CURRENT_DESKTOP=GNOME", "XDG_SESSION_TYPE=wayland", "XDG_SESSION_DESKTOP=gnome", "DESKTOP_SESSION=gnome",
                        "WAYLAND_DISPLAY=wayland-0"):
                 self.assertIn(kv, args)
+
+    def test_service_wrapper_loads_the_session_identity_before_gnome_session_service(self):
+        p4 = (GSO / "files" / "0001-horcrux-session-scoped-user-services.patch").read_text()
+        self.assertIn("cmd_session_env", p4)
+        self.assertIn('eval "$(gnome-session-openrc-helper session-env', p4)
+        # run the real subcommand: leader env in, export lines out
+        lines, on = [], False
+        for line in p4.splitlines():
+            if line.startswith("+++ b/data/gnome-session-openrc-helper"):
+                on = True
+                continue
+            if on and line.startswith("diff --git"):
+                break
+            if on and line.startswith("+") and not line.startswith("+#"):
+                lines.append(line[1:])
+        helper = "\n".join(l for l in lines if not l.startswith("PATH=")) + "\n"
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "helper").write_text(helper)
+            sleeper = subprocess.Popen(["sleep", "20"], env={"XDG_CURRENT_DESKTOP": "GNOME", "DESKTOP_SESSION": "gnome", "XDG_SESSION_TYPE": "tty"})
+            try:
+                Path(d, "gnome-session-leader.pid").write_text(str(sleeper.pid))
+                r = subprocess.run(["sh", str(Path(d) / "helper"), "session-env"], capture_output=True, text=True, timeout=30,
+                                   env={"PATH": os.environ["PATH"], "XDG_RUNTIME_DIR": d})
+            finally:
+                sleeper.kill()
+            self.assertEqual(r.returncode, 0, r.stderr)
+            for kv in ("XDG_CURRENT_DESKTOP='GNOME'", "XDG_SESSION_DESKTOP='gnome'", "DESKTOP_SESSION='gnome'", "XDG_SESSION_TYPE='wayland'"):
+                self.assertIn(f"export {kv}", r.stdout)
 
     def test_session_env_portal_restart_matches_the_real_process(self):
         # the kernel cuts comm to 15 characters ("xdg-desktop-por"): `pgrep -x xdg-desktop-portal` can never match

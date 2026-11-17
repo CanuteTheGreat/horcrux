@@ -5,7 +5,7 @@ Why: on OpenRC, gnome-session-openrc runs gnome-shell & co. as OpenRC USER servi
 pam_openrc) is shared by every login of the user and only stops with the LAST one. An ssh login of the desktop user (agents, scripts) kept it
 alive across a GNOME logout, supervise-daemon respawned gnome-shell into the closed session, that shell held the seat, and the next login got
 mutter "Failed to take control of the session: ... EBUSY" and no mouse/keyboard (owner-ws, 2026-11-13). The fix lives in
-gnome-base/gnome-session-openrc-50.0::horcrux (session-scoped user services) plus sys-auth/horcrux-ssh-pam (ssh logins start no OpenRC user
+gnome-base/gnome-session-openrc-50.0-r1::horcrux (session-scoped user services) plus sys-auth/horcrux-ssh-pam (ssh logins start no OpenRC user
 services). This test reproduces the owner's sequence on an installed GNOME VM:
 
     cycle N:  GNOME login at the greeter (QMP key events)  ->  20 parallel `ssh USER@vm true` + one ssh session of USER held open
@@ -18,7 +18,10 @@ Per cycle it asserts:
   * the input devices (/dev/input/event*) are open in the active session's compositor and in no other gnome-shell of the user;
   * no duplicated user supervisors (two `supervise-daemon dbus` of the user, two `supervise-daemon user.USER`, ...);
   * screen sharing works: xdg-desktop-portal answers org.freedesktop.portal.ScreenCast AvailableSourceTypes with a non-zero value (it only
-    has the GNOME backend when the session's XDG_CURRENT_DESKTOP & co. reached the user bus's D-Bus activation environment).
+    has the GNOME backend when the session's XDG_CURRENT_DESKTOP & co. reached the user bus's D-Bus activation environment);
+  * autostarted apps get the session's desktop identity: an autostart probe (written by the test) has XDG_CURRENT_DESKTOP=GNOME-ish,
+    XDG_SESSION_DESKTOP and DESKTOP_SESSION in its environment, an entry with NotShowIn=GNOME does NOT start (nm-applet's case), and
+    neither does an installed /etc/xdg/autostart/nm-applet.desktop.
 
 Attach mode only: the VM must already run an installed GNOME edition (e.g. installed with qemu-test.py --flow auto and
 tests/data/gnome-session-answers.toml), reachable over ssh as root with --key, with a QMP socket for key events. The test sets the login user's
@@ -178,6 +181,13 @@ class Run:
         vm.sh(f"install -d -m700 -o {a.user} -g {a.user} ~{a.user}/.ssh; grep -qxF '{pub}' ~{a.user}/.ssh/authorized_keys 2>/dev/null || "
               f"echo '{pub}' >> ~{a.user}/.ssh/authorized_keys; chown {a.user}: ~{a.user}/.ssh/authorized_keys; chmod 600 ~{a.user}/.ssh/authorized_keys")
         self.uid = uid_of(vm, a.user)
+        # autostart probes: the first dumps its environment, the second must never start in GNOME (NotShowIn=GNOME, like nm-applet)
+        probes = {"gsl-probe": "env > /tmp/gsl-probe.env; exec sleep 100001", "gsl-notshowin": "touch /tmp/gsl-notshowin.ran; exec sleep 100001"}
+        vm.sh(f"install -d -o {a.user} -g {a.user} ~{a.user}/.config ~{a.user}/.config/autostart")
+        for name, cmd in probes.items():
+            extra = "NotShowIn=KDE;GNOME;\n" if "notshowin" in name else ""
+            vm.sh(f"cat > ~{a.user}/.config/autostart/{name}.desktop; chown {a.user}: ~{a.user}/.config/autostart/{name}.desktop",
+                  inp=f"[Desktop Entry]\nType=Application\nName={name}\n{extra}Exec=sh -c '{cmd}'\n")
         self.versions = vm.out("qlist -Iv gnome-base/gnome-session-openrc sys-auth/horcrux-ssh-pam sys-apps/openrc gnome-base/gdm 2>/dev/null; "
                                "sshd -T 2>/dev/null | grep -i '^pamservicename'")
         print("versions:\n  " + self.versions.replace("\n", "\n  "), flush=True)
@@ -256,7 +266,7 @@ class Run:
     def cycle(self, n):
         vm, a = self.vm, self.a
         marker = f"GSLTEST-{os.getpid()}-{n}"
-        vm.sh(f"logger -t gsl-test {marker}")
+        vm.sh(f"logger -t gsl-test {marker}; rm -f /tmp/gsl-probe.env /tmp/gsl-notshowin.ran; pkill -f 'sleep 10000[1]' || true")
         sid = self.login(n)
         if not sid:
             return
@@ -307,6 +317,25 @@ class Run:
         # activation environment (owner-ws 2026-11-13: no ScreenCast interface, OBS/browser screen sharing broken)
         cast = self.wait(lambda: self.screencast_types() or None, 40, step=4)
         self.check(n, "portal-screencast", bool(cast), f"org.freedesktop.portal.ScreenCast AvailableSourceTypes={cast or self.last_cast}")
+        self.verify_autostart_env(n)
+
+    def verify_autostart_env(self, n):
+        vm = self.vm
+        env = self.wait(lambda: vm.out("cat /tmp/gsl-probe.env 2>/dev/null"), 40, step=3) or ""
+        kv = dict(l.split("=", 1) for l in env.splitlines() if "=" in l)
+        cur = kv.get("XDG_CURRENT_DESKTOP", "")
+        self.check(n, "autostart-xdg-current-desktop", "GNOME" in cur.split(":"), f"autostarted app sees XDG_CURRENT_DESKTOP={cur!r}")
+        self.check(n, "autostart-xdg-session-desktop", bool(kv.get("XDG_SESSION_DESKTOP")) and bool(kv.get("DESKTOP_SESSION")),
+                   f"XDG_SESSION_DESKTOP={kv.get('XDG_SESSION_DESKTOP')!r} DESKTOP_SESSION={kv.get('DESKTOP_SESSION')!r}")
+        ran = vm.out("test -e /tmp/gsl-notshowin.ran && echo yes || echo no")
+        self.check(n, "autostart-notshowin-gnome-honoured", ran == "no", f"NotShowIn=GNOME probe started: {ran}")
+        nm = vm.out(f"test -e /etc/xdg/autostart/nm-applet.desktop && {{ pgrep -u {self.uid} -x nm-applet || echo none; }} || echo not-installed")
+        self.check(n, "nm-applet-not-autostarted", nm in ("none", "not-installed"), f"nm-applet: {nm}")
+        # gnome-session-service itself (the parent of everything it autostarts) carries the identity too
+        # (the wrapper script shares the 15-character comm "gnome-session-s": look at the real binary, whose argv[0] is not the wrapper)
+        gss = vm.out(f"for p in $(pgrep -u {self.uid} -x gnome-session-s); do tr '\\0' ' ' </proc/$p/cmdline | grep -q wrapper && continue; "
+                     f"tr '\\0' '\\n' </proc/$p/environ | grep -c '^XDG_CURRENT_DESKTOP=' ; done | head -n1")
+        self.check(n, "gnome-session-service-env", gss == "1", f"gnome-session-service has XDG_CURRENT_DESKTOP in its environ: {gss or 'process not found'}")
 
     def screencast_types(self):
         o = self.vm.out(f"su - {self.a.user} -c 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{self.uid}/bus timeout 20 gdbus call --session "

@@ -7,7 +7,7 @@ One deterministic, no-LLM check for the classes of defect the owner kept finding
   blank             page body empty after load
   http-5xx          an API request answered 5xx while the page loaded
   not-found         the page itself says 404 / not found
-  bad-text          'undefined', 'NaN', '[object Object]', 'missing field', 'panicked' printed to the user
+  bad-text          'undefined', 'NaN', '[object Object]', 'missing field', 'panicked' printed to the user (also raw Rust such as `.get() ||` leaked by a `>` inside an unbraced view! attribute)
   private-text      a private URL / private host / owner machine name visible in the UI
   internal-name     build-internal vocabulary shown to users (see forbidden_names in the config)
   overflow          the page scrolls sideways (fail at every width)
@@ -244,7 +244,7 @@ def main():
     forbidden = [re.compile(p, re.I) for p in cfg["forbidden_names"]]
     pfail = [re.compile(p, re.I) for p in cfg["private_fail"]]
     pwarn = [re.compile(p, re.I) for p in cfg["private_warn"]]
-    bad_text = re.compile(r"\bundefined\b|\bNaN\b|\[object Object\]|missing field|panicked at|Traceback \(most|RUST_BACKTRACE|\{\{|\}\}", re.I)
+    bad_text = re.compile(r"\bundefined\b|\bNaN\b|\[object Object\]|missing field|panicked at|Traceback \(most|RUST_BACKTRACE|\{\{|\}\}|\.get\(\)\s*(\|\||&&|[<>!=]=)", re.I)
     # A bare "404" is a number too (a 404 GB disk, 404 MiB free on the runner), so only the
     # error-shaped forms count: "HTTP 404", "404 Not Found", "Error 404", a lone "404" line.
     notfound = re.compile(
