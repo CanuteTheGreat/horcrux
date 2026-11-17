@@ -5,3 +5,4 @@ app-admin/rustinion-agent # first-party, released by its own repo's CI
 app-misc/awccd            # first-party daemon (this repo)
 app-misc/*-tools          # first-party helper packages
 net-misc/ctg-ssh-ca       # first-party
+sec-keys/openpgp-keys-errantsolutions # first-party: the release signing public key, versioned by this repo (no upstream)
