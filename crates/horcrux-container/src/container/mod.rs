@@ -915,6 +915,11 @@ impl ContainerManager {
         if let Some(stored) = containers.get_mut(id) {
             stored.status = ContainerStatus::Running;
         }
+        // A reconcile that listed the runtime before this state change must not
+        // write its stale status over it (stop then delete answered "Cannot delete
+        // running container" when the stale listing landed in between).
+        in_flight_touch(&self.creating, id);
+        in_flight_touch(&self.creating, &container.name);
         Ok(ContainerConfig {
             status: ContainerStatus::Running,
             ..container.to_config()
@@ -966,6 +971,11 @@ impl ContainerManager {
         if let Some(stored) = containers.get_mut(id) {
             stored.status = ContainerStatus::Stopped;
         }
+        // A reconcile that listed the runtime before this state change must not
+        // write its stale status over it (stop then delete answered "Cannot delete
+        // running container" when the stale listing landed in between).
+        in_flight_touch(&self.creating, id);
+        in_flight_touch(&self.creating, &container.name);
         Ok(ContainerConfig {
             status: ContainerStatus::Stopped,
             ..container.to_config()
@@ -1052,6 +1062,11 @@ impl ContainerManager {
         if let Some(stored) = containers.get_mut(id) {
             stored.status = ContainerStatus::Paused;
         }
+        // A reconcile that listed the runtime before this state change must not
+        // write its stale status over it (stop then delete answered "Cannot delete
+        // running container" when the stale listing landed in between).
+        in_flight_touch(&self.creating, id);
+        in_flight_touch(&self.creating, &container.name);
         Ok(ContainerConfig {
             status: ContainerStatus::Paused,
             ..container.to_config()
@@ -1089,6 +1104,11 @@ impl ContainerManager {
         if let Some(stored) = containers.get_mut(id) {
             stored.status = ContainerStatus::Running;
         }
+        // A reconcile that listed the runtime before this state change must not
+        // write its stale status over it (stop then delete answered "Cannot delete
+        // running container" when the stale listing landed in between).
+        in_flight_touch(&self.creating, id);
+        in_flight_touch(&self.creating, &container.name);
         Ok(ContainerConfig {
             status: ContainerStatus::Running,
             ..container.to_config()
