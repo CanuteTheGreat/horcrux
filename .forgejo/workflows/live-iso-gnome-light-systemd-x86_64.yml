@@ -22,13 +22,12 @@
 # (the single `live-iso-<project>` group made every run wait for the previous run's SLOWEST job; no image published for 32 h).
 # This file builds ONLY gnome-light-systemd-x86_64. Siblings: see the other live-iso-*.yml. Dispatch inputs: `mode` (daily|dry); `only` is gone.
 # Concurrency: per variant + event + mode + ref. A newer dispatch of the same variant/mode/ref cancels the older one (superseded);
-# the push (daily) and v* tag runs are never cancelled by a dispatch (their group differs), tag groups are per tag.
+# the scheduled daily and v* tag runs are never cancelled by a dispatch (their group differs), tag groups are per tag.
 name: Live ISO (gnome-light-systemd-x86_64)
 
 on:
-  # Event-driven like the OpenRC twin (owner principle: nothing waits for a clock). It was a nightly-only slot, so a green
-  # workflow_dispatch (default mode=dry, never publishes) left the published daily stale while main had image-input commits.
-  # Burst pushes = one build (replace: group below); v* tags build the stable ISO.
+  # Event-driven (2026-11-06): build + test + publish the daily when main changes anything the image is built from
+  # (app source, gentoo/, build/live-iso/); docs/site/branding-only pushes do not build. v* tags still build the stable ISO.
   push:
     branches: [main]
     tags: ['v*']
