@@ -46,6 +46,87 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum DesiredCommands {
+    /// Store a spec file as the desired state
+    Set {
+        /// Spec file (YAML/JSON), or - for stdin
+        #[arg(short, long)]
+        file: String,
+    },
+    /// Print the stored desired spec
+    Get {
+        /// Write to this file instead of stdout
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+    /// Check a spec file and show what it would change, without storing it
+    Validate {
+        #[arg(short, long)]
+        file: String,
+    },
+    /// Apply the stored desired spec now
+    Apply {
+        /// Only print the plan
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove the stored desired spec (stops drift checking)
+    Clear,
+}
+
+#[derive(Subcommand)]
+enum GitopsCommands {
+    /// Show the GitOps configuration, last commit, last sync, last error and pending approvals
+    Status,
+    /// Show the configuration, or set it from a YAML/JSON file
+    Config {
+        /// Config file: url, branch, path, interval_secs, mode (auto|approve), verify_signatures, signing, credentials ...
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+    /// Remove the GitOps configuration
+    Disable,
+    /// Fetch the repository now and apply or queue what changed
+    Sync,
+    /// Apply a pending plan (only if the repository head is still its commit)
+    Approve { hash: String },
+    /// Reject a pending plan; its commit is not queued again
+    Reject {
+        hash: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum HistoryCommands {
+    /// List applies, newest first
+    List {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Show one apply: who, when, source, plan and results
+    Show {
+        id: String,
+        /// Print the spec that was applied
+        #[arg(long)]
+        spec: bool,
+    },
+    /// Roll back an apply (preview with --dry-run)
+    Rollback {
+        id: String,
+        /// Restore the spec of this history entry instead of the one before
+        #[arg(long)]
+        to: Option<String>,
+        /// Also store the restored spec as the desired state
+        #[arg(long)]
+        set_desired: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
     /// Save state on host shutdown / resume on boot (Hyper-V style)
     Power {
@@ -149,17 +230,47 @@ enum Commands {
         #[arg(long)]
         prune: bool,
     },
-    /// Make the node match a declarative spec file
+    /// Make the node match a declarative spec file (or undo the last apply with --rollback)
     Apply {
         /// Spec file (YAML/JSON), or - for stdin
-        #[arg(short, long)]
-        file: String,
+        #[arg(short, long, required_unless_present = "rollback")]
+        file: Option<String>,
         /// Delete resources of managed sections that the spec doesn't list
         #[arg(long)]
         prune: bool,
         /// Only print the plan
         #[arg(long)]
         dry_run: bool,
+        /// Roll back an apply: restore the spec applied before it and remove only what it created
+        #[arg(long, conflicts_with_all = ["file", "prune"])]
+        rollback: bool,
+        /// With --rollback: the history entry to roll back (default: the latest apply)
+        #[arg(long, requires = "rollback")]
+        id: Option<String>,
+        /// With --rollback: restore the spec of this history entry instead of the previous one
+        #[arg(long, requires = "rollback")]
+        to: Option<String>,
+    },
+    /// The stored desired spec the node should follow (drift is measured against it)
+    Desired {
+        #[command(subcommand)]
+        command: DesiredCommands,
+    },
+    /// Show how the node differs from its desired spec (exit 2 = drift)
+    Drift {
+        /// Re-check now instead of showing the last periodic check
+        #[arg(long)]
+        refresh: bool,
+    },
+    /// GitOps: follow a spec file in a git repository
+    Gitops {
+        #[command(subcommand)]
+        command: GitopsCommands,
+    },
+    /// Apply history and rollback
+    History {
+        #[command(subcommand)]
+        command: HistoryCommands,
     },
     /// Dump the node's live state as a declarative spec
     Export {
@@ -1277,7 +1388,76 @@ async fn main() -> Result<()> {
             file,
             prune,
             dry_run,
-        } => commands::declarative::apply(&api_client, &file, prune, dry_run).await?,
+            rollback,
+            id,
+            to,
+        } => {
+            if rollback {
+                commands::declarative::rollback_latest(
+                    &api_client,
+                    id.as_deref(),
+                    to.as_deref(),
+                    dry_run,
+                )
+                .await?
+            } else {
+                let file = file.unwrap_or_default();
+                commands::declarative::apply(&api_client, &file, prune, dry_run).await?
+            }
+        }
+        Commands::Desired { command } => match command {
+            DesiredCommands::Set { file } => {
+                commands::declarative::desired_set(&api_client, &file).await?
+            }
+            DesiredCommands::Get { file } => {
+                commands::declarative::desired_get(&api_client, file.as_deref()).await?
+            }
+            DesiredCommands::Validate { file } => {
+                commands::declarative::desired_validate(&api_client, &file).await?
+            }
+            DesiredCommands::Apply { dry_run } => {
+                commands::declarative::desired_apply(&api_client, dry_run).await?
+            }
+            DesiredCommands::Clear => commands::declarative::desired_clear(&api_client).await?,
+        },
+        Commands::Drift { refresh } => commands::declarative::drift(&api_client, refresh).await?,
+        Commands::Gitops { command } => match command {
+            GitopsCommands::Status => commands::declarative::gitops_status(&api_client).await?,
+            GitopsCommands::Config { file } => {
+                commands::declarative::gitops_config(&api_client, file.as_deref()).await?
+            }
+            GitopsCommands::Disable => commands::declarative::gitops_disable(&api_client).await?,
+            GitopsCommands::Sync => commands::declarative::gitops_sync(&api_client).await?,
+            GitopsCommands::Approve { hash } => {
+                commands::declarative::gitops_approve(&api_client, &hash).await?
+            }
+            GitopsCommands::Reject { hash, reason } => {
+                commands::declarative::gitops_reject(&api_client, &hash, reason.as_deref()).await?
+            }
+        },
+        Commands::History { command } => match command {
+            HistoryCommands::List { limit } => {
+                commands::declarative::history_list(&api_client, limit).await?
+            }
+            HistoryCommands::Show { id, spec } => {
+                commands::declarative::history_show(&api_client, &id, spec).await?
+            }
+            HistoryCommands::Rollback {
+                id,
+                to,
+                set_desired,
+                dry_run,
+            } => {
+                commands::declarative::history_rollback(
+                    &api_client,
+                    &id,
+                    to.as_deref(),
+                    set_desired,
+                    dry_run,
+                )
+                .await?
+            }
+        },
         Commands::Export { file } => {
             commands::declarative::export(&api_client, file.as_deref()).await?
         }

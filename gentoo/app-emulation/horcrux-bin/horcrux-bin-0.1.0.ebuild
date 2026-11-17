@@ -37,15 +37,19 @@ KEYWORDS="amd64 arm64 riscv"
 
 # qemu[zstd]: qcow2 images with zstd compression (libvirt / virt-manager default on some distros) are imported with qemu-img; without
 # USE=zstd qemu-img answers "unknown compression type: 1" and the VM importer cannot read the disk (owner-ws 2026-11-12).
+# GitOps sync (declarative.git) runs the git binary; signature verification uses ssh-keygen (SSH signatures) or gpg (OpenPGP).
 RDEPEND="
 	acct-group/horcrux-admin
 	acct-group/kvm
 	app-arch/zstd
+	app-crypt/gnupg
 	app-emulation/libvirt[qemu]
 	app-emulation/qemu[spice,usbredir,virtfs,vnc,zstd]
 	net-dns/dnsmasq
+	dev-vcs/git
 	net-fs/nfs-utils
 	net-misc/bridge-utils
+	net-misc/openssh
 	sys-apps/iproute2
 	sys-auth/pambase
 	sys-libs/pam

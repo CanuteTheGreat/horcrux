@@ -272,3 +272,130 @@ pub fn spawn(state: Arc<AppState>) {
         }
     });
 }
+
+// ------------------------------------------------------ text diff of spec/live
+
+fn strip_nulls(v: &mut serde_json::Value) {
+    use serde_json::Value;
+    match v {
+        Value::Object(m) => {
+            m.retain(|_, x| !x.is_null());
+            m.values_mut().for_each(strip_nulls);
+        }
+        Value::Array(a) => a.iter_mut().for_each(strip_nulls),
+        _ => {}
+    }
+}
+
+fn identity(v: &serde_json::Value) -> String {
+    for k in ["name", "id", "cidr"] {
+        if let Some(s) = v.get(k).and_then(|x| x.as_str()) {
+            return s.to_string();
+        }
+    }
+    v.to_string()
+}
+
+/// The part of `live` that `want` talks about: same keys, and in lists of
+/// resources only the ones the spec lists (all of them with `keep_extra`,
+/// i.e. prune). What the spec leaves out is never drift, so it must not show
+/// up in the text diff either.
+pub fn restrict(
+    live: &serde_json::Value,
+    want: &serde_json::Value,
+    keep_extra: bool,
+) -> serde_json::Value {
+    use serde_json::Value;
+    match (live, want) {
+        (Value::Object(l), Value::Object(w)) => {
+            let mut out = serde_json::Map::new();
+            for (k, wv) in w {
+                if let Some(lv) = l.get(k) {
+                    out.insert(k.clone(), restrict(lv, wv, keep_extra));
+                }
+            }
+            Value::Object(out)
+        }
+        (Value::Array(l), Value::Array(w)) if w.iter().all(|x| x.is_object()) => {
+            let mut out: Vec<Value> = l
+                .iter()
+                .filter_map(|li| {
+                    let id = identity(li);
+                    match w.iter().find(|wi| identity(wi) == id) {
+                        Some(wi) => Some(restrict(li, wi, keep_extra)),
+                        None => keep_extra.then(|| li.clone()),
+                    }
+                })
+                .collect();
+            out.sort_by_key(identity);
+            Value::Array(out)
+        }
+        _ => live.clone(),
+    }
+}
+
+/// Normalised YAML of the desired spec and of the matching slice of the live
+/// state, ready for a line diff.
+pub async fn diff_texts(state: &Arc<AppState>) -> Result<serde_json::Value, String> {
+    let Some(d) = store::desired(state).await else {
+        return Ok(serde_json::json!({"configured": false}));
+    };
+    let spec = parse(&d.spec)?;
+    let live = exec::gather(state).await;
+    let mut want = serde_json::to_value(&spec).map_err(|e| e.to_string())?;
+    strip_nulls(&mut want);
+    if let Some(o) = want.as_object_mut() {
+        o.remove("prune");
+    }
+    let mut have = serde_json::to_value(super::export(&live)).map_err(|e| e.to_string())?;
+    strip_nulls(&mut have);
+    let mut have = restrict(&have, &want, spec.prune);
+    // arrays in the desired spec are sorted the same way as the live ones
+    sort_lists(&mut want);
+    sort_lists(&mut have);
+    let desired = serde_yaml::to_string(&want).map_err(|e| e.to_string())?;
+    let live_txt = serde_yaml::to_string(&have).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "configured": true,
+        "same": desired == live_txt,
+        "desired": desired,
+        "live": live_txt,
+    }))
+}
+
+fn sort_lists(v: &mut serde_json::Value) {
+    use serde_json::Value;
+    match v {
+        Value::Object(m) => m.values_mut().for_each(sort_lists),
+        Value::Array(a) => {
+            a.iter_mut().for_each(sort_lists);
+            if a.iter().all(|x| x.is_object()) {
+                a.sort_by_key(identity);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn restrict_keeps_only_what_the_spec_states() {
+        let live = json!({"vms": [
+            {"name": "b", "memory": 64, "cpus": 1, "id": "b"},
+            {"name": "a", "memory": 300, "cpus": 2, "id": "a", "architecture": "x86_64"}]});
+        let want = json!({"vms": [{"name": "a", "memory": 128}]});
+        let out = restrict(&live, &want, false);
+        assert_eq!(out, json!({"vms": [{"name": "a", "memory": 300}]}));
+        // with prune the VM the spec doesn't list is shown too
+        let out = restrict(&live, &want, true);
+        assert_eq!(out["vms"].as_array().unwrap().len(), 2);
+        // null in the spec means "not stated"
+        let mut w = json!({"a": null, "b": {"c": null, "d": 1}});
+        strip_nulls(&mut w);
+        assert_eq!(w, json!({"b": {"d": 1}}));
+    }
+}

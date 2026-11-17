@@ -1090,3 +1090,27 @@ a.stat-card.healthy .stat-value { color: var(--success); }
 .backend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.5rem 1rem; margin-top: 0.5rem; }
 .backend { display: flex; flex-direction: column; }
 .backend span { color: var(--secondary); font-size: 0.875rem; }
+
+/* Declarative configuration page */
+.declarative-page .spec-editor { width: 100%; min-height: 18rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; padding: .6rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); resize: vertical; }
+.declarative-page .form-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0; }
+.declarative-page .form-help { color: var(--secondary); font-size: .875rem; margin: .25rem 0 .75rem; }
+.declarative-page .alert-info { background: var(--note-bg); border: 1px solid var(--info); padding: .75rem; border-radius: 4px; margin: .75rem 0; }
+.declarative-page .no-data { color: var(--secondary); padding: .75rem 0; }
+.declarative-page .tabs { flex-wrap: wrap; }
+.declarative-page .tab { text-decoration: none; }
+.declarative-page .drift-blocked { color: var(--danger); font-weight: 600; }
+.declarative-page .alert-count-text { color: var(--danger); font-weight: 600; }
+.declarative-page .spec-diff, .declarative-page .spec-view { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: .5rem; overflow-x: auto; max-width: 100%; white-space: pre; }
+.declarative-page .diff-add { display: block; background: var(--ok-bg); }
+.declarative-page .diff-del { display: block; background: var(--bad-bg); }
+.declarative-page .diff-same { display: block; color: var(--secondary); }
+.declarative-page .status-card, .declarative-page .pending-card, .declarative-page .history-detail { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: .75rem; margin: .75rem 0; }
+.declarative-page .sig-good { color: var(--success); font-weight: 600; }
+.declarative-page .sig-bad { color: var(--danger); font-weight: 600; }
+.declarative-page .form-row { display: flex; flex-wrap: wrap; gap: .75rem; margin: .5rem 0; align-items: flex-end; }
+.declarative-page .form-row label { display: flex; flex-direction: column; gap: .2rem; flex: 1 1 14rem; min-width: 0; font-size: .875rem; }
+.declarative-page .form-row input, .declarative-page .form-row select, .declarative-page .form-row textarea { width: 100%; min-width: 0; }
+.declarative-page .history-row.selected { background: var(--note-bg); }
+.declarative-page code { overflow-wrap: anywhere; }
+.declarative-page .table-container { overflow-x: auto; max-width: 100%; }

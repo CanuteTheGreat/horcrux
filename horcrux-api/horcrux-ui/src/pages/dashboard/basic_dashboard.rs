@@ -52,6 +52,8 @@ pub fn Dashboard() -> impl IntoView {
     let (vms, set_vms) = create_signal(Vec::<horcrux_common::VmConfig>::new());
     let (containers, set_containers) = create_signal(None::<Vec<api::Container>>);
     let (pools, set_pools) = create_signal(None::<Vec<api::StoragePoolInfo>>);
+    // Configuration drift against the stored declarative spec (same privilege as alerts).
+    let (drift, set_drift) = create_signal(None::<api::declarative::DriftReport>);
     let (tasks, set_tasks) = create_signal(None::<Vec<api::TaskRecord>>);
     // Per-panel permission: a non-admin (e.g. a VM user) gets 403 for node
     // metrics, cluster nodes and alerts. Those panels say "No permission"
@@ -110,6 +112,11 @@ pub fn Dashboard() -> impl IntoView {
                 }
             } else {
                 set_alerts_access.set(Access::Denied);
+            }
+            if access.alerts {
+                if let Ok(r) = api::declarative::get_drift(false).await {
+                    set_drift.set(Some(r));
+                }
             }
             match api::get_vms().await {
                 Ok(list) => set_vms.set(list),
@@ -207,6 +214,19 @@ pub fn Dashboard() -> impl IntoView {
                     <h3>"Active Alerts"</h3>
                     <div class="stat-value" class:alert-count=move || !active_alerts.get().is_empty()>
                         {stat(alerts_access, Signal::derive(move || active_alerts.get().len().to_string()))}
+                    </div>
+                </A>
+
+                // Drift of the node from its desired spec: red only while it differs.
+                <A href="/declarative?tab=drift" class="stat-card stat-link" attr:id="stat-config-drift">
+                    <h3>"Config Drift"</h3>
+                    <div class="stat-value" class:alert-count=move || drift.get().is_some_and(|r| r.configured && r.count > 0)>
+                        {stat(alerts_access, Signal::derive(move || match drift.get() {
+                            None => "--".to_string(),
+                            Some(r) if !r.configured => "No spec".to_string(),
+                            Some(r) if r.count == 0 => "In sync".to_string(),
+                            Some(r) => format!("{} differ", r.count),
+                        }))}
                     </div>
                 </A>
 

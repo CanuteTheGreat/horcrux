@@ -134,6 +134,7 @@ pub fn App() -> impl IntoView {
                             <A href="/storage/isos" class="dropdown-item">"ISO Library"</A>
                             <A href="/storage/content" class="dropdown-item">"Storage Content"</A>
                             <A href="/pools" class="dropdown-item">"Resource Pools"</A>
+                            <A href="/declarative" class="dropdown-item">"Declarative Config & GitOps"</A>
                             <A href="/network" class="dropdown-item">"Network"</A>
                             <A href="/network/bridges" class="dropdown-item">"Host Bridges"</A>
                             <A href="/network/dhcp" class="dropdown-item">"DHCP & DNS"</A>
@@ -236,6 +237,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/storage/isos" view=crate::pages::IsoLibraryPage/>
                     <Route path="/storage/content" view=crate::pages::StorageContentPage/>
                     <Route path="/pools" view=crate::pages::ResourcePoolsPage/>
+                    <Route path="/declarative" view=crate::pages::DeclarativePage/>
                     <Route path="/network/firewall-objects" view=crate::pages::FirewallObjectsPage/>
                     <Route path="/network/bridges" view=crate::pages::HostBridgesPage/>
                     <Route path="/network/dhcp" view=crate::pages::DhcpNetworksPage/>

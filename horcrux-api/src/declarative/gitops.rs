@@ -26,6 +26,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 
+/// Messages that the API maps to a 424 (the node lacks a binary).
+pub const GIT_MISSING: &str = "the git binary is not installed on this node (install dev-vcs/git)";
+pub const GPG_MISSING: &str = "gpg is not installed on this node (install app-crypt/gnupg)";
+
 static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -415,7 +419,7 @@ async fn run_git(
         .map_err(|_| "git timed out after 180 s".to_string())?
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                "the git binary is not installed on this node (install dev-vcs/git)".to_string()
+                GIT_MISSING.to_string()
             } else {
                 format!("running git: {e}")
             }
@@ -648,7 +652,7 @@ async fn verify(state: &Arc<AppState>, cfg: &GitConfig, commit: &str) -> Result<
             .await
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    "gpg is not installed on this node (install app-crypt/gnupg)".to_string()
+                    GPG_MISSING.to_string()
                 } else {
                     e.to_string()
                 }

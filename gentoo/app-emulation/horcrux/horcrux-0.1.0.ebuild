@@ -74,6 +74,7 @@ REQUIRED_USE="
 # atoms ("Invalid atom (#)") and the whole ebuild fails metadata.
 # kubernetes? pulls app-admin/helm: Helm repositories/charts/releases are
 # driven through the helm CLI.
+# GitOps sync (declarative.git) runs the git binary; signature verification uses ssh-keygen (SSH signatures) or gpg (OpenPGP).
 RDEPEND="
 	qemu? (
 		app-emulation/qemu[spice,usbredir,virtfs,vnc]
@@ -99,6 +100,10 @@ RDEPEND="
 	pam? ( sys-libs/pam acct-group/horcrux-admin )
 	net-misc/bridge-utils
 	sys-apps/iproute2
+
+	dev-vcs/git
+	app-crypt/gnupg
+	net-misc/openssh
 
 	smb? ( net-fs/samba[acl,winbind] )
 	nfs-server? ( net-fs/nfs-utils[nfsv4] )

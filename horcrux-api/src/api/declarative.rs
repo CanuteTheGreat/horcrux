@@ -8,7 +8,7 @@
 //!
 //! Stored desired state and drift
 //! - `GET|PUT|DELETE /api/declarative/desired`, `POST .../desired/validate`, `POST .../desired/apply`
-//! - `GET /api/declarative/drift[?refresh=true]`, `POST .../drift/check`
+//! - `GET /api/declarative/drift[?refresh=true]`, `POST .../drift/check`, `GET .../drift/diff` (spec vs live as text)
 //! - `GET|PUT /api/declarative/settings`   drift interval, history cap, alert hook
 //!
 //! GitOps
@@ -51,6 +51,7 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/declarative/desired/apply", post(apply_desired))
         .route("/api/declarative/drift", get(get_drift))
         .route("/api/declarative/drift/check", post(check_drift))
+        .route("/api/declarative/drift/diff", get(drift_diff))
         .route(
             "/api/declarative/settings",
             get(get_settings).put(put_settings),
@@ -114,6 +115,30 @@ fn svc_err(e: SvcError) -> ApiError {
 }
 
 fn sync_err(e: SyncError) -> ApiError {
+    // a missing binary is the node's gap, not a failure of the request
+    fn missing(m: &str, reason: &'static str, what: &str, hint: &str) -> Option<ApiError> {
+        m.contains(what).then(|| ApiError::NotAvailable {
+            reason,
+            message: what.into(),
+            hint: hint.into(),
+        })
+    }
+    if let Some(a) = missing(
+        e.message(),
+        "git-missing",
+        "the git binary is not installed on this node",
+        "Install dev-vcs/git (emerge dev-vcs/git), then sync again.",
+    )
+    .or_else(|| {
+        missing(
+            e.message(),
+            "gpg-missing",
+            "gpg is not installed on this node",
+            "Install app-crypt/gnupg, or use SSH signatures (signing.format: ssh).",
+        )
+    }) {
+        return a;
+    }
     match e {
         SyncError::Fetch(m) => ApiError::ServiceUnavailable(m),
         SyncError::Refused(m) => ApiError::ValidationError(m),
@@ -280,6 +305,16 @@ async fn get_drift(
 
 async fn check_drift(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
     json_of(drift::check(&state).await)
+}
+
+/// Desired spec and the matching slice of the live state as normalised YAML,
+/// for a text diff.
+async fn drift_diff(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        drift::diff_texts(&state)
+            .await
+            .map_err(ApiError::ValidationError)?,
+    ))
 }
 
 async fn get_settings(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
