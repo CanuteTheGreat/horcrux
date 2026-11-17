@@ -18,6 +18,7 @@ pub mod lxc_template;
 pub mod lxd;
 #[cfg(feature = "podman")]
 pub mod podman;
+pub mod probe;
 pub mod savestate;
 #[cfg(any(feature = "docker", feature = "podman"))]
 pub mod stack;

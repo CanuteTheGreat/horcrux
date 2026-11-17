@@ -397,6 +397,13 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
     font-size: 1rem;
 }
 
+/* Create Container: why a runtime is not offered, and how to enable it */
+.ct-runtime-help, .ct-runtime-unavailable ul { text-align: left; max-width: 46rem; margin: 0 auto 1rem; padding-left: 1.2rem; }
+.ct-runtime-help li, .ct-runtime-unavailable li { margin-bottom: .6rem; }
+.ct-runtime-unavailable { margin-top: .5rem; font-size: .9rem; color: var(--secondary); }
+.ct-runtime-hint { color: var(--secondary); }
+.search-select select { margin-top: .4rem; }
+
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus {

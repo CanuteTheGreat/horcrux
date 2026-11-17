@@ -84,33 +84,6 @@ pub fn build_request(
     })
 }
 
-/// (value, label) of every container runtime, in menu order (Incus before
-/// LXD: Incus is the preferred system-container runtime).
-const RUNTIMES: [(&str, &str); 5] = [
-    ("podman", "Podman"),
-    ("docker", "Docker"),
-    ("lxc", "LXC"),
-    ("incus", "Incus"),
-    ("lxd", "LXD"),
-];
-
-/// The warning for the chosen runtime when the node cannot run it, else None.
-/// `statuses` is empty until the node has answered (no warning then).
-pub fn runtime_warning(statuses: &[api::RuntimeStatus], runtime: &str) -> Option<String> {
-    let s = statuses.iter().find(|s| s.runtime == runtime)?;
-    if s.available {
-        return None;
-    }
-    let msg = s
-        .message
-        .clone()
-        .unwrap_or_else(|| format!("{runtime} isn't usable on this node."));
-    Some(match s.hint.as_deref().filter(|h| !h.is_empty()) {
-        Some(h) => format!("{msg} {h}"),
-        None => msg,
-    })
-}
-
 /// Raw values of the LXC section of the form.
 #[derive(Clone, Debug, Default)]
 pub struct LxcForm {
@@ -205,10 +178,13 @@ impl LxcForm {
 #[component]
 pub fn ContainerCreate() -> impl IntoView {
     let (name, set_name) = create_signal(String::new());
-    let (runtime, set_runtime) = create_signal("podman".to_string());
+    let (runtime, set_runtime) = create_signal(String::new());
     let (image, set_image) = create_signal(String::new());
-    let (memory, set_memory) = create_signal("512".to_string());
-    let (cpus, set_cpus) = create_signal("1".to_string());
+    // CPU/RAM/disk sliders (same component as the Create VM form)
+    let memory = create_rw_signal(512u64);
+    let cpus = create_rw_signal(1u64);
+    let disk_gb = create_rw_signal(8u64);
+    let (disk_limit, set_disk_limit) = create_signal(false);
     let (env, set_env) = create_signal(String::new());
     let (ports, set_ports) = create_signal(String::new());
     let (volumes, set_volumes) = create_signal(String::new());
@@ -217,14 +193,69 @@ pub fn ContainerCreate() -> impl IntoView {
     let (creating, set_creating) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
 
-    // Podman/Docker availability on this node, shown before Create is pressed.
-    let (runtimes, set_runtimes) = create_signal(Vec::<api::RuntimeStatus>::new());
-    spawn_local(async move {
-        if let Ok(r) = api::get_container_runtimes().await {
-            set_runtimes.set(r);
-        }
-    });
-    let warning = move || runtime_warning(&runtimes.get(), &runtime.get());
+    // Which runtimes really work on this node (live probe), plus the
+    // host's CPU/RAM/disk bounds. The form offers only working runtimes and
+    // says what to do when there is none (journey QA finding 13).
+    let rt_info = create_rw_signal(None::<api::ContainerRuntimes>);
+    let (rt_error, set_rt_error) = create_signal(None::<String>);
+    let (checking, set_checking) = create_signal(true);
+    // `?runtime=` asked for (LXC templates page); honoured when it works.
+    let wanted = create_rw_signal(None::<String>);
+    let (wanted_note, set_wanted_note) = create_signal(None::<String>);
+    let load_runtimes = move |refresh: bool| {
+        set_checking.set(true);
+        spawn_local(async move {
+            match api::get_container_runtimes(refresh).await {
+                Ok(r) => {
+                    let host = r.host.clone();
+                    cpus.update(|c| *c = (*c).clamp(1, host.cpus.max(1) as u64));
+                    let want = wanted.get_untracked();
+                    let pick = choose_runtime(&r.runtimes, want.as_deref(), r.default.as_deref());
+                    set_wanted_note.set(want.as_deref().and_then(|w| {
+                        r.runtimes
+                            .iter()
+                            .find(|p| p.runtime == w && !p.available)
+                            .map(|p| {
+                                format!(
+                                    "{} is not available on this node: {}",
+                                    p.label,
+                                    p.message.clone().unwrap_or_default()
+                                )
+                            })
+                    }));
+                    set_runtime.set(pick.unwrap_or_default());
+                    set_rt_error.set(None);
+                    rt_info.set(Some(r));
+                }
+                Err(e) => set_rt_error.set(Some(e.message)),
+            }
+            set_checking.set(false);
+        });
+    };
+    load_runtimes(false);
+    let available = move || {
+        rt_info
+            .get()
+            .map(|r| {
+                r.runtimes
+                    .into_iter()
+                    .filter(|p| p.available)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let unavailable = move || {
+        rt_info
+            .get()
+            .map(|r| {
+                r.runtimes
+                    .into_iter()
+                    .filter(|p| p.compiled && !p.available)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let none_available = move || rt_info.with(|r| r.is_some()) && available().is_empty();
 
     // LXC section.
     let lxc_form = create_rw_signal(LxcForm {
@@ -239,12 +270,19 @@ pub fn ContainerCreate() -> impl IntoView {
     let (lxc_catalog, set_lxc_catalog) = create_signal(Vec::<api::LxcCatalogEntry>::new());
 
     // `?runtime=lxc&template=alpine/3.22/amd64/default` (from the LXC
-    // templates page) preselects the runtime and template.
+    // templates page) preselects the runtime (once the probe says it works)
+    // and the template.
     let query = use_query_map();
     create_effect(move |_| {
         let q = query.get();
         if let Some(rt) = q.get("runtime") {
-            set_runtime.set(rt.clone());
+            wanted.set(Some(rt.clone()));
+            if rt_info.with_untracked(|r| {
+                r.as_ref()
+                    .is_some_and(|r| r.runtimes.iter().any(|p| &p.runtime == rt && p.available))
+            }) {
+                set_runtime.set(rt.clone());
+            }
         }
         if let Some(t) = q.get("template") {
             set_image.set(t.clone());
@@ -277,26 +315,15 @@ pub fn ContainerCreate() -> impl IntoView {
 
     let navigate = use_navigate();
 
-    // Default to the first runtime this server was built with (docker is
-    // not there with USE=-docker).
-    let features = crate::features::use_features();
-    create_effect(move |_| {
-        if features.loaded() && !features.has(&runtime.get_untracked()) {
-            if let Some((v, _)) = RUNTIMES.iter().find(|(v, _)| features.has(v)) {
-                set_runtime.set(v.to_string());
-            }
-        }
-    });
-
-    let submit = move |ev: ev::SubmitEvent| {
+    let submit = Callback::new(move |ev: ev::SubmitEvent| {
         ev.prevent_default();
         set_error.set(None);
         let mut req = match build_request(
             &name.get(),
             &runtime.get(),
             &image.get(),
-            &memory.get(),
-            &cpus.get(),
+            &memory.get().to_string(),
+            &cpus.get().to_string(),
             &env.get(),
             &ports.get(),
             &volumes.get(),
@@ -309,7 +336,13 @@ pub fn ContainerCreate() -> impl IntoView {
             }
         };
         if runtime.get() == "lxc" {
-            match lxc_form.get().to_options() {
+            let mut f = lxc_form.get();
+            f.disk_gb = if disk_limit.get() {
+                disk_gb.get().to_string()
+            } else {
+                String::new()
+            };
+            match f.to_options() {
                 Ok(o) => req.lxc = Some(o),
                 Err(e) => {
                     set_error.set(Some(e));
@@ -341,9 +374,10 @@ pub fn ContainerCreate() -> impl IntoView {
                 }
             }
         });
-    };
+    });
 
     let oci = move || matches!(runtime.get().as_str(), "docker" | "podman");
+    let host = move || rt_info.get().map(|r| r.host);
 
     view! {
         <div class="container-create">
@@ -355,8 +389,45 @@ pub fn ContainerCreate() -> impl IntoView {
             </div>
 
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="create-container-error">{e}</div> })}
+            {move || rt_error.get().map(|e| view! { <div class="alert alert-error" id="ct-runtimes-error">{format!("Could not check the container runtimes: {e}")}</div> })}
+            {move || wanted_note.get().map(|n| view! { <div class="alert alert-warning" id="ct-runtime-wanted-note">{n}</div> })}
 
-            <form id="create-container-form" on:submit=submit class="form">
+            <Show when=move || checking.get() && rt_info.with(|r| r.is_none())>
+                <p class="loading" id="ct-runtimes-loading">"Checking which container runtimes work on this node..."</p>
+            </Show>
+
+            <Show when=none_available>
+                <div class="empty-state" id="ct-no-runtime">
+                    <h2>"No container runtime is working on this node"</h2>
+                    <p>"Containers need one of Podman, Docker, LXC, Incus or LXD installed and running here. Enable one, then check again:"</p>
+                    <ul class="ct-runtime-help">
+                        {move || {
+                            let mut list = unavailable();
+                            if list.is_empty() {
+                                // nothing compiled in: show the USE flag hints
+                                list = rt_info.get().map(|r| r.runtimes).unwrap_or_default();
+                            }
+                            list.into_iter().map(|p| view! {
+                                <li data-runtime=p.runtime.clone()>
+                                    <strong>{p.label.clone()}</strong>": "{p.message.clone().unwrap_or_default()}
+                                    <br/><small class="ct-runtime-hint">{p.hint.clone().unwrap_or_default()}</small>
+                                </li>
+                            }).collect_view()
+                        }}
+                    </ul>
+                    <div class="form-actions">
+                        <button id="ct-runtime-recheck" type="button" class="btn btn-primary"
+                            disabled=checking
+                            on:click=move |_| load_runtimes(true)>
+                            {move || if checking.get() { "Checking..." } else { "Check again" }}
+                        </button>
+                        <a href="/containers" class="btn">"Back to Containers"</a>
+                    </div>
+                </div>
+            </Show>
+
+            <Show when=move || !available().is_empty()>
+            <form id="create-container-form" on:submit=move |ev| submit.call(ev) class="form">
                 <div class="form-group">
                     <label for="ct-name">"Name"</label>
                     <input id="ct-name" name="name" type="text" required placeholder="web-1"
@@ -365,25 +436,41 @@ pub fn ContainerCreate() -> impl IntoView {
                 </div>
                 <div class="form-group">
                     <label for="ct-runtime">"Runtime"</label>
-                    // Only the runtimes compiled into the server (USE flags).
+                    // Only the runtimes that work on this node right now (live probe).
                     <select id="ct-runtime" name="runtime"
                         prop:value=runtime
                         on:change=move |ev| set_runtime.set(event_target_value(&ev))>
                         {move || {
-                            RUNTIMES
-                                .iter()
-                                .filter(|(v, _)| features.has(v))
-                                .map(|(v, label)| {
-                                    let down = runtime_warning(&runtimes.get(), v).is_some();
-                                    let text = if down { format!("{label} (not available on this node)") } else { label.to_string() };
-                                    view! { <option value=*v selected=move || runtime.get() == *v>{text}</option> }
+                            available()
+                                .into_iter()
+                                .map(|p| {
+                                    let v = p.runtime.clone();
+                                    let label = match &p.version {
+                                        Some(ver) => format!("{} ({ver})", p.label),
+                                        None => p.label.clone(),
+                                    };
+                                    view! { <option value=p.runtime.clone() selected=move || runtime.get() == v>{label}</option> }
                                 })
                                 .collect_view()
                         }}
                     </select>
-                    {move || warning().map(|w| view! {
-                        <div class="alert alert-warning" id="ct-runtime-warning" role="status">{w}</div>
-                    })}
+                    {move || {
+                        let un = unavailable();
+                        (!un.is_empty()).then(|| view! {
+                            <details class="ct-runtime-unavailable" id="ct-runtime-unavailable">
+                                <summary>{format!("Not available on this node: {}",
+                                    un.iter().map(|p| p.label.as_str()).collect::<Vec<_>>().join(", "))}</summary>
+                                <ul>
+                                    {un.iter().map(|p| view! {
+                                        <li data-runtime=p.runtime.clone()>
+                                            <strong>{p.label.clone()}</strong>": "{p.message.clone().unwrap_or_default()}
+                                            <br/><small class="ct-runtime-hint">{p.hint.clone().unwrap_or_default()}</small>
+                                        </li>
+                                    }).collect_view()}
+                                </ul>
+                            </details>
+                        })
+                    }}
                 </div>
                 <div class="form-group">
                     <label for="ct-image">{move || if oci() { "Image" } else { "Template / rootfs" }}</label>
@@ -408,20 +495,41 @@ pub fn ContainerCreate() -> impl IntoView {
                             <a href="/containers/lxc/templates">"Manage templates"</a></small>
                     </Show>
                 </div>
-                <div class="form-row">
+                <crate::components::ResourceSlider label="CPUs" id="ct-cpus" value=cpus
+                    steps=Signal::derive(move || crate::components::cpu_steps(host().map(|h| h.cpus).unwrap_or(4)))
+                    limit=Signal::derive(move || host().map(|h| h.cpus as u64).unwrap_or(u64::MAX))
+                    hard_max=Signal::derive(move || host().map(|h| h.cpus as u64 * 4).unwrap_or(1024).max(4))
+                    fmt=crate::components::human_cpus unit="CPUs" limit_what="logical CPUs" guest="container"/>
+                <crate::components::ResourceSlider label="Memory" id="ct-memory" value=memory
+                    steps=Signal::derive(move || crate::components::memory_steps(host().map(|h| h.max_vm_memory_mb).unwrap_or(8192)))
+                    limit=Signal::derive(move || host().map(|h| h.max_vm_memory_mb).unwrap_or(u64::MAX))
+                    hard_max=Signal::derive(move || host().map(|h| h.memory_mb * 2).unwrap_or(1 << 20).max(512))
+                    fmt=crate::components::human_mb unit="MB" limit_what="available RAM (after the host's reserve)" guest="container"/>
+                <Show when=move || runtime.get() == "lxc"
+                    fallback=move || view! {
+                        <p class="form-help" id="ct-disk-note">
+                            {move || if oci() {
+                                "Disk: the container's files live in the runtime's image storage (no per-container size limit)."
+                            } else {
+                                "Disk: the root filesystem lives in the runtime's default storage pool."
+                            }}
+                        </p>
+                    }>
                     <div class="form-group">
-                        <label for="ct-memory">"Memory (MB)"</label>
-                        <input id="ct-memory" name="memory" type="number" min="1"
-                            prop:value=memory
-                            on:input=move |ev| set_memory.set(event_target_value(&ev))/>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="ct-disk-limit" prop:checked=disk_limit
+                                on:change=move |ev| set_disk_limit.set(event_target_checked(&ev))/>
+                            " Limit the root disk size (otherwise a plain directory, no limit)"
+                        </label>
                     </div>
-                    <div class="form-group">
-                        <label for="ct-cpus">"CPUs"</label>
-                        <input id="ct-cpus" name="cpus" type="number" min="1"
-                            prop:value=cpus
-                            on:input=move |ev| set_cpus.set(event_target_value(&ev))/>
-                    </div>
-                </div>
+                    <Show when=move || disk_limit.get()>
+                        <crate::components::ResourceSlider label="Disk" id="ct-disk" value=disk_gb
+                            steps=Signal::derive(move || crate::components::disk_steps(rt_info.get().map(|r| r.lxc_disk_available_gb).unwrap_or(64)))
+                            limit=Signal::derive(move || rt_info.get().map(|r| r.lxc_disk_available_gb).filter(|g| *g > 0).unwrap_or(u64::MAX))
+                            hard_max=Signal::derive(move || 1u64 << 20)
+                            fmt=crate::components::human_gb unit="GB" limit_what="free where LXC keeps containers" guest="container"/>
+                    </Show>
+                </Show>
                 <Show when=oci>
                     <div class="form-group">
                         <label for="ct-ports">"Published ports (one per line, host:container)"</label>
@@ -459,10 +567,6 @@ pub fn ContainerCreate() -> impl IntoView {
                                 <input id="lxc-hostname" type="text" placeholder="defaults to the name"
                                     prop:value=move || lxc_form.get().hostname
                                     on:input=move |ev| lxc_form.update(|f| f.hostname = event_target_value(&ev))/></div>
-                            <div class="form-group"><label for="lxc-disk">"Disk (GB, empty = directory, no limit)"</label>
-                                <input id="lxc-disk" type="number" min="1"
-                                    prop:value=move || lxc_form.get().disk_gb
-                                    on:input=move |ev| lxc_form.update(|f| f.disk_gb = event_target_value(&ev))/></div>
                             <div class="form-group"><label for="lxc-swap">"Swap (MB)"</label>
                                 <input id="lxc-swap" type="number" min="0"
                                     prop:value=move || lxc_form.get().swap_mb
@@ -561,13 +665,66 @@ pub fn ContainerCreate() -> impl IntoView {
                     </button>
                 </div>
             </form>
+            </Show>
         </div>
     }
+}
+
+/// The runtime the form starts on: the one asked for in `?runtime=` when it
+/// works here, else the server's default (first working one in menu order).
+pub fn choose_runtime(
+    runtimes: &[api::ContainerRuntimeProbe],
+    wanted: Option<&str>,
+    default: Option<&str>,
+) -> Option<String> {
+    let works = |r: &str| runtimes.iter().any(|p| p.runtime == r && p.available);
+    wanted
+        .filter(|w| works(w))
+        .or(default.filter(|d| works(d)))
+        .map(str::to_string)
+        .or_else(|| {
+            runtimes
+                .iter()
+                .find(|p| p.available)
+                .map(|p| p.runtime.clone())
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn probe(rt: &str, ok: bool) -> api::ContainerRuntimeProbe {
+        api::ContainerRuntimeProbe {
+            runtime: rt.into(),
+            label: rt.into(),
+            compiled: true,
+            available: ok,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_form_starts_on_a_runtime_that_works() {
+        let v = [
+            probe("podman", false),
+            probe("docker", true),
+            probe("lxc", true),
+        ];
+        // ?runtime=lxc is honoured when LXC works
+        assert_eq!(
+            choose_runtime(&v, Some("lxc"), Some("docker")).as_deref(),
+            Some("lxc")
+        );
+        // ?runtime=podman is not: Podman does not work here
+        assert_eq!(
+            choose_runtime(&v, Some("podman"), Some("docker")).as_deref(),
+            Some("docker")
+        );
+        assert_eq!(choose_runtime(&v, None, None).as_deref(), Some("docker"));
+        // nothing works: no runtime (the form shows the empty state instead)
+        assert_eq!(choose_runtime(&v[..1], Some("podman"), None), None);
+    }
 
     #[test]
     fn builds_a_docker_request_from_form_values() {
@@ -672,31 +829,6 @@ mod tests {
         ] {
             assert!(bad.to_options().is_err(), "{bad:?}");
         }
-    }
-
-    #[test]
-    fn warns_when_the_chosen_runtime_is_unavailable() {
-        let down = api::RuntimeStatus {
-            runtime: "podman".into(),
-            available: false,
-            reason: Some("podman-missing".into()),
-            message: Some("Podman isn't installed on this node.".into()),
-            hint: Some("Install it.".into()),
-        };
-        let up = api::RuntimeStatus {
-            runtime: "docker".into(),
-            available: true,
-            ..Default::default()
-        };
-        let all = [down, up];
-        assert_eq!(
-            runtime_warning(&all, "podman").as_deref(),
-            Some("Podman isn't installed on this node. Install it.")
-        );
-        assert_eq!(runtime_warning(&all, "docker"), None);
-        // not answered yet, or a runtime the probe does not cover: no warning
-        assert_eq!(runtime_warning(&[], "podman"), None);
-        assert_eq!(runtime_warning(&all, "lxc"), None);
     }
 
     #[test]

@@ -89,6 +89,9 @@ pub fn ResourceSlider(
     /// What the warning says is exceeded ("host CPUs", ...).
     #[prop(into)]
     limit_what: String,
+    /// What is being sized, for the overcommit warning ("VM", "container").
+    #[prop(default = "VM")]
+    guest: &'static str,
 ) -> impl IntoView {
     let (custom, set_custom) = create_signal(false);
     let idx = move || steps.with(|s| nearest_step(s, value.get()));
@@ -137,7 +140,7 @@ pub fn ResourceSlider(
             </Show>
             <Show when=over>
                 <p class="form-help warning" id=id_warn.clone()>
-                    {move || format!("{} is more than this host has ({} {}): the VM may not start, or will contend with the host.",
+                    {move || format!("{} is more than this host has ({} {}): the {guest} may not start, or will contend with the host.",
                         fmt(value.get()), fmt(limit.get()), limit_what.get_value())}
                 </p>
             </Show>

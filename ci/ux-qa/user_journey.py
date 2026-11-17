@@ -229,6 +229,9 @@ UNSTYLED_TABS_JS = """() => [...document.querySelectorAll('.tab-buttons, .tabs, 
   .filter(e => e.offsetParent !== null && getComputedStyle(e).display !== 'flex').map(e => e.className)"""
 # The page scrolls sideways (owner rule: never).
 H_OVERFLOW_JS = "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
+# Bridges a container runtime made for itself (never a VM network).
+CONTAINER_BRIDGE_RE = re.compile(r"^(docker|podman|cni|kube-bridge$|br-[0-9a-f]{12}$)")
+RT_BRIDGE = "br-fa11bac0ffee"   # Docker-network-style bridge the journey makes (when it can) to test that filter
 
 
 def main():
@@ -323,6 +326,13 @@ def main():
 
         # ------------------------------------------------------------------ J3 create VM
         with step(j, "j3-create-vm", "create VM form") as _:
+            # a host running Docker has docker0 / br-<hash>: make a Docker-style network bridge where we can, so the
+            # VM network list is really checked for leaving it out (removed at the end)
+            try:
+                state["rt_bridge"] = run_on_server(f"ip link show docker0 >/dev/null 2>&1 && exit 0; ip link add {RT_BRIDGE} type bridge "
+                                                   f"&& ip link set {RT_BRIDGE} up && echo made", timeout=20).stdout.strip() == "made"
+            except Exception:  # noqa: BLE001  (no ip tool / no permission: the check then reads the real bridges only)
+                state["rt_bridge"] = False
             code, opts = api("GET", "/api/vms/host-options")
             if code == 200 and not (opts or {}).get("bridges"):
                 j.go("/vms/create", settle=2.5)
@@ -342,6 +352,12 @@ def main():
                    f"CPU/RAM/disk are plain number boxes ({n_range} sliders): no sliders, supported steps or presets with a custom override")
             expect("j3-create-vm", "nic-by-default", page.locator(".vm-nic-row").count() >= 1,
                    "a new VM form has no network card by default")
+            # container runtimes' own bridges (docker0, podman0, cni0, br-<hash>) are never offered to a VM
+            nic_opts = [o["v"] for o in select_options(page, ".vm-nic-bridge")] if page.locator(".vm-nic-bridge").count() else []
+            api_br = [b.get("name", "") for b in ((opts or {}).get("bridges") or []) if isinstance(b, dict)] if code == 200 and isinstance(opts, dict) else []
+            bad_br = sorted({b for b in nic_opts + api_br if CONTAINER_BRIDGE_RE.match(b)})
+            expect("j3-create-vm", "nic-no-container-bridges", not bad_br,
+                   f"the VM network list offers container runtime bridges {bad_br} (Docker/Podman own those; a VM NIC there gets no DHCP)")
             snd = select_options(page, "#disp-sound")
             proto = select_options(page, "#disp-protocol")
             if page.locator("#disp-protocol").count():
@@ -457,13 +473,31 @@ def main():
         # ------------------------------------------------------------------ J5 container
         with step(j, "j5-container", "create a container") as _:
             j.go("/containers/create", settle=2)
+            page.wait_for_selector("#ct-runtime, #ct-no-runtime, #ct-runtimes-error", timeout=30000)
             j.shot("container-create")
             body = j.text()
-            has_form = page.locator("form input").count() > 0
+            has_form = page.locator("#create-container-form").count() > 0 and page.locator("#create-container-form").is_visible()
             unavailable = re.search(r"not available|not installed|unavailable|no container runtime|enable", body, re.I)
             expect("j5-container", "form-or-explanation", has_form or unavailable, "container create page shows neither a form nor why containers are unavailable")
+            # the form offers exactly the runtimes that work on this node (live probe), never one that fails at Create
+            code, rts = api("GET", "/api/containers/runtimes")
+            works = [r["runtime"] for r in (rts or {}).get("runtimes", []) if r.get("available")] if code == 200 and isinstance(rts, dict) else None
+            offered = [o["v"] for o in select_options(page, "#ct-runtime")]
+            expect("j5-container", "runtime-api", works is not None, f"GET /api/containers/runtimes answered {code}")
+            if works is not None:
+                expect("j5-container", "only-working-runtimes", offered == works,
+                       f"the Runtime list offers {offered} but the runtimes that work on this node are {works}")
+                if not works:
+                    nr = page.locator("#ct-no-runtime")
+                    expect("j5-container", "no-runtime-explained", nr.count() > 0 and nr.is_visible() and not has_form
+                           and page.locator("#ct-no-runtime .ct-runtime-hint").count() > 0
+                           and page.locator("#ct-runtime-recheck").count() > 0,
+                           "no container runtime works here, but the page does not say so up front with how to enable one")
             if has_form and page.locator("#ct-image").count():
-                page.fill("form input[placeholder*='name' i], #ct-name", CT_NAME) if page.locator("#ct-name, form input[placeholder*='name' i]").count() else None
+                n_range = page.locator("#create-container-form input[type=range]").count()
+                expect("j5-container", "resource-sliders", n_range >= 2,
+                       f"container CPU/RAM are plain number boxes ({n_range} sliders), unlike the Create VM form")
+                page.fill("#ct-name", CT_NAME)
                 page.fill("#ct-image", "busybox:latest")
                 j.shot("container-create-filled")
                 btn = page.locator("button[type=submit]").first
@@ -519,12 +553,39 @@ def main():
             vm = vm_by_name(VM_NAME)
             if vm:
                 j.go("/snapshots")
-                create = page.locator("button, a.btn").filter(has_text=re.compile(r"create|take|new|add", re.I)).first
-                expect("j7-backup-snapshots", "snapshot-control", create.count() > 0, "the Snapshots page has no way to create a snapshot")
-                code, res = api("POST", f"/api/vms/{vm['id']}/snapshots", {"name": "journey-snap", "description": "journey"})
-                expect("j7-backup-snapshots", "snapshot-api", code in (200, 201, 202), f"snapshot of the stopped VM failed: {code} {str(res)[:150]}")
-                j.go("/snapshots")
+                create = page.locator("#snapshot-create-btn")
+                expect("j7-backup-snapshots", "snapshot-control", create.count() > 0 and create.is_enabled(),
+                       "the Snapshots page has no (enabled) way to create a snapshot although a VM exists")
+                taken = False
+                if create.count() and create.is_enabled():
+                    # take it the way a user does: the dialog (VM preselected), name, Create
+                    create.click()
+                    page.wait_for_selector("#create-snapshot-form", timeout=10000)
+                    vm_opts = [o["v"] for o in select_options(page, "#snap-vm")]
+                    if vm["id"] in vm_opts:
+                        page.select_option("#snap-vm", vm["id"])
+                    page.fill("#snap-name", "journey-snap")
+                    page.fill("#snap-desc", "journey")
+                    page.click("#snap-submit")
+                    try:
+                        page.wait_for_selector("#snapshot-notice", timeout=60000)
+                        taken = True
+                    except Exception:  # noqa: BLE001
+                        err = page.locator("#create-snapshot-error")
+                        finding("j7-backup-snapshots", "snapshot-ui", "creating a snapshot from the dialog failed: "
+                                + (err.inner_text()[:200] if err.count() else "no message"))
+                if not taken:
+                    code, res = api("POST", f"/api/vms/{vm['id']}/snapshots", {"name": "journey-snap", "description": "journey"})
+                    expect("j7-backup-snapshots", "snapshot-api", code in (200, 201, 202), f"snapshot of the stopped VM failed: {code} {str(res)[:150]}")
+                page.wait_for_timeout(1500)
                 j.shot("snapshots-after")
+                row = page.locator("tr[data-snapshot-name='journey-snap']")
+                expect("j7-backup-snapshots", "new-snapshot-visible", row.count() > 0 and row.first.is_visible(),
+                       "the snapshot just taken is not listed on the Snapshots page (no VM picked = nothing shown)")
+                # a fresh visit (no VM picked) lists it too
+                j.go("/snapshots", settle=2.5)
+                expect("j7-backup-snapshots", "snapshots-default-all-vms", page.locator("tr[data-snapshot-name='journey-snap']").count() > 0,
+                       "opening /snapshots shows no snapshot until a VM is picked")
 
         # ------------------------------------------------------------------ J8 settings / updates
         with step(j, "j8-settings", "settings, users, updates") as _:
@@ -536,6 +597,27 @@ def main():
                 expect("j8-settings", f"{name}-not-blank", len(t) > 150, f"{path} is nearly blank")
                 bad_tabs = page.evaluate(UNSTYLED_TABS_JS)
                 expect("j8-settings", f"{name}-tabs-styled", not bad_tabs, f"{path}: tab strip is unstyled ({bad_tabs})")
+                if name == "config":
+                    # time zone / locale come from the node and show its current values (Etc/UTC was blank)
+                    code, cfg = api("GET", "/api/system/config")
+                    if code == 200 and isinstance(cfg, dict) and page.locator("#cfg-timezone").count():
+                        page.wait_for_timeout(1000)
+                        tz_n = page.eval_on_selector("#cfg-timezone", "e => e.options.length")
+                        tz_v = page.eval_on_selector("#cfg-timezone", "e => e.value")
+                        lc_v = page.eval_on_selector("#cfg-locale", "e => e.value") if page.locator("#cfg-locale").count() else ""
+                        expect("j8-settings", "timezone-shows-current", tz_v == cfg.get("timezone"),
+                               f"Timezone select shows {tz_v!r}, the node is in {cfg.get('timezone')!r}")
+                        expect("j8-settings", "timezone-is-a-real-zone", bool(tz_v) and not tz_v.startswith("/")
+                               and run_on_server(f"test -f /usr/share/zoneinfo/{tz_v} && echo yes").stdout.strip() == "yes",
+                               f"the node's time zone is reported as {tz_v!r}, which is not a zone in its zoneinfo database")
+                        expect("j8-settings", "locale-shows-current", lc_v == cfg.get("locale"),
+                               f"Locale select shows {lc_v!r}, the node's locale is {cfg.get('locale')!r}")
+                        expect("j8-settings", "timezone-list-from-node", tz_n > 50 or not run_on_server("ls /usr/share/zoneinfo/America 2>/dev/null | head -1").stdout.strip(),
+                               f"the Timezone list has {tz_n} entries although the node has the zoneinfo database")
+                        expect("j8-settings", "timezone-searchable", page.locator("#cfg-timezone-search").count() > 0,
+                               "the Timezone list (hundreds of zones) has no search box")
+                    else:
+                        finding("j8-settings", "timezone-select", "System Configuration has no #cfg-timezone select")
                 if name == "updates":
                     expect("j8-settings", "updates-actionable", re.search(r"check|update|upgrade|refresh", t, re.I) is not None, "the updates page offers no way to check for / install updates")
             j.go("/")
@@ -547,6 +629,8 @@ def main():
         vm = vm_by_name(VM_NAME)
         if vm:
             api("DELETE", f"/api/vms/{vm['id']}", ok=None)
+        if state.get("rt_bridge"):
+            run_on_server(f"ip link del {RT_BRIDGE}", timeout=20)
         browser.close()
     srv.shutdown()
     shutil.rmtree(tmp, ignore_errors=True)

@@ -473,7 +473,12 @@ def main():
         # default runtime, so pick Docker explicitly (Podman: ci.yml "Podman e2e").
         page.locator("#ct-runtime").select_option("docker")
         page.fill("#ct-image", "busybox:latest")
-        page.fill("#ct-memory", "64")
+        # Memory is a slider like the Create VM form; 64 MB is below its first
+        # stop, so use the Custom override (and check it reaches Docker)
+        expect(page.locator("#ct-memory-slider")).to_be_visible()
+        expect(page.locator("#ct-cpus-slider")).to_be_visible()
+        page.locator("#ct-memory-custom").check()
+        page.fill("#ct-memory-input", "64")
         page.fill("#ct-env", "E2E=1")
         page.fill("#ct-ports", "8080")
         page.fill("#ct-command", "httpd -f -p 8080")
@@ -492,6 +497,7 @@ def main():
         assert "E2E=1" in info["Config"]["Env"], info["Config"]["Env"]
         assert info["Config"]["Cmd"] == ["httpd", "-f", "-p", "8080"], info["Config"]["Cmd"]
         assert info["Config"]["Labels"].get("horcrux.id") == CT, info["Config"]["Labels"]
+        assert info["HostConfig"]["Memory"] == 64 * 1024 * 1024, info["HostConfig"]["Memory"]
         bindings = info["HostConfig"]["PortBindings"]
         assert "8080/tcp" in bindings, bindings
 
@@ -503,17 +509,18 @@ def main():
         expect(page.locator("#create-container-error")).to_contain_text("name", timeout=30000)
         assert page.url == f"{BASE}/containers/create"
 
-        # Finding 13: Podman/Docker availability is stated up front (never only
-        # when Create fails) and the textareas are as wide as the inputs.
-        runtimes = {r["runtime"]: r for r in api_get("/api/containers/runtimes", tok)}
-        assert set(runtimes) == {"podman", "docker"}, runtimes
+        # Finding 13: only runtimes that work on this node are offered (live
+        # probe), the rest are named with how to enable them; the textareas are
+        # as wide as the inputs.
+        probe = api_get("/api/containers/runtimes", tok)
+        works = [r["runtime"] for r in probe["runtimes"] if r["available"]]
+        assert "docker" in works, probe   # this job runs next to a real Docker daemon
         page.goto(f"{BASE}/containers/create")
         page.locator("#ct-image").wait_for()
-        want = runtimes["podman"]
-        if want["available"]:
-            expect(page.locator("#ct-runtime-warning")).to_have_count(0)
-        else:
-            expect(page.locator("#ct-runtime-warning")).to_contain_text(want["message"], timeout=30000)
+        offered = page.locator("#ct-runtime option").evaluate_all("els => els.map(e => e.value)")
+        assert offered == works, (offered, works)
+        if any(r["compiled"] and not r["available"] for r in probe["runtimes"]):
+            expect(page.locator("#ct-runtime-unavailable")).to_be_attached()
         widths = {
             sel: page.locator(sel).bounding_box()["width"]
             for sel in ("#ct-image", "#ct-memory", "#ct-cpus", "#ct-ports", "#ct-env", "#ct-volumes")
@@ -532,7 +539,7 @@ def main():
         page.goto(f"{BASE}/system/config")
         tz = page.locator("select:has(option[value='%s'])" % cfg["timezone"]).first
         expect(tz).to_have_value(cfg["timezone"], timeout=30000)
-        assert tz.locator("option").count() == len(opts["timezones"]), "select lists the node's zones"
+        expect(tz.locator("option")).to_have_count(len(opts["timezones"]), timeout=30000)  # the node's zones (list loads after the value)
 
         # ---- Stop / Delete from the list reflect real state ----------------
         page.goto(f"{BASE}/containers")

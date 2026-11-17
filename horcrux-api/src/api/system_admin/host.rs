@@ -90,12 +90,23 @@ fn read_trim(p: PathBuf) -> Option<String> {
 
 pub fn current_timezone() -> String {
     if let Ok(t) = std::fs::read_link(rooted("etc/localtime")) {
-        let s = t.to_string_lossy().to_string();
-        if let Some(i) = s.find("zoneinfo/") {
-            return s[i + "zoneinfo/".len()..].to_string();
+        if let Some(z) = zone_from_link(&t.to_string_lossy()) {
+            return z;
         }
     }
-    read_trim(rooted("etc/timezone")).unwrap_or_else(|| "UTC".into())
+    read_trim(rooted("etc/timezone"))
+        .map(|z| z.trim_start_matches('/').to_string())
+        .filter(|z| !z.is_empty())
+        .unwrap_or_else(|| "UTC".into())
+}
+
+/// The zone name from an `/etc/localtime` symlink target. Some images point
+/// it at `/usr/share/zoneinfo//UTC` (double slash), which once surfaced as
+/// the zone "/UTC" (not in the node's list, so the select showed a bogus value).
+pub fn zone_from_link(target: &str) -> Option<String> {
+    let i = target.find("zoneinfo/")?;
+    let z = target[i + "zoneinfo/".len()..].trim_start_matches('/');
+    (!z.is_empty()).then(|| z.to_string())
 }
 
 /// `LANG=...` out of a `locale.conf`-style file (quotes allowed).
@@ -1273,6 +1284,24 @@ pub(crate) fn data_dir_usage_percent() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zone_names_come_clean_out_of_the_localtime_link() {
+        assert_eq!(
+            zone_from_link("/usr/share/zoneinfo/Europe/Berlin").as_deref(),
+            Some("Europe/Berlin")
+        );
+        assert_eq!(
+            zone_from_link("/usr/share/zoneinfo//UTC").as_deref(),
+            Some("UTC")
+        );
+        assert_eq!(
+            zone_from_link("../usr/share/zoneinfo/Etc/UTC").as_deref(),
+            Some("Etc/UTC")
+        );
+        assert_eq!(zone_from_link("/usr/share/zoneinfo/"), None);
+        assert_eq!(zone_from_link("/etc/foo"), None);
+    }
 
     #[test]
     fn option_lists_come_from_the_node_and_keep_the_current_value() {

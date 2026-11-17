@@ -1283,11 +1283,10 @@ async fn run_import(
                 }
             }
             b.filter(|b| host_bridges.contains(b)).or_else(|| {
-                host_bridges
-                    .iter()
-                    .find(|b| *b != "docker0")
-                    .or(host_bridges.first())
-                    .cloned()
+                crate::api::vm_hw::vm_bridges()
+                    .into_iter()
+                    .next()
+                    .map(|b| b.name)
             })
         }
     };

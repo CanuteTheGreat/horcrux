@@ -525,6 +525,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(vm_console_api::routes())
         .merge(api::vm_import::routes(&state))
         .merge(container_routes())
+        .merge(api::container_runtimes::routes())
         .merge(template_routes())
         .merge(auth_protected_routes())
         .merge(api::access_routes())

@@ -1074,7 +1074,7 @@ pub(crate) async fn import_plan(
         .filter(|b| !b.is_empty())
     {
         Some(b) => Some(b.to_string()),
-        None => crate::api::vm_hw::host_bridges()
+        None => crate::api::vm_hw::vm_bridges()
             .first()
             .map(|b| b.name.clone()),
     };

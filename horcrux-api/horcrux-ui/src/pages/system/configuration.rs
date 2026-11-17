@@ -21,10 +21,9 @@ pub fn SystemConfigurationPage() -> impl IntoView {
     let (form_domain, set_form_domain) = create_signal(String::new());
     let (form_timezone, set_form_timezone) = create_signal(String::new());
     let (form_locale, set_form_locale) = create_signal(String::new());
-
-    // Time zones / locales the node itself offers (its current value included)
-    let (tz_options, set_tz_options) = create_signal(Vec::<String>::new());
-    let (locale_options, set_locale_options) = create_signal(Vec::<String>::new());
+    // Zone/locale choices read from the node (zoneinfo, `locale -a`)
+    let (tz_choices, set_tz_choices) = create_signal(Vec::<String>::new());
+    let (locale_choices, set_locale_choices) = create_signal(Vec::<String>::new());
 
     // Network configuration
     let (selected_interface, set_selected_interface) = create_signal(None::<NetworkInterface>);
@@ -62,9 +61,16 @@ pub fn SystemConfigurationPage() -> impl IntoView {
             }
         }
 
-        if let Ok(o) = get_system_config_options().await {
-            set_tz_options.set(o.timezones);
-            set_locale_options.set(o.locales);
+        match get_system_config_options().await {
+            Ok(o) => {
+                set_tz_choices.set(o.timezones);
+                set_locale_choices.set(o.locales);
+            }
+            // the selects still show the node's current values
+            Err(e) => set_error_message.set(Some(format!(
+                "Failed to load the time zone and locale lists: {}",
+                e
+            ))),
         }
 
         match get_network_interfaces().await {
@@ -377,42 +383,14 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                     </div>
 
                                     <div class="form-row">
-                                        <div class="form-group">
-                                            <label>"Timezone"</label>
-                                            <select
-                                                prop:value=form_timezone
-                                                on:change=move |ev| set_form_timezone.set(event_target_value(&ev))
-                                            >
-                                                {move || {
-                                                    let cur = form_timezone.get();
-                                                    crate::utils::choices_with_current(tz_options.get(), &cur)
-                                                        .into_iter()
-                                                        .map(|v| {
-                                                            let sel = v == cur;
-                                                            view! { <option value=v.clone() selected=sel>{v.clone()}</option> }
-                                                        })
-                                                        .collect_view()
-                                                }}
-                                            </select>
-                                        </div>
-                                        <div class="form-group">
-                                            <label>"Locale"</label>
-                                            <select
-                                                prop:value=form_locale
-                                                on:change=move |ev| set_form_locale.set(event_target_value(&ev))
-                                            >
-                                                {move || {
-                                                    let cur = form_locale.get();
-                                                    crate::utils::choices_with_current(locale_options.get(), &cur)
-                                                        .into_iter()
-                                                        .map(|v| {
-                                                            let sel = v == cur;
-                                                            view! { <option value=v.clone() selected=sel>{v.clone()}</option> }
-                                                        })
-                                                        .collect_view()
-                                                }}
-                                            </select>
-                                        </div>
+                                        <SearchSelect id="cfg-timezone" label="Timezone"
+                                            choices=Signal::derive(move || tz_choices.get())
+                                            value=form_timezone set_value=set_form_timezone
+                                            placeholder="Search time zones (e.g. Chicago, Etc/UTC)"/>
+                                        <SearchSelect id="cfg-locale" label="Locale"
+                                            choices=Signal::derive(move || locale_choices.get())
+                                            value=form_locale set_value=set_form_locale
+                                            placeholder="Search locales (e.g. en_US, de_DE)"/>
                                     </div>
 
                                     <div class="form-actions">
@@ -566,24 +544,10 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                         <small>"One NTP server per line"</small>
                                     </div>
 
-                                    <div class="form-group">
-                                        <label>"Timezone"</label>
-                                        <select
-                                            prop:value=form_ntp_timezone
-                                            on:change=move |ev| set_form_ntp_timezone.set(event_target_value(&ev))
-                                        >
-                                            {move || {
-                                                    let cur = form_ntp_timezone.get();
-                                                    crate::utils::choices_with_current(tz_options.get(), &cur)
-                                                        .into_iter()
-                                                        .map(|v| {
-                                                            let sel = v == cur;
-                                                            view! { <option value=v.clone() selected=sel>{v.clone()}</option> }
-                                                        })
-                                                        .collect_view()
-                                                }}
-                                        </select>
-                                    </div>
+                                    <SearchSelect id="ntp-timezone" label="Timezone"
+                                        choices=Signal::derive(move || tz_choices.get())
+                                        value=form_ntp_timezone set_value=set_form_ntp_timezone
+                                        placeholder="Search time zones (e.g. Chicago, Etc/UTC)"/>
 
                                     <div class="form-actions">
                                         <button
@@ -781,5 +745,85 @@ fn VmDefaultNetworkCard() -> impl IntoView {
                 {move || msg.get().map(|(ok, m)| view! { <div class=if ok { "alert alert-success" } else { "alert alert-error" } id="vm-default-network-msg">{m}</div> })}
             </form>
         </div>
+    }
+}
+
+/// The choices a search box narrows `all` to: case-insensitive substring
+/// match (a space also matches `_`, so "new york" finds America/New_York),
+/// with `current` always kept so the select never shows a blank value.
+pub fn filter_choices(all: &[String], query: &str, current: &str) -> Vec<String> {
+    let q = query.trim().to_lowercase().replace(' ', "_");
+    let mut out: Vec<String> = all
+        .iter()
+        .filter(|c| q.is_empty() || c.to_lowercase().contains(&q))
+        .cloned()
+        .collect();
+    if !current.is_empty() && !out.iter().any(|c| c == current) {
+        out.insert(0, current.to_string());
+    }
+    out
+}
+
+/// A select over a long list (hundreds of time zones) with a search box.
+#[component]
+fn SearchSelect(
+    id: &'static str,
+    label: &'static str,
+    #[prop(into)] choices: Signal<Vec<String>>,
+    value: ReadSignal<String>,
+    set_value: WriteSignal<String>,
+    placeholder: &'static str,
+) -> impl IntoView {
+    let (query, set_query) = create_signal(String::new());
+    let shown = create_memo(move |_| filter_choices(&choices.get(), &query.get(), &value.get()));
+    view! {
+        <div class="form-group search-select">
+            <label for=id>{label}</label>
+            <input type="search" id=format!("{id}-search") placeholder=placeholder
+                prop:value=query
+                on:input=move |ev| {
+                    let q = event_target_value(&ev);
+                    set_query.set(q.clone());
+                    // one match left: take it (typing a full zone name selects it)
+                    let m = filter_choices(&choices.get_untracked(), &q, "");
+                    if m.len() == 1 {
+                        set_value.set(m[0].clone());
+                    }
+                }/>
+            <select id=id on:change=move |ev| set_value.set(event_target_value(&ev))>
+                {move || shown.get().into_iter().map(|c| {
+                    let c2 = c.clone();
+                    view! { <option value=c.clone() selected=move || value.get() == c2>{c}</option> }
+                }).collect_view()}
+            </select>
+            <small class="form-help">{move || {
+                let total = choices.with(|c| c.len());
+                if query.get().trim().is_empty() {
+                    format!("{total} available on this node")
+                } else {
+                    format!("{} of {total} match", shown.with(|s| s.len()))
+                }
+            }}</small>
+        </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_narrows_the_list_but_keeps_the_current_value() {
+        let all: Vec<String> = ["America/Chicago", "America/New_York", "Etc/UTC", "UTC"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(filter_choices(&all, "", "Etc/UTC"), all);
+        assert_eq!(
+            filter_choices(&all, "new york", "Etc/UTC"),
+            ["Etc/UTC", "America/New_York"]
+        );
+        assert_eq!(filter_choices(&all, "CHICAGO", ""), ["America/Chicago"]);
+        // a value the node has but the list lacks is still shown
+        assert_eq!(filter_choices(&all, "", "Asia/Tokyo")[0], "Asia/Tokyo");
     }
 }

@@ -1771,13 +1771,15 @@ impl LxcManager {
             for e in rd.flatten() {
                 let p = e.path();
                 if p.join("bridge").is_dir() {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    // docker0/podman0/br-<hash> belong to their runtime
+                    if crate::container::probe::is_container_runtime_bridge(&name) {
+                        continue;
+                    }
                     let vlan_aware = std::fs::read_to_string(p.join("bridge/vlan_filtering"))
                         .map(|s| s.trim() == "1")
                         .unwrap_or(false);
-                    bridges.push(LxcBridge {
-                        name: e.file_name().to_string_lossy().to_string(),
-                        vlan_aware,
-                    });
+                    bridges.push(LxcBridge { name, vlan_aware });
                 }
             }
         }

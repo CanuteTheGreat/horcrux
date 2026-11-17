@@ -76,59 +76,6 @@ pub fn engine_check(runtime: &str, have_bin: bool, socket: bool) -> Result<(), A
     }
 }
 
-/// One OCI runtime's availability, for the container create form.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct RuntimeStatus {
-    pub runtime: String,
-    pub available: bool,
-    #[serde(default)]
-    pub reason: Option<String>,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub hint: Option<String>,
-}
-
-pub fn runtime_status(runtime: &str, check: Result<(), ApiError>) -> RuntimeStatus {
-    match check {
-        Ok(()) => RuntimeStatus {
-            runtime: runtime.into(),
-            available: true,
-            reason: None,
-            message: None,
-            hint: None,
-        },
-        Err(ApiError::NotAvailable {
-            reason,
-            message,
-            hint,
-        }) => RuntimeStatus {
-            runtime: runtime.into(),
-            available: false,
-            reason: Some(reason.into()),
-            message: Some(message),
-            hint: Some(hint),
-        },
-        Err(e) => RuntimeStatus {
-            runtime: runtime.into(),
-            available: false,
-            reason: Some("unknown".into()),
-            message: Some(format!("{e:?}")),
-            hint: None,
-        },
-    }
-}
-
-/// `GET /api/containers/runtimes`: whether Podman and Docker are usable here.
-pub async fn container_runtimes() -> axum::Json<Vec<RuntimeStatus>> {
-    axum::Json(
-        ["podman", "docker"]
-            .iter()
-            .map(|r| runtime_status(r, container_engine(r)))
-            .collect(),
-    )
-}
-
 pub fn no_log_source(detail: &str) -> ApiError {
     ApiError::NotAvailable {
         reason: "no-log-source",
@@ -208,18 +155,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runtime_status_says_why_a_runtime_is_unusable() {
-        let ok = runtime_status("podman", engine_check("podman", true, false));
-        assert!(ok.available && ok.reason.is_none());
-        let p = runtime_status("podman", engine_check("podman", false, false));
-        assert!(!p.available);
-        assert_eq!(p.reason.as_deref(), Some("podman-missing"));
-        assert!(p.hint.as_deref().unwrap().contains("Install"));
-        let d = runtime_status("docker", engine_check("docker", false, false));
-        assert_eq!(d.reason.as_deref(), Some("docker-missing"));
-        let off = runtime_status("docker", engine_check("docker", true, false));
-        assert_eq!(off.reason.as_deref(), Some("docker-not-running"));
-        assert!(runtime_status("docker", engine_check("docker", true, true)).available);
+    fn engine_check_says_why_a_runtime_is_unusable() {
+        let reason = |r: Result<(), ApiError>| match r {
+            Ok(()) => None,
+            Err(ApiError::NotAvailable { reason, hint, .. }) => {
+                assert!(!hint.is_empty());
+                Some(reason)
+            }
+            Err(e) => panic!("{e:?}"),
+        };
+        assert_eq!(reason(engine_check("podman", true, false)), None);
+        assert_eq!(
+            reason(engine_check("podman", false, false)),
+            Some("podman-missing")
+        );
+        assert_eq!(
+            reason(engine_check("docker", false, false)),
+            Some("docker-missing")
+        );
+        assert_eq!(
+            reason(engine_check("docker", true, false)),
+            Some("docker-not-running")
+        );
+        assert_eq!(reason(engine_check("docker", true, true)), None);
     }
 
     #[test]

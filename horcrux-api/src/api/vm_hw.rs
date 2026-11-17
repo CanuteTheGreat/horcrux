@@ -285,11 +285,10 @@ pub fn default_qemu_bridge(bridges: &[HostBridge], route_dev: Option<&str>) -> O
         }
     }
     let runtime = |n: &str| {
-        [
-            "docker", "podman", "cni", "incusbr", "lxdbr", "lxcbr", "br-",
-        ]
-        .iter()
-        .any(|p| n.starts_with(p))
+        crate::container::probe::is_container_runtime_bridge(n)
+            || ["incusbr", "lxdbr", "lxcbr"]
+                .iter()
+                .any(|p| n.starts_with(p))
     };
     bridges
         .iter()
@@ -430,6 +429,19 @@ pub async fn check_host_advanced(state: &AppState, hw: &VmHardware) -> Result<()
     Ok(())
 }
 
+/// Bridges a VM NIC may be put on: every host bridge except the ones a
+/// container runtime made for itself (docker0, podman0, cni0, br-<hash>).
+pub fn vm_bridges() -> Vec<HostBridge> {
+    vm_bridges_of(host_bridges())
+}
+
+pub fn vm_bridges_of(bridges: Vec<HostBridge>) -> Vec<HostBridge> {
+    bridges
+        .into_iter()
+        .filter(|b| !crate::container::probe::is_container_runtime_bridge(&b.name))
+        .collect()
+}
+
 /// Linux bridges on this host.
 pub fn host_bridges() -> Vec<HostBridge> {
     let mut out = Vec::new();
@@ -498,7 +510,7 @@ pub async fn iso_storages(state: &AppState) -> Vec<IsoStorage> {
     out
 }
 
-fn nearest_existing(p: &FsPath) -> PathBuf {
+pub(crate) fn nearest_existing(p: &FsPath) -> PathBuf {
     let mut p = p.to_path_buf();
     while !p.exists() {
         if !p.pop() {
@@ -638,7 +650,7 @@ pub async fn check_host_hardware(state: &AppState, hw: &VmHardware) -> Result<()
 
 async fn host_options(State(state): State<Arc<AppState>>) -> Json<HostOptions> {
     Json(HostOptions {
-        bridges: host_bridges(),
+        bridges: vm_bridges(),
         isos: scan_isos(&state).await,
         iso_dir: image_dir(&state.config.paths.data_dir)
             .to_string_lossy()
@@ -657,7 +669,7 @@ async fn host_options(State(state): State<Arc<AppState>>) -> Json<HostOptions> {
             .unwrap_or(0),
         ),
         default_networks: {
-            let bridges = host_bridges();
+            let bridges = vm_bridges();
             DefaultNetworks {
                 qemu: default_qemu_bridge(&bridges, default_route_dev().as_deref()),
                 incus: bridges
@@ -1336,6 +1348,37 @@ mod tests {
         );
         assert_eq!(default_qemu_bridge(&[b("docker0")], None), None);
         assert_eq!(default_qemu_bridge(&[], None), None);
+        // a user bridge named br-* is a real bridge; a Docker network's is not
+        assert_eq!(
+            default_qemu_bridge(&[b("br-0123456789ab"), b("br-lan")], None).as_deref(),
+            Some("br-lan")
+        );
+    }
+
+    #[test]
+    fn vm_nic_choices_leave_out_container_runtime_bridges() {
+        let b = |n: &str| HostBridge {
+            name: n.into(),
+            vlan_aware: false,
+        };
+        let names: Vec<String> = vm_bridges_of(
+            [
+                "br-0123456789ab",
+                "br0",
+                "cni0",
+                "docker0",
+                "incusbr0",
+                "podman0",
+                "virbr0",
+                "vmbr0",
+            ]
+            .map(b)
+            .to_vec(),
+        )
+        .into_iter()
+        .map(|b| b.name)
+        .collect();
+        assert_eq!(names, ["br0", "incusbr0", "virbr0", "vmbr0"]);
     }
 
     #[test]

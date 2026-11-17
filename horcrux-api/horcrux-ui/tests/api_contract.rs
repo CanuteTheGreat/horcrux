@@ -504,8 +504,8 @@ async fn ui_types_read_real_api_responses() {
     check!("/storage/smart/disks", Vec<api::SmartDiskInfo>);
     check!("/storage/smart/alerts", Vec<api::SmartAlert>);
     check!("/system/config", api::SystemConfiguration);
-    check!("/containers/runtimes", Vec<api::RuntimeStatus>);
     check!("/system/config/options", api::SystemConfigOptions);
+    check!("/containers/runtimes", api::ContainerRuntimes);
     check!("/system/network/dns", api::DnsConfiguration);
     check!("/system/time/ntp", api::NtpConfiguration);
     check!("/system/health", api::SystemHealth);
@@ -2250,6 +2250,61 @@ async fn features_endpoint_matches_ui_type() {
         "kubernetes",
     ] {
         assert!(set.has(name), "{name} missing from {body}");
+    }
+}
+
+/// The Create Container form offers only runtimes the node can use, and
+/// the System Configuration selects list the node's own zones/locales.
+#[tokio::test]
+async fn container_runtimes_and_config_options_reflect_the_node() {
+    let c = client();
+    let token = login(&c).await;
+    let rt: api::ContainerRuntimes = fetch(&c, &token, "/containers/runtimes?refresh=1").await;
+    let keys: Vec<&str> = rt.runtimes.iter().map(|r| r.runtime.as_str()).collect();
+    assert_eq!(keys, ["podman", "docker", "lxc", "incus", "lxd"]);
+    for r in &rt.runtimes {
+        // every runtime that is not usable says why and how to enable it
+        assert_eq!(r.available, r.reason.is_none(), "{r:?}");
+        if !r.available {
+            assert!(
+                r.message.is_some() && r.hint.as_deref().is_some_and(|h| !h.is_empty()),
+                "{r:?}"
+            );
+        }
+    }
+    // Docker's own answer agrees with the probe (CI's Test job sees a real daemon)
+    if docker_available() {
+        assert!(
+            rt.runtimes[1].available,
+            "docker works here: {:?}",
+            rt.runtimes[1]
+        );
+    }
+    assert_eq!(
+        rt.default.as_deref(),
+        rt.runtimes
+            .iter()
+            .find(|r| r.available)
+            .map(|r| r.runtime.as_str())
+    );
+    assert!(rt.host.cpus >= 1 && rt.host.memory_mb > 0, "{:?}", rt.host);
+
+    let o: api::SystemConfigOptions = fetch(&c, &token, "/system/config/options").await;
+    let cfg: api::SystemConfiguration = fetch(&c, &token, "/system/config").await;
+    assert!(
+        o.timezones.contains(&cfg.timezone),
+        "current zone {} not offered",
+        cfg.timezone
+    );
+    assert!(
+        o.locales.contains(&cfg.locale),
+        "current locale {} not offered",
+        cfg.locale
+    );
+    if std::path::Path::new("/usr/share/zoneinfo/America/Chicago").is_file() {
+        assert!(o.timezones.len() > 300, "{} zones", o.timezones.len());
+        assert!(o.timezones.iter().any(|z| z == "America/Chicago"));
+        assert!(!o.timezones.iter().any(|z| z.starts_with("posix/")));
     }
 }
 

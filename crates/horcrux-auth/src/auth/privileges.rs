@@ -266,6 +266,11 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
                     privilege: P::VmAudit,
                     prefix: "/containers".into(),
                 },
+                // which runtimes work on this node (Create Container form)
+                "runtimes" if m == "GET" && arg(2).is_empty() => Requirement::AnyBelow {
+                    privilege: P::VmAudit,
+                    prefix: "/containers".into(),
+                },
                 _ => guest_action(m, &format!("/containers/{}", id), arg(2)),
             }
         }
@@ -616,6 +621,20 @@ mod tests {
                 ..
             }
         ));
+        // Anyone who may see some container may ask which runtimes work
+        // (the Create Container form); a container named "runtimes" keeps
+        // its own write rules.
+        assert!(matches!(
+            requirement("GET", "/api/containers/runtimes"),
+            Requirement::AnyBelow {
+                privilege: P::VmAudit,
+                ..
+            }
+        ));
+        assert_eq!(
+            priv_of(requirement("DELETE", "/api/containers/runtimes")),
+            (P::VmAllocate, "/containers/runtimes".into())
+        );
     }
 
     #[test]

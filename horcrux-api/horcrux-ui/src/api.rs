@@ -4539,6 +4539,38 @@ pub async fn update_system_configuration(config: SystemConfiguration) -> Result<
     post_json("/system/config", &config).await
 }
 
+/// One container runtime as probed live on the node.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ContainerRuntimeProbe {
+    pub runtime: String,
+    pub label: String,
+    pub compiled: bool,
+    pub available: bool,
+    pub version: Option<String>,
+    pub reason: Option<String>,
+    pub message: Option<String>,
+    pub hint: Option<String>,
+}
+
+/// GET /api/containers/runtimes: what works, the default, slider bounds.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ContainerRuntimes {
+    pub runtimes: Vec<ContainerRuntimeProbe>,
+    pub default: Option<String>,
+    pub host: HostCapabilities,
+    #[serde(default)]
+    pub lxc_disk_available_gb: u64,
+}
+
+pub async fn get_container_runtimes(refresh: bool) -> Result<ContainerRuntimes, ApiError> {
+    fetch_json(if refresh {
+        "/containers/runtimes?refresh=1"
+    } else {
+        "/containers/runtimes"
+    })
+    .await
+}
+
 /// Get network interfaces
 pub async fn get_network_interfaces() -> Result<Vec<NetworkInterface>, ApiError> {
     fetch_json("/system/network/interfaces").await
@@ -5497,23 +5529,6 @@ pub async fn update_stack(
 pub struct WsTicketResponse {
     pub ticket: String,
     pub ws_path: String,
-}
-
-/// Whether an OCI runtime (podman, docker) is usable on this node.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct RuntimeStatus {
-    pub runtime: String,
-    pub available: bool,
-    #[serde(default)]
-    pub reason: Option<String>,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub hint: Option<String>,
-}
-
-pub async fn get_container_runtimes() -> Result<Vec<RuntimeStatus>, ApiError> {
-    fetch_json("/containers/runtimes").await
 }
 
 pub async fn get_images(runtime: &str) -> Result<Vec<ImageInfo>, ApiError> {

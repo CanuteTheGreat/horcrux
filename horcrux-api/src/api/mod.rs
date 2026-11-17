@@ -9,6 +9,7 @@ pub mod backup;
 pub mod ceph_admin;
 #[cfg(feature = "cluster")]
 pub mod cluster_join;
+pub mod container_runtimes;
 #[cfg(feature = "cluster")]
 pub mod ct_move;
 pub mod dashboards;

@@ -17,6 +17,7 @@ import json
 import os
 import ssl
 import sys
+import urllib.error
 import urllib.request
 
 from playwright.sync_api import expect, sync_playwright
@@ -56,6 +57,21 @@ ALWAYS_NAV = ["Virtual Machines", "Containers", "Storage", "Snapshots"]
 def server_features():
     with urllib.request.urlopen(f"{BASE}/api/features", context=SSL_CTX) as r:
         return set(json.load(r)["features"])
+
+
+def api_get(path):
+    """GET an API path as admin: {status, body}."""
+    req = urllib.request.Request(f"{BASE}/api/auth/login", data=json.dumps({"username": "admin", "password": "admin"}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, context=SSL_CTX) as r:
+        tok = json.load(r)
+    tok = tok.get("ticket") or tok.get("token")
+    req = urllib.request.Request(f"{BASE}{path}", headers={"Authorization": f"Bearer {tok}"})
+    try:
+        with urllib.request.urlopen(req, context=SSL_CTX, timeout=60) as r:
+            return {"status": r.status, "body": json.load(r)}
+    except urllib.error.HTTPError as e:
+        return {"status": e.code, "body": None}
 
 
 def has(feats, expr):
@@ -106,14 +122,35 @@ def main():
                 expect(disabled).to_be_visible(timeout=20000)
                 expect(disabled).to_contain_text("Not available in this build")
 
-        # ---- form options follow the compiled runtimes/hypervisors --------
+        # ---- container form: compiled AND working runtimes only -----------
         page.goto(f"{BASE}/containers/create")
-        opts = page.locator("#ct-runtime option")
-        expect(opts.first).to_be_attached(timeout=20000)
-        runtimes = opts.evaluate_all("els => els.map(e => e.value)")
-        want = [r for r in ("podman", "docker", "lxc", "incus", "lxd") if r in feats]
-        assert runtimes == want, f"[{MODE}] runtime options {runtimes}, expected {want}"
-        assert page.locator("#ct-runtime").input_value() == want[0]
+        expect(page.locator("#ct-runtime, #ct-no-runtime").first).to_be_visible(timeout=30000)
+        probe = api_get("/api/containers/runtimes?refresh=1")
+        assert probe["status"] == 200, f"[{MODE}] GET /api/containers/runtimes -> {probe['status']}"
+        rts = probe["body"]["runtimes"]
+        assert [r["runtime"] for r in rts] == ["podman", "docker", "lxc", "incus", "lxd"], rts
+        for r in rts:
+            assert r["compiled"] == (r["runtime"] in feats), f"[{MODE}] {r}"
+            assert r["compiled"] or not r["available"], f"[{MODE}] not built in but available: {r}"
+        want = [r["runtime"] for r in rts if r["available"]]
+        if want:
+            runtimes = page.locator("#ct-runtime option").evaluate_all("els => els.map(e => e.value)")
+            assert runtimes == want, f"[{MODE}] runtime options {runtimes}, expected the working ones {want}"
+            assert page.locator("#ct-runtime").input_value() == want[0]
+            # CPU/RAM sliders with a Custom override, like the Create VM form
+            for s in ("#ct-cpus-slider", "#ct-memory-slider"):
+                expect(page.locator(s)).to_be_visible()
+            page.locator("#ct-memory-custom").check()
+            expect(page.locator("#ct-memory-input")).to_be_visible()
+            # a runtime that does not work here is named with how to enable it
+            if any(r["compiled"] and not r["available"] for r in rts):
+                expect(page.locator("#ct-runtime-unavailable")).to_be_attached()
+        else:
+            # nothing works: say so up front (no form that fails at Create), with hints and a re-check
+            expect(page.locator("#ct-no-runtime")).to_be_visible()
+            assert page.locator("#create-container-form").count() == 0
+            assert page.locator("#ct-no-runtime .ct-runtime-hint").count() >= 1
+            expect(page.locator("#ct-runtime-recheck")).to_be_enabled()
 
         page.goto(f"{BASE}/vms/create")
         hv_want = [h for h in ("qemu", "incus", "lxd") if h in feats]
