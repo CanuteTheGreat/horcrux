@@ -148,6 +148,12 @@ pkg_postinst() {
 			mkdir -p "${r}/metadata" && printf 'masters = gentoo\nthin-manifests = true\n' > "${r}/metadata/layout.conf"
 		fi
 	done
+	# ClamAV is a blocked personal app here (see the blockers in RDEPEND). Portage leaves its signature database in /var/lib/clamav after the
+	# blocker unmerges it; with no scanner left, Rustinion read that frozen database and raised `av_signatures_outdated` for a scanner that no
+	# longer exists. With no clamav installed the database is dead weight: remove it, so the agent reports "not installed" (which never alerts).
+	if [[ -z ${ROOT} || ${ROOT} == / ]] && ! has_version app-antivirus/clamav; then
+		rm -f "${EROOT}"/var/lib/clamav/{main,daily,bytecode}.{cvd,cld,cud} "${EROOT}"/var/lib/clamav/*.cvd.sign "${EROOT}"/var/lib/clamav/freshclam.dat
+	fi
 	use gnome && has_version gnome-base/dconf && dconf update
 	if [[ -z ${ROOT} || ${ROOT} == / ]]; then
 		local s
