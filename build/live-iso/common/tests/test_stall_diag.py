@@ -50,7 +50,7 @@ class SerialProbe(unittest.TestCase):
             if s == "\r" and menu:
                 vm.raw += b"Enter an option: "
             if s.startswith("echo DIAG-S"):
-                vm.raw += b"DIAG-S-42\nlo UNKNOWN 127.0.0.1/8\nenp0s2 DOWN 10.77.0.1/24\nchain input { type filter hook input priority 0; policy drop;\nLOCALWEB-8443-200\nLISTEN 0 128 0.0.0.0:22\nDIAG-E-42\n"
+                vm.raw += b"DIAG-S-42\nlo UNKNOWN 127.0.0.1/8\nenp0s2 DOWN 10.77.0.1/24\nchain input { type filter hook input priority 0; policy drop;\nLOCALWEB-8443-200\nPING-GW-0\nCTRULES-1\nLISTEN 0 128 0.0.0.0:22\nDIAG-E-42\n"
         vm.send = send
         def expect_raw(pat, timeout, consume=True):
             import re
@@ -66,6 +66,9 @@ class SerialProbe(unittest.TestCase):
         self.assertIn("enp0s2 DOWN", d)
         self.assertIn("policy drop", d)
         self.assertIn("LOCALWEB-8443-200", d)
+        self.assertIn("PING-GW-0", d)
+        self.assertIn("CTRULES-1", d)
+        self.assertTrue(any("ping -c2" in x and "10.0.2.2" in x for x in vm.sent))
         self.assertIn("8\r", vm.sent)
         self.assertTrue(any("nft list ruleset" in x and "LOCALWEB-" in x for x in vm.sent))
 

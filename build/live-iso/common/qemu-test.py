@@ -848,6 +848,11 @@ def serial_probe(vm, wait=45):
                     # 2026-11-16 (gringotts j05543: guest up 5 min, 22/8443 listening, forwards dead for 180 s): was the ruleset only half loaded after the
                     # reset (a drop policy without its accept rules), did applyd/web log an error, does the web answer on the guest itself?
                     "echo NFT-RULES; nft list ruleset 2>&1 | grep -E 'table |chain |policy|dport|iifname' | head -30; "
+                    # 2026-11-17 (hogshead j06220, same stall: rules fine, 22/8443 listening, local curl 303, host forwards dead 300 s): QEMU slirp may have
+                    # lost the guest's ARP entry; a guest-originated packet to the gateway refreshes it. Report whether the gateway answers, the neighbour table
+                    # and whether an established/related accept exists in the input chain.
+                    "ping -c2 -W2 10.0.2.2 >/dev/null 2>&1; echo PING-GW-$?; ip neigh | head -4 | sed 's/^/NEIGH /'; "
+                    "nft list chain inet patronus input 2>&1 | grep -c 'ct state' | sed 's/^/CTRULES-/'; "
                     "echo APPLY-LOGS; tail -n 4 /var/log/patronus/*.log /var/log/horcrux/*.log 2>/dev/null | cut -c1-160; "
                     "for p in 8443 8006; do ss -ltn | grep -q \":$p \" && echo LOCALWEB-$p-$(curl -sk -m8 -o /dev/null -w %{http_code} https://127.0.0.1:$p/ 2>&1 | tail -c 40); done; "
                     "echo DIAG-E-$((6*7))")
@@ -856,7 +861,7 @@ def serial_probe(vm, wait=45):
             out = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", m.group(0).decode(errors="replace")) if m else "<<no shell answer>>"
             vm.send("exit\r")
         print("--- serial probe (guest console menu %s) ---\n%s\n---" % ("answers" if alive else "SILENT", out), flush=True)
-        facts = [l.strip() for l in out.splitlines() if re.match(r"\s*(lo|enp\S*|eth\S*|\d+:\d+:\d+ up|LOCALWEB-)", l) or "LISTEN" in l or "policy" in l][:12]
+        facts = [l.strip() for l in out.splitlines() if re.match(r"\s*(lo|enp\S*|eth\S*|\d+:\d+:\d+ up|LOCALWEB-)", l) or "LISTEN" in l or "policy" in l or re.match(r"(PING-GW|CTRULES|NEIGH)", l.strip())][:16]
         return " [serial probe: console menu " + ("answers" if alive else "SILENT (guest hung?)") + ("; " + " // ".join(facts) if facts else "") + "]"
     except Exception as e:  # diagnostics must never mask the failure
         return f" [serial probe failed: {e}]"
@@ -1963,6 +1968,9 @@ class Runner:
                 diag += stall_diag(vm, rc, o)
                 if rc != 0:
                     diag += serial_probe(vm)
+                    # the probe made the guest send packets (ping of the slirp gateway): say whether the dead forward came back by itself afterwards
+                    rc_after, _ = ssh(FWD_SSH, self.key, "true")
+                    diag += f" [ssh forward after the serial probe: rc={rc_after}]"
         else:
             diag = ""
         self.step("console-menu-factory-reset", c3 == 200 and c2 != 200, f"factory defaults: new password -> {c3}, password from before the reset -> {c2}" + diag)
