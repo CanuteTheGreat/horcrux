@@ -996,9 +996,14 @@ pub async fn approve(
         .map_err(|_| SyncError::Busy("a sync is running; try again in a moment".into()))?;
     let head = fetch(state, &cfg).await?;
     if head.commit != pend.commit {
-        drift::rt().kick_git.notify_one();
+        // replace the stale plan with one for the new head right away
+        let fresh = sync_inner(state, &cfg, Trigger::Manual).await.ok();
+        let now = fresh
+            .and_then(|o| o.pending)
+            .map(|h| format!(" (new plan {h} is waiting)"))
+            .unwrap_or_default();
         return Err(SyncError::Conflict(format!(
-            "the repository head moved to {} since this plan was made for {}: the old approval is stale and a new plan will replace it",
+            "the repository head moved to {} since this plan was made for {}: the old approval is stale{now}",
             &head.commit[..head.commit.len().min(12)],
             &pend.commit[..pend.commit.len().min(12)]
         )));

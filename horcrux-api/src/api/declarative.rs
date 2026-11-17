@@ -313,8 +313,6 @@ async fn put_git_config(
     store::put_gitops_config(&state, &c)
         .await
         .map_err(ApiError::Internal)?;
-    // a changed repo/branch starts from a clean slate
-    drift::rt().kick_git.notify_one();
     json_of(json!({"configured": true, "config": c}))
 }
 

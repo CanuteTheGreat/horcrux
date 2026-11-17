@@ -231,7 +231,6 @@ pub fn spawn(state: Arc<AppState>) {
         tokio::time::sleep(Duration::from_secs(10)).await;
         ensure_rule(&state).await;
         let mut last_drift: Option<Instant> = None;
-        let mut last_git: Option<Instant> = None;
         loop {
             let mut force_drift = false;
             let mut force_git = false;
@@ -250,8 +249,19 @@ pub fn spawn(state: Arc<AppState>) {
                 check(&state).await;
             }
             if let Some(cfg) = store::gitops_config(&state).await {
-                if cfg.enabled && (force_git || due(last_git, cfg.interval_secs)) {
-                    last_git = Some(Instant::now());
+                // "due" comes from the persisted last sync, so a restart
+                // doesn't resync early and a manual sync resets the clock
+                let git_due = || async {
+                    let last = store::gitops_state(&state).await.last_sync;
+                    match last.and_then(|t| chrono::DateTime::parse_from_rfc3339(&t).ok()) {
+                        Some(t) => {
+                            (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds()
+                                >= cfg.interval_secs as i64
+                        }
+                        None => true,
+                    }
+                };
+                if cfg.enabled && (force_git || git_due().await) {
                     if let Err(e) =
                         super::gitops::sync(&state, super::gitops::Trigger::Schedule).await
                     {
