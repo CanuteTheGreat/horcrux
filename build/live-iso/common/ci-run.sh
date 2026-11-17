@@ -157,7 +157,7 @@ if [ "$result" = pass ]; then
   fi
   # Hard per-test deadlines (a stuck QEMU test must FAIL in minutes-to-an-hour, not hold the single KVM runner for hours): the harness arms a
   # watchdog (QEMU_TEST_DEADLINE: kills its QEMUs, prints [FAIL] hard-deadline, exits 124) and `timeout` is the backstop (SIGTERM = same cleanup).
-  if [ "$ARCH" = "$HOST_ARCH" ] && [ -e /dev/kvm ]; then DL_QEMU=2700; DL_ZFS=3600; DL_MODES=3000; else DL_QEMU=5400; DL_ZFS=10800; DL_MODES=10800; fi   # DL_ZFS under TCG 7200 -> 10800: systemd aarch64 run 3281 passed every step of the headless gate and was cut by the 7200 s deadline in its last stage (install alone 1446 s)
+  if [ "$ARCH" = "$HOST_ARCH" ] && [ -e /dev/kvm ]; then DL_QEMU=2700; DL_ZFS=5400; DL_MODES=3000; else DL_QEMU=5400; DL_ZFS=10800; DL_MODES=10800; fi   # DL_ZFS under TCG 7200 -> 10800: systemd aarch64 run 3281 passed every step of the headless gate and was cut by the 7200 s deadline in its last stage (install alone 1446 s)
   # DL_MODES under TCG: boot-modes = 8 menu-mode boots + a ~1900 s base install + forensic + rescue boots; it hit the old 6000 s deadline on a loaded
   # arm64 runner (patronus run 783: all asserts passed up to 'rescue', then hard-deadline). Only the deadline moved; the job cap is 420 min.
   with_deadline() { local s=$1; shift; QEMU_TEST_DEADLINE=$s timeout -k 30 $((s+180)) "$@"; }

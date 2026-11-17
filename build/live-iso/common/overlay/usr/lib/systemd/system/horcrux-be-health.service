@@ -1,0 +1,15 @@
+# Boot-environment auto-fallback, systemd half (OpenRC twin: /etc/init.d/horcrux-be-health, same command): once this boot is healthy,
+# tell horcrux-be so the trial of a freshly activated environment ends; until then GRUB counts boots and returns to the previous one.
+[Unit]
+Description=Mark this boot environment healthy (auto-fallback)
+After=local-fs.target horcrux-api.service libvirtd.service sshd.service network-online.target
+ConditionPathExists=/etc/horcrux/be.conf
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# waits up to HEALTH_TIMEOUT for the checks; a oneshot that takes minutes would delay multi-user.target, so the wait is forked off
+ExecStart=/usr/bin/horcrux-be mark-good --wait --detach
+
+[Install]
+WantedBy=multi-user.target

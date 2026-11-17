@@ -61,14 +61,68 @@ Migration of an existing install's `/var/lib/horcrux/vms` into its own dataset i
 
 ## OpenRC and systemd parity (owner rule)
 Coordinated with `docs/design/init-parity.md` (init abstraction in `horcrux-api/src/init.rs`; not duplicated here).
-Nothing in boot environments touches the init system: Portage's bashrc, ZFS, GRUB and `horcrux-be` (Python) are init-neutral,
-the API module shells out to `horcrux-be` only, and the QEMU test asserts behavior, not services. The one init-specific piece
-is the installer's `zfsroot.configure()` enabling `zfs-import`/`zfs-mount`/`zfs-zed` with `rc-update`: the systemd installer
-path (init-parity phase 3) must enable `zfs-import-cache.service`/`zfs-mount.service`/`zfs-zed.service`/`zfs.target` instead;
-until then BE install is OpenRC-only on the installer side, but a systemd host that has `horcrux-tools` and a ZFS root runs
-every other part unchanged.
+Boot environments are init-neutral: Portage's bashrc, ZFS, GRUB and `horcrux-be` (Python) never touch the init system, the API module
+shells out to `horcrux-be` only, and the QEMU test asserts behavior, not services. The init-specific pieces, each with both flavours:
+- the installer's `zfsroot.configure()` enables the ZFS boot services through `liveinst/initsys.py`: `zfs-import`/`zfs-mount`/`zfs-zed`
+  with `rc-update` on OpenRC, `zfs-import-cache.service`/`zfs-mount.service`/`zfs-zed.service` + `zfs.target`/`zfs-import.target` with
+  `systemctl enable` on systemd (`UNIT_MAP`; unit-tested in `tests/test_initsys.py`, asserted on the booted guest by the QEMU gate
+  `be-zfs-and-health-services-enabled-on-this-init`);
+- the health service of the automatic fallback: `/etc/init.d/horcrux-be-health` (OpenRC) and `horcrux-be-health.service` (systemd) run the
+  same command, `horcrux-be mark-good --wait --detach`.
 
-## Test
+## Phase 2 (this change)
+
+### Where `/var/lib/horcrux` (the config database) lives: it rolls back WITH the root
+Decision: `/var/lib/horcrux` stays on the boot environment dataset; only `/var/lib/horcrux/vms` (the disks) is shared.
+- The database schema and the `horcrux-api` binary are a pair: a binary rolled back to an older version must not open a database a newer
+  version already migrated. Sharing the database across environments would make every rollback of a schema-changing upgrade a corruption risk.
+- Nothing is lost: the environment you leave keeps its own, newer database untouched and stays bootable (`Boot next` returns to it).
+- What a rollback does revert is configuration changed after the snapshot (users, ACLs, VM definitions created since). The VM disks are
+  still there (shared dataset); re-register such a VM from its disk, or boot the newer environment again. The UI says so on the roll back
+  buttons, and the pre-upgrade snapshot is taken at upgrade time, so the window is "what you changed since that upgrade".
+
+### `horcrux-be migrate-data [--dry-run] [--keep-original] [PATH...]`
+Existing installs from before the installer gave `/var/lib/horcrux/vms` its own dataset keep VM disks inside the boot environment, and the
+data guard (`check`) refuses a rollback for them. `migrate-data` fixes that for every `DATA_PATHS` entry that is a plain directory on a
+`rpool/ROOT/<be>` dataset and holds files (`liveinst/bemigrate.py`):
+1. blockers first: any process with a file open under the path (a running VM, docker), a dataset of that name that is not ours, too little
+   free space for a second copy: exit 3, nothing changed (the dry run prints the same list);
+2. snapshot `migrate-data-<stamp>` of the environment (never pruned: the original data stays reachable until you destroy it);
+3. create `rpool/<path>` (missing parents as `canmount=off` containers, `recordsize=64K` for VM disks), copy with `rsync -aHAXS` (else `cp -a`),
+   verify type/size/mode/owner/mtime/symlink target of every entry, copy again after re-checking the path is still quiet;
+4. swap: old directory renamed aside, dataset mounted at the path, old copy removed (`--keep-original` keeps it); a failed mount puts it back.
+Idempotent (a migrated path is skipped; an interrupted run resumes its half-copied dataset, marked `horcrux:migrating=yes`). API: `POST
+/api/system/boot-environments/migrate-data {dry_run}` (the real run is a task); the UI offers it in the data-safety banner.
+Old boot environments keep their own stale copy under the mount until destroyed.
+
+### Explicit snapshot step in the upgrade task + the Packages banner
+`POST /api/system/packages/upgrade-all` and `.../:name/upgrade` first run `horcrux-be pre-upgrade --json` (always snapshots as
+`pre-upgrade-<stamp>`, unlike the Portage hook's 30-minute throttle, then arms that throttle so the emerge does not snapshot twice; skipped
+with a reason where there is no ZFS root or `AUTO_SNAPSHOT=no`). The task answer carries `snapshot`. The Package Manager page shows a banner
+for the newest `pre-upgrade-*` snapshot of the running environment with the time and a one-click "Roll back to before this upgrade" (nothing
+reboots; it disappears once the rolled-back environment is the running one). The hook in Portage's bashrc stays as the safety net for CLI,
+cron and unattended upgrades.
+
+### Automatic fallback ("boot the previous version by itself")
+A just-activated environment (`activate`, `rollback`) is ON TRIAL. State lives in GRUB's environment block `/boot/grub/grubenv`
+(plain ext4 `/boot`, so GRUB can write it; `befallback.py`): `hx_trial` (environment under trial), `hx_tries` (one `x` per boot of it: GRUB
+has no arithmetic), `hx_good` (the environment that was running = the way back), `hx_failed`. The generated `grub.cfg` loads them, appends
+an `x` on every boot of the trial environment and, when `FALLBACK_TRIES` (default 3) boots passed without a healthy one, makes `hx_good`
+the default entry and sets `hx_failed`. Every entry also gets `panic=10` (`PANIC_REBOOT`), so a kernel panic resets the machine and is
+counted instead of hanging at a dead console.
+The health service (`horcrux-be-health`, OpenRC script / systemd unit) runs `horcrux-be mark-good --wait --detach` on every boot: it waits up
+to `HEALTH_TIMEOUT` (300 s) for the pool to be online and, when `horcrux-api` is enabled, for port 8006 to answer (`HEALTH_CMD` adds a custom
+check), then closes the trial (`boot-ok`) or, after a fallback, makes `bootfs` follow what actually booted, flags the failed environment
+(`horcrux:failed=yes`, shown as "did not boot healthy") and records a `fallback` event. An unhealthy boot that does come up records
+`health-failed` and stays on trial, so the counter keeps running. Not armed when `FALLBACK=no`, when there is no previous environment with
+a kernel, or when the health service is not enabled (nothing could end the trial). A hand-picked older menu entry never ends or fails a trial.
+Events (`armed`, `boot-ok`, `fallback`, `health-failed`, `snapshot`, `migrated`) go to `/var/log/horcrux-be-events.jsonl` (the shared log
+dataset, so they survive rollbacks and fallbacks) and show in `horcrux-be events`, `GET /api/system/boot-environments` (`events`, `fallback`)
+and the Boot Environments page. Limits: a boot that hangs without panicking is not counted until someone resets the machine; multi-disk
+`/boot` mirrors copy `grub.cfg` but the counter lives on the first drive's `/boot`.
+Existing installs: `sys-apps/horcrux-tools` pkg_postinst enables the health service on whichever init runs and regenerates `grub.cfg`.
+
+## Test (phase 1; phase 2 gates are listed under Phases)
 `build/live-iso/common/zfs-enc-test.py` (QEMU, KVM on rw-man): install on encrypted ZFS, then in the installed system install a
 probe package 1.0 through emerge, **upgrade it to 2.0 through emerge** (the Portage hook must snapshot by itself), write files
 into the VM datasets and /home, `horcrux-be rollback` (no argument), reboot with the passphrase, and assert: booted the rolled-back BE,
@@ -76,9 +130,8 @@ probe package is 1.0, every VM/user file is byte-identical, the old BE is still 
 `tests/test_be_boot_space.py`, `tests/test_be_rollback.py` (pins, previous-snapshot, data guard, installer layout).
 
 ## Phases
-1. (this change) pins, `--json`, no-arg rollback, data guard + `horcrux-be check`, vms dataset in the installer, API, UI, design, QEMU gate.
-2. Existing installs: `horcrux-be migrate-data` moving `/var/lib/horcrux/vms` into its own dataset (offline-safe, VMs stopped);
-   API-side explicit "snapshot then upgrade" task step and a banner in the Packages page showing the snapshot taken;
-   boot-time health check that auto-selects the previous BE after N failed boots (GRUB `grubenv` fallback counter);
-   `/var/lib/horcrux` (config DB) split decision: today it rolls back with root so DB and binary stay consistent.
-3. ZFSBootMenu as an optional loader (EFI), systemd installer path, per-BE `etc` diff view in the UI.
+1. (done) pins, `--json`, no-arg rollback, data guard + `horcrux-be check`, vms dataset in the installer, API, UI, design, QEMU gate.
+2. (done) `migrate-data`, explicit pre-upgrade snapshot + Packages banner, automatic fallback with events, `/var/lib/horcrux` decision,
+   systemd ZFS services asserted; QEMU gates `be-*`, `migrate-data-*`, `explicit-pre-upgrade-snapshot-step`, `broken-environment-panicked-n-times-then-fell-back`
+   run on both inits (`zfs-enc-test.py --server`, default on, `--no-be-phase2` skips).
+3. ZFSBootMenu as an optional loader (EFI), per-BE `etc` diff view in the UI, an unhealthy-but-running boot optionally rebooting itself.
