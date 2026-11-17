@@ -1090,3 +1090,88 @@ a.stat-card.healthy .stat-value { color: var(--success); }
 .backend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.5rem 1rem; margin-top: 0.5rem; }
 .backend { display: flex; flex-direction: column; }
 .backend span { color: var(--secondary); font-size: 0.875rem; }
+
+/* ---- Shared building blocks used by many pages (UX lane 2026-11-17: these classes had no rules, so the
+   pages rendered as stacked, run-together text). ---- */
+.card, section.card { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1.25rem; margin-bottom: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); overflow-x: auto; }
+.card > h2, .card > h3 { margin: 0 0 .75rem; font-size: 1.15rem; }
+.card > p { margin-bottom: .75rem; }
+table.table, .users-table, .sessions-table table, .health-dashboard table { width: 100%; border-collapse: collapse; background: var(--surface); }
+table.table th, table.table td, .users-table th, .users-table td, .sessions-table th, .sessions-table td {
+    padding: .55rem .75rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+table.table th, .users-table th, .sessions-table th { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary); font-weight: 600; white-space: nowrap; }
+.card table.table th { text-transform: none; letter-spacing: 0; font-size: .9rem; width: 1%; padding-right: 1.5rem; }
+.users-table td, .sessions-table td { white-space: nowrap; }
+
+/* checkboxes/radios in a .form-group keep their natural size next to their text (width:100% put the box far away) */
+.form-group input[type=checkbox], .form-group input[type=radio] { width: auto; padding: 0; margin: 0; flex: none; }
+.checkbox-label, label.checkbox, .form-group label.checkbox-label { display: inline-flex; align-items: center; gap: .45rem; font-weight: 400; margin: 0; white-space: nowrap; cursor: pointer; }
+.resource-slider .form-row { align-items: center; flex-wrap: nowrap; gap: 1rem; }
+.resource-slider input[type=range] { flex: 1 1 auto; padding: 0; min-width: 0; }
+
+/* multi-line inputs: room for a few lines and a readable example */
+.form-group textarea { min-height: 6.5rem; }
+input::placeholder, textarea::placeholder { color: var(--secondary); opacity: 1; }
+
+/* Filter bars and list tables (Users, Sessions, ...) */
+.filters-section { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin: 1rem 0; }
+.search-filter { position: relative; display: flex; align-items: center; flex: 1 1 18rem; max-width: 28rem; }
+.search-input, .filter-select { padding: .5rem .7rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font: inherit; }
+.search-input { width: 100%; padding-right: 2rem; }
+.search-filter .search-icon { position: absolute; right: .6rem; opacity: .6; pointer-events: none; }
+.dropdown-filters { display: flex; flex-wrap: wrap; gap: .5rem; }
+.users-table-container, .sessions-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: .5rem; }
+.user-info { display: flex; flex-direction: column; line-height: 1.3; }
+.user-info small, .user-comment { color: var(--secondary); font-size: .8rem; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.role-badge, .realm-badge, .users-table .status-badge { display: inline-block; font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; border: 1px solid var(--border); background: var(--light); }
+.users-table .status-badge.enabled { background: var(--ok-bg); color: var(--success); border-color: transparent; }
+.users-table .status-badge.disabled { background: var(--bad-bg); color: var(--danger); border-color: transparent; }
+.additional-roles { display: block; color: var(--secondary); font-size: .78rem; }
+.action-buttons { display: flex; gap: .35rem; }
+.btn-icon { border: 1px solid var(--border); background: var(--surface); border-radius: 4px; padding: .25rem .5rem; cursor: pointer; line-height: 1.2; }
+.btn-icon:hover { background: var(--light); }
+.table-footer { padding: .6rem .5rem 0; color: var(--secondary); font-size: .875rem; }
+.bulk-actions { display: flex; gap: 1rem; align-items: center; margin: .5rem 0; }
+.user-sessions-group { border-bottom: 1px solid var(--border); padding: .75rem .25rem; }
+.user-sessions-group:last-child { border-bottom: 0; }
+.user-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: .5rem; }
+.user-header .user-info { flex-direction: row; align-items: center; gap: .6rem; }
+.user-header h3 { margin: 0; font-size: 1.05rem; }
+.session-count { color: var(--secondary); font-size: .875rem; }
+.sessions-table { overflow-x: auto; }
+.session-id { font-size: .8rem; }
+.user-agent { display: inline-block; max-width: 22rem; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.auto-refresh-toggle { display: inline-flex; align-items: center; gap: .4rem; }
+.page-header .header-content .description { color: var(--secondary); margin-top: .25rem; }
+
+/* System Health: cards with label/value rows, usage bars and a styled interface table */
+.health-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin: 1rem 0 1.5rem; }
+.health-card, .disk-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; }
+.health-card h3 { font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary); margin-bottom: .5rem; }
+.health-dashboard .detail-row { display: flex; justify-content: space-between; gap: 1rem; padding: .15rem 0; font-size: .925rem; }
+.health-dashboard .detail-row .label { color: var(--secondary); }
+.health-dashboard .detail-row .value { text-align: right; overflow-wrap: anywhere; }
+.health-dashboard .usage-warning { color: var(--warning-text); font-weight: 600; }
+.health-dashboard .usage-danger { color: var(--danger); font-weight: 600; }
+.health-dashboard .progress-bar { height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; margin-top: .5rem; }
+.health-dashboard .progress-fill { height: 100%; background: var(--success-solid); }
+.health-dashboard .progress-fill.progress-warning { background: var(--warning); }
+.health-dashboard .progress-fill.progress-danger { background: var(--danger-solid); }
+.network-interfaces .interface-stats { display: flex; justify-content: space-between; gap: .75rem; padding: .15rem 0; font-size: .925rem; }
+.network-interfaces .interface-name { font-weight: 600; }
+.network-interfaces .interface-data { display: flex; gap: .75rem; color: var(--secondary); }
+.disk-usage-section, .network-stats-section { margin-bottom: 1.5rem; }
+.disk-usage-section h2, .network-stats-section h2 { font-size: 1.2rem; margin-bottom: .75rem; }
+.disk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+.disk-header { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; margin-bottom: .4rem; }
+.disk-header h4 { margin: 0; overflow-wrap: anywhere; }
+.filesystem-type { font-size: .75rem; padding: .05rem .5rem; border-radius: 999px; background: var(--light); border: 1px solid var(--border); }
+.network-table { overflow-x: auto; }
+
+/* Footer links */
+.footer a { color: #fff; }
+.footer .footer-links { display: flex; gap: 1.25rem; justify-content: center; flex-wrap: wrap; }
+.text-danger { color: var(--danger); }
+.text-success { color: var(--success); }
+.header-actions select { padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font: inherit; }

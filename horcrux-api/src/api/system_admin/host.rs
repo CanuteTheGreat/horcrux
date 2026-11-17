@@ -1166,6 +1166,30 @@ pub fn parse_net_dev(text: &str) -> Vec<NetworkStats> {
         .collect()
 }
 
+/// Interfaces a person cares about on the Health page: real NICs, bridges, bonds, VLANs, Wi-Fi.
+/// Left out: loopback, the fallback devices the kernel creates in every network namespace as soon
+/// as a tunnel module is loaded (gre0, gretap0, erspan0, sit0, ...; they never carry traffic), and
+/// per-guest devices (VM taps, container veth ends), which belong to their guest's page.
+pub fn is_listed_interface(name: &str) -> bool {
+    const KERNEL_FALLBACK: &[&str] = &[
+        "gre0",
+        "gretap0",
+        "erspan0",
+        "ip6gre0",
+        "ip6erspan0",
+        "ip6gretap0",
+        "sit0",
+        "tunl0",
+        "ip6tnl0",
+        "ip_vti0",
+        "ip6_vti0",
+    ];
+    const PER_GUEST: &[&str] = &["tap", "veth", "vnet", "fwbr", "fwpr", "fwln"];
+    !(name == "lo"
+        || KERNEL_FALLBACK.contains(&name)
+        || PER_GUEST.iter().any(|p| name.starts_with(p)))
+}
+
 fn statvfs(path: &str) -> Option<(u64, u64, u64)> {
     let st = nix::sys::statvfs::statvfs(path).ok()?;
     let bs = st.fragment_size() as u64;
@@ -1187,12 +1211,19 @@ fn disks() -> Vec<DiskUsage> {
         .lines()
     {
         let f: Vec<&str> = l.split_whitespace().collect();
-        if f.len() < 3 || !REAL.contains(&f[2]) || !seen.insert(f[0].to_string() + f[1]) {
+        // one card per filesystem: the same device mounted again (bind mounts, a container's volumes)
+        // has the same size and usage, so only its first mount point is listed
+        if f.len() < 3 || !REAL.contains(&f[2]) || seen.contains(f[0]) {
             continue;
         }
         let mp = f[1].replace("\\040", " ");
+        // single files bind-mounted into a container (/etc/hosts, /etc/hostname, ...) are not disks
+        if !std::path::Path::new(&mp).is_dir() {
+            continue;
+        }
         if let Some((total, used, avail)) = statvfs(&mp) {
             if total > 0 {
+                seen.insert(f[0].to_string());
                 out.push(DiskUsage {
                     device: f[0].into(),
                     mount_point: mp,
@@ -1265,7 +1296,10 @@ async fn health() -> Json<SystemHealth> {
         },
         memory_usage: m,
         disk_usage: disks(),
-        network_stats: parse_net_dev(&std::fs::read_to_string("/proc/net/dev").unwrap_or_default()),
+        network_stats: parse_net_dev(&std::fs::read_to_string("/proc/net/dev").unwrap_or_default())
+            .into_iter()
+            .filter(|n| is_listed_interface(&n.interface))
+            .collect(),
     })
 }
 
@@ -1450,6 +1484,32 @@ mod tests {
         let t = render_ntp(NtpBackend::Timesyncd, "", &s);
         assert_eq!(parse_ntp_servers(NtpBackend::Timesyncd, &t), s);
         assert_eq!(render_ntp(NtpBackend::Ntpd, "", &s).lines().count(), 2);
+    }
+
+    #[test]
+    fn health_lists_real_interfaces_not_kernel_tunnel_or_guest_devices() {
+        for keep in [
+            "eth0", "enp3s0", "wlan0", "vmbr0", "br0", "bond0", "eth0.20", "wg0",
+        ] {
+            assert!(is_listed_interface(keep), "{keep} should be listed");
+        }
+        for hide in [
+            "lo",
+            "gre0",
+            "gretap0",
+            "erspan0",
+            "sit0",
+            "tunl0",
+            "ip6tnl0",
+            "ip_vti0",
+            "ip6gre0",
+            "tapba7bbdd3i0",
+            "veth1a2b",
+            "vnet3",
+            "fwpr100p0",
+        ] {
+            assert!(!is_listed_interface(hide), "{hide} should be hidden");
+        }
     }
 
     #[test]

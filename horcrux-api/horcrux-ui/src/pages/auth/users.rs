@@ -509,8 +509,8 @@ pub fn UsersPage() -> impl IntoView {
                                                     <td>
                                                         <div class="user-info">
                                                             <strong>{&user.username}</strong>
-                                                            {user.comment.as_ref().map(|comment| view! {
-                                                                <small>{comment}</small>
+                                                            {user.comment.as_ref().filter(|c| !c.trim().is_empty()).map(|comment| view! {
+                                                                <small class="user-comment" title=comment.clone()>{comment.clone()}</small>
                                                             })}
                                                         </div>
                                                     </td>

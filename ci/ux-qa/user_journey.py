@@ -27,6 +27,7 @@ the server runs elsewhere - ISO is pushed and QEMU command lines are read throug
 HX_BROWSER (chromium|firefox).
 """
 import argparse
+import urllib.parse
 import json
 import os
 import re
@@ -229,6 +230,21 @@ UNSTYLED_TABS_JS = """() => [...document.querySelectorAll('.tab-buttons, .tabs, 
   .filter(e => e.offsetParent !== null && getComputedStyle(e).display !== 'flex').map(e => e.className)"""
 # The page scrolls sideways (owner rule: never).
 H_OVERFLOW_JS = "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
+# checkbox/radio wider than ~2 boxes = stretched by a width:100% form rule, so it sits far from its own label
+WIDE_CHECKBOX_JS = """() => [...document.querySelectorAll('input[type=checkbox], input[type=radio]')].filter(e => e.offsetParent !== null)
+    .filter(e => e.getBoundingClientRect().width > 40).map(e => e.id || e.name || e.closest('label')?.innerText?.trim()?.slice(0, 20) || '?')"""
+# form controls whose label is not above them or next to them (label + input + label + input run inline on one line)
+INLINE_FIELDS_JS = """(sel) => [...document.querySelectorAll(sel + ' input:not([type=checkbox]):not([type=radio]):not([type=hidden]), ' + sel + ' textarea, ' + sel + ' select')]
+    .filter(e => e.offsetParent !== null).filter(e => { const g = e.closest('.form-group'); if (!g) return true;
+        const l = g.querySelector('label'); if (!l) return true; return l.getBoundingClientRect().bottom > e.getBoundingClientRect().top + 2; })
+    .map(e => e.id || e.name || e.tagName)"""
+# a table whose header cells have no padding renders as run-together words
+UNSTYLED_TABLE_JS = """(sel) => [...document.querySelectorAll(sel)].filter(t => t.offsetParent !== null).filter(t => {
+    const c = t.querySelector('th, td'); return c && parseFloat(getComputedStyle(c).paddingLeft) < 4; }).length"""
+# multi-line inputs shorter than ~3 lines (a 2-row box with an unreadable example)
+SMALL_TEXTAREA_JS = """() => [...document.querySelectorAll('textarea')].filter(e => e.offsetParent !== null)
+    .filter(e => e.getBoundingClientRect().height < 80).map(e => e.id || e.name || '?')"""
+KERNEL_TUNNEL_IFACES = ("gre0", "gretap0", "erspan0", "ip6gre0", "ip6erspan0", "ip6gretap0", "sit0", "tunl0", "ip6tnl0", "ip_vti0", "ip6_vti0")
 # Bridges a container runtime made for itself (never a VM network).
 CONTAINER_BRIDGE_RE = re.compile(r"^(docker|podman|cni|kube-bridge$|br-[0-9a-f]{12}$)")
 RT_BRIDGE = "br-fa11bac0ffee"   # Docker-network-style bridge the journey makes (when it can) to test that filter
@@ -279,6 +295,9 @@ def main():
             j.shot("dashboard")
             body = j.text()
             expect("j1-login", "dashboard-content", len(body) > 200 and "Dashboard" in body, "after login the page is not a dashboard")
+            foot = page.locator("footer").inner_text() if page.locator("footer").count() else ""
+            expect("j1-login", "footer-for-users", not re.search(r"Built with|Leptos|lines of", foot) and page.locator("footer a[href]").count() > 0,
+                   f"the footer talks about how the UI was built instead of helping (version + docs/help link): {foot[:80]!r}")
             expect("j1-login", "no-nan-or-undefined", not re.search(r"\b(NaN|undefined|null)\b", body), "dashboard shows NaN/undefined/null")
 
         # ------------------------------------------------------------------ J2 ISO library
@@ -350,6 +369,8 @@ def main():
             n_range = page.locator("form input[type=range]").count()
             expect("j3-create-vm", "resource-sliders", n_range >= 3,
                    f"CPU/RAM/disk are plain number boxes ({n_range} sliders): no sliders, supported steps or presets with a custom override")
+            wide = page.evaluate(WIDE_CHECKBOX_JS)
+            expect("j3-create-vm", "checkbox-beside-label", not wide, f"checkboxes stretched across the form, far from their labels: {wide}")
             expect("j3-create-vm", "nic-by-default", page.locator(".vm-nic-row").count() >= 1,
                    "a new VM form has no network card by default")
             # container runtimes' own bridges (docker0, podman0, cni0, br-<hash>) are never offered to a VM
@@ -497,6 +518,8 @@ def main():
                 n_range = page.locator("#create-container-form input[type=range]").count()
                 expect("j5-container", "resource-sliders", n_range >= 2,
                        f"container CPU/RAM are plain number boxes ({n_range} sliders), unlike the Create VM form")
+                small = page.evaluate(SMALL_TEXTAREA_JS)
+                expect("j5-container", "textareas-roomy", not small, f"Create Container multi-line fields are tiny boxes: {small}")
                 page.fill("#ct-name", CT_NAME)
                 page.fill("#ct-image", "busybox:latest")
                 j.shot("container-create-filled")
@@ -545,11 +568,22 @@ def main():
 
         # ------------------------------------------------------------------ J7 backups / snapshots
         with step(j, "j7-backup-snapshots", "snapshots and backups") as _:
-            for path, name in (("/snapshots", "snapshots"), ("/backup/snapshots", "backup-snapshots"), ("/backup", "backup"), ("/backup/jobs", "backup-jobs")):
+            for path, name in (("/snapshots", "snapshots"), ("/snapshots/schedules", "snapshot-schedules"), ("/snapshots/quotas", "snapshot-quotas"),
+                               ("/backup", "backup"), ("/backup/jobs", "backup-jobs")):
                 j.go(path, settle=1.8)
                 j.shot(name)
                 t = j.text()
                 expect("j7-backup-snapshots", f"{name}-not-blank", len(t) > 150, f"{path} is nearly blank")
+                if path.startswith("/snapshots"):
+                    tabs = page.locator("#snapshot-tabs a").count()
+                    expect("j7-backup-snapshots", "one-snapshots-page", tabs == 3 and page.locator("main h1").first.inner_text().strip() == "Snapshots",
+                           f"{path} is not part of the one Snapshots page (tabs Snapshots/Schedules/Quotas: {tabs} found)")
+                    expect("j7-backup-snapshots", "snapshots-styled", not page.evaluate(UNSTYLED_TABS_JS) and not page.evaluate(UNSTYLED_TABLE_JS, "table"),
+                           f"{path}: tab strip or table is unstyled")
+            # the old second snapshot page ("Snapshot Management", other layout) is gone: its path lands on the one page
+            j.go("/backup/snapshots", settle=1.5)
+            expect("j7-backup-snapshots", "one-snapshots-page", urllib.parse.urlparse(page.url).path == "/snapshots",
+                   f"/backup/snapshots is still a separate snapshot page ({page.url})")
             vm = vm_by_name(VM_NAME)
             if vm:
                 j.go("/snapshots")
@@ -589,7 +623,9 @@ def main():
 
         # ------------------------------------------------------------------ J8 settings / updates
         with step(j, "j8-settings", "settings, users, updates") as _:
-            for path, name in (("/system/config", "config"), ("/auth/users", "users"), ("/system/certificates", "certificates"),
+            # open the node shell once, like an admin would: that records a task, so the Tasks page has one to show
+            j.go("/system/shell", settle=3)
+            for path, name in (("/system/config", "config"), ("/auth/users", "users"), ("/auth/sessions", "sessions"), ("/system/certificates", "certificates"),
                                ("/system/packages", "updates"), ("/system/health", "health"), ("/tasks", "tasks")):
                 j.go(path, settle=2)
                 j.shot(name)
@@ -618,6 +654,37 @@ def main():
                                "the Timezone list (hundreds of zones) has no search box")
                     else:
                         finding("j8-settings", "timezone-select", "System Configuration has no #cfg-timezone select")
+                if name in ("users", "sessions"):
+                    expect("j8-settings", {"users": "users-table-styled", "sessions": "sessions-table-styled"}[name], not page.evaluate(UNSTYLED_TABLE_JS, "table"),
+                           f"{path}: table columns have no padding (values run together)")
+                    expect("j8-settings", {"users": "users-no-internal-text", "sessions": "sessions-no-internal-text"}[name], not re.search(r"ADMIN_PASSWORD|test/automation|deprecated\)", t),
+                           f"{path} shows internal provenance text to the admin")
+                if name == "certificates":
+                    bad = page.evaluate(INLINE_FIELDS_JS, ".certificates-page")
+                    expect("j8-settings", "certificates-form-layout", not bad, f"Certificates: fields run inline with their labels: {bad}")
+                    small = page.evaluate(SMALL_TEXTAREA_JS)
+                    expect("j8-settings", "certificates-textareas-roomy", not small, f"Certificates PEM fields are tiny boxes: {small}")
+                if name == "health":
+                    styled = page.evaluate("""() => { const c = document.querySelector('.health-cards');
+                        return !!c && ['grid', 'flex'].includes(getComputedStyle(c).display) }""")
+                    expect("j8-settings", "health-styled", styled, "System Health is unstyled stacked text (no card grid)")
+                    expect("j8-settings", "health-no-emoji-icons", not re.search(r"[\U0001F300-\U0001FAFF]", t), "System Health uses emoji as section icons")
+                    code, h = api("GET", "/api/system/health")
+                    names = [n.get("interface", "") for n in (h or {}).get("network_stats", [])] if code == 200 and isinstance(h, dict) else []
+                    junk = sorted(set(names) & set(KERNEL_TUNNEL_IFACES + ("lo",))) + [n for n in names if n.startswith(("tap", "veth", "vnet"))]
+                    expect("j8-settings", "health-real-interfaces", not junk,
+                           f"System Health lists loopback / kernel tunnel / guest tap devices as networks: {junk}")
+                if name == "tasks":
+                    rows = page.locator("tr.task-row")
+                    if rows.count():
+                        rows.first.locator("button:has-text('Log')").click()
+                        page.wait_for_timeout(1500)
+                        head = page.locator("#task-log-title").inner_text() if page.locator("#task-log-title").count() else ""
+                        expect("j8-settings", "task-named", head and "UPID" not in head and "UPID" not in page.title(),
+                               f"an open task is named by its raw UPID (heading {head[:80]!r}, title {page.title()[:80]!r})")
+                        j.shot("task-log")
+                    else:
+                        finding("j8-settings", "task-named", "no task to open after using the node shell (task log not checked)", sev="warn")
                 if name == "updates":
                     expect("j8-settings", "updates-actionable", re.search(r"check|update|upgrade|refresh", t, re.I) is not None, "the updates page offers no way to check for / install updates")
             j.go("/")

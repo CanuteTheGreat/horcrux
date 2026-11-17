@@ -1,6 +1,5 @@
 {
  "_comment": "Known failing journey checks; a NEW failure fails CI. Each value says what is wrong and who owns it. Remove an entry when its check passes (the run prints 'baseline entry no longer fails').",
  "journey:j3-create-vm:fresh-host-no-bridge": "owner finding 16: a fresh install has no bridge so a VM with a NIC fails at Create (400); form should create one or default to NAT.",
- "journey:j3-create-vm:nic-by-default": "owner finding 16: new VM form has no NIC by default when the host has no bridge (seen on runners that cannot create one).",
  "journey:j8-settings:dashboard-mentions-updates": "owner finding 18: nothing tells the admin the node has pending/never-installed updates; needs a dashboard update status card."
 }

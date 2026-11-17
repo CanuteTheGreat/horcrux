@@ -25,6 +25,73 @@ fn status_class(s: &str) -> &'static str {
     }
 }
 
+/// "node-shell" -> "Node shell", "net-dhcp" -> "Network DHCP", "pkg-install" -> "Package install".
+pub fn task_type_label(t: &str) -> String {
+    let words: Vec<String> = t
+        .split(['-', '_'])
+        .filter(|w| !w.is_empty())
+        .enumerate()
+        .map(|(i, w)| {
+            let known = match w.to_ascii_lowercase().as_str() {
+                "vm" | "qm" => Some("VM"),
+                "ct" => Some("container"),
+                "lxc" => Some("LXC"),
+                "dhcp" => Some("DHCP"),
+                "dns" => Some("DNS"),
+                "iso" => Some("ISO"),
+                "ha" => Some("HA"),
+                "zfs" => Some("ZFS"),
+                "nfs" => Some("NFS"),
+                "lvm" => Some("LVM"),
+                "acme" => Some("ACME"),
+                "net" => Some("network"),
+                "pkg" => Some("package"),
+                "ceph" => Some("Ceph"),
+                _ => None,
+            };
+            let w = known
+                .map(str::to_string)
+                .unwrap_or_else(|| w.to_ascii_lowercase());
+            if i == 0 {
+                let mut c = w.chars();
+                c.next()
+                    .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+                    .unwrap_or_default()
+            } else {
+                w
+            }
+        })
+        .collect();
+    if words.is_empty() {
+        "Task".into()
+    } else {
+        words.join(" ")
+    }
+}
+
+/// What a person calls a task: "Node shell · admin" (type, then what it acted on, else who ran it),
+/// never the raw UPID.
+pub fn task_label(task_type: &str, target: Option<&str>, user: &str) -> String {
+    let what = target
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or(user)
+        .trim();
+    if what.is_empty() {
+        task_type_label(task_type)
+    } else {
+        format!("{} · {}", task_type_label(task_type), what)
+    }
+}
+
+/// Name from a UPID alone ("UPID:node:serial:type:target:user:"), before the list has loaded.
+pub fn upid_label(upid: &str) -> Option<String> {
+    let f: Vec<&str> = upid.split(':').collect();
+    if f.len() < 6 || f[0] != "UPID" {
+        return None;
+    }
+    Some(task_label(f[3], Some(f[4]), f[5]))
+}
+
 #[component]
 pub fn TasksPage() -> impl IntoView {
     let (tasks, set_tasks) = create_signal(Vec::<TaskRecord>::new());
@@ -131,7 +198,7 @@ pub fn TasksPage() -> impl IntoView {
                             view! {
                                 <tr class="task-row" id=upid.clone()>
                                     <td>{fmt_time(t.start_time)}</td>
-                                    <td>{t.task_type.clone()}</td>
+                                    <td title=t.task_type.clone()>{task_type_label(&t.task_type)}</td>
                                     <td>{t.target.clone().unwrap_or_default()}</td>
                                     <td>{t.user.clone()}</td>
                                     <td class=status_class(&t.status)>{t.status.clone()}</td>
@@ -152,13 +219,46 @@ pub fn TasksPage() -> impl IntoView {
                     }}
                 </tbody>
             </table>
-            {move || selected.get().map(|u| view! {
-                <div class="task-log">
-                    <h3>"Log of " {u.clone()}</h3>
+            {move || selected.get().map(|u| {
+                // the open task by name (heading and page title); the UPID stays in the URL and a tooltip only
+                let name = tasks.with(|ts| ts.iter().find(|t| t.upid == u).map(|t| task_label(&t.task_type, t.target.as_deref(), &t.user)))
+                    .or_else(|| upid_label(&u))
+                    .unwrap_or_else(|| "Task".into());
+                crate::titles::set_subject(&name);
+                view! {
+                <div class="task-log card" id="task-log">
+                    <h3 id="task-log-title" title=u.clone()>"Log: " {name}</h3>
                     <pre class="log-output" style="max-height: 24em; overflow: auto">{move || log.get().join("\n")}</pre>
                     <button class="btn btn-secondary" on:click=move |_| set_selected.set(None)>"Close"</button>
                 </div>
-            })}
+            }})}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tasks_are_named_for_people_not_by_upid() {
+        assert_eq!(task_type_label("node-shell"), "Node shell");
+        assert_eq!(task_type_label("net-dhcp"), "Network DHCP");
+        assert_eq!(task_type_label("pkg-install"), "Package install");
+        assert_eq!(task_type_label("ceph-pool"), "Ceph pool");
+        assert_eq!(task_type_label(""), "Task");
+        assert_eq!(
+            task_label("node-shell", None, "admin"),
+            "Node shell · admin"
+        );
+        assert_eq!(
+            task_label("service", Some("sshd:restart"), "admin"),
+            "Service · sshd:restart"
+        );
+        assert_eq!(
+            upid_label("UPID:node1:18A3F00000AB:node-shell:admin:admin:").as_deref(),
+            Some("Node shell · admin")
+        );
+        assert_eq!(upid_label("not-a-upid"), None);
     }
 }

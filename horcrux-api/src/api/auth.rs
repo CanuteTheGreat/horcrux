@@ -247,7 +247,8 @@ pub async fn bootstrap_admin(db: &crate::db::Database, cfg: &crate::config::Horc
         realm: "local".into(),
         enabled: true,
         roles: vec![],
-        comment: Some("ADMIN_PASSWORD test/automation account (deprecated)".into()),
+        // no provenance note: the comment column is the admin's own text and shows on the Users page
+        comment: None,
     };
     store::insert_user(pool, &user)
         .await

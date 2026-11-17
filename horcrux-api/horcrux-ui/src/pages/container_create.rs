@@ -533,19 +533,22 @@ pub fn ContainerCreate() -> impl IntoView {
                 <Show when=oci>
                     <div class="form-group">
                         <label for="ct-ports">"Published ports (one per line, host:container)"</label>
-                        <textarea id="ct-ports" name="ports" rows="2" placeholder="8080:80"
+                        <textarea id="ct-ports" name="ports" rows="4" placeholder="8080:80
+    8443:443/tcp"
                             prop:value=ports
                             on:input=move |ev| set_ports.set(event_target_value(&ev))></textarea>
                     </div>
                     <div class="form-group">
                         <label for="ct-env">"Environment (one KEY=value per line)"</label>
-                        <textarea id="ct-env" name="env" rows="3"
+                        <textarea id="ct-env" name="env" rows="4" placeholder="TZ=UTC
+    APP_ENV=production"
                             prop:value=env
                             on:input=move |ev| set_env.set(event_target_value(&ev))></textarea>
                     </div>
                     <div class="form-group">
                         <label for="ct-volumes">"Volumes (one source:/target per line)"</label>
-                        <textarea id="ct-volumes" name="volumes" rows="2"
+                        <textarea id="ct-volumes" name="volumes" rows="4" placeholder="/srv/app-data:/data
+    app-config:/etc/app"
                             prop:value=volumes
                             on:input=move |ev| set_volumes.set(event_target_value(&ev))></textarea>
                     </div>
@@ -625,7 +628,7 @@ pub fn ContainerCreate() -> impl IntoView {
                             </Show>
                         </div>
                         <div class="form-group"><label for="lxc-mounts">"Mount points (one per line: mp=/srv/data,source=/host/dir[,ro=1] or mp=/var/lib/app for a managed volume)"</label>
-                            <textarea id="lxc-mounts" rows="2"
+                            <textarea id="lxc-mounts" rows="4"
                                 prop:value=move || lxc_form.get().mounts
                                 on:input=move |ev| lxc_form.update(|f| f.mounts = event_target_value(&ev))></textarea></div>
                         <div class="form-row">
@@ -646,7 +649,7 @@ pub fn ContainerCreate() -> impl IntoView {
                                     prop:value=move || lxc_form.get().nameserver
                                     on:input=move |ev| lxc_form.update(|f| f.nameserver = event_target_value(&ev))/></div>
                             <div class="form-group"><label for="lxc-ssh">"SSH public keys (root)"</label>
-                                <textarea id="lxc-ssh" rows="2"
+                                <textarea id="lxc-ssh" rows="4" placeholder="ssh-ed25519 AAAA... user@host"
                                     prop:value=move || lxc_form.get().ssh_keys
                                     on:input=move |ev| lxc_form.update(|f| f.ssh_keys = event_target_value(&ev))></textarea></div>
                         </div>

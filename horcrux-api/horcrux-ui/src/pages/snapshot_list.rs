@@ -210,7 +210,7 @@ pub fn SnapshotList() -> impl IntoView {
         <div class="snapshot-list">
             {move || notice.get().map(|n| view! { <div class="alert alert-success" id="snapshot-notice">{n}</div> })}
             <div class="page-header">
-                <h1>"VM Snapshots"</h1>
+                <h1>"Snapshots"</h1>
                 <div class="header-actions">
                     <button
                         id="snapshot-create-btn"
@@ -220,6 +220,7 @@ pub fn SnapshotList() -> impl IntoView {
                     >"Create Snapshot"</button>
                 </div>
             </div>
+            <crate::pages::snapshot_policies::SnapshotTabs active="snapshots"/>
 
             <div class="form-group vm-selector" style="max-width:32rem">
                 <label for="snapshot-vm-filter">"Show snapshots of"</label>

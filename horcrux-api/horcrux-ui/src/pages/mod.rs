@@ -33,6 +33,7 @@ mod resource_pools;
 mod resources;
 pub mod sdn_zones;
 mod snapshot_list;
+pub mod snapshot_policies;
 pub mod storage;
 mod storage_content;
 pub mod system;
@@ -99,8 +100,7 @@ pub use kubernetes::{
 
 // Re-export backup components
 pub use backup::{
-    BackupDashboard, BackupJobsPage, BackupVerifyPage, RetentionPoliciesPage, SnapshotManagerPage,
-    TemplateManagerPage,
+    BackupDashboard, BackupJobsPage, BackupVerifyPage, RetentionPoliciesPage, TemplateManagerPage,
 };
 
 // Re-export HA components

@@ -17,6 +17,7 @@ One deterministic, no-LLM check for the classes of defect the owner kept finding
   same-title        one document.title shared by >= 3 routes (each page needs its own title)
   nav-broken        at 1280 and 1440px a nav item is wrapped onto two lines, clipped off the right edge, or the bar overflows
   zero-red          a stat card showing 0 / none is painted red: red is only for > 0 (owner rule)
+  wide-checkbox     a checkbox/radio stretched to the row width (a width:100% input rule), far from its label (Create VM "Custom")
 
 Usage:
   BASE_URL=https://host:8006 ADMIN_PASSWORD=... ux_crawl.py [--config ux-crawl.json] [--static DIR] [--report out.json]
@@ -100,6 +101,10 @@ FACTS_JS = r"""() => {
     unlinked.push((el.id || el.className || el.tagName) + ': ' + (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 50));
   }
   // stat cards showing nothing in the colour of a problem
+  // a checkbox/radio stretched by a width:100% form rule sits far away from its own label text
+  const wideCheck = [...document.querySelectorAll('input[type=checkbox], input[type=radio]')].filter(e => e.offsetParent !== null)
+    .filter(e => e.getBoundingClientRect().width > 40)
+    .map(e => (e.id || e.name || (e.closest('label') || {}).innerText || '?').toString().trim().slice(0, 30));
   const zeroRed = [];
   for (const el of document.querySelectorAll('.stat-card, [class*="summary-card"]')) {
     if (!vis(el)) continue;
@@ -148,7 +153,7 @@ FACTS_JS = r"""() => {
   const root = document.documentElement;
   return {
     textLen: text.trim().length, text: text.slice(0, 60000), ownText: ownText.slice(0, 60000), title: document.title,
-    overflowX: root.scrollWidth - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), zeroRed, navProblems, empty: empty.slice(0, 3),
+    overflowX: root.scrollWidth - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), zeroRed, navProblems, empty: empty.slice(0, 3), wideCheck: wideCheck.slice(0, 4),
     h1: ((document.querySelector('main h1, h1, main h2, h2') || {}).innerText || '').trim().slice(0, 60),
   };
 }"""
@@ -337,6 +342,8 @@ def main():
                     for color, val, label in f["zeroRed"]:
                         if is_zero(val) and is_red(color):
                             add("zero-red", "fail", route, vp, scheme, f"'{label}' shows {val} in red {color}")
+                    for w in f.get("wideCheck", []):
+                        add("wide-checkbox", "fail", route, vp, scheme, f"checkbox '{w}' is stretched across the row, away from its label")
                     if vp in NAV_WIDTHS:
                         for n in f["navProblems"]:
                             add("nav-broken", "fail", route, vp, scheme, n)

@@ -143,19 +143,32 @@ pub fn CertificatesPage() -> impl IntoView {
                     <a href="/api/tls/ca.pem" id="download-ca" download="horcrux-local-ca.pem">"download horcrux-local-ca.pem"</a>
                     ". Re-issue below to add names (e.g. the address you browse to)."
                 </p>
-                <input type="text" id="cert-extra-san" placeholder="extra names: pve.lan, 10.0.0.5"
-                    on:input=move |ev| set_san.set(event_target_value(&ev)) prop:value=san/>
-                <button class="btn" id="cert-regenerate" on:click=regenerate disabled=busy>"Issue new certificate"</button>
+                <div class="form-group">
+                    <label for="cert-extra-san">"Extra names for the certificate (optional)"</label>
+                    <input type="text" id="cert-extra-san" placeholder="pve.lan, 10.0.0.5"
+                        on:input=move |ev| set_san.set(event_target_value(&ev)) prop:value=san/>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" id="cert-regenerate" on:click=regenerate disabled=busy>"Issue new certificate"</button>
+                </div>
             </section>
 
             <section class="card">
                 <h2>"Upload certificate"</h2>
                 <form id="cert-upload" on:submit=upload>
-                    <label>"Certificate chain (PEM, leaf first)"</label>
-                    <textarea id="cert-pem" rows="6" on:input=move |ev| set_cert_pem.set(event_target_value(&ev)) prop:value=cert_pem></textarea>
-                    <label>"Private key (PEM)"</label>
-                    <textarea id="key-pem" rows="6" on:input=move |ev| set_key_pem.set(event_target_value(&ev)) prop:value=key_pem></textarea>
-                    <button type="submit" class="btn btn-primary" id="cert-upload-submit" disabled=busy>"Install"</button>
+                    <div class="form-group">
+                        <label for="cert-pem">"Certificate chain (PEM, leaf first)"</label>
+                        <textarea id="cert-pem" rows="8" placeholder="-----BEGIN CERTIFICATE-----"
+                            on:input=move |ev| set_cert_pem.set(event_target_value(&ev)) prop:value=cert_pem></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="key-pem">"Private key (PEM)"</label>
+                        <textarea id="key-pem" rows="8" placeholder="-----BEGIN PRIVATE KEY-----"
+                            on:input=move |ev| set_key_pem.set(event_target_value(&ev)) prop:value=key_pem></textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary" id="cert-upload-submit" disabled=busy>"Install"</button>
+                    </div>
                 </form>
             </section>
 
@@ -170,20 +183,38 @@ pub fn CertificatesPage() -> impl IntoView {
                     })}
                 </p>
                 <form id="acme-form" on:submit=save_acme>
-                    <label>"Directory URL"</label>
-                    <input type="text" id="acme-directory" on:input=move |ev| set_acme_dir.set(event_target_value(&ev)) prop:value=acme_dir/>
-                    <label>"Contact email"</label>
-                    <input type="email" id="acme-email" on:input=move |ev| set_acme_email.set(event_target_value(&ev)) prop:value=acme_email/>
-                    <label>"Domains (comma separated)"</label>
-                    <input type="text" id="acme-domains" on:input=move |ev| set_acme_domains.set(event_target_value(&ev)) prop:value=acme_domains/>
-                    <label>"Extra CA for the ACME server (PEM path, private CAs only)"</label>
-                    <input type="text" id="acme-ca" on:input=move |ev| set_acme_ca.set(event_target_value(&ev)) prop:value=acme_ca/>
-                    <label class="checkbox">
-                        <input type="checkbox" id="acme-tos" prop:checked=acme_tos on:change=move |_| set_acme_tos.update(|v| *v = !*v)/>
-                        " I accept the CA's terms of service"
-                    </label>
-                    <button type="submit" class="btn" id="acme-save">"Save"</button>
-                    <button type="button" class="btn btn-primary" id="acme-order" on:click=order disabled=busy>"Order certificate now"</button>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="acme-directory">"Directory URL"</label>
+                            <input type="text" id="acme-directory" on:input=move |ev| set_acme_dir.set(event_target_value(&ev)) prop:value=acme_dir/>
+                        </div>
+                        <div class="form-group">
+                            <label for="acme-email">"Contact email"</label>
+                            <input type="email" id="acme-email" placeholder="admin@example.com"
+                                on:input=move |ev| set_acme_email.set(event_target_value(&ev)) prop:value=acme_email/>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="acme-domains">"Domains (comma separated)"</label>
+                            <input type="text" id="acme-domains" placeholder="node1.example.com"
+                                on:input=move |ev| set_acme_domains.set(event_target_value(&ev)) prop:value=acme_domains/>
+                        </div>
+                        <div class="form-group">
+                            <label for="acme-ca">"Extra CA for the ACME server (PEM path, private CAs only)"</label>
+                            <input type="text" id="acme-ca" on:input=move |ev| set_acme_ca.set(event_target_value(&ev)) prop:value=acme_ca/>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox">
+                            <input type="checkbox" id="acme-tos" prop:checked=acme_tos on:change=move |_| set_acme_tos.update(|v| *v = !*v)/>
+                            "I accept the CA's terms of service"
+                        </label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-secondary" id="acme-save">"Save"</button>
+                        <button type="button" class="btn btn-primary" id="acme-order" on:click=order disabled=busy>"Order certificate now"</button>
+                    </div>
                 </form>
             </section>
         </div>

@@ -10,5 +10,5 @@
   "baseline": "ux-crawl-baseline.json",
   "private_fail": ["git\\.canutethegreat\\.com", "canutethegreat\\.com", "redweek\\.(internal|com)", "\\b10\\.(66|1)\\.\\d+\\.\\d+\\b", "/home/canutethegreat"],
   "private_warn": ["\\b(gringotts|hogshead|madammalkins|ollivanders|azkaban|rw-man-\\d+)\\b"],
-  "forbidden_names": ["\\bgnome[- ]light\\b", "\\blive[- ]?(installer|iso)\\b", "\\b(openrc|systemd)-(x86_64|aarch64)\\b", "\\bpqa:", "\\bforgejo\\b"]
+  "forbidden_names": ["\\bgnome[- ]light\\b", "\\blive[- ]?(installer|iso)\\b", "\\b(openrc|systemd)-(x86_64|aarch64)\\b", "\\bpqa:", "\\bforgejo\\b", "\\bBuilt with Rust\\b", "\\bLeptos\\b"]
 }

@@ -109,7 +109,8 @@ fn exact(path: &str) -> Option<&'static str> {
         "/backup/jobs" => "Backup Jobs",
         "/backup/retention" => "Retention",
         "/backup/verify" => "Verify Backups",
-        "/backup/snapshots" => "Backup Snapshots",
+        "/snapshots/schedules" => "Snapshot Schedules",
+        "/snapshots/quotas" => "Snapshot Quotas",
         "/backup/templates" => "Backup Templates",
         "/ha" => "High Availability",
         "/ha/cluster" => "Cluster",
@@ -147,7 +148,11 @@ pub fn title_for(path: &str, subject: Option<&str>) -> String {
     let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
     let named = |id: &str| subject.unwrap_or(id).to_string();
     let page = if let Some(t) = exact(path) {
-        t.to_string()
+        // a list page with one item open (a task's log): "Node shell · admin · Tasks"
+        match subject {
+            Some(s) => format!("{s} · {t}"),
+            None => t.to_string(),
+        }
     } else {
         match segs.as_slice() {
             ["vms", id] => named(id),
@@ -227,6 +232,15 @@ mod tests {
     }
 
     #[test]
+    fn an_open_item_on_a_list_page_names_the_item() {
+        assert_eq!(
+            title_for("/tasks", Some("Node shell · admin")),
+            "Node shell · admin · Tasks · Horcrux"
+        );
+        assert_eq!(title_for("/tasks", None), "Tasks · Horcrux");
+    }
+
+    #[test]
     fn every_route_has_its_own_title() {
         // Every static <Route path="/..."> in lib.rs resolves to a title that is not the generic fallback,
         // and no two routes share one.
@@ -234,7 +248,8 @@ mod tests {
         let mut seen = std::collections::HashMap::new();
         for part in lib.split("<Route path=\"").skip(1) {
             let path = part.split('"').next().unwrap();
-            if path.contains(':') {
+            // a moved page (<Redirect>) shows the target's title
+            if path.contains(':') || part.lines().next().unwrap_or("").contains("<Redirect") {
                 continue;
             }
             let t = title_for(path, None);

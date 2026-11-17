@@ -31,10 +31,9 @@ use pages::{
     LxcTemplatesPage, MaintenancePage, MetricServersPage, MetricsExplorerPage, MfaPage,
     MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage, ObservabilityPage,
     PermissionsPage, PodsPage, RealmsPage, ReplicationList, RetentionPoliciesPage, RolesPage,
-    SecretsPage, ServicesPage, SessionsPage, SmartMonitoringPage, SnapshotList,
-    SnapshotManagerPage, StacksPage, StorageManagement, TemplateManagerPage, UserMenu, UsersPage,
-    VmConsole, VmCreate, VmImportEsxiPage, VmImportLibvirtPage, VmImportOvfPage, VmList,
-    VolumesPage,
+    SecretsPage, ServicesPage, SessionsPage, SmartMonitoringPage, SnapshotList, StacksPage,
+    StorageManagement, TemplateManagerPage, UserMenu, UsersPage, VmConsole, VmCreate,
+    VmImportEsxiPage, VmImportLibvirtPage, VmImportOvfPage, VmList, VolumesPage,
 };
 
 /// Pages mount only for a signed-in browser. Without this, a first visit rendered the dashboard,
@@ -288,6 +287,8 @@ pub fn App() -> impl IntoView {
                     <Route path="/network" view=NetworkManagement/>
                     <Route path="/gpu" view=GpuManagement/>
                     <Route path="/snapshots" view=SnapshotList/>
+                    <Route path="/snapshots/schedules" view=crate::pages::snapshot_policies::SnapshotSchedulesPage/>
+                    <Route path="/snapshots/quotas" view=crate::pages::snapshot_policies::SnapshotQuotasPage/>
                     <Route path="/clones" view=CloneList/>
                     <Route path="/replication" view=ReplicationList/>
                     <Route path="/monitoring" view=Monitoring/>
@@ -305,7 +306,8 @@ pub fn App() -> impl IntoView {
                     <Route path="/backup/jobs" view=|| view! { <Gated feature="backup"><BackupJobsPage/></Gated> }/>
                     <Route path="/backup/retention" view=|| view! { <Gated feature="backup"><RetentionPoliciesPage/></Gated> }/>
                     <Route path="/backup/verify" view=|| view! { <Gated feature="backup"><BackupVerifyPage/></Gated> }/>
-                    <Route path="/backup/snapshots" view=SnapshotManagerPage/>
+                    // one Snapshots page: the old "Snapshot Management" duplicate lived here
+                    <Route path="/backup/snapshots" view=|| view! { <Redirect path="/snapshots"/> }/>
                     <Route path="/backup/templates" view=TemplateManagerPage/>
                     <Route path="/ha" view=|| view! { <Gated feature="cluster"><HaDashboard/></Gated> }/>
                     <Route path="/ha/cluster" view=|| view! { <Gated feature="cluster"><ClusterManagementPage/></Gated> }/>
@@ -335,8 +337,11 @@ pub fn App() -> impl IntoView {
             </main>
 
             <footer class="footer">
-                <p>"Horcrux v" {env!("CARGO_PKG_VERSION")} " - Built with Rust + Leptos"</p>
-                <p>"50,000+ lines of memory-safe code"</p>
+                <p class="footer-links">
+                    <span id="footer-version">"Horcrux " {env!("CARGO_PKG_VERSION")}</span>
+                    <a href="https://horcrux.errant.solutions/docs/" target="_blank" rel="noopener">"Documentation"</a>
+                    <a href="https://github.com/CanuteTheGreat/horcrux/issues" target="_blank" rel="noopener">"Report a problem"</a>
+                </p>
             </footer>
         </Router>
     }

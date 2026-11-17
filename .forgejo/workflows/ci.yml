@@ -1273,7 +1273,12 @@ jobs:
   ui-e2e:
     name: UI E2E (browser)
     runs-on: linux-cross-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container:
+      image: catthehacker/ubuntu:act-latest
+      # NET_ADMIN + /dev/net/tun inside the job's own network namespace (runners use a per-job network,
+      # never host networking): the User journey step makes a Linux bridge like a real node has, so the
+      # VM-with-a-NIC path (form default NIC, tap on the bridge, QEMU netdev) is really tested.
+      options: --cap-add NET_ADMIN --device /dev/net/tun
     needs: [check, plan]
     if: needs.plan.outputs.dup != 'true'
     timeout-minutes: 60
@@ -1472,7 +1477,14 @@ jobs:
           BASE_URL: https://localhost:8009
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "User journey"
-          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" grub-pc-bin grub-common xorriso iproute2   # iproute2: the journey makes a bridge where the runner allows it (else it warns nic-path-untested)
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" grub-pc-bin grub-common xorriso iproute2
+          # The journey first checks the create form on a bridge-less fresh install, then makes vmbr0 itself
+          # (ip link add ... type bridge) and creates the VM with a NIC. That needs NET_ADMIN in the job's own
+          # netns (container.options): prove it here and fail loudly, instead of the journey quietly creating the
+          # VM without a NIC (nic-path-untested).
+          { sudo ip link add hxprobe0 type bridge && sudo ip link del hxprobe0; } \
+            || { echo "::error::cannot create a bridge in the job container (needs --cap-add NET_ADMIN and a per-job network)"; exit 1; }
+          test -c /dev/net/tun || { echo "::error::/dev/net/tun missing in the job container (VM tap NIC)"; exit 1; }
           mkdir -p /tmp/journey-data /tmp/journey-cni/bin /tmp/journey-cni/conf.d
           HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8009 \
           HORCRUX_DATA_DIR=/tmp/journey-data \
