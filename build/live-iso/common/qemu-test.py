@@ -310,8 +310,13 @@ class VM:
         self.raw = b""
         self.snap_pred, self.snap_text, self.snap_key = None, None, ""     # snap_when(): first screen satisfying a predicate, captured in the reader thread
         self.lock = threading.Lock()
-        self.qmp_path = f"{out}/{name}.qmp"
-        self.ser_path = f"{out}/{name}.serial"
+        # AF_UNIX paths are limited to 107 bytes; the per-job evidence dir (iso-out-<image>-<arch>/evidence/<scenario>/) can exceed
+        # that (run 18336: every QEMU died with "UNIX socket path ... is too long"), so long paths fall back to a short temp dir.
+        sock_dir = out
+        if len(f"{out}/{name}.serial") > 100:
+            sock_dir = tempfile.mkdtemp(prefix="qt")
+        self.qmp_path = f"{sock_dir}/{name}.qmp"
+        self.ser_path = f"{sock_dir}/{name}.serial"
         for pth in (self.qmp_path, self.ser_path):
             if os.path.exists(pth):
                 os.unlink(pth)
