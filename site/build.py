@@ -116,6 +116,22 @@ def doc_page(src_name, active):
     edit = f'<p class="edit"><a href="{BLOB}docs/{src_name}">View or edit this page in the repository</a></p>'
     write(d + "index.html", page(d, title, f'<main class="wrap doc">{body}{edit}</main>', active))
 
+def signing_fpr():
+    """Fingerprint of keys/release-signing.asc (gpg --show-keys), spaced like gpg prints it; fails the build without gpg."""
+    import subprocess
+    out = subprocess.run(["gpg", "--batch", "--with-colons", "--show-keys", os.path.join(ROOT, "keys", "release-signing.asc")],
+                         capture_output=True, text=True, check=True).stdout
+    fpr = next(l.split(":")[9] for l in out.splitlines() if l.startswith("fpr:"))
+    return " ".join(fpr[i:i + 4] for i in range(0, 20, 4)) + "  " + " ".join(fpr[i:i + 4] for i in range(20, 40, 4))
+
+
+def security_txt(host):
+    import datetime
+    exp = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=330)).strftime("%Y-%m-%dT00:00:00Z")
+    return (f"Contact: mailto:security@errant.solutions\nExpires: {exp}\nEncryption: https://{host}/signing-key.asc\n"
+            f"Preferred-Languages: en\nCanonical: https://{host}/.well-known/security.txt\nPolicy: https://{host}/security/\n")
+
+
 def main():
     if os.path.isdir(DIST):
         shutil.rmtree(DIST)
@@ -149,14 +165,19 @@ def main():
     sh = "".join(f'<figure><img src="{rel("", "docs/images/" + p)}" alt="{html.escape(a)}" loading="lazy"><figcaption>{html.escape(a)}</figcaption></figure>'
                  for p, a in CFG["shots"])
     DLD = rel("", "download/")
+    SIGNING_FPR_SPACED = signing_fpr()
     assets = gating.release_assets(CFG["repo"])
     def cell(iso, label, listed):
         if not listed:
             return '<td class="v"><span class="muted">systemd build: coming soon</span></td>'
         ev = gating.evidence_name(iso)
         evl = f' &middot; <a href="{DLD}{ev}">evidence</a>' if assets is None or ev in assets else ""
+        # signature + SBOM links only once the build that carries them is published (older dailies have neither)
+        sig = f' &middot; <a href="{DLD}{iso}.asc">signature</a>' if assets is not None and iso + ".asc" in assets else ""
+        sb = iso[:-4] + ".cdx.json"
+        sbom = f' &middot; <a href="{DLD}{sb}">SBOM</a>' if assets is not None and sb in assets else ""
         return (f'<td class="v"><a class="btn sm" href="{DLD}{iso}" title="{iso}">{label} ISO</a> '
-                f'<span class="aux"><a href="{DLD}{iso}.sha256">sha256</a>{evl}</span>'
+                f'<span class="aux"><a href="{DLD}{iso}.sha256">sha256</a>{sig}{sbom}{evl}</span>'
                 f'<span class="fn">{iso}</span></td>')
     dl_rows = ""
     for a, f in CFG["isos"]:
@@ -181,6 +202,14 @@ def main():
 <p><strong>OpenRC or systemd:</strong> the same edition built on either init system. The installed system uses the init of the image you download; the installer does not switch it. Pick systemd if you want upstream GNOME session and systemd tooling, OpenRC for the classic Gentoo init.</p>
 <div class="tw"><table class="dl"><thead><tr><th>Image: desktop &middot; architecture</th><th>OpenRC</th><th>systemd</th></tr></thead><tbody>{dl_rows}</tbody></table></div>
 <p>{CFG['dl_note']} Verify with <code>sha256sum -c</code>, write to a USB stick with <code>dd</code> (see the <a href="{rel('', 'docs/iso-install/')}">install guide</a>), or boot it in a VM. The test evidence (serial logs and screenshots) is attached to every build.</p>
+<h3 id="verify">Verify your download</h3>
+<p>Every image, its <code>.sha256</code>, its SBOM (CycloneDX JSON listing every installed Gentoo package and Rust crate) and the test evidence has a detached OpenPGP signature (<code>.asc</code>) made with the Errant Solutions release key. Get the <a href="{rel('', 'signing-key.asc')}">release signing key</a> and check its fingerprint:</p>
+<pre><code>{SIGNING_FPR_SPACED}</code></pre>
+<pre><code>curl -fsSLO https://{CFG['key']}.errant.solutions/signing-key.asc
+gpg --import signing-key.asc
+gpg --verify {CFG['key']}-server-openrc-daily-x86_64.iso.asc {CFG['key']}-server-openrc-daily-x86_64.iso
+sha256sum -c {CFG['key']}-server-openrc-daily-x86_64.iso.sha256</code></pre>
+<p><code>gpg</code> must say <em>Good signature from "Errant Solutions Release Signing"</em> with the fingerprint above. A bad signature means the file was changed or damaged: do not use it. How to report a security problem: <a href="{rel('', 'security/')}">security policy</a>.</p>
 <h3>How the image names work</h3>
 <p>Every image is named <code>&lt;product&gt;-&lt;desktop or server&gt;-&lt;init&gt;-&lt;channel&gt;-&lt;arch&gt;.iso</code>, for example <code>{CFG['key']}-server-openrc-daily-x86_64.iso</code>.
 <strong>Desktop or server</strong> is the graphical environment the image installs: <code>server</code> means no desktop. An image with a desktop gets its environment in the name, for example <code>gnome-light</code> (GNOME on Wayland, small app set), <code>xfce</code> or <code>kde</code>.
@@ -200,6 +229,10 @@ Older download names (for example <code>{CFG['key']}-daily-x86_64.iso</code>) st
     urls = sorted({"/" + (pp[:-len("index.html")] if pp.endswith("index.html") else pp) for pp in WRITTEN_HTML})
     write("sitemap.xml", '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
           + "".join(f"  <url><loc>https://{host}{u}</loc></url>\n" for u in urls) + "</urlset>\n")
+    # release signing key + RFC 9116 security.txt (contact = the Errant Solutions security address, same as errant.solutions)
+    shutil.copy(os.path.join(ROOT, "keys", "release-signing.asc"), os.path.join(DIST, "signing-key.asc"))
+    write(".well-known/security.txt", security_txt(host))
+    write("security/index.html", page("security/", "Security", '<main class="wrap doc">' + md_to_html(open(os.path.join(ROOT, "SECURITY.md"), encoding="utf-8").read()) + '</main>', ""))
     write("robots.txt", f"User-agent: *\nAllow: /\n\nSitemap: https://{host}/sitemap.xml\n")
     # IndexNow (Bing, Yandex, Seznam, Naver) proof-of-ownership key file; .forgejo/scripts/indexnow.sh submits after each deploy
     write("5bd2340b776c5d0b43933a1f02f4281e.txt", "5bd2340b776c5d0b43933a1f02f4281e")

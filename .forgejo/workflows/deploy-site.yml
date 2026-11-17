@@ -14,6 +14,8 @@ on:
       - 'site/**'
       - 'docs/**'
       - 'branding/**'
+      - 'keys/**'
+      - 'SECURITY.md'
       - '.forgejo/workflows/deploy-site.yml'
   # Daily rebuild: picks up systemd ISOs that were published since the last deploy (the build lists a systemd
   # download only once its asset exists on the GitHub daily release). 18:30 UTC is after the nightly ISO slots.
@@ -36,7 +38,7 @@ jobs:
       - name: Install tools
         run: |
           apt-get update -qq
-          apt-get install -y -qq rsync openssh-client jq curl python3 python3-markdown
+          apt-get install -y -qq rsync openssh-client jq curl python3 python3-markdown gnupg
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build the site and check every link
         run: |
@@ -96,7 +98,7 @@ jobs:
           # The tunnel can answer 502 for a short while after a container swap: retry ~3 min.
           check() {
             fail=0
-            for p in "" roadmap/ stable-channel/ docs/ docs/iso-install/ assets/style.css robots.txt; do
+            for p in "" roadmap/ stable-channel/ docs/ docs/iso-install/ assets/style.css robots.txt .well-known/security.txt signing-key.asc security/; do
               code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Cache-Control: no-cache' "https://$SITE_HOST/$p")
               echo "$code https://$SITE_HOST/$p"; [ "$code" = 200 ] || fail=1
             done

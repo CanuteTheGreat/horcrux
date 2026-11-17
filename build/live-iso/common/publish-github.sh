@@ -6,7 +6,10 @@
 #   mode=stable -> release of the pushed tag (GITHUB_REF_NAME), a normal (non-pre) release
 # Env: FORGEJO_TOKEN (optional, to trigger a mirror sync), GH_RELEASE_TOKEN (Forgejo repo secret; a GitHub token with `repo` scope), GITHUB_SHA, GITHUB_REF_NAME (stable),
 #      GH_REPO (default CanuteTheGreat/<project>), DAILY_TAG (default daily; tests use a throw-away tag).
-# Never fails the build: the caller treats a non-zero exit as "github publish failed" only in the job summary.
+# SIGNED + SBOM (enterprise supply chain): every file uploaded here (ISO, .sha256, CycloneDX SBOM, test evidence) gets a detached
+# OpenPGP signature <asset>.asc made with the release key (RELEASE_SIGNING_KEY, sign-artifacts.sh) and verified against the public
+# key committed to the repo (keys/release-signing.asc) BEFORE the first upload. No key, a foreign key or a bad signature = exit 1
+# with nothing uploaded. SBOM env: path of the CycloneDX JSON for this ISO (sbom.py), published as <image>.cdx.json (+ .asc).
 # GitHub allows 2 GiB per release asset; a bigger ISO is refused here with a clear message (split it first).
 set -euo pipefail
 mode=$1; project=$2; iso=${3:-}; evidence=${4:-}; statusfile=${5:-}
@@ -64,24 +67,49 @@ put_asset() { # id file name   (delete the same-named asset, then upload)
   for a in $(assets_json "$id" | pyj 'import json,sys;print(" ".join(str(a["id"]) for a in json.load(sys.stdin) if a["name"]==sys.argv[1]))' "$name"); do
     curl -fsS -X DELETE "${H[@]}" "$api/releases/assets/$a"
   done
-  local ct=application/octet-stream; case $name in *.sha256) ct=text/plain;; *.tgz) ct=application/gzip;; esac
+  local ct=application/octet-stream; case $name in *.sha256|*.asc) ct=text/plain;; *.tgz) ct=application/gzip;; *.json) ct=application/json;; esac
   curl -fsS --retry 3 --retry-delay 10 --max-time 3600 "${H[@]}" -H "Content-Type: $ct" -X POST -T "$f" "$upl/releases/$id/assets?name=$name" >/dev/null
   echo "github: attached $name ($((size>>20)) MiB) to release $id"
+}
+
+# stage <iso-asset-name> <evidence-asset-name>: copy every small file under its asset name into $tmp/pub, sign all of them and the
+# ISO (in place, its .asc is copied as <iso-asset-name>.asc). Fails (nothing uploaded yet) when anything cannot be signed.
+SIGN=$(dirname "$0")/sign-artifacts.sh
+stage() {
+  local isoname=$1 evname=$2 base=${1%.iso}
+  mkdir -p "$tmp/pub"
+  printf '%s  %s\n' "$(cut -d' ' -f1 "$iso.sha256")" "$isoname" > "$tmp/pub/$isoname.sha256"
+  [ -n "${SBOM:-}" ] && [ -s "$SBOM" ] || { echo "::error::no SBOM for $isoname (SBOM env): not publishing"; return 1; }
+  cp "$SBOM" "$tmp/pub/$base.cdx.json"
+  [ -z "$evidence" ] || cp "$evidence" "$tmp/pub/$evname"
+  bash "$SIGN" "$iso" "$tmp/pub/$isoname.sha256" "$tmp/pub/$base.cdx.json" ${evidence:+"$tmp/pub/$evname"} || { echo "::error::signing failed: not publishing $isoname"; return 1; }
+  mv "$iso.asc" "$tmp/pub/$isoname.asc"
+}
+# upload_signed <release id> <iso-asset-name> <evidence-asset-name>: the ISO, then every staged file and its signature
+upload_signed() {
+  local id=$1 isoname=$2 evname=$3 base=${2%.iso} f
+  put_asset "$id" "$iso" "$isoname"
+  for f in "$isoname.asc" "$isoname.sha256" "$isoname.sha256.asc" "$base.cdx.json" "$base.cdx.json.asc" ${evidence:+"$evname" "$evname.asc"}; do
+    put_asset "$id" "$tmp/pub/$f" "$f"
+  done
 }
 
 case "$mode" in
 daily)
   [ -s "$iso" ] || { echo "no ISO at $iso"; exit 1; }
-  sum=$(cut -d' ' -f1 "$iso.sha256"); name=$project-${VPFX}daily-$ARCH.iso
+  name=$project-${VPFX}daily-$ARCH.iso; evn=$project-${VPFX}daily-$ARCH-test-evidence.tgz
+  stage "$name" "$evn" || exit 1
   id=$(ensure_release "$DAILY_TAG" "$project daily ISO (rolling, pre-release)" true "pending")
   [ -n "$id" ] || { echo "cannot create GitHub release $DAILY_TAG"; exit 1; }
-  put_asset "$id" "$iso" "$name"
-  printf '%s  %s\n' "$sum" "$name" > "$tmp/$name.sha256"
-  put_asset "$id" "$tmp/$name.sha256" "$name.sha256"
-  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-${VPFX}daily-$ARCH-test-evidence.tgz"
+  upload_signed "$id" "$name" "$evn"
   # the manager tarball app-emulation/horcrux-bin fetches on installed machines (HORCRUX_MANAGER_URL default); same asset name from every variant of one arch
   mgr=$(ls "$(dirname "$iso")"/mgr/horcrux-manager-*.tar.zst 2>/dev/null | head -1 || true)   # no match = ls exit 2 under pipefail: without || true a patronus daily died here, silently, after its last upload (run 865)
-  [ -z "$mgr" ] || [ "$project" != horcrux ] || put_asset "$id" "$mgr" "horcrux-manager-daily-$ARCH.tar.zst" || echo "::warning::manager tarball not uploaded"
+  if [ -n "$mgr" ] && [ "$project" = horcrux ]; then
+    # signed like every other asset (the ebuild also pins its sha256 in the overlay Manifest); unsigned = not uploaded
+    if bash "$SIGN" "$mgr"; then
+      put_asset "$id" "$mgr" "horcrux-manager-daily-$ARCH.tar.zst" && put_asset "$id" "$mgr.asc" "horcrux-manager-daily-$ARCH.tar.zst.asc" || echo "::warning::manager tarball not uploaded"
+    else echo "::warning::manager tarball could not be signed: not uploaded"; fi
+  fi
   # assets of the older naming schemes: removed once the same image is up under its new name (the product-domain redirects keep the old URLs working)
   for old in "$project-${IMG_OLD_VPFX}daily-$ARCH.iso" "$project-${IMG_OLD_VPFX}daily-$ARCH.iso.sha256" "$project-${IMG_OLD_VPFX}daily-$ARCH-test-evidence.tgz"; do
     for a in $(assets_json "$id" | pyj 'import json,sys;print(" ".join(str(a["id"]) for a in json.load(sys.stdin) if a["name"]==sys.argv[1]))' "$old"); do curl -fsS -X DELETE "${H[@]}" "$api/releases/assets/$a" || true; done
@@ -96,11 +124,12 @@ for x in sorted(a, key=lambda x: x["name"]):
     m = re.match(re.escape(p) + r"-((?:[a-z0-9]+-)*?[a-z0-9]+)-(openrc|systemd)-daily-(.+)\.iso$", n)
     if m:
         de = DE.get(m.group(1), m.group(1))
-        rows.append("- **%s %s - %s**: `%s` (%d MiB), SHA256 in `%s.sha256`" % (de, m.group(2).replace("openrc", "OpenRC").replace("systemd", "systemd"), m.group(3), n, x["size"] >> 20, n))
+        rows.append("- **%s %s - %s**: `%s` (%d MiB), SHA256 in `%s.sha256`, OpenPGP signature `%s.asc`, SBOM `%s.cdx.json`" % (de, m.group(2).replace("openrc", "OpenRC").replace("systemd", "systemd"), m.group(3), n, x["size"] >> 20, n, n, n[:-4]))
 print("Rolling **pre-release** build of the %s live/installer ISO from `main` (%s), updated %s UTC." % (p, os.environ["SHA"][:10], time.strftime("%F %T", time.gmtime())))
 print("Each architecture is replaced in place by its own daily job, only after the QEMU boot + install + reboot + web-probe tests passed on that architecture.\n")
 print("\n".join(rows)); print()
 print("Last test result (%s): %s" % (os.environ["ARCH"], os.environ["SUMMARY"]))
+print("\nVerify: `gpg --verify <file>.asc <file>` with the release key https://%s.errant.solutions/signing-key.asc (fingerprint on that page)." % p)
 print("\nTest builds, not releases: use test hardware or a VM. Secure Boot must be OFF. Install guide: https://%s.errant.solutions/docs/iso-install/" % p)
 ')
   patch_body "$id" "$body" true
@@ -108,13 +137,11 @@ print("\nTest builds, not releases: use test hardware or a VM. Secure Boot must 
 stable)
   tag=${GITHUB_REF_NAME:?}
   [ -s "$iso" ] || { echo "no ISO at $iso"; exit 1; }
-  id=$(ensure_release "$tag" "$tag" false "Release $tag. Install guide: https://$project.errant.solutions/docs/iso-install/")
+  stage "$project-$IMG-$tag-$ARCH.iso" "$project-$IMG-$tag-$ARCH-iso-test-evidence.tgz" || exit 1
+  id=$(ensure_release "$tag" "$tag" false "Release $tag. Install guide: https://$project.errant.solutions/docs/iso-install/ - every file has an OpenPGP signature (.asc, key https://$project.errant.solutions/signing-key.asc) and the ISO a CycloneDX SBOM (.cdx.json).")
   [ -n "$id" ] || { echo "no GitHub release for $tag"; exit 1; }
   n=$project-$IMG-$tag-$ARCH.iso      # <product>-<DE|server>-<init>-<tag>-<arch>.iso
-  put_asset "$id" "$iso" "$n"
-  printf '%s  %s\n' "$(cut -d' ' -f1 "$iso.sha256")" "$n" > "$tmp/$n.sha256"
-  put_asset "$id" "$tmp/$n.sha256" "$n.sha256"
-  [ -z "$evidence" ] || put_asset "$id" "$evidence" "$project-$IMG-$tag-$ARCH-iso-test-evidence.tgz"
+  upload_signed "$id" "$n" "$project-$IMG-$tag-$ARCH-iso-test-evidence.tgz"
   echo "GITHUB DOWNLOAD https://github.com/$repo/releases/download/$tag/$n" ;;
 *) echo "bad mode"; exit 2 ;;
 esac

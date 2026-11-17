@@ -30,7 +30,7 @@ RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked 
     # the [horcrux] repos.conf entry is package-owned (sys-apps/horcrux-repo-config, a dependency of the core); placed once from the package's own file so this emerge sees the overlay
     install -D -m644 /var/db/repos/horcrux/sys-apps/horcrux-repo-config/files/horcrux.conf /etc/portage/repos.conf/horcrux.conf; \
     qlist -I | sort > /tmp/pkgs.before; \
-    emerge --update --newuse --usepkg-exclude "sys-apps/horcrux-* net-misc/horcrux-* app-emulation/horcrux-bin" --select sys-apps/horcrux-core app-emulation/horcrux-bin > /tmp/core-emerge.log 2>&1 || { tail -60 /tmp/core-emerge.log; exit 1; }; \
+    emerge --update --newuse --usepkg-exclude "sys-apps/horcrux-* net-misc/horcrux-* app-emulation/horcrux-bin sec-keys/openpgp-keys-errantsolutions" --select sys-apps/horcrux-core app-emulation/horcrux-bin sec-keys/openpgp-keys-errantsolutions > /tmp/core-emerge.log 2>&1 || { tail -60 /tmp/core-emerge.log; exit 1; }; \
     qlist -I | sort > /tmp/pkgs.after; comm -13 /tmp/pkgs.before /tmp/pkgs.after > /tmp/pkgs.added; \
     echo "core added $(wc -l < /tmp/pkgs.added) packages:"; cat /tmp/pkgs.added; \
     # GATE: the headless core pulls no display stack (the live-only graphical installer stack was there before this layer and is removed again on a server install)
@@ -41,7 +41,9 @@ RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked 
     horcrux-time-config check; \
     # GATE: the manager is a real Portage package (lab finding 2026-11-05: `qlist -I app-emulation/horcrux` said absent on every edition, cluster tests could not run) and QEMU has SPICE;
     # the prebuilt tarball only served the emerge: the package owns the files now (the ISO does not carry both)
-    qlist -Iv app-emulation/horcrux-bin | grep . ; [ "$(qfile -q /usr/bin/horcrux-api)" = app-emulation/horcrux-bin ]; [ "$(qfile -q /usr/bin/horcrux)" = app-emulation/horcrux-bin ]; test -d /usr/share/horcrux/ui; \
+    qlist -Iv app-emulation/horcrux-bin | grep . ; \
+    # GATE: the release signing key (verifies downloaded Horcrux images, checksums and SBOMs: gpg --verify) is package-owned
+    [ "$(qfile -q /usr/share/openpgp-keys/errantsolutions.asc)" = sec-keys/openpgp-keys-errantsolutions ]; [ "$(qfile -q /usr/bin/horcrux-api)" = app-emulation/horcrux-bin ]; [ "$(qfile -q /usr/bin/horcrux)" = app-emulation/horcrux-bin ]; test -d /usr/share/horcrux/ui; \
     cat /var/db/pkg/app-emulation/qemu-*/USE | tr ' ' '\n' | grep -qx spice || { echo "GATE: qemu built without SPICE"; exit 1; }; \
     rm -f /usr/share/horcrux/prebuilt/horcrux-manager-*.tar.zst; rmdir /usr/share/horcrux/prebuilt 2>/dev/null || true; \
     qfile -q /usr/sbin/horcrux-time-config /usr/libexec/horcrux-timesync /etc/init.d/horcrux-timesync /etc/init.d/horcrux-firstboot /usr/libexec/horcrux-firstboot \

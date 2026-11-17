@@ -65,6 +65,7 @@ jobs:
         env:
           FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}   # public GitHub mirror release (second publish step)
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}   # OpenPGP release key: every published file is signed (common/sign-artifacts.sh); unset = nothing is published
           ARCH: aarch64
           INIT: systemd
           JOBS: '4'

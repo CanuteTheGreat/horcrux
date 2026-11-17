@@ -3,5 +3,6 @@ app-emulation
 app-misc
 gnome-extra
 net-misc
+sec-keys
 sys-apps
 sys-kernel

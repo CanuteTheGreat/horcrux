@@ -38,7 +38,7 @@ if [ "$mode" = stable ]; then tag=${GITHUB_REF_NAME:?}; suffix=$tag; else suffix
 
 echo "::group::host deps"
 export DEBIAN_FRONTEND=noninteractive
-(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl >/dev/null) || fail deps "apt install failed"
+(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools >/dev/null) || fail deps "apt install failed"
 echo "::endgroup::"
 
 # stable gate: the repo's own CI must not be red on the tagged commit
@@ -233,6 +233,26 @@ if [ "$result" = pass ]; then
   fi
   TEST_S=$(( $(date +%s)-t ))
 fi
+# SBOM (CycloneDX JSON) of the TESTED image: the Portage package database read back out of the ISO's own squashfs, plus every Rust
+# package of Cargo.lock (licenses from `cargo metadata`, run in a throwaway rust container; best effort: without it the Rust
+# components carry name/version/sha256 only). Published next to the ISO and signed (publish-github.sh); no SBOM = no publish.
+SBOM_FILE=""
+if [ "$result" = pass ]; then
+  echo "::group::SBOM"
+  REPO_ROOT=$(cd "$HERE/../../.." && pwd)
+  SBOM_FILE=$OUT/$(basename "$ISO" .iso).cdx.json
+  meta=$OUT/cargo-metadata.json; rm -f "$meta"
+  if command -v docker >/dev/null && ( cd "$REPO_ROOT" && git archive --format=tar HEAD ) | timeout 900 docker run --rm -i -v live-iso-sbom-cargo:/usr/local/cargo/registry \
+       rust:1-bookworm sh -c 'mkdir -p /s && cd /s && tar xf - && cargo metadata --format-version 1 --locked' > "$meta" 2> "$EVI/cargo-metadata.log"; then
+    echo "cargo metadata: $(stat -c %s "$meta") bytes"
+  else echo "::warning::cargo metadata failed (Rust components listed without licenses): $(tail -n 2 "$EVI/cargo-metadata.log" 2>/dev/null | tr '\n' ' ')"; rm -f "$meta"; fi
+  margs=(); [ -s "$meta" ] && margs=(--cargo-metadata "$meta")
+  python3 "$HERE/sbom.py" --from-iso "$ISO" --cargo-lock "$REPO_ROOT/Cargo.lock" "${margs[@]}" \
+      --name "$(basename "$ISO" .iso)" --version "$sha" --project "$PROJECT" -o "$SBOM_FILE" 2>&1 | tee "$EVI/sbom.log" | tail -3
+  [ "${PIPESTATUS[0]}" = 0 ] && [ -s "$SBOM_FILE" ] || fail sbom "SBOM generation failed: $(tail -n 1 "$EVI/sbom.log" | cut -c1-200)"
+  rm -f "$meta"
+  echo "::endgroup::"
+fi
 ACCEL=KVM; [ -e /dev/kvm ] && [ "$ARCH" = "$HOST_ARCH" ] || ACCEL="TCG emulation, no KVM"
 [ "$result" = pass ] && summary="PASS ($ARCH, QEMU $ACCEL): ${#MATRIX[@]} QEMU runs (boot, install, reboot; $([ "$ARCH" = x86_64 ] && echo 'UEFI+USB, BIOS+CD; answer-file, serial TUI, VGA TUI, graphical installer driven by keyboard + pointer + AT-SPI, no-answer-file fallback' || echo 'UEFI, USB + optical; answer-file, serial TUI, VGA TUI, graphical installer driven by keyboard + pointer + AT-SPI, no-answer-file fallback')) - installed system refuses password root SSH, accepts the key, serves the web UI on the chosen IP (build ${BUILD_S}s, test ${TEST_S}s)"
 
@@ -250,7 +270,9 @@ gh_note=""
 if [ -n "${FORGEJO_TOKEN:-}" ] && [ "$result" = pass ]; then
   if [ -z "${GH_RELEASE_TOKEN:-}" ]; then
     fail publish "GH_RELEASE_TOKEN is not set: the ISO cannot be delivered (the GitHub release is the only download location)"
-  elif bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json"; then
+  elif [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
+    fail publish "RELEASE_SIGNING_KEY is not set: unsigned images are never published (repo Actions secret)"
+  elif SBOM=$SBOM_FILE bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json"; then
     gh_note="GitHub release updated."
   else
     fail publish "GitHub release publish failed (see the job log)"
