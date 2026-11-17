@@ -1200,30 +1200,46 @@ fn statvfs(path: &str) -> Option<(u64, u64, u64)> {
 }
 
 fn disks() -> Vec<DiskUsage> {
+    pick_disks(
+        &std::fs::read_to_string("/proc/mounts").unwrap_or_default(),
+        statvfs,
+        |p| std::path::Path::new(p).is_dir(),
+    )
+}
+
+/// The filesystems the Health page shows, from /proc/mounts: the root filesystem whatever its
+/// type (overlay in a container, a zfs dataset, tmpfs on a live ISO), then each other real
+/// filesystem once (the same device mounted again - bind mounts, a container's volumes - has the
+/// same size and usage). Single files bind-mounted into a container (/etc/hosts) are not disks.
+fn pick_disks(
+    mounts: &str,
+    stat: impl Fn(&str) -> Option<(u64, u64, u64)>,
+    is_dir: impl Fn(&str) -> bool,
+) -> Vec<DiskUsage> {
     const REAL: &[&str] = &[
         "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "vfat", "ntfs", "exfat", "nfs",
         "nfs4", "cifs",
     ];
-    let mut seen = std::collections::HashSet::new();
+    let mut seen_dev = std::collections::HashSet::new();
+    let mut root_seen = false;
     let mut out = Vec::new();
-    for l in std::fs::read_to_string("/proc/mounts")
-        .unwrap_or_default()
-        .lines()
-    {
+    for l in mounts.lines() {
         let f: Vec<&str> = l.split_whitespace().collect();
-        // one card per filesystem: the same device mounted again (bind mounts, a container's volumes)
-        // has the same size and usage, so only its first mount point is listed
-        if f.len() < 3 || !REAL.contains(&f[2]) || seen.contains(f[0]) {
+        if f.len() < 3 || f[2] == "rootfs" {
+            continue;
+        }
+        let is_root = f[1] == "/";
+        if (is_root && root_seen) || !(is_root || REAL.contains(&f[2])) || seen_dev.contains(f[0]) {
             continue;
         }
         let mp = f[1].replace("\\040", " ");
-        // single files bind-mounted into a container (/etc/hosts, /etc/hostname, ...) are not disks
-        if !std::path::Path::new(&mp).is_dir() {
+        if !is_dir(&mp) {
             continue;
         }
-        if let Some((total, used, avail)) = statvfs(&mp) {
+        if let Some((total, used, avail)) = stat(&mp) {
             if total > 0 {
-                seen.insert(f[0].to_string());
+                root_seen |= is_root;
+                seen_dev.insert(f[0].to_string());
                 out.push(DiskUsage {
                     device: f[0].into(),
                     mount_point: mp,
@@ -1484,6 +1500,29 @@ mod tests {
         let t = render_ntp(NtpBackend::Timesyncd, "", &s);
         assert_eq!(parse_ntp_servers(NtpBackend::Timesyncd, &t), s);
         assert_eq!(render_ntp(NtpBackend::Ntpd, "", &s).lines().count(), 2);
+    }
+
+    #[test]
+    fn health_disks_list_the_root_and_each_filesystem_once() {
+        let stat = |_: &str| Some((100, 40, 60));
+        // a docker container: / is overlay, the only ext4 mounts are files bind-mounted from the host
+        let container = "overlay / overlay rw 0 0\nproc /proc proc rw 0 0\n\
+            /dev/sda1 /etc/resolv.conf ext4 rw 0 0\n/dev/sda1 /etc/hosts ext4 rw 0 0\n";
+        let d = pick_disks(container, stat, |p| !p.starts_with("/etc/"));
+        assert_eq!(
+            d.iter().map(|x| x.mount_point.as_str()).collect::<Vec<_>>(),
+            ["/"]
+        );
+        assert_eq!(d[0].filesystem, "overlay");
+        // a host: the same device bind-mounted again is listed once, rootfs placeholder skipped
+        let host = "rootfs / rootfs rw 0 0\n/dev/nvme0n1p2 / ext4 rw 0 0\n\
+            /dev/nvme0n1p1 /boot vfat rw 0 0\n/dev/nvme0n1p2 /var/lib/docker ext4 rw 0 0\n\
+            tmpfs /run tmpfs rw 0 0\ntank/data /tank/data zfs rw 0 0\n";
+        let d = pick_disks(host, stat, |_| true);
+        assert_eq!(
+            d.iter().map(|x| x.mount_point.as_str()).collect::<Vec<_>>(),
+            ["/", "/boot", "/tank/data"]
+        );
     }
 
     #[test]
