@@ -715,10 +715,12 @@ def main():
         # stopped VM: the console page's Display settings switch it to VNC
         page.goto(f"{BASE}/vms/{vid}/console")
         page.select_option("#disp-protocol", "vnc")
+        # the sound card stays (VNC carries no audio: a warning says so)
+        expect(page.locator("#disp-sound-warning")).to_be_visible(timeout=10000)
         page.locator("#save-display").click()
         expect(page.locator("#display-notice")).to_contain_text("Saved", timeout=30000)
         d = api_get(f"/api/vms/{vid}", token())["display"]
-        assert d["protocol"] == "vnc" and d["sound"] == "none", d
+        assert d["protocol"] == "vnc" and d["sound"] == "ich9-intel-hda", d
 
         # Start from the VM list; noVNC in the console page really connects
         # to QEMU's VNC server (password-protected, through the ticketed
