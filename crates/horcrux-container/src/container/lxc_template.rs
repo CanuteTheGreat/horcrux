@@ -29,8 +29,8 @@ fn retryable_status(code: u16) -> bool {
 /// distro stay selectable by naming them (`alpine/3.22`). Gentoo publishes only
 /// the `openrc` and `systemd` variants, so the variant is spelled out.
 pub const DEFAULT_LXC_TEMPLATE: &str = "gentoo/current/openrc";
-pub const DEFAULT_IMAGES_URL: &str = "https://images.linuxcontainers.org";
-const CATALOG_TTL: Duration = Duration::from_secs(30 * 60);
+/// Default image server and catalog lifetime live in `[containers]` (`HorcruxConfig`).
+pub use horcrux_core::config::DEFAULT_LXC_IMAGES_URL as DEFAULT_IMAGES_URL;
 const ROOTFS: &str = "rootfs.tar.xz";
 
 /// One path component of a template id (`alpine`, `3.22`, `amd64`,
@@ -156,6 +156,8 @@ pub struct TemplateStore {
     /// Directory local rootfs tarballs may come from (besides `dir`).
     image_dir: PathBuf,
     base_url: String,
+    /// `[containers] lxc_catalog_ttl_secs`
+    catalog_ttl: Duration,
     client: reqwest::Client,
     catalog: Mutex<Option<(Instant, Vec<LxcCatalogEntry>)>>,
     locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
@@ -172,6 +174,9 @@ impl TemplateStore {
             dir,
             image_dir,
             base_url: base_url.trim_end_matches('/').to_string(),
+            catalog_ttl: Duration::from_secs(
+                horcrux_core::config::ContainersConfig::default().lxc_catalog_ttl_secs,
+            ),
             client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(20))
                 .timeout(Duration::from_secs(1800))
@@ -180,6 +185,16 @@ impl TemplateStore {
             catalog: Mutex::new(None),
             locks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// How long a fetched catalog is reused (`[containers] lxc_catalog_ttl_secs`).
+    pub fn with_catalog_ttl(mut self, ttl: Duration) -> Self {
+        self.catalog_ttl = ttl;
+        self
+    }
+
+    pub fn catalog_ttl(&self) -> Duration {
+        self.catalog_ttl
     }
 
     pub fn dir(&self) -> &Path {
@@ -234,11 +249,11 @@ impl TemplateStore {
             .map_err(|e| Error::System(format!("GET {url}: {e}")))
     }
 
-    /// The image catalog (cached for 30 minutes; `refresh` forces a fetch).
+    /// The image catalog (cached for `[containers] lxc_catalog_ttl_secs`; `refresh` forces a fetch).
     pub async fn catalog(&self, refresh: bool) -> Result<Vec<LxcCatalogEntry>> {
         let mut cache = self.catalog.lock().await;
         if let Some((at, list)) = cache.as_ref() {
-            if !refresh && at.elapsed() < CATALOG_TTL {
+            if !refresh && at.elapsed() < self.catalog_ttl {
                 return Ok(list.clone());
             }
         }

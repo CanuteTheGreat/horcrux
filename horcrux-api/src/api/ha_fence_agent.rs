@@ -52,30 +52,35 @@ use std::time::Duration;
 
 /// Heartbeat older than this and the agent kills the HA guests.
 pub(crate) fn fence_secs() -> i64 {
-    std::env::var("HORCRUX_HA_AGENT_FENCE_SECS")
-        .ok()
-        .and_then(|v| v.trim().parse::<i64>().ok())
-        .filter(|v| *v >= 3)
-        .unwrap_or(15)
+    // `[ha] agent_fence_secs` (env HORCRUX_HA_AGENT_FENCE_SECS)
+    horcrux_core::config::HaConfig::current().agent_fence_secs as i64
 }
 
 /// Longest time between the manager's last answer and the guests being gone,
 /// beyond `fence_secs`: one heartbeat period, one agent poll period,
 /// `kill_qemu` (SIGTERM, SIGKILL after 5 s, gives up after 10 s, all guests
 /// concurrently) and clock drift between the two nodes. The leader waits
-/// `fence_secs + AGENT_SETTLE_SECS` from the moment it FIRST sees the manager
+/// `fence_secs + agent_settle_secs()` from the moment it FIRST sees the manager
 /// silent, which is never before the manager's last answer.
-pub(crate) const AGENT_SETTLE_SECS: i64 = 1 + 1 + FENCE_KILL_BUDGET_SECS + 2;
+pub(crate) fn agent_settle_secs() -> i64 {
+    horcrux_core::config::HaConfig::current().agent_settle_secs() as i64
+}
 
 /// Longest wait for SIGKILLed QEMUs to be gone before the node is reset.
-pub(crate) const FENCE_KILL_WAIT_SECS: i64 = 2;
+pub(crate) fn fence_kill_wait_secs() -> i64 {
+    horcrux_core::config::HaConfig::current().fence_kill_wait_secs as i64
+}
 /// A reset (`/proc/sysrq-trigger` 'b': no sync, no unmount, no I/O) stops every
 /// CPU, hence every QEMU, within this time.
-pub(crate) const FENCE_RESET_SECS: i64 = 1;
+pub(crate) fn fence_reset_secs() -> i64 {
+    horcrux_core::config::HaConfig::current().fence_reset_secs as i64
+}
 /// Hard upper bound from "the fence fires" to "no guest of this node can run",
 /// whatever state QEMU is in: SIGKILL wait + reset. The recovery margin and the
 /// agent settle time are derived from this one number.
-pub(crate) const FENCE_KILL_BUDGET_SECS: i64 = FENCE_KILL_WAIT_SECS + FENCE_RESET_SECS;
+pub(crate) fn fence_kill_budget_secs() -> i64 {
+    horcrux_core::config::HaConfig::current().kill_budget_secs() as i64
+}
 
 /// Reset the machine NOW. Used only when a fenced QEMU survived SIGKILL (stuck in
 /// uninterruptible storage I/O): it could write to the shared disks again as
@@ -100,15 +105,15 @@ pub(crate) fn emergency_reset(why: &str) {
 }
 
 /// Fence the guests `vms`: SIGKILL all of them at once; any that is still
-/// running after [`FENCE_KILL_WAIT_SECS`] gets the node reset. Returns when
+/// running after [`fence_kill_wait_secs`] gets the node reset. Returns when
 /// every guest is gone or the reset was triggered: at most
-/// [`FENCE_KILL_BUDGET_SECS`] after the call (the reset itself takes effect
+/// [`fence_kill_budget_secs`] after the call (the reset itself takes effect
 /// at once). Returns true if a reset was needed.
 pub(crate) async fn fence_kill(vms: &[String], why: &str) -> bool {
     fence_kill_with(
         vms,
         why,
-        Duration::from_secs(FENCE_KILL_WAIT_SECS as u64),
+        Duration::from_secs(fence_kill_wait_secs() as u64),
         |vm, wait| async move { crate::vm::migrate::kill_qemu_fence(&vm, wait).await },
         emergency_reset,
     )
@@ -314,21 +319,15 @@ pub async fn agent_main() -> i32 {
 
 /// TCP port of the attestation endpoint (`GET /attest?n=<nonce>`).
 pub(crate) fn attest_port() -> u16 {
-    std::env::var("HORCRUX_HA_FENCE_PORT")
-        .ok()
-        .and_then(|v| v.trim().parse::<u16>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(8026)
+    // `[ha] fence_port` (env HORCRUX_HA_FENCE_PORT)
+    horcrux_core::config::HaConfig::current().fence_port
 }
 
 /// How long after the agent started a manager that is enabled but not running is
 /// still given to start by itself before the node is declared manager-less.
 pub(crate) fn boot_settle_secs() -> i64 {
-    std::env::var("HORCRUX_HA_AGENT_BOOT_SETTLE_SECS")
-        .ok()
-        .and_then(|v| v.trim().parse::<i64>().ok())
-        .filter(|v| *v >= 0)
-        .unwrap_or(20)
+    // `[ha] agent_boot_settle_secs` (env HORCRUX_HA_AGENT_BOOT_SETTLE_SECS)
+    horcrux_core::config::HaConfig::current().agent_boot_settle_secs as i64
 }
 
 /// What the agent saw when it answered.
@@ -902,10 +901,10 @@ mod fence_kill_tests {
     #[test]
     fn budget_is_wait_plus_reset_and_feeds_the_settle_time() {
         assert_eq!(
-            FENCE_KILL_BUDGET_SECS,
-            FENCE_KILL_WAIT_SECS + FENCE_RESET_SECS
+            fence_kill_budget_secs(),
+            fence_kill_wait_secs() + fence_reset_secs()
         );
-        assert_eq!(AGENT_SETTLE_SECS, 1 + 1 + FENCE_KILL_BUDGET_SECS + 2);
+        assert_eq!(agent_settle_secs(), 1 + 1 + fence_kill_budget_secs() + 2);
     }
 
     #[tokio::test]

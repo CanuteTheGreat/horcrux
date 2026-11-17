@@ -7,7 +7,7 @@
 //! local cache of images.linuxcontainers.org images); the rootfs is a plain
 //! directory or, with a disk size, an ext4 image that can be grown.
 use super::lxc_config::{self, ConfigInput, GuestNet, HostEnv, RootfsKind};
-use super::lxc_template::{TemplateRef, TemplateStore, DEFAULT_IMAGES_URL};
+use super::lxc_template::{TemplateRef, TemplateStore};
 use super::Container;
 use horcrux_common::{
     ContainerConfig, ContainerOptions, ContainerRuntime, ContainerStatus, Error, LxcOptions,
@@ -420,9 +420,14 @@ impl LxcManager {
                     .unwrap_or_else(|_| PathBuf::from("/var/lib/horcrux"))
                     .join("lxc-templates")
             });
-        let url = std::env::var("HORCRUX_LXC_IMAGES_URL")
-            .unwrap_or_else(|_| DEFAULT_IMAGES_URL.to_string());
-        Self::with_paths(lxc_path, template_dir, url)
+        // `[containers] lxc_images_url` / `lxc_catalog_ttl_secs` (env HORCRUX_LXC_IMAGES_URL,
+        // HORCRUX_LXC_CATALOG_TTL_SECS)
+        let c = horcrux_core::config::HorcruxConfig::load().containers;
+        let mut m = Self::with_paths(lxc_path, template_dir, c.lxc_images_url);
+        m.templates = m
+            .templates
+            .with_catalog_ttl(std::time::Duration::from_secs(c.lxc_catalog_ttl_secs));
+        m
     }
 
     pub fn with_paths(lxc_path: PathBuf, template_dir: PathBuf, images_url: String) -> Self {

@@ -90,8 +90,6 @@ b4faa9f24300f071	crates/horcrux-auth/src/middleware/auth.rs	constant	CLUSTER_NOD
 a20960241b5bae21	crates/horcrux-auth/src/middleware/rate_limit.rs	timing	Duration::from_secs(60)	auth.timing.interval
 c59a155932abf6c0	crates/horcrux-auth/src/tls/acme.rs	constant	ACCOUNT_KEY	auth.account_key
 0e7953fb53242f38	crates/horcrux-auth/src/tls/acme.rs	timing	Duration::from_secs(120)	auth.timing.retry
-954003184725193c	crates/horcrux-auth/src/tls/acme.rs	url	https://acme-staging-v02.api.letsencrypt.org/directory	auth.url.lets_encrypt_staging
-8da0ef075b0ae620	crates/horcrux-auth/src/tls/acme.rs	url	https://acme-v02.api.letsencrypt.org/directory	auth.url.lets_encrypt
 6f10d07ab38e70fd	crates/horcrux-auth/src/tls/mod.rs	path	/etc/horcrux/ssl/cert.pem	auth.path.pathbuf
 fe838e8e57a2d000	crates/horcrux-auth/src/tls/mod.rs	path	/etc/horcrux/ssl/key.pem	auth.path.pathbuf
 a875ec5ee804fcd6	crates/horcrux-auth/src/tls/mod.rs	path	/var/lib/horcrux/ssl	auth.path.pathbuf
@@ -111,9 +109,6 @@ ed733cf0102d31cf	crates/horcrux-backup/src/backup/mod.rs	path	/var/lib/horcrux/b
 28ff8548ca30493f	crates/horcrux-backup/src/backup/mod.rs	timing	Duration::from_millis(100)	backup.timing.tokio
 42a98646686b7289	crates/horcrux-backup/src/backup/providers.rs	timing	Duration::from_secs(300)	backup.timing.std
 42a98646686b7289#2	crates/horcrux-backup/src/backup/providers.rs	timing	Duration::from_secs(300)	backup.timing.std
-ce214a7dd326ff77	crates/horcrux-cluster/src/cluster/membership.rs	port	8443	cluster.port.port
-ccb27ad363075061	crates/horcrux-cluster/src/cluster/migration.rs	constant	MGMT_PORT	cluster.mgmt_port
-aa1a6526750f2d33	crates/horcrux-cluster/src/cluster/migration.rs	constant	SSH_PORT	cluster.ssh_port
 31556dbe8137858c	crates/horcrux-cluster/src/cluster/migration.rs	path	/var/lib/horcrux	cluster.path.path
 709ad8af3c701568	crates/horcrux-cluster/src/cluster/migration.rs	timing	Duration::from_millis(100)	cluster.timing.tokio
 7d1453ce199a639b	crates/horcrux-cluster/src/cluster/migration.rs	timing	Duration::from_millis(50)	cluster.timing.tokio
@@ -140,13 +135,10 @@ c848bb0fbdf0cdac	crates/horcrux-container/src/container/lxc.rs	timing	Duration::
 255ab8f61c0b4046	crates/horcrux-container/src/container/lxc.rs	timing	Duration::from_secs(1)	container.timing.tokio
 2c49aef812573124	crates/horcrux-container/src/container/lxc_config.rs	constant	CPU_PERIOD_US	container.cpu_period_us
 3262e2d7b259ffe6	crates/horcrux-container/src/container/lxc_config.rs	size	1024 * 1024	container.size._
-b7c52f0d1de29d57	crates/horcrux-container/src/container/lxc_template.rs	constant	CATALOG_TTL	container.catalog_ttl
-ba238d435cbbde6b	crates/horcrux-container/src/container/lxc_template.rs	constant	DEFAULT_IMAGES_URL	container.default_images_url
 2417363a59d10c71	crates/horcrux-container/src/container/lxc_template.rs	constant	GET_RETRY_DELAYS_SECS	container.get_retry_delays_secs
 ab555f3590720269	crates/horcrux-container/src/container/lxc_template.rs	path	/var/lib/horcrux	container.path.pathbuf
 54ec8492404487e7	crates/horcrux-container/src/container/lxc_template.rs	timing	Duration::from_secs(1800)	container.timing.duration
 508925ace10ab5ca	crates/horcrux-container/src/container/lxc_template.rs	timing	Duration::from_secs(20)	container.timing.duration
-b3993f68127fda15	crates/horcrux-container/src/container/lxc_template.rs	url	https://images.linuxcontainers.org	container.default_images_url
 edca88e7b3ea8438	crates/horcrux-container/src/container/mod.rs	path	/var/lib	container.path.path
 0b16cb29bd8305d3	crates/horcrux-container/src/container/probe.rs	timing	Duration::from_secs(10)	container.timing.duration
 2491f9a4282629b8	crates/horcrux-container/src/container/probe.rs	timing	Duration::from_secs(8)	container.probe_timeout
@@ -435,16 +427,6 @@ f04f02ecbe1ca9c0	horcrux-api/src/api/guest_state/engine.rs	timing	Duration::from
 9b7849b334d09aa9	horcrux-api/src/api/guest_state/engine.rs	timing	Duration::from_secs(20)	api.timing.tokio
 77c48475872d8279	horcrux-api/src/api/guest_state/engine.rs	timing	Duration::from_secs(30)	api.timing.duration
 77c48475872d8279#2	horcrux-api/src/api/guest_state/engine.rs	timing	Duration::from_secs(30)	api.timing.duration
-80e0c3373f9b0720	horcrux-api/src/api/ha_fence_agent.rs	constant	AGENT_SETTLE_SECS	api.agent_settle_secs
-d2c51b5449ef2609	horcrux-api/src/api/ha_fence_agent.rs	constant	FENCE_KILL_BUDGET_SECS	api.fence_kill_budget_secs
-047b96de31cd7553	horcrux-api/src/api/ha_fence_agent.rs	constant	FENCE_KILL_WAIT_SECS	api.fence_kill_wait_secs
-8d0398ffa3d88490	horcrux-api/src/api/ha_fence_agent.rs	constant	FENCE_RESET_SECS	api.fence_reset_secs
-36050f2330897858	horcrux-api/src/api/ha_loop.rs	constant	ATTEST_MIN_SILENT_SECS	api.attest_min_silent_secs
-a19f9196511efa98	horcrux-api/src/api/ha_loop.rs	constant	ATTEST_NOT_YET_MAX_SECS	api.attest_not_yet_max_secs
-b953caa985d09293	horcrux-api/src/api/ha_loop.rs	constant	DRIFT_SECS	api.drift_secs
-5f3c4ebcec0ab446	horcrux-api/src/api/ha_loop.rs	constant	KILL_BUDGET_SECS	api.kill_budget_secs
-743af56f1362bf7d	horcrux-api/src/api/ha_loop.rs	constant	SYNC_TIMEOUT_SECS	api.sync_timeout_secs
-d29effc39fa1f068	horcrux-api/src/api/ha_loop.rs	constant	WATCHDOG_SECS	api.watchdog_secs
 61b1545b51ea837e	horcrux-api/src/api/ha_loop.rs	timing	Duration::from_secs(1)	api.timing.ticker
 8b5c13b0bf000e3b	horcrux-api/src/api/ha_loop.rs	timing	Duration::from_secs(10)	api.timing.duration
 149c2edac6f13cc2	horcrux-api/src/api/ha_loop.rs	timing	Duration::from_secs(2)	api.timing.duration

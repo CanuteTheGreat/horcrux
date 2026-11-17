@@ -8,9 +8,7 @@ use crate::audit::{AuditEvent, AuditEventType, AuditResult, AuditSeverity};
 use crate::auth::store::{self, Principal, RealmRecord, RoleRecord, UserUpdate};
 use crate::auth::{password, privileges, realms, sysgroups, totp, webauthn};
 use crate::error::ApiError;
-use crate::middleware::auth::{
-    generate_session_token, AuthUser, SCOPE_TFA_SETUP,
-};
+use crate::middleware::auth::{generate_session_token, AuthUser, SCOPE_TFA_SETUP};
 use crate::AppState;
 use axum::{
     extract::{ConnectInfo, FromRequestParts, Path, Query, State},

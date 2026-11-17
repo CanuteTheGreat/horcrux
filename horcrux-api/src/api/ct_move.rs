@@ -429,7 +429,14 @@ async fn run_move(
         let token_inc = prep
             .token
             .ok_or_else(|| "the target gave no trust token".to_string())?;
-        let address = format!("{}:8443", host_of(&base));
+        // `[cluster] incus_port`
+        let address = format!(
+            "{}:{}",
+            host_of(&base),
+            horcrux_core::config::HorcruxConfig::load()
+                .cluster
+                .incus_port
+        );
         let restart = cm
             .incus_move(id, &r.to, &address, &token_inc, live && running, timeout)
             .await

@@ -60,16 +60,16 @@ block).
 | category | must become config | legit constant | test fixture | total |
 |---|---|---|---|---|
 | address | 27 | 99 | 497 | 623 |
-| constant | 56 | 8 | 2 | 66 |
+| constant | 42 | 10 | 2 | 54 |
 | fixed-list | 10 | 6 | 14 | 30 |
 | hostname | 0 | 1 | 0 | 1 |
 | interface | 12 | 6 | 66 | 84 |
 | path | 70 | 121 | 214 | 405 |
-| port | 20 | 3 | 16 | 39 |
+| port | 19 | 3 | 16 | 38 |
 | size | 18 | 0 | 2 | 20 |
 | timing | 251 | 4 | 93 | 348 |
-| url | 58 | 52 | 35 | 145 |
-| **all** | 522 | 300 | 939 | 1761 |
+| url | 55 | 57 | 36 | 148 |
+| **all** | 504 | 307 | 940 | 1751 |
 
 ## Converted
 
@@ -77,6 +77,11 @@ block).
 |---|---|---|---|
 | `USER_TOKEN_TTL_SECS = 86400` (horcrux-auth middleware) | `[auth] session_ttl_secs` / `HORCRUX_SESSION_TTL_SECS` | 86400 s (300 .. 30 d) | config.toml, env |
 | `TFA_SETUP_TOKEN_TTL_SECS = 900` (horcrux-auth middleware) | `[auth] tfa_setup_ttl_secs` / `HORCRUX_TFA_SETUP_TTL_SECS` | 900 s (60 .. 3600) | config.toml, env |
+| `DEFAULT_IMAGES_URL` (horcrux-container lxc_template.rs; env var only) | `[containers] lxc_images_url` / `HORCRUX_LXC_IMAGES_URL` | `https://images.linuxcontainers.org` (http/https URL) | config.toml, env |
+| `CATALOG_TTL = 30 min` (lxc_template.rs) | `[containers] lxc_catalog_ttl_secs` / `HORCRUX_LXC_CATALOG_TTL_SECS` | 1800 s (60 .. 86400) | config.toml, env |
+| `LETS_ENCRYPT` / `LETS_ENCRYPT_STAGING` (horcrux-auth tls/acme.rs) | `[tls] acme_directory` / `HORCRUX_ACME_DIRECTORY` (default for new orders) and `[tls] acme_directories` (picker list: Let's Encrypt, its staging CA, ZeroSSL, Google Trust Services; replaceable with an internal CA); `GET /api/tls/acme` returns `directories` | Let's Encrypt | config.toml, env |
+| HA timings in ha_loop.rs / ha_fence_agent.rs (`WATCHDOG_SECS`, `DRIFT_SECS`, `ATTEST_*`, `SYNC_TIMEOUT_SECS`, `FENCE_KILL_WAIT_SECS`, `FENCE_RESET_SECS`, agent settle, ports; tick/self-fence/agent-fence were env only) | `[ha] tick_secs, self_fence_secs, fence_after_secs, agent_fence_secs, agent_boot_settle_secs, fence_port, sync_timeout_secs, recovery_margin_secs, watchdog_secs, drift_secs, fence_kill_wait_secs, fence_reset_secs, attest_min_silent_secs, attest_not_yet_max_secs` (the historic `HORCRUX_HA_*` env names still win) | the former values (3 / 10 / 10 / 15 / 20 / 8026 / 5 / floor / 1 / 2 / 2 / 1 / 3 / 180 s) | config.toml, env |
+| cluster ports: `MGMT_PORT 8006`, `SSH_PORT 22` (migration.rs), `8443` (membership.rs, ct_move.rs) | `[server] port` for the node API (migration check, membership), `[cluster] ssh_port`, `[cluster] incus_port` / `HORCRUX_CLUSTER_SSH_PORT`, `HORCRUX_CLUSTER_INCUS_PORT` | 8006 / 22 / 8443 | config.toml, env |
 | fixed 13-entry language list in the live installer (`liveinst/system.py` `LOCALES`) | the image's glibc `/usr/share/i18n/SUPPORTED` (every UTF-8 locale, `locale-gen` runs for the choice) | shortlist shown first; whole list only without glibc data | installer |
 
 Already dynamic before this sweep: the System > Configuration page reads time zones and
@@ -93,16 +98,16 @@ P1 = owner-visible or security, P2 = operator tuning, P3 = rare.
    and include them in the declarative spec as a `node_settings` kind (registered through the
    engine's `Kind` extension point once the declarative lanes have merged), so GitOps and
    history carry them.
-2. **P1 catalog and update URLs**: LXC image catalog `DEFAULT_IMAGES_URL` and `CATALOG_TTL`
-   (horcrux-container lxc_template.rs), ACME directory URLs (horcrux-auth tls/acme.rs; the
-   CA should be selectable, not only Let's Encrypt), Kubernetes manifests/URLs in
-   horcrux-k8s, overlay/binhost URLs in `deploy/gentoo`.
-3. **P1 HA and fencing timings** (horcrux-api ha_loop.rs `WATCHDOG_SECS`,
-   `KILL_BUDGET_SECS`, `DRIFT_SECS`, `ATTEST_*`, `SYNC_TIMEOUT_SECS`; ha_fence_agent.rs
-   `AGENT_SETTLE_SECS`, `FENCE_*`): `[ha]` keys with bounds; the safety relations between
-   them (kill budget < watchdog) validated together.
-4. **P1 cluster ports** (horcrux-cluster migration.rs `MGMT_PORT`, `SSH_PORT`;
-   membership.rs 8443): derive from `[server] port` and a `[cluster]` section.
+2. ~~**P1 catalog and update URLs**~~ LXC catalog and ACME done (batch 3, see Converted).
+   Left: Kubernetes manifests/URLs in horcrux-k8s, overlay/binhost URLs in `deploy/gentoo`.
+3. ~~**P1 HA and fencing timings**~~ done (batch 3): `[ha]` with joint validation
+   (`HaConfig::validate`: watchdog < self-fence, kill budget < self-fence, tick <= self-fence,
+   attestation windows ordered, an explicit recovery margin not below what the section
+   itself guarantees, the lab env override only warned about by the HA loop). An
+   inconsistent section falls back to the proven defaults instead of weakening fencing.
+   The fence agent reads the same section.
+4. ~~**P1 cluster ports**~~ done (batch 3): node API port from `[server] port`, `[cluster]`
+   for SSH and the Incus/LXD remote API.
 5. **P2 monitoring and metrics** (`NODE_METRICS_INTERVAL_SECS`, `VM_METRICS_INTERVAL_SECS`,
    metrics explorer `SAMPLE_INTERVAL_SECS`/`RETENTION_SECS`, alert `EVAL_INTERVAL_SECS`,
    webhook retry/backoff caps, `MAX_SILENCE_SECS`): `[monitoring]` keys.

@@ -19,9 +19,6 @@ use sqlx::SqlitePool;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const LETS_ENCRYPT: &str = "https://acme-v02.api.letsencrypt.org/directory";
-pub const LETS_ENCRYPT_STAGING: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcmeConfig {
     #[serde(default = "default_directory")]
@@ -43,7 +40,10 @@ pub struct AcmeConfig {
 }
 
 fn default_directory() -> String {
-    LETS_ENCRYPT.into()
+    // `[tls] acme_directory` (env HORCRUX_ACME_DIRECTORY)
+    horcrux_core::config::HorcruxConfig::load()
+        .tls
+        .acme_directory
 }
 fn yes() -> bool {
     true
@@ -275,7 +275,7 @@ mod tests {
 
     fn cfg(domains: &[&str]) -> AcmeConfig {
         AcmeConfig {
-            directory_url: LETS_ENCRYPT_STAGING.into(),
+            directory_url: "https://acme.test/directory".into(),
             contact_email: None,
             domains: domains.iter().map(|s| s.to_string()).collect(),
             ca_cert: None,

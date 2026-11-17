@@ -39,6 +39,12 @@ cert_path = "/etc/horcrux/ssl/cert.pem"
 key_path = "/etc/horcrux/ssl/key.pem"
 # SSL directory for storing certificates
 ssl_dir = "/etc/horcrux/ssl"
+# ACME certificate authority used when an order does not name one (https), and the list the TLS page offers.
+# Env: HORCRUX_ACME_DIRECTORY
+# acme_directory = "https://acme-v02.api.letsencrypt.org/directory"
+# [[tls.acme_directories]]
+# name = "Internal CA"
+# url = "https://ca.example.internal/acme/directory"
 
 [qemu]
 # Pattern for QMP socket path (use {vm_id} as placeholder)
@@ -75,3 +81,35 @@ admin_groups = ["horcrux-admin", "wheel"]
 session_ttl_secs = 86400
 # Lifetime of the restricted "set up two-factor first" login (60 .. 3600). Env: HORCRUX_TFA_SETUP_TTL_SECS
 tfa_setup_ttl_secs = 900
+
+[containers]
+# LXC image server (any mirror with the same layout) and how long the fetched catalog is reused (60 .. 86400 s).
+# Env: HORCRUX_LXC_IMAGES_URL, HORCRUX_LXC_CATALOG_TTL_SECS
+lxc_images_url = "https://images.linuxcontainers.org"
+lxc_catalog_ttl_secs = 1800
+
+[cluster]
+# Ports of the other nodes. The management port is [server] port. Env: HORCRUX_CLUSTER_SSH_PORT, HORCRUX_CLUSTER_INCUS_PORT
+ssh_port = 22
+incus_port = 8443
+
+[ha]
+# High-availability timings in seconds; the values are checked together (the kill budget
+# fence_kill_wait_secs + fence_reset_secs must be shorter than self_fence_secs, ...).
+# Env overrides: HORCRUX_HA_TICK_SECS, HORCRUX_HA_SELF_FENCE_SECS, HORCRUX_HA_FENCE_AFTER_SECS,
+# HORCRUX_HA_AGENT_FENCE_SECS, HORCRUX_HA_AGENT_BOOT_SETTLE_SECS, HORCRUX_HA_FENCE_PORT,
+# HORCRUX_HA_SYNC_TIMEOUT_SECS, HORCRUX_HA_RECOVERY_MARGIN_SECS
+tick_secs = 3
+self_fence_secs = 10
+fence_after_secs = 10
+agent_fence_secs = 15
+agent_boot_settle_secs = 20
+fence_port = 8026
+sync_timeout_secs = 5
+# recovery_margin_secs = 12   # unset = the proven floor for the timings in effect
+watchdog_secs = 1
+drift_secs = 2
+fence_kill_wait_secs = 2
+fence_reset_secs = 1
+attest_min_silent_secs = 3
+attest_not_yet_max_secs = 180

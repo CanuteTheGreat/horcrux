@@ -55,32 +55,36 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-fn env_secs(name: &str, default: u64) -> u64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|v| *v >= 1)
-        .unwrap_or(default)
+fn ha() -> horcrux_core::config::HaConfig {
+    horcrux_core::config::HaConfig::current()
 }
 
+/// `[ha] tick_secs` (env `HORCRUX_HA_TICK_SECS`).
 fn tick_secs() -> u64 {
-    env_secs("HORCRUX_HA_TICK_SECS", 3)
+    ha().tick_secs
 }
 /// How long a node without a majority waits before it kills its HA VMs,
 /// counted from the LAST moment it still saw a majority (see [`FenceClock`]).
+/// `[ha] self_fence_secs`.
 fn self_fence_secs() -> i64 {
-    env_secs("HORCRUX_HA_SELF_FENCE_SECS", 10) as i64
+    ha().self_fence_secs as i64
 }
 /// Period of the self-fence watchdog (its own task, independent of the HA
-/// tick, which can be stuck in a peer call for a long time).
-const WATCHDOG_SECS: i64 = 1;
+/// tick, which can be stuck in a peer call for a long time): `[ha] watchdog_secs`.
+fn watchdog_secs() -> i64 {
+    ha().watchdog_secs as i64
+}
 /// Upper bound for killing the guests of a node that lost its majority, whatever
 /// state QEMU is in (SIGKILL, then a node reset if one survives; see
 /// `ha_fence_agent::fence_kill`). Not "kill_qemu's 10 s": a QEMU in D-state on
 /// NFS never dies by signal, the reset is what bounds it.
-const KILL_BUDGET_SECS: i64 = super::ha_fence_agent::FENCE_KILL_BUDGET_SECS;
-/// Clock-rate drift allowance between two nodes over one fencing window.
-const DRIFT_SECS: i64 = 2;
+fn kill_budget_secs() -> i64 {
+    super::ha_fence_agent::fence_kill_budget_secs()
+}
+/// Clock-rate drift allowance between two nodes over one fencing window: `[ha] drift_secs`.
+fn drift_secs() -> i64 {
+    ha().drift_secs as i64
+}
 
 /// Smallest recovery margin that keeps the isolated node's self-fence strictly
 /// before the survivors' recovery for the given monitor timings (proof in
@@ -88,7 +92,7 @@ const DRIFT_SECS: i64 = 2;
 /// `2*poll + fetch` earlier than the isolated node loses its LAST peer, plus
 /// the watchdog granularity (twice) and the time to kill the guests.
 pub(crate) fn recovery_margin_floor(poll: i64, fetch: i64, watchdog: i64, kill: i64) -> i64 {
-    2 * poll + fetch + 2 * watchdog + kill + DRIFT_SECS
+    2 * poll + fetch + 2 * watchdog + kill + drift_secs()
 }
 
 /// Extra time the leader waits, beyond the self-fence time, before it
@@ -99,20 +103,17 @@ fn recovery_margin_secs() -> i64 {
     let floor = recovery_margin_floor(
         crate::cluster::usage::poll_interval().as_secs() as i64,
         crate::cluster::usage::FETCH_TIMEOUT.as_secs() as i64,
-        WATCHDOG_SECS,
-        KILL_BUDGET_SECS,
+        watchdog_secs(),
+        kill_budget_secs(),
     );
-    match std::env::var("HORCRUX_HA_RECOVERY_MARGIN_SECS")
-        .ok()
-        .and_then(|v| v.trim().parse::<i64>().ok())
-        .filter(|v| *v >= 1)
-    {
+    match ha().recovery_margin_secs {
         Some(v) => {
+            let v = v as i64;
             if v < floor {
                 static WARNED: OnceLock<()> = OnceLock::new();
                 WARNED.get_or_init(|| {
                     tracing::warn!(
-                        "HA: HORCRUX_HA_RECOVERY_MARGIN_SECS={v} is below the safe floor {floor} s \
+                        "HA: recovery_margin_secs = {v} is below the safe floor {floor} s \
                          for the monitor timings in effect: a partitioned node may still run its \
                          guest when the survivors recover it (split brain)"
                     )
@@ -153,7 +154,7 @@ impl FenceClock {
 
 /// Wait before fencing a node that has gone quiet (it may only be slow).
 fn fence_after_secs() -> i64 {
-    env_secs("HORCRUX_HA_FENCE_AFTER_SECS", 10) as i64
+    ha().fence_after_secs as i64
 }
 
 /// What a TCP probe of a silent node's API port says about the node.
@@ -203,7 +204,7 @@ pub(crate) enum RecoveryGate {
 ///   i.e. its QEMUs are provably gone. Without an agent they may still run: hold.
 /// * the same node, but its agent answers a `safe` attestation (heartbeat stale
 ///   and guests gone, or no manager at boot and nothing running): recover at once
-///   (after [`ATTEST_MIN_SILENT_SECS`] of silence), no advert needed.
+///   (after [`attest_min_silent_secs`] of silence), no advert needed.
 pub(crate) fn recovery_gate(
     live: Liveness,
     manager_answers: bool,
@@ -224,12 +225,14 @@ pub(crate) fn recovery_gate(
         Liveness::KernelAlive if manager_answers => RecoveryGate::HoldAlive,
         Liveness::KernelAlive => match (attest, agent_wait) {
             // first-hand proof from the node's own agent (works with no manager at all)
-            (Attest::Safe, _) if mgr_silent_for >= ATTEST_MIN_SILENT_SECS => RecoveryGate::Recover,
+            (Attest::Safe, _) if mgr_silent_for >= attest_min_silent_secs() => {
+                RecoveryGate::Recover
+            }
             (Attest::Safe, _) => RecoveryGate::Wait,
             // the agent answers but the node is not provably dead yet (fresh heartbeat,
             // guests still being killed, manager still allowed to start): wait, but
             // not forever
-            (Attest::NotYet, _) if mgr_silent_for < ATTEST_NOT_YET_MAX_SECS => RecoveryGate::Wait,
+            (Attest::NotYet, _) if mgr_silent_for < attest_not_yet_max_secs() => RecoveryGate::Wait,
             (_, Some(a)) => {
                 if mgr_silent_for >= a && offline_for >= a {
                     RecoveryGate::Recover
@@ -255,10 +258,14 @@ pub(crate) enum Attest {
 
 /// The manager must have been silent this long before an attestation is acted
 /// on: one lost probe is not a dead manager.
-pub(crate) const ATTEST_MIN_SILENT_SECS: i64 = 3;
+pub(crate) fn attest_min_silent_secs() -> i64 {
+    ha().attest_min_silent_secs as i64
+}
 /// A node whose agent keeps saying "not yet" this long is a manager that is not
 /// beating but answers nothing either: held like any unproven node.
-pub(crate) const ATTEST_NOT_YET_MAX_SECS: i64 = 180;
+pub(crate) fn attest_not_yet_max_secs() -> i64 {
+    ha().attest_not_yet_max_secs as i64
+}
 
 /// Does a manager answer HTTP on the node (any status)? A SIGSTOPped manager
 /// still completes TCP handshakes in the kernel backlog but never replies.
@@ -807,7 +814,7 @@ pub(crate) fn may_restart_local_guests(
 async fn self_fence_watchdog(state: Arc<AppState>) {
     let mut clock = FenceClock::default();
     let mut had_majority = true;
-    let mut ticker = tokio::time::interval(Duration::from_secs(WATCHDOG_SECS as u64));
+    let mut ticker = tokio::time::interval(Duration::from_secs(watchdog_secs() as u64));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         ticker.tick().await;
@@ -1018,9 +1025,8 @@ async fn peer_post<T: Serialize, R: serde::de::DeserializeOwned>(
 /// right after the injection (j02106 real laptops, 'manager hung': tick stuck
 /// +5 s..+65 s, recovery 98 s instead of ~30 s).
 fn sync_timeout() -> Duration {
-    Duration::from_secs(env_secs("HORCRUX_HA_SYNC_TIMEOUT_SECS", SYNC_TIMEOUT_SECS))
+    Duration::from_secs(ha().sync_timeout_secs)
 }
-const SYNC_TIMEOUT_SECS: u64 = 5;
 
 async fn peer_post_for<T: Serialize, R: serde::de::DeserializeOwned>(
     ls: &LoopState,
@@ -1231,7 +1237,7 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
             // silent), not after the (longer) network self-fence margin.
             let silent_wait = self_fence_secs() + recovery_margin_secs();
             let agent_wait = super::ha_fence_agent::peer_agent_secs(&node, now)
-                .map(|s| s + super::ha_fence_agent::AGENT_SETTLE_SECS);
+                .map(|s| s + super::ha_fence_agent::agent_settle_secs());
             // A node whose manager is hung (SIGSTOP, deadlock) or dead cannot
             // self-fence, yet its QEMUs keep running the guests: the timer
             // above only proves safety for a node that lost the network.
@@ -1695,7 +1701,7 @@ mod recovery_guard_tests {
 /// `fence + margin`. The isolated node feeds the REAL [`FenceClock`] once per
 /// watchdog period (its majority is gone when its last peer turned Offline) and
 /// needs up to `kill` s to stop the guests. A node only compares against its own
-/// clock, so skew between nodes cancels; rate drift is the `DRIFT_SECS` part of
+/// clock, so skew between nodes cancels; rate drift is the `drift_secs` part of
 /// the floor. Exhaustive over every poll phase of both sides and the watchdog.
 #[cfg(test)]
 mod fencing_timing_tests {
@@ -1779,9 +1785,9 @@ mod fencing_timing_tests {
             poll: 2,
             fetch: 3,
             stale: 6,
-            watchdog: WATCHDOG_SECS,
+            watchdog: watchdog_secs(),
             fence: 10,
-            kill: KILL_BUDGET_SECS,
+            kill: kill_budget_secs(),
         }
     }
 
@@ -1792,7 +1798,7 @@ mod fencing_timing_tests {
         let (slack, bad) = sweep(&t, margin, false);
         assert_eq!(bad, 0, "split brain possible");
         assert!(
-            slack >= DRIFT_SECS,
+            slack >= drift_secs(),
             "slack {slack} s leaves no room for clock drift"
         );
     }
@@ -1810,12 +1816,12 @@ mod fencing_timing_tests {
                                 stale: poll * stale_polls,
                                 watchdog,
                                 fence,
-                                kill: KILL_BUDGET_SECS,
+                                kill: kill_budget_secs(),
                             };
                             let margin = recovery_margin_floor(poll, fetch, watchdog, t.kill);
                             let (slack, bad) = sweep(&t, margin, false);
                             assert_eq!(bad, 0, "split brain: poll {poll} fetch {fetch} stale {} fence {fence} wd {watchdog}", t.stale);
-                            assert!(slack >= DRIFT_SECS, "slack {slack}");
+                            assert!(slack >= drift_secs(), "slack {slack}");
                         }
                     }
                 }
@@ -1849,7 +1855,7 @@ mod fencing_timing_tests {
         let (slack, bad) = sweep(&t, floor, false);
         assert_eq!(bad, 0);
         assert!(
-            slack <= DRIFT_SECS + 2 * t.watchdog + 2 * t.poll,
+            slack <= drift_secs() + 2 * t.watchdog + 2 * t.poll,
             "floor is {slack} s above the model's limit: too loose"
         );
         let (worst, bad) = sweep(&t, floor - slack - 1, false);
@@ -1862,10 +1868,13 @@ mod fencing_timing_tests {
     /// budget is the bound `fence_kill` enforces (a QEMU in D-state is reset, not waited for).
     #[test]
     fn the_kill_budget_is_the_enforced_fence_bound() {
-        use crate::api::ha_fence_agent::{FENCE_KILL_WAIT_SECS, FENCE_RESET_SECS};
-        assert_eq!(KILL_BUDGET_SECS, FENCE_KILL_WAIT_SECS + FENCE_RESET_SECS);
+        use crate::api::ha_fence_agent::{fence_kill_wait_secs, fence_reset_secs};
+        assert_eq!(
+            kill_budget_secs(),
+            fence_kill_wait_secs() + fence_reset_secs()
+        );
         let t = defaults();
-        assert_eq!(t.kill, FENCE_KILL_WAIT_SECS + FENCE_RESET_SECS);
+        assert_eq!(t.kill, fence_kill_wait_secs() + fence_reset_secs());
         // the budget is load-bearing: a fence that takes `slack + 1` s longer than the
         // budget the margin was sized for breaks the property
         let margin = recovery_margin_floor(t.poll, t.fetch, t.watchdog, t.kill);
@@ -1923,12 +1932,12 @@ mod fencing_timing_tests {
 #[cfg(test)]
 mod fence_agent_gate_tests {
     use super::*;
-    use crate::api::ha_fence_agent::{fence_secs, AGENT_SETTLE_SECS};
+    use crate::api::ha_fence_agent::{agent_settle_secs, fence_secs};
 
     const SILENT: i64 = 58;
 
     fn agent() -> Option<i64> {
-        Some(fence_secs() + AGENT_SETTLE_SECS)
+        Some(fence_secs() + agent_settle_secs())
     }
 
     #[test]
@@ -2055,8 +2064,10 @@ mod fence_agent_gate_tests {
             for first_probe in 0..=40i64 {
                 for drift in -2..=2i64 {
                     let last_beat = -hb_age_at_last_answer;
-                    let killed_by =
-                        last_beat + fence + 1 + crate::api::ha_fence_agent::FENCE_KILL_BUDGET_SECS;
+                    let killed_by = last_beat
+                        + fence
+                        + 1
+                        + crate::api::ha_fence_agent::fence_kill_budget_secs();
                     let recovery_at = first_probe + wait;
                     assert!(
                         killed_by + drift.abs() <= recovery_at,
@@ -2094,7 +2105,7 @@ mod fence_agent_gate_tests {
                 k,
                 false,
                 None,
-                ATTEST_NOT_YET_MAX_SECS,
+                attest_not_yet_max_secs(),
                 999,
                 SILENT,
                 Attest::NotYet
@@ -2170,7 +2181,7 @@ mod sync_stall_tests {
     /// attestation window (agent deadline 15 s + settle): detection is not delayed by a sync.
     #[test]
     fn the_default_sync_bound_is_short() {
-        const { assert!(SYNC_TIMEOUT_SECS <= 6) };
-        const { assert!(SYNC_TIMEOUT_SECS >= 3) }; // a healthy peer under load must still sync
+        assert!(sync_timeout().as_secs() <= 6);
+        assert!(sync_timeout().as_secs() >= 3); // a healthy peer under load must still sync
     }
 }

@@ -110,8 +110,9 @@ async fn get_acme(State(state): St) -> Json<Value> {
     Json(json!({
         "config": acme::load_config(pool).await,
         "last_result": acme::last_result(pool).await,
-        "lets_encrypt": acme::LETS_ENCRYPT,
-        "lets_encrypt_staging": acme::LETS_ENCRYPT_STAGING,
+        // `[tls] acme_directory` / `acme_directories` in config.toml
+        "default_directory": state.config.tls.acme_directory,
+        "directories": state.config.tls.acme_directories,
         "http_redirect_port": state.tls_manager.config().http_redirect_port,
     }))
 }

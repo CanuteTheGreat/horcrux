@@ -191,7 +191,8 @@ impl MembershipManager {
             node_id,
             name: local_node.name.clone(),
             address: local_node.ip.clone(),
-            port: 8443, // Default API port
+            // the node's own API port (every node of a cluster serves on the same one)
+            port: horcrux_core::config::HorcruxConfig::load().server.port,
             is_master: true,
             status: NodeStatus::Online,
             architecture: local_node.architecture.clone(),

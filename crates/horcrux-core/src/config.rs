@@ -25,6 +25,15 @@ pub struct HorcruxConfig {
     pub logging: LoggingConfig,
     /// CNI (Container Networking Interface) configuration
     pub cni: CniConfig,
+    /// Container runtimes (image catalogs)
+    #[serde(default)]
+    pub containers: ContainersConfig,
+    /// High availability timings
+    #[serde(default)]
+    pub ha: HaConfig,
+    /// Cluster ports
+    #[serde(default)]
+    pub cluster: ClusterConfig,
     /// Authentication settings
     #[serde(default)]
     pub auth: AuthConfig,
@@ -182,6 +191,75 @@ pub struct TlsConfig {
     pub key_path: PathBuf,
     /// SSL directory for storing certificates
     pub ssl_dir: PathBuf,
+    /// ACME directory a new certificate order uses unless its configuration names another
+    /// (https). Env: `HORCRUX_ACME_DIRECTORY`.
+    #[serde(default = "default_acme_directory")]
+    pub acme_directory: String,
+    /// Certificate authorities offered on the TLS page (any ACME CA works; the list only
+    /// feeds the picker). Replace it to offer an internal CA.
+    #[serde(default = "default_acme_directories")]
+    pub acme_directories: Vec<AcmeDirectory>,
+}
+
+/// One selectable ACME certificate authority.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AcmeDirectory {
+    pub name: String,
+    /// ACME directory URL (https).
+    pub url: String,
+}
+
+fn default_acme_directory() -> String {
+    default_acme_directories()
+        .into_iter()
+        .next()
+        .map(|d| d.url)
+        .unwrap_or_default()
+}
+
+fn default_acme_directories() -> Vec<AcmeDirectory> {
+    [
+        (
+            "Let's Encrypt",
+            "https://acme-v02.api.letsencrypt.org/directory",
+        ),
+        (
+            "Let's Encrypt (staging, untrusted test certificates)",
+            "https://acme-staging-v02.api.letsencrypt.org/directory",
+        ),
+        ("ZeroSSL", "https://acme.zerossl.com/v2/DV90"),
+        (
+            "Google Trust Services",
+            "https://dv.acme-v02.api.pki.goog/directory",
+        ),
+    ]
+    .into_iter()
+    .map(|(n, u)| AcmeDirectory {
+        name: n.into(),
+        url: u.into(),
+    })
+    .collect()
+}
+
+impl TlsConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        let https = |u: &str| u.starts_with("https://") && !u.chars().any(|c| c.is_whitespace());
+        if !https(&self.acme_directory) {
+            return Err(format!(
+                "[tls] acme_directory = {:?} is not an https URL",
+                self.acme_directory
+            ));
+        }
+        for d in &self.acme_directories {
+            if d.name.trim().is_empty() || !https(&d.url) {
+                return Err(format!(
+                    "[tls] acme_directories entry {:?} needs a name and an https URL",
+                    d.name
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// QEMU configuration
@@ -263,6 +341,8 @@ impl Default for TlsConfig {
             cert_path: ssl_dir.join("cert.pem"),
             key_path: ssl_dir.join("key.pem"),
             ssl_dir,
+            acme_directory: default_acme_directory(),
+            acme_directories: default_acme_directories(),
         }
     }
 }
@@ -296,6 +376,354 @@ impl Default for CniConfig {
             conf_dir: PathBuf::from("/etc/cni/net.d"),
             enabled: true,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// [containers]
+// ---------------------------------------------------------------------------
+
+/// Default LXC image server (the images.linuxcontainers.org simplestreams layout).
+pub const DEFAULT_LXC_IMAGES_URL: &str = "https://images.linuxcontainers.org";
+/// Bounds of [`ContainersConfig::lxc_catalog_ttl_secs`].
+pub const LXC_CATALOG_TTL_RANGE: std::ops::RangeInclusive<u64> = 60..=86_400;
+
+/// Container settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainersConfig {
+    /// LXC image server the template catalog and downloads come from (any server with
+    /// the same `meta/1.0/index-system` layout works: a mirror, an internal cache).
+    /// Env: `HORCRUX_LXC_IMAGES_URL`.
+    #[serde(default = "default_lxc_images_url")]
+    pub lxc_images_url: String,
+    /// How long the fetched image catalog is reused before it is fetched again, in
+    /// seconds (60 .. 86400). Env: `HORCRUX_LXC_CATALOG_TTL_SECS`.
+    #[serde(default = "default_lxc_catalog_ttl_secs")]
+    pub lxc_catalog_ttl_secs: u64,
+}
+
+fn default_lxc_images_url() -> String {
+    DEFAULT_LXC_IMAGES_URL.to_string()
+}
+
+fn default_lxc_catalog_ttl_secs() -> u64 {
+    1_800
+}
+
+impl Default for ContainersConfig {
+    fn default() -> Self {
+        Self {
+            lxc_images_url: default_lxc_images_url(),
+            lxc_catalog_ttl_secs: default_lxc_catalog_ttl_secs(),
+        }
+    }
+}
+
+impl ContainersConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        let u = self.lxc_images_url.trim();
+        if !(u.starts_with("https://") || u.starts_with("http://"))
+            || u.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(format!(
+                "[containers] lxc_images_url = {u:?} is not an http(s) URL"
+            ));
+        }
+        if !LXC_CATALOG_TTL_RANGE.contains(&self.lxc_catalog_ttl_secs) {
+            return Err(format!(
+                "[containers] lxc_catalog_ttl_secs = {} is outside {}..={} seconds",
+                self.lxc_catalog_ttl_secs,
+                LXC_CATALOG_TTL_RANGE.start(),
+                LXC_CATALOG_TTL_RANGE.end()
+            ));
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// [cluster]
+// ---------------------------------------------------------------------------
+
+/// Ports the cluster code connects to on other nodes. The management (API) port is the
+/// node's own `[server] port`: every node of a cluster uses the same one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ClusterConfig {
+    /// SSH port of the nodes (migration reachability check, cross-node clone).
+    /// Env: `HORCRUX_CLUSTER_SSH_PORT`.
+    #[serde(default = "default_ssh_port")]
+    pub ssh_port: u16,
+    /// Incus/LXD remote API port of the nodes (container moves between hosts).
+    /// Env: `HORCRUX_CLUSTER_INCUS_PORT`.
+    #[serde(default = "default_incus_port")]
+    pub incus_port: u16,
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+fn default_incus_port() -> u16 {
+    8443
+}
+
+impl Default for ClusterConfig {
+    fn default() -> Self {
+        Self {
+            ssh_port: default_ssh_port(),
+            incus_port: default_incus_port(),
+        }
+    }
+}
+
+impl ClusterConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.ssh_port == 0 || self.incus_port == 0 {
+            return Err("[cluster] ssh_port and incus_port must not be 0".into());
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// [ha]
+// // ---------------------------------------------------------------------------
+
+/// High-availability timings. Every value is a number of seconds unless noted.
+/// The values depend on each other (a node must have killed its guests before the
+/// survivors restart them), so [`HaConfig::validate`] checks them together, and the
+/// fence agent (a separate process) reads the same section.
+///
+/// Env overrides keep their historic names (`HORCRUX_HA_TICK_SECS`, ...).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HaConfig {
+    /// Period of the HA loop (leader decisions, recovery). Env `HORCRUX_HA_TICK_SECS`.
+    #[serde(default = "ha_tick")]
+    pub tick_secs: u64,
+    /// A node without a majority kills its HA guests after this long without having seen
+    /// one. Env `HORCRUX_HA_SELF_FENCE_SECS`.
+    #[serde(default = "ha_self_fence")]
+    pub self_fence_secs: u64,
+    /// Wait before fencing a node that has gone quiet. Env `HORCRUX_HA_FENCE_AFTER_SECS`.
+    #[serde(default = "ha_fence_after")]
+    pub fence_after_secs: u64,
+    /// The fence agent kills the guests when the manager's heartbeat is older than this
+    /// (3 or more). Env `HORCRUX_HA_AGENT_FENCE_SECS`.
+    #[serde(default = "ha_agent_fence")]
+    pub agent_fence_secs: u64,
+    /// Time a manager that is enabled but not running is given to start before the node
+    /// is declared manager-less. Env `HORCRUX_HA_AGENT_BOOT_SETTLE_SECS`.
+    #[serde(default = "ha_agent_boot_settle")]
+    pub agent_boot_settle_secs: u64,
+    /// TCP port of the fence agent's attestation endpoint. Env `HORCRUX_HA_FENCE_PORT`.
+    #[serde(default = "ha_fence_port")]
+    pub fence_port: u16,
+    /// Timeout of one peer-to-peer HA call. Env `HORCRUX_HA_SYNC_TIMEOUT_SECS`.
+    #[serde(default = "ha_sync_timeout")]
+    pub sync_timeout_secs: u64,
+    /// Extra time the leader waits, beyond the self-fence time, before it restarts the
+    /// guests of an unfenced node. Unset = the proven floor for the timings in effect.
+    /// Env `HORCRUX_HA_RECOVERY_MARGIN_SECS` (a lab shortcut: below the floor it is only
+    /// warned about).
+    #[serde(default)]
+    pub recovery_margin_secs: Option<u64>,
+    /// Period of the self-fence watchdog task.
+    #[serde(default = "ha_watchdog")]
+    pub watchdog_secs: u64,
+    /// Clock-rate drift allowance between two nodes over one fencing window.
+    #[serde(default = "ha_drift")]
+    pub drift_secs: u64,
+    /// Longest wait for SIGKILLed QEMUs to be gone before the node is reset.
+    #[serde(default = "ha_kill_wait")]
+    pub fence_kill_wait_secs: u64,
+    /// Time a node reset (sysrq `b`) needs to stop every guest.
+    #[serde(default = "ha_reset")]
+    pub fence_reset_secs: u64,
+    /// The manager must have been silent this long before an attestation is acted on.
+    #[serde(default = "ha_attest_min_silent")]
+    pub attest_min_silent_secs: u64,
+    /// A node whose agent keeps saying "not yet" this long is held like any unproven node.
+    #[serde(default = "ha_attest_not_yet_max")]
+    pub attest_not_yet_max_secs: u64,
+    /// Set by the env override of `recovery_margin_secs` (not a config key).
+    #[serde(skip)]
+    pub margin_from_env: bool,
+}
+
+fn ha_tick() -> u64 {
+    3
+}
+fn ha_self_fence() -> u64 {
+    10
+}
+fn ha_fence_after() -> u64 {
+    10
+}
+fn ha_agent_fence() -> u64 {
+    15
+}
+fn ha_agent_boot_settle() -> u64 {
+    20
+}
+fn ha_fence_port() -> u16 {
+    8026
+}
+fn ha_sync_timeout() -> u64 {
+    5
+}
+fn ha_watchdog() -> u64 {
+    1
+}
+fn ha_drift() -> u64 {
+    2
+}
+fn ha_kill_wait() -> u64 {
+    2
+}
+fn ha_reset() -> u64 {
+    1
+}
+fn ha_attest_min_silent() -> u64 {
+    3
+}
+fn ha_attest_not_yet_max() -> u64 {
+    180
+}
+
+impl Default for HaConfig {
+    fn default() -> Self {
+        Self {
+            tick_secs: ha_tick(),
+            self_fence_secs: ha_self_fence(),
+            fence_after_secs: ha_fence_after(),
+            agent_fence_secs: ha_agent_fence(),
+            agent_boot_settle_secs: ha_agent_boot_settle(),
+            fence_port: ha_fence_port(),
+            sync_timeout_secs: ha_sync_timeout(),
+            recovery_margin_secs: None,
+            watchdog_secs: ha_watchdog(),
+            drift_secs: ha_drift(),
+            fence_kill_wait_secs: ha_kill_wait(),
+            fence_reset_secs: ha_reset(),
+            attest_min_silent_secs: ha_attest_min_silent(),
+            attest_not_yet_max_secs: ha_attest_not_yet_max(),
+            margin_from_env: false,
+        }
+    }
+}
+
+impl HaConfig {
+    /// The HA section in effect now (config file + environment). Read at each use, so a
+    /// tick always sees the current file; the file is tiny.
+    pub fn current() -> Self {
+        let ha = HorcruxConfig::load().ha;
+        match ha.validate() {
+            Ok(()) => ha,
+            Err(e) => {
+                // an inconsistent section must never weaken fencing: use the proven defaults
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| eprintln!("horcrux: {e}; using the default HA timings"));
+                HaConfig::default()
+            }
+        }
+    }
+
+    /// Hard upper bound from "the fence fires" to "no guest of this node can run":
+    /// SIGKILL wait + node reset. The recovery margin and the agent settle time derive
+    /// from this one number.
+    pub fn kill_budget_secs(&self) -> u64 {
+        self.fence_kill_wait_secs + self.fence_reset_secs
+    }
+
+    /// Longest time between the manager's last answer and the guests being gone, beyond
+    /// `agent_fence_secs`: one heartbeat period, one agent poll period, the kill budget
+    /// and clock drift.
+    pub fn agent_settle_secs(&self) -> u64 {
+        1 + 1 + self.kill_budget_secs() + self.drift_secs
+    }
+
+    /// The part of the smallest safe recovery margin that depends only on this section
+    /// (the cluster monitor's poll and fetch times are added by the HA loop).
+    pub fn margin_floor_part(&self) -> u64 {
+        2 * self.watchdog_secs + self.kill_budget_secs() + self.drift_secs
+    }
+
+    /// Check the values and their relations.
+    pub fn validate(&self) -> Result<(), String> {
+        let rng = |name: &str, v: u64, lo: u64, hi: u64| -> Result<(), String> {
+            if (lo..=hi).contains(&v) {
+                Ok(())
+            } else {
+                Err(format!("[ha] {name} = {v} is outside {lo}..={hi} seconds"))
+            }
+        };
+        rng("tick_secs", self.tick_secs, 1, 300)?;
+        rng("self_fence_secs", self.self_fence_secs, 3, 600)?;
+        rng("fence_after_secs", self.fence_after_secs, 1, 600)?;
+        rng("agent_fence_secs", self.agent_fence_secs, 3, 3_600)?;
+        rng(
+            "agent_boot_settle_secs",
+            self.agent_boot_settle_secs,
+            0,
+            600,
+        )?;
+        rng("sync_timeout_secs", self.sync_timeout_secs, 1, 120)?;
+        rng("watchdog_secs", self.watchdog_secs, 1, 10)?;
+        rng("drift_secs", self.drift_secs, 0, 30)?;
+        rng("fence_kill_wait_secs", self.fence_kill_wait_secs, 1, 30)?;
+        rng("fence_reset_secs", self.fence_reset_secs, 1, 10)?;
+        rng("attest_min_silent_secs", self.attest_min_silent_secs, 1, 60)?;
+        rng(
+            "attest_not_yet_max_secs",
+            self.attest_not_yet_max_secs,
+            10,
+            86_400,
+        )?;
+        if self.fence_port == 0 {
+            return Err("[ha] fence_port must not be 0".into());
+        }
+        // relations
+        if self.watchdog_secs >= self.self_fence_secs {
+            return Err(format!(
+                "[ha] watchdog_secs ({}) must be shorter than self_fence_secs ({}): the \
+                 watchdog could not notice the expiry in time",
+                self.watchdog_secs, self.self_fence_secs
+            ));
+        }
+        if self.kill_budget_secs() >= self.self_fence_secs {
+            return Err(format!(
+                "[ha] the kill budget fence_kill_wait_secs + fence_reset_secs ({}) must be \
+                 shorter than self_fence_secs ({})",
+                self.kill_budget_secs(),
+                self.self_fence_secs
+            ));
+        }
+        if self.attest_min_silent_secs >= self.attest_not_yet_max_secs {
+            return Err(format!(
+                "[ha] attest_min_silent_secs ({}) must be shorter than attest_not_yet_max_secs ({})",
+                self.attest_min_silent_secs, self.attest_not_yet_max_secs
+            ));
+        }
+        if self.tick_secs > self.self_fence_secs {
+            return Err(format!(
+                "[ha] tick_secs ({}) must not exceed self_fence_secs ({})",
+                self.tick_secs, self.self_fence_secs
+            ));
+        }
+        // an explicit margin below what this section alone needs would let the survivors
+        // restart a guest the isolated node has not killed yet (split brain); a value from
+        // the environment is the lab shortcut and is only warned about by the HA loop
+        if let Some(m) = self.recovery_margin_secs {
+            if !self.margin_from_env && m < self.margin_floor_part() {
+                return Err(format!(
+                    "[ha] recovery_margin_secs = {m} is below {} (2 x watchdog_secs + kill budget \
+                     + drift_secs): the survivors could restart a guest before the isolated node \
+                     has killed its copy",
+                    self.margin_floor_part()
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -387,6 +815,66 @@ impl HorcruxConfig {
                 v.trim().to_ascii_lowercase().as_str(),
                 "1" | "true" | "yes" | "on"
             );
+        }
+
+        if let Ok(v) = std::env::var("HORCRUX_ACME_DIRECTORY") {
+            self.tls.acme_directory = v;
+        }
+
+        // Containers
+        if let Ok(v) = std::env::var("HORCRUX_LXC_IMAGES_URL") {
+            self.containers.lxc_images_url = v;
+        }
+        if let Ok(v) = std::env::var("HORCRUX_LXC_CATALOG_TTL_SECS") {
+            if let Ok(n) = v.trim().parse() {
+                self.containers.lxc_catalog_ttl_secs = n;
+            }
+        }
+
+        for (name, slot) in [
+            ("HORCRUX_CLUSTER_SSH_PORT", &mut self.cluster.ssh_port),
+            ("HORCRUX_CLUSTER_INCUS_PORT", &mut self.cluster.incus_port),
+        ] {
+            if let Some(p) = std::env::var(name)
+                .ok()
+                .and_then(|v| v.trim().parse::<u16>().ok())
+                .filter(|p| *p != 0)
+            {
+                *slot = p;
+            }
+        }
+
+        // High availability (historic env names; an unusable value is ignored)
+        let env_u64 = |name: &str, min: u64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|v| *v >= min)
+        };
+        if let Some(v) = env_u64("HORCRUX_HA_TICK_SECS", 1) {
+            self.ha.tick_secs = v;
+        }
+        if let Some(v) = env_u64("HORCRUX_HA_SELF_FENCE_SECS", 1) {
+            self.ha.self_fence_secs = v;
+        }
+        if let Some(v) = env_u64("HORCRUX_HA_FENCE_AFTER_SECS", 1) {
+            self.ha.fence_after_secs = v;
+        }
+        if let Some(v) = env_u64("HORCRUX_HA_AGENT_FENCE_SECS", 3) {
+            self.ha.agent_fence_secs = v;
+        }
+        if let Some(v) = env_u64("HORCRUX_HA_AGENT_BOOT_SETTLE_SECS", 0) {
+            self.ha.agent_boot_settle_secs = v;
+        }
+        if let Some(v) = env_u64("HORCRUX_HA_SYNC_TIMEOUT_SECS", 1) {
+            self.ha.sync_timeout_secs = v;
+        }
+        if let Some(v) = env_u64("HORCRUX_HA_FENCE_PORT", 1).and_then(|p| u16::try_from(p).ok()) {
+            self.ha.fence_port = v;
+        }
+        if let Some(v) = env_u64("HORCRUX_HA_RECOVERY_MARGIN_SECS", 1) {
+            self.ha.recovery_margin_secs = Some(v);
+            self.ha.margin_from_env = true;
         }
 
         // Paths
@@ -503,6 +991,12 @@ impl HorcruxConfig {
         }
 
         self.auth.validate().map_err(ConfigError::Validation)?;
+        self.containers
+            .validate()
+            .map_err(ConfigError::Validation)?;
+        self.tls.validate().map_err(ConfigError::Validation)?;
+        self.ha.validate().map_err(ConfigError::Validation)?;
+        self.cluster.validate().map_err(ConfigError::Validation)?;
 
         // Validate socket patterns contain placeholder
         if !self.qemu.qmp_socket_pattern.contains("{vm_id}") {
@@ -570,6 +1064,33 @@ mod tests {
         c.auth.tfa_setup_ttl_secs = 120;
         c.auth.allow_root = true;
         c.server.port = 9443;
+        c.containers.lxc_images_url = "https://mirror.test/images".into();
+        c.containers.lxc_catalog_ttl_secs = 600;
+        c.tls.acme_directory = "https://ca.test/acme".into();
+        c.tls.acme_directories.push(AcmeDirectory {
+            name: "Internal CA".into(),
+            url: "https://ca.test/acme".into(),
+        });
+        c.cluster.ssh_port = 2222;
+        c.cluster.incus_port = 18443;
+        c.ha = HaConfig {
+            tick_secs: 2,
+            self_fence_secs: 12,
+            fence_after_secs: 11,
+            agent_fence_secs: 20,
+            agent_boot_settle_secs: 30,
+            fence_port: 18026,
+            sync_timeout_secs: 4,
+            recovery_margin_secs: Some(15),
+            watchdog_secs: 2,
+            drift_secs: 3,
+            fence_kill_wait_secs: 3,
+            fence_reset_secs: 2,
+            attest_min_silent_secs: 4,
+            attest_not_yet_max_secs: 200,
+            margin_from_env: false,
+        };
+        c.validate().unwrap();
         let text = toml::to_string_pretty(&c).unwrap();
         let back: HorcruxConfig = toml::from_str(&text).unwrap();
         assert_eq!(
@@ -589,21 +1110,111 @@ mod tests {
     }
 
     #[test]
+    fn ha_defaults_are_consistent_and_relations_are_enforced() {
+        HaConfig::default().validate().unwrap();
+        let bad = |f: &dyn Fn(&mut HaConfig), needle: &str| {
+            let mut h = HaConfig::default();
+            f(&mut h);
+            let e = h.validate().unwrap_err();
+            assert!(e.contains(needle), "{e}");
+        };
+        // the guests must be dead before the node's own fence time is over
+        bad(&|h| h.fence_kill_wait_secs = 12, "kill budget");
+        bad(&|h| h.watchdog_secs = 10, "watchdog_secs");
+        bad(&|h| h.tick_secs = 11, "tick_secs");
+        bad(
+            &|h| h.attest_min_silent_secs = 200,
+            "attest_min_silent_secs",
+        );
+        bad(&|h| h.agent_fence_secs = 2, "agent_fence_secs");
+        // an explicit margin below the part this section guarantees is refused ...
+        bad(
+            &|h| h.recovery_margin_secs = Some(3),
+            "recovery_margin_secs",
+        );
+        // ... unless it is the environment's lab shortcut
+        let mut h = HaConfig {
+            recovery_margin_secs: Some(3),
+            margin_from_env: true,
+            ..HaConfig::default()
+        };
+        h.validate().unwrap();
+        h.margin_from_env = false;
+        h.recovery_margin_secs = Some(h.margin_floor_part());
+        h.validate().unwrap();
+        assert_eq!(HaConfig::default().kill_budget_secs(), 3);
+        assert_eq!(HaConfig::default().agent_settle_secs(), 1 + 1 + 3 + 2);
+    }
+
+    #[test]
+    fn containers_cluster_and_acme_values_are_validated() {
+        let mut c = HorcruxConfig::default();
+        c.validate().unwrap();
+        c.containers.lxc_images_url = "ftp://x".into();
+        assert!(c
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("lxc_images_url"));
+        c.containers = ContainersConfig::default();
+        c.containers.lxc_catalog_ttl_secs = 5;
+        assert!(c
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("lxc_catalog_ttl_secs"));
+        c.containers = ContainersConfig::default();
+        c.tls.acme_directory = "http://insecure/dir".into();
+        assert!(c
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("acme_directory"));
+        c.tls = TlsConfig::default();
+        c.cluster.ssh_port = 0;
+        assert!(c.validate().unwrap_err().to_string().contains("ssh_port"));
+        // a config file without the new sections gets today's values
+        let old: HorcruxConfig = toml::from_str(
+            &toml::to_string_pretty(&HorcruxConfig::default())
+                .unwrap()
+                .lines()
+                .take_while(|l| !l.starts_with("[containers]"))
+                .map(|l| format!("{l}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        assert_eq!(old.ha, HaConfig::default());
+        assert_eq!(old.cluster, ClusterConfig::default());
+        assert_eq!(old.containers.lxc_catalog_ttl_secs, 1_800);
+    }
+
+    #[test]
     fn shipped_example_config_parses_and_validates() {
         let text = include_str!("../../../horcrux-api/config.example.toml");
         let c: HorcruxConfig = toml::from_str(text).unwrap();
         c.validate().unwrap();
-        assert_eq!(c.auth.session_ttl_secs, AuthConfig::default().session_ttl_secs);
+        assert_eq!(
+            c.auth.session_ttl_secs,
+            AuthConfig::default().session_ttl_secs
+        );
     }
 
     #[test]
     fn login_lifetimes_out_of_range_are_refused() {
         let mut c = HorcruxConfig::default();
         c.auth.session_ttl_secs = 10;
-        assert!(c.validate().unwrap_err().to_string().contains("session_ttl_secs"));
+        assert!(c
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("session_ttl_secs"));
         c.auth.session_ttl_secs = 3600;
         c.auth.tfa_setup_ttl_secs = 99_999;
-        assert!(c.validate().unwrap_err().to_string().contains("tfa_setup_ttl_secs"));
+        assert!(c
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("tfa_setup_ttl_secs"));
     }
 
     #[test]
