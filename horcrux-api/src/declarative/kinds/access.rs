@@ -1754,7 +1754,6 @@ mod tests {
             users: Some(export_users(&live, false)),
             groups: Some(export_groups(&live)),
             acl: Some(export_acl(&live)),
-            ..Default::default()
         };
         let yaml = serde_yaml::to_string(&k).unwrap();
         assert!(

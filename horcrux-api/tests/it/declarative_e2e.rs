@@ -1484,7 +1484,7 @@ async fn backup_jobs_and_ha_groups_converge_and_prune() {
             json!({"spec": "backup_jobs: []\nha_groups: []\n"}),
         )
         .await;
-    assert_eq!(v["in_sync"].as_bool().unwrap_or(true), true);
+    assert!(v["in_sync"].as_bool().unwrap_or(true), "{v}");
     assert_eq!(api.get("/backup-jobs").await.1.as_array().unwrap().len(), 1);
     let (_, v) = api
         .post(
@@ -1562,13 +1562,15 @@ async fn containers_and_volumes_use_a_real_runtime_or_say_what_the_node_lacks() 
         .post("/declarative/plan", json!({"spec": spec("one", "")}))
         .await;
     assert_eq!(s, 200, "{v}");
+    let ct = v["plan"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "container" && c["action"] == "create")
+        .unwrap_or_else(|| panic!("a container create in {v}"));
     assert!(
-        v["plan"]["changes"][0]["details"][0]
-            .as_str()
-            .unwrap()
-            .starts_with(want)
-            || kinds(&v["plan"]).iter().any(|k| k.ends_with(&vol)),
-        "{v}"
+        ct["details"][0].as_str().unwrap().starts_with(want),
+        "the default runtime is {want}: {v}"
     );
     let (s, v) = api
         .post("/declarative/apply", json!({"spec": spec("one", "")}))

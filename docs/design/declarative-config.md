@@ -72,8 +72,15 @@ Notes:
 Every kind follows the same rules: a pure `plan` (unit-tested), `apply` through
 the managers the REST handlers use, `export` as a fixed point
 (`export` -> `plan --prune` is empty), prune only inside a section the spec
-lists, and **secrets only as references**. Code: one module per kind in
-`horcrux-api/src/declarative/kinds/`, wired in by `kinds/mod.rs`.
+lists, and **secrets only as references**. Code: one `Kind` implementation per
+section in `horcrux-api/src/declarative/kinds/` (the engine's extension point,
+registered in `kinds/mod.rs`); `gather` returns the live section in spec shape,
+which is also what `export` writes. What a plan needs that is not spec-shaped
+(who is applying and from where, the API port, runtime probes, password hashes,
+built-in roles, HA usage) is in `Live::kinds` (`kinds/ctx.rs`), gathered once.
+The caller's identity reaches the kinds through a tower layer on the
+declarative router, so every endpoint under it (plan, apply, desired/apply,
+rollback...) is covered without its handler knowing.
 
 | section | matched by | apply uses |
 |---|---|---|
@@ -160,8 +167,12 @@ acl:     [{path: /vms, subject_type: group, subject: ops, role: Operator}]
   must resolve in the resulting state; built-in roles are never redefined,
   pruned or exported.
 - Deleting a user, group or role takes its grants with it (the schema does).
-- An apply that comes with no authenticated caller (a future scheduled sync)
-  cannot change these sections until it brings one.
+- Work with no HTTP caller (the drift timer, a scheduled sync) can read these
+  sections but cannot change them, and its plans skip the calling-user checks;
+  to allow it, run the apply inside `kinds::ctx::CALLER.scope(..)` with a
+  service identity. A `password_ref` in a `{vault: ...}` form is only checked
+  when the user is created or another field changes (the plan can read files
+  and environment variables, not the vault).
 
 ### firewall
 ```yaml

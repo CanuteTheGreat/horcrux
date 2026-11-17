@@ -545,9 +545,17 @@ async fn apply(
 ) -> Result<Option<String>, String> {
     let want: Vec<ContainerSpec> = items(section)?;
     let live_items: Vec<ContainerSpec> = items(live)?;
-    let rts = crate::declarative::kinds::ctx::gather_ctx(state)
+    let rts: Vec<RuntimeInfo> = crate::container::probe::probe_all_cached(false)
         .await
-        .runtimes;
+        .into_iter()
+        .map(|p| RuntimeInfo {
+            runtime: p.runtime,
+            available: p.available,
+            reason: p.reason,
+            message: p.message,
+            hint: p.hint,
+        })
+        .collect();
     let mgr = state.container_manager.clone();
     let w = want.iter().find(|w| w.name == c.name);
     let live_c = live_items.iter().find(|l| l.name == c.name);

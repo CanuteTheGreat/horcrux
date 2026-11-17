@@ -462,6 +462,7 @@ fn rollback_helpers_and_secret_free_history_summary() {
 
 // ---------------------------------------------------------------- kinds
 
+#[allow(clippy::field_reassign_with_default)]
 mod kinds_integration {
     use super::*;
     use crate::declarative::kinds::access::CallerInfo;
