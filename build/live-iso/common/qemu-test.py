@@ -299,6 +299,26 @@ class VT:
 LUKS_PROMPT = re.compile(rb"(?i)(enter passphrase|passphrase for|enter key|please enter (the )?(disk )?(passphrase|password))")
 
 
+SOCK_MAX = 100   # sun_path holds 108 bytes (QEMU: "UNIX socket path ... is too long"); keep a margin
+
+
+def sock_paths(out, name):
+    """(qmp, serial) unix-socket paths for VM `name` whose files live in `out`. They sit beside the logs when that path fits; a deep CI workspace
+    (/workspace/<owner>/<repo>/iso-out-<image>-<arch>/evidence/<scenario>/...) does not, so then they go to a short per-process dir under /tmp
+    (named by a hash of out+name: unique per VM, nothing the test reads is lost, the logs stay in `out`)."""
+    qmp, ser = f"{out}/{name}.qmp", f"{out}/{name}.serial"
+    if max(len(qmp), len(ser)) <= SOCK_MAX:
+        return qmp, ser
+    import atexit
+    import hashlib
+    d = f"/tmp/hxq-{os.getpid()}"
+    if not os.path.isdir(d):
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        atexit.register(shutil.rmtree, d, True)
+    h = hashlib.sha1(f"{out}/{name}".encode()).hexdigest()[:12]
+    return f"{d}/{h}.qmp", f"{d}/{h}.serial"
+
+
 class VM:
     LUKS_UNLOCK = None         # set to the disk passphrase when the installed root is xfs-luks (see _rd)
 
@@ -310,8 +330,7 @@ class VM:
         self.raw = b""
         self.snap_pred, self.snap_text, self.snap_key = None, None, ""     # snap_when(): first screen satisfying a predicate, captured in the reader thread
         self.lock = threading.Lock()
-        self.qmp_path = f"{out}/{name}.qmp"
-        self.ser_path = f"{out}/{name}.serial"
+        self.qmp_path, self.ser_path = sock_paths(out, name)
         for pth in (self.qmp_path, self.ser_path):
             if os.path.exists(pth):
                 os.unlink(pth)
