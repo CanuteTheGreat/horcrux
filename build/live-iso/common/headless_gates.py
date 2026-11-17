@@ -29,12 +29,20 @@ GUI_DENY = [
     "dev-python/pygobject", "dev-python/pycairo", "app-accessibility/*", "x11-misc/lightdm*", "x11-misc/sddm*",
     "sys-auth/seatd", "media-fonts/dejavu", "x11-themes/*", "gui-apps/*", "www-client/*", "app-text/evince*",
 ]
+# Header-only / build-time packages Portage files under a display category but that carry no display stack. Keep in step with
+# DISPLAY_ALLOW in zfs-enc-test.py (tests/test_headless_gates.py compares the two). x11-base/xorg-proto: protocol headers only (no library,
+# no server); a server's `emerge -uDN --with-bdeps=y @world` (horcrux-autoupdate) installs it as a build dependency of x11-apps/bdftopcf
+# (the compiler for the console font media-fonts/terminus-font) and sys-apps/dbus. Verified with a real Portage resolution 2026-11-17.
+# x11-libs/cairo is deliberately NOT here: it only arrived through the stale graphical-installer USE lines (see liveinst drop_gui_use_flags).
+HEADLESS_ALLOW = ("x11-base/xorg-proto",)
+
 GUI_PROCS = ("Xorg", "Xwayland", "sway", "cage", "gnome-shell", "gdm", "lightdm", "sddm", "weston", "seatd", "xfce4-session")
 GUI_SERVICES = ("xdm", "gdm", "lightdm", "sddm", "display-manager", "seatd", "elogind-gui")
 
 GUI_CHECK = r'''
 import fnmatch, os, subprocess
 deny = %(deny)r
+allow = %(allow)r
 procs = %(procs)r
 svcs = %(svcs)r
 pk = []
@@ -48,7 +56,7 @@ def name(x):
     import re
     m = re.match(r"^(.*?)-[0-9][^-]*(-r[0-9]+)?$", pf)
     return c + "/" + (m.group(1) if m else pf)
-bad = sorted({name(x) for x in pk if any(fnmatch.fnmatch(name(x), p) for p in deny)})
+bad = sorted({name(x) for x in pk if any(fnmatch.fnmatch(name(x), p) for p in deny) and name(x) not in allow})
 print("PKG-COUNT", len(pk))
 print("GUI-PACKAGES", len(bad), " ".join(bad[:25]))
 ps = subprocess.run(["ps", "-eo", "comm"], capture_output=True, text=True).stdout.split()
@@ -63,7 +71,7 @@ print("GUI-SERVICES", len(en), " ".join(en))
 bins = [b for b in ("/usr/bin/Xorg", "/usr/bin/Xwayland", "/usr/bin/sway", "/usr/bin/cage", "/usr/bin/gnome-shell", "/usr/bin/startx") if os.path.exists(b)]
 print("GUI-BINARIES", len(bins), " ".join(bins))
 print("GUI-DONE")
-''' % dict(deny=GUI_DENY, procs=GUI_PROCS, svcs=GUI_SERVICES)
+''' % dict(deny=GUI_DENY, allow=HEADLESS_ALLOW, procs=GUI_PROCS, svcs=GUI_SERVICES)
 
 ACCOUNT_CHECK = r'''
 import subprocess, re

@@ -105,6 +105,35 @@ class StripLiveGuiKeepsSharedFiles(unittest.TestCase):
             shutil.rmtree(root)
 
 
+class StripLiveGuiDropsTheGuiUseFlags(unittest.TestCase):
+    def test_server_loses_the_graphical_installer_use_lines(self):
+        """freetype[harfbuzz] left on a server pulled harfbuzz[cairo] -> x11-libs/cairo into `emerge @world` (lab hx-installer-vm 2026-11-17)"""
+        import shutil
+        sys.path.insert(0, os.path.join(HERE, "..", "overlay", "usr", "lib", "live-installer"))
+        from liveinst import system
+        root = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(root, "etc/portage/package.use"))
+            open(os.path.join(root, "etc/portage/package.use/gui"), "w").write("media-libs/freetype harfbuzz\n")
+            open(os.path.join(root, "etc/portage/package.use/horcrux-virt"), "w").write("app-emulation/qemu spice\n")
+            logs = []
+
+            class Stub:
+                target = root
+                log = staticmethod(logs.append)
+            system.Installer.strip_live_gui(Stub())          # no live-only-packages list: the USE lines must go anyway
+            self.assertFalse(os.path.exists(os.path.join(root, "etc/portage/package.use/gui")))
+            self.assertTrue(os.path.exists(os.path.join(root, "etc/portage/package.use/horcrux-virt")))
+            self.assertTrue(any("USE flags" in l for l in logs))
+            system.Installer.strip_live_gui(Stub())          # idempotent
+        finally:
+            shutil.rmtree(root)
+
+    def test_desktop_keeps_them(self):
+        src = open(os.path.join(HERE, "..", "overlay", "usr", "lib", "live-installer", "liveinst", "system.py")).read()
+        self.assertRegex(src, r"if not TYPE_KEEP_GUI\.get\(c\[\"install_type\"\], False\) and not desk:\n\s+self\.strip_live_gui\(\)")
+
+
 class DistKernelScratchInitrd(unittest.TestCase):
     def test_scratch_initrd_in_the_kernel_tree_is_pruned_only_there(self):
         c = ("obj /usr/src/linux-6.18.60-gentoo-dist-bin/arch/x86/boot/initrd d41d8cd98f00b204e9800998ecf8427e 1\n"

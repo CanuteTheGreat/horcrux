@@ -189,5 +189,46 @@ class DockerForwardGate(unittest.TestCase):
         self.assertIn("HG.docker_forward_gate(", open(os.path.join(ROOT, "qemu-test.py")).read())
 
 
+class DisplayAllowListsAgree(unittest.TestCase):
+    """The lab/CI installer-VM check (zfs-enc-test.py DISPLAY_RE/DISPLAY_ALLOW) and the QEMU gate (headless_gates GUI_DENY/HEADLESS_ALLOW)
+    judge the same installed server: they must not drift (lab hx-installer-vm 2026-11-17: one list allowed a package, the other did not)."""
+
+    @staticmethod
+    def zfs_enc_lists():
+        import ast
+        tree = ast.parse(open(os.path.join(ROOT, "zfs-enc-test.py")).read())
+        out = {}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) and n.targets[0].id in ("DISPLAY_RE", "DISPLAY_ALLOW"):
+                out[n.targets[0].id] = ast.literal_eval(n.value)
+        return out
+
+    def test_every_allowed_display_package_is_allowed_in_both_gates(self):
+        import fnmatch
+        z = self.zfs_enc_lists()
+        self.assertEqual(set(z), {"DISPLAY_RE", "DISPLAY_ALLOW"})
+        for pkg in z["DISPLAY_ALLOW"]:
+            if any(fnmatch.fnmatch(pkg, d) for d in HG.GUI_DENY):
+                self.assertIn(pkg, HG.HEADLESS_ALLOW, f"{pkg} is allowed by zfs-enc-test but denied by headless_gates")
+        for pkg in HG.HEADLESS_ALLOW:
+            self.assertIn(pkg, z["DISPLAY_ALLOW"], f"{pkg} is allowed by headless_gates but not by zfs-enc-test")
+            self.assertRegex(pkg + "/", z["DISPLAY_RE"])        # it is only an exception because the display regex would catch it
+
+    def test_cairo_and_toolkits_are_never_allowed(self):
+        z = self.zfs_enc_lists()
+        for pkg in ("x11-libs/cairo", "x11-libs/pango", "x11-libs/libX11", "media-libs/mesa", "gui-libs/gtk"):
+            self.assertNotIn(pkg, z["DISPLAY_ALLOW"])
+            self.assertNotIn(pkg, HG.HEADLESS_ALLOW)
+
+    def test_scan_allows_header_only_xorg_proto_but_flags_cairo(self):
+        with tempfile.TemporaryDirectory() as d:
+            for p in ("x11-base/xorg-proto-2025.1", "x11-apps/bdftopcf-1.1.2", "x11-libs/cairo-1.18.4-r1", "sys-apps/dbus-1.16.2"):
+                os.makedirs(os.path.join(d, "var/db/pkg", p))
+            o = run_script(HG.GUI_CHECK, **{"/var/db/pkg": os.path.join(d, "var/db/pkg")})
+        m = re.search(r"GUI-PACKAGES (\d+) (.*)", o)
+        self.assertIn("x11-libs/cairo", m.group(2))
+        self.assertNotIn("xorg-proto", m.group(2))
+
+
 if __name__ == "__main__":
     unittest.main()

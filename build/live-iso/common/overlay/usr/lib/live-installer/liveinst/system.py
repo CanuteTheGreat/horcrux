@@ -765,6 +765,22 @@ class InstallError(Exception):
     pass
 
 
+GUI_PACKAGE_USE = "etc/portage/package.use/gui"
+
+
+def drop_gui_use_flags(target, log):
+    """The graphical installer's USE lines (gtk/mesa/libglvnd/freetype[harfbuzz]) must not outlive its packages on a Server.
+
+    Left behind, `media-libs/freetype harfbuzz` makes the server's own freetype (a GRUB dependency) pull harfbuzz, and harfbuzz's default
+    USE=cairo then pulls x11-libs/cairo into the next `emerge @world` (horcrux-autoupdate runs it hourly, with --with-bdeps=y): a display
+    library chain on a headless machine (lab hx-installer-vm 2026-11-17, found with a real Portage resolution of the server world)."""
+    try:
+        os.unlink(os.path.join(target, GUI_PACKAGE_USE))
+        log("removed the graphical installer's USE flags (/" + GUI_PACKAGE_USE + ")")
+    except OSError:
+        pass
+
+
 class Installer:
     def __init__(self, profile, cfg, log, progress):
         self.p, self.c = profile, cfg
@@ -1201,6 +1217,7 @@ class Installer:
         Portage cannot run in the target (the tree is not shipped), so unmerge by hand from the package
         database: delete every file a package's CONTENTS lists, empty directories, then its database entry."""
         T = self.target
+        drop_gui_use_flags(T, self.log)
         lst = os.path.join(T, "etc/live-installer/live-only-packages")
         if not os.path.exists(lst):
             return
