@@ -1945,6 +1945,15 @@ class Runner:
         vm.expect_raw("Enter an option", 20)
         c3 = self.web_login_code(PW2 if self.P.get("web_user") else PW3, 180)    # system users survive a product factory reset: the same account still signs in
         err3 = self.login_err
+        if c3 == 0:
+            # Patronus run 1298 (qemu-uefi-usb-auto-zfs-default-tpm, 1 of 9 same-sha runs of this scenario): no HTTP answer for 180 s and an ssh
+            # 'timed out during banner exchange' although the guest was idle with 22/8443 listening, yet the very next request (the old-password
+            # probe below) got a 401, so the forwarded ports came back late. ONE bounded retry of the no-answer case (a second 120 s wait for the
+            # SAME login); a wrong answer (401) or a guest that never answers still fails, and the assertion below is unchanged.
+            print(f"[factory-reset] no HTTP answer for 180 s ({err3!r}); one more 120 s wait for the same login", flush=True)
+            c3 = self.web_login_code(PW2 if self.P.get("web_user") else PW3, 120)
+            err3 = self.login_err
+            print(f"[factory-reset] after the retry: new password -> {c3}", flush=True)
         c2 = self.web_login_code(PW2) if not self.P.get("web_user") else 401
         if c3 != 200:
             rc, o = ssh(FWD_SSH, self.key, f"{init_cmds.service_status_cmd(self.a.init, self.P['svc'])}; ls -la /var/lib/{a.project}; tail -n 8 /var/log/{a.project}/web-error.log; nft list ruleset 2>&1 | grep -n {P['port']} | head -5; ss -ltn | grep {P['port']}")
@@ -1957,7 +1966,13 @@ class Runner:
         else:
             diag = ""
         self.step("console-menu-factory-reset", c3 == 200 and c2 != 200, f"factory defaults: new password -> {c3}, password from before the reset -> {c2}" + diag)
-        rc, o = ssh(FWD_SSH, self.key, f"sleep 12; test -e {P['seedfile']} && echo present || echo gone")
+        # a forwarded sshd can answer 'timed out during banner exchange' (rc 255) right after the reset: re-ask for up to 60 s, result unchanged
+        end = time.time() + 60
+        while True:
+            rc, o = ssh(FWD_SSH, self.key, f"sleep 12; test -e {P['seedfile']} && echo present || echo gone")
+            if rc != 255 or time.time() >= end:
+                break
+            time.sleep(5)
         self.step("console-menu-firstboot-file-removed", "gone" in o, f"{P['seedfile']}: {o.strip()}")
         vm.send("10\r")
         m = vm.expect_raw(r"(?s).*?Backup to restore", 60)
