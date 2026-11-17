@@ -545,7 +545,19 @@ def main():
         page.goto(f"{BASE}/containers")
         row = page.locator(f"tr[data-container-id='{CT}']")
         row.get_by_role("button", name="Stop").click()
-        expect(row).to_contain_text("stopped", timeout=60000)
+        try:
+            expect(row).to_contain_text("stopped", timeout=60000)
+        except AssertionError:
+            # Lab run vmc-1117-0403: the row stayed "running" for 60 s. Say why
+            # (page error banner, what the API and Docker report) so the next
+            # failure names its cause instead of only the stale row.
+            try:
+                api_state = [c.get("status") for c in api_get("/api/containers", tok) if c.get("id") == CT]
+            except Exception as e:  # noqa: BLE001
+                api_state = f"api error: {e}"
+            print(f"STOP-DIAG page text: {page.locator('body').inner_text()[:600]!r}", flush=True)
+            print(f"STOP-DIAG api status: {api_state}; docker state: {docker_state(CT)}", flush=True)
+            raise
         assert wait_for(lambda: docker_state(CT) == "exited", "container exited")
         row.get_by_role("button", name="Delete").click()
         expect(page.locator(f"tr[data-container-id='{CT}']")).to_have_count(0, timeout=60000)
