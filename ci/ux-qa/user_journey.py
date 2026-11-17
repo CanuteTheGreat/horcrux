@@ -23,7 +23,8 @@ it gets removed). The screenshots then go to the LLM review (ci/ux-qa/journey-re
 
   BASE_URL=https://host:8006 ADMIN_PASSWORD=... user_journey.py --shots out/shots --report out/journey.json
 Env: HORCRUX_CA_FILE (trust the node's CA; else TLS errors are ignored), HX_EXEC_PREFIX (e.g. "docker exec -i ctr":
-the server runs elsewhere - ISO is pushed and QEMU command lines are read through it), HX_JOURNEY_BOOT_TIMEOUT (s).
+the server runs elsewhere - ISO is pushed and QEMU command lines are read through it), HX_JOURNEY_BOOT_TIMEOUT (s),
+HX_BROWSER (chromium|firefox).
 """
 import argparse
 import json
@@ -217,7 +218,7 @@ def main():
     iso_url = f"http://127.0.0.1:{srv.server_address[1]}/{iso_name}"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = getattr(p, os.environ.get("HX_BROWSER", "chromium")).launch()
         ctx = browser.new_context(viewport={"width": 1366, "height": 900}, ignore_https_errors=not CA)
         page = ctx.new_page()
         # "Failed to load resource" console lines carry no URL: failed API calls are recorded from the response instead
