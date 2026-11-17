@@ -120,7 +120,8 @@ class ConfigAndParsing(Base):
     def test_depclean_parser_handles_equals_prefix_and_wrapped_lines(self):
         txt = "All selected packages: =media-libs/libcdr-0.1.9 =sys-kernel/gentoo-kernel-6.18.62\n  =dev-libs/x-1-r2\n\n>>> 'Selected' packages are slated for removal.\n"
         self.assertEqual(self.m.parse_depclean(txt), ["media-libs/libcdr", "sys-kernel/gentoo-kernel", "dev-libs/x"])
-        self.assertIn("protected", self.m.depclean_verdict(self.m.parse_depclean(txt), self.conf()))
+        remove, kept, why = self.m.depclean_plan(self.m.parse_depclean(txt), self.conf())
+        self.assertEqual((remove, kept, why), (["media-libs/libcdr", "dev-libs/x"], ["sys-kernel/gentoo-kernel"], None))
 
     def test_merged_since_reads_only_new_lines(self):
         with open(self.m.EMERGE_LOG, "w") as f:
@@ -132,13 +133,14 @@ class ConfigAndParsing(Base):
 
 
 class Policy(Base):
-    def test_depclean_refuses_protected_and_big_sets(self):
+    def test_depclean_keeps_protected_and_refuses_big_sets(self):
         c = self.conf()
-        self.assertIn("protected", self.m.depclean_verdict(["sys-kernel/gentoo-kernel-bin"], c))
-        self.assertIn("protected", self.m.depclean_verdict(["sys-fs/zfs-kmod"], c))
-        self.assertIn("protected", self.m.depclean_verdict(["app-emulation/horcrux-bin"], c))
-        self.assertIn("limit", self.m.depclean_verdict([f"a/p{i}" for i in range(21)], c))
-        self.assertIsNone(self.m.depclean_verdict(["dev-libs/foo"], c))
+        for a in ("sys-kernel/gentoo-kernel-bin", "sys-fs/zfs-kmod", "app-emulation/horcrux-bin", "sys-apps/horcrux-release"):
+            self.assertEqual(self.m.depclean_plan([a, "dev-libs/foo"], c), (["dev-libs/foo"], [a], None))
+        # an old kernel no longer blocks the cleanup of everything else (an installed older gentoo-kernel used to keep depclean off for good)
+        self.assertEqual(self.m.depclean_plan(["sys-kernel/gentoo-kernel"], c), ([], ["sys-kernel/gentoo-kernel"], None))
+        self.assertIn("limit", self.m.depclean_plan([f"a/p{i}" for i in range(21)], c)[2])
+        self.assertIsNone(self.m.depclean_plan([f"a/p{i}" for i in range(20)] + ["sys-kernel/gentoo-kernel"], c)[2])
 
     def test_reboot_reasons_kernel_and_microcode(self):
         r = self.m.reboot_reasons(["sys-firmware/intel-microcode", "app-editors/vim", "sys-firmware/intel-microcode"], self.conf(),
@@ -174,6 +176,7 @@ class Runs(Base):
         self.assertFalse(os.path.exists(os.path.join(self.m.STATE_DIR, "failed")))
         self.assertEqual(st["pending"], 2)
         self.assertEqual(st["steps"]["depclean"], "removed 2")
+        self.assertEqual([c for c in self.calls if "--depclean" in c and "--pretend" not in c][0][-2:], ["dev-libs/foo", "app-misc/bar"])
 
     def test_sync_failure_is_a_failure_but_update_still_runs(self):
         self.rc = {"emaint": 1}
@@ -191,11 +194,21 @@ class Runs(Base):
         cmds = [" ".join(c) for c in self.calls]
         self.assertFalse(any("--depclean" in c or "etc-update" in c or "preserved" in c for c in cmds))
 
-    def test_depclean_skipped_when_it_would_remove_the_kernel(self):
+    def test_depclean_never_removes_the_kernel(self):
         self.out = {"--depclean --pretend": "All selected packages: sys-kernel/gentoo-kernel-bin-6.12.1\nPackages installed:   9\n"}
         st = self.run_it()
-        self.assertIn("skipped", st["steps"]["depclean"])
-        self.assertFalse(any(c[-1] == "--depclean" for c in self.calls))
+        self.assertIn("nothing to remove", st["steps"]["depclean"])
+        self.assertIn("kept protected: sys-kernel/gentoo-kernel-bin", st["steps"]["depclean"])
+        self.assertFalse(any("--depclean" in c and "--pretend" not in c for c in self.calls))
+
+    def test_depclean_removes_only_the_unprotected_packages_by_name(self):
+        self.out = {"--depclean --pretend": "All selected packages: =sys-kernel/gentoo-kernel-6.18.62 =dev-libs/foo-1.0\n\nPackages installed:   9\n"}
+        st = self.run_it()
+        real = [c for c in self.calls if "--depclean" in c and "--pretend" not in c]
+        self.assertEqual(len(real), 1)
+        self.assertEqual(real[0][-1], "dev-libs/foo")
+        self.assertNotIn("sys-kernel/gentoo-kernel", " ".join(real[0]))
+        self.assertTrue(st["steps"]["depclean"].startswith("removed 1"))
 
     def test_depclean_off(self):
         st = self.run_it(DEPCLEAN="no")
@@ -244,6 +257,116 @@ class Runs(Base):
         self.rc = {}
         self.run_it()
         self.assertFalse(os.path.exists(os.path.join(self.m.STATE_DIR, "failed")))
+
+
+# the gentoo part of a real run log: the rsync mirror served a tree whose Manifest did not
+# verify; every overlay synced, the eix post-sync hook printed its noise, `emaint sync -a` exited 1
+SYNC_MIRROR_MISMATCH = """\
+>>> Syncing repository 'gentoo' into '/var/db/repos/gentoo'...
+>>> Starting rsync with rsync://[2606:5480:1000::300:10]/gentoo-portage...
+ * Manifest timestamp: 2026-11-17 09:37:58 UTC
+ * Verifying /var/db/repos/gentoo/.tmp-unverified-download-quarantine ...!!! Manifest verification failed:
+Manifest mismatch for www-apps/Manifest.gz
+  __size__: expected: 13136, have: 13131
+[ !! ]
+>>> Syncing repository 'guru' into '/var/db/repos/guru'...
+=== Sync completed for guru
+cannot properly execute /var/db/repos/guru/x11-wm/oxwm/oxwm-9999.ebuild
+Database contains 21999 packages in 185 categories
+Action: sync for repo: gentoo, returned code = 1
+Action: sync for repo: guru, returned code = 0
+Action: sync for repo: horcrux, returned code = 0
+Action: sync for repo: canutethegreat-overlay, returned code = 0
+"""
+
+SYNC_ALL_OK_HOOK_FAILED = """\
+cannot properly execute /var/db/repos/myoverlay/app-misc/foo/foo-9999.ebuild
+!!! eix-postsync: hook failed
+Action: sync for repo: gentoo, returned code = 0
+Action: sync for repo: guru, returned code = 0
+"""
+
+
+class Sync(Base):
+    def setUp(self):
+        super().setUp()
+        self.slept = []
+        self.m.SLEEP = self.slept.append
+        self.m.GENTOO_REPO = os.path.join(self.t.name, "gentoo")
+        os.makedirs(os.path.join(self.m.GENTOO_REPO, "metadata"))
+        self.stamp(time.time() - 3600)
+
+    def stamp(self, t):
+        with open(os.path.join(self.m.GENTOO_REPO, "metadata", "timestamp.chk"), "w") as f:
+            f.write(time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(t)) + "\n")
+
+    def run_it(self, **conf):
+        return self.m.do_run(self.conf(**conf), "test", runner=self.fake_sh)
+
+    def test_parsers_on_the_real_log(self):
+        lines = SYNC_MIRROR_MISMATCH.splitlines()
+        self.assertEqual(self.m.parse_sync(lines), {"gentoo": 1, "guru": 0, "horcrux": 0, "canutethegreat-overlay": 0})
+        errs = self.m.sync_errors(lines)
+        self.assertTrue(any("Manifest mismatch for www-apps/Manifest.gz" in e for e in errs))
+        self.assertFalse(any("cannot properly execute" in e or e.startswith("Action:") for e in errs))
+        self.assertLess(self.m.tree_age_hours(self.m.GENTOO_REPO), 2)
+        self.assertIsNone(self.m.tree_age_hours(os.path.join(self.t.name, "nope")))
+
+    def test_bad_mirror_is_retried_on_its_own_and_the_run_is_ok(self):
+        self.rc = {"emaint sync -a": 1}
+        self.out = {"emaint sync -a": SYNC_MIRROR_MISMATCH, "emaint sync -r gentoo": "Action: sync for repo: gentoo, returned code = 0\n"}
+        st = self.run_it()
+        self.assertEqual(st["result"], "ok", st.get("error"))
+        self.assertIn(["emaint", "sync", "-r", "gentoo"], self.calls)
+        self.assertFalse(any(c[:3] == ["emaint", "sync", "-r"] and c[3] != "gentoo" for c in self.calls))  # only the failed repo
+        self.assertEqual(self.slept, [120.0])
+        self.assertIn("gentoo synced on retry 1", st["steps"]["sync"])
+        self.assertIn("Manifest mismatch", st["steps"]["sync"])
+        self.assertEqual(self.m.check_result(self.conf(), st)[0], 0)
+
+    def test_persistent_failure_names_the_repo_and_the_reason(self):
+        self.rc = {"emaint sync": 1}
+        self.out = {"emaint sync -a": SYNC_MIRROR_MISMATCH,
+                    "emaint sync -r gentoo": "!!! Manifest verification failed:\nManifest mismatch for www-apps/Manifest.gz\n"
+                                             "Action: sync for repo: gentoo, returned code = 1\n"}
+        st = self.run_it(SYNC_RETRIES="2", SYNC_RETRY_DELAY="5")
+        self.assertEqual((st["result"], st["failed_step"]), ("failed", "sync"))
+        self.assertEqual(len([c for c in self.calls if c[:4] == ["emaint", "sync", "-r", "gentoo"]]), 2)
+        self.assertEqual(self.slept, [5.0, 5.0])
+        self.assertIn("gentoo:", st["error"])
+        self.assertIn("Manifest mismatch for www-apps/Manifest.gz", st["error"])
+        self.assertNotIn("returned code = 0", st["error"])  # the old message quoted three healthy repos and never said which one failed
+        code, text = self.m.check_result(self.conf(), st)
+        self.assertEqual(code, 2)
+        self.assertIn("gentoo", text)
+        self.assertTrue(any("@world" in c and "--pretend" not in c for c in self.calls))  # the update still runs on the verified old tree
+
+    def test_post_sync_hook_failure_is_a_warning_when_the_tree_is_fresh(self):
+        self.rc = {"emaint sync -a": 1}
+        self.out = {"emaint sync -a": SYNC_ALL_OK_HOOK_FAILED}
+        st = self.run_it()
+        self.assertEqual(st["result"], "ok")
+        self.assertFalse(any(c[:3] == ["emaint", "sync", "-r"] for c in self.calls))
+        self.assertIn("post-sync hook", st["warnings"][0])
+        self.assertIn("eix-postsync", st["warnings"][0])
+        code, text = self.m.check_result(self.conf(), st)
+        self.assertEqual(code, 1)
+        self.assertIn("post-sync hook", text)
+
+    def test_post_sync_hook_failure_with_a_stale_tree_is_a_failure(self):
+        self.stamp(time.time() - 5 * 86400)
+        self.rc = {"emaint sync -a": 1}
+        self.out = {"emaint sync -a": SYNC_ALL_OK_HOOK_FAILED}
+        st = self.run_it()
+        self.assertEqual((st["result"], st["failed_step"]), ("failed", "sync"))
+        self.assertIn("old after the sync", st["error"])
+
+    def test_emaint_crash_without_repo_lines_is_a_failure(self):
+        self.rc = {"emaint sync -a": 1}
+        self.out = {"emaint sync -a": "Traceback (most recent call last):\nOSError: boom\n"}
+        st = self.run_it()
+        self.assertEqual(st["failed_step"], "sync")
+        self.assertIn("boom", st["error"])
 
 
 class Scheduling(Base):

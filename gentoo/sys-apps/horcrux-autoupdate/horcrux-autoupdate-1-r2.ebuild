@@ -18,6 +18,9 @@ IUSE="systemd"
 # Scheduling, one per init (OWNER RULE: OpenRC and systemd equally): OpenRC = /etc/cron.d (cronie, already required by horcrux-backup), systemd = a timer
 # enabled at install. Both only trigger hourly: the program decides when an update is due, so a laptop that was off at night catches up.
 # Never reboots: a kernel/microcode update is recorded in /var/lib/horcrux-autoupdate/reboot-required and /run/reboot-required.
+# -r2: a repository whose sync fails (an rsync mirror caught mid-update fails Manifest verification) is synced again on its own before the
+# run counts as failed, the error names the repository and the reason, a post-sync hook failure with a fresh tree is a warning, protected
+# packages (old kernels) no longer block the whole depclean, and the repo.postsync.d md5-cache hook.
 RDEPEND="
 	dev-lang/python
 	sys-apps/portage
@@ -30,6 +33,13 @@ src_install() {
 	insinto /etc/horcrux
 	doins "${FILESDIR}"/autoupdate.conf
 	keepdir /var/lib/horcrux-autoupdate /var/log/horcrux-autoupdate
+	# md5-cache for git overlays that ship none (eix-update and Portage read it instead of sourcing every ebuild); updated with the
+	# package, so it is not config-protected
+	exeinto /etc/portage/repo.postsync.d
+	doexe "${FILESDIR}"/50-horcrux-md5-cache
+	newenvd - 50horcrux-autoupdate <<-EOF
+		CONFIG_PROTECT_MASK="/etc/portage/repo.postsync.d/50-horcrux-md5-cache"
+	EOF
 	if use systemd; then
 		systemd_dounit "${FILESDIR}"/horcrux-autoupdate.service "${FILESDIR}"/horcrux-autoupdate.timer
 	else

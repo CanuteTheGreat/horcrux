@@ -1,0 +1,31 @@
+#!/bin/sh
+# Installed by sys-apps/horcrux-autoupdate as /etc/portage/repo.postsync.d/50-horcrux-md5-cache. Portage runs it after each repository
+# sync with: $1 = repository name, $2 = sync URI, $3 = repository path.
+#
+# Git overlays that do not ship a metadata cache (our own overlays, steam-overlay) leave every consumer to source each ebuild itself.
+# eix-update (eix 0.36.9) then falls back to `ebuild <file> depend`, which current Portage refuses ("returnproc or returnpid must be
+# True for depend phase"), and prints "cannot properly execute ..." for every ebuild it could not parse. This hook generates the
+# md5-cache Portage and eix read, the same way Portage's own repo.postsync.d example does.
+#
+# Rules: never the gentoo repository (it ships a verified cache), never a repository whose md5-cache is tracked in git (guru and other
+# mirrors ship one: rewriting tracked files would make the next `git pull` refuse to merge), and the cache stays out of `git status`
+# (.git/info/exclude). It always exits 0: Portage counts a failing repo.postsync.d hook as a failed sync of that repository, and a
+# missing cache only costs speed.
+name=$1
+path=$3
+[ -n "${name}" ] && [ -n "${path}" ] && [ -d "${path}" ] || exit 0
+[ "${name}" = gentoo ] && exit 0
+[ -d "${path}/.git" ] || exit 0
+command -v egencache >/dev/null 2>&1 || exit 0
+g() { git -c safe.directory="${path}" -C "${path}" "$@"; }
+if [ -n "$(g ls-files -- metadata/md5-cache 2>/dev/null | head -n 1)" ]; then
+	exit 0
+fi
+ex="${path}/.git/info/exclude"
+if ! grep -qx '/metadata/md5-cache/' "${ex}" 2>/dev/null; then
+	mkdir -p "${path}/.git/info" && printf '%s\n' '/metadata/md5-cache/' >> "${ex}" || true
+fi
+if ! nice -n 19 egencache --update --repo="${name}" --jobs="${HORCRUX_EGENCACHE_JOBS:-2}" >/dev/null 2>&1; then
+	echo " * horcrux: egencache --update --repo=${name} failed (metadata cache not refreshed; harmless, Portage reads the ebuilds)" >&2
+fi
+exit 0

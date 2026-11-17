@@ -33,6 +33,8 @@ LOCK = os.environ.get("HX_AU_LOCK", "/run/lock/horcrux-autoupdate.lock")
 EMERGE_LOG = os.environ.get("HX_AU_EMERGE_LOG", "/var/log/emerge.log")
 PRESERVED = os.environ.get("HX_AU_PRESERVED", "/var/lib/portage/preserved_libs_registry")
 RUN_REBOOT_FLAG = os.environ.get("HX_AU_RUN_FLAG", "/run/reboot-required")
+GENTOO_REPO = os.environ.get("HX_AU_GENTOO_REPO", "")  # empty: ask portageq, else /var/db/repos/gentoo
+SLEEP = time.sleep
 
 # Binary-package managers: Portage matches a binary package by version, and these ebuilds install a tarball fetched at unpack time, so a
 # binary package would silently reinstall an older tarball (same list as horcrux-api's PREBUILT_PACKAGES).
@@ -42,6 +44,9 @@ DEFAULTS = {
     "ENABLED": "yes",
     "INTERVAL_HOURS": "24",       # one attempt per this many hours; the hourly trigger makes a machine that was off at night catch up
     "SYNC": "yes",
+    "SYNC_RETRIES": "2",          # a repository whose sync failed is synced again on its own this many times (another rsync mirror)
+    "SYNC_RETRY_DELAY": "120",    # seconds before each retry
+    "SYNC_MAX_AGE_HOURS": "48",   # the gentoo tree must be at most this old after the sync step (metadata/timestamp.chk)
     "SNAPSHOT": "yes",            # boot-environment / ZFS snapshot before the update (ZFS root only)
     "DEPCLEAN": "safe",           # safe | no. safe = only when `--pretend` shows no protected package and no more than DEPCLEAN_MAX removals
     "DEPCLEAN_MAX": "20",
@@ -329,19 +334,113 @@ def parse_depclean(text):
     return out
 
 
-def depclean_verdict(atoms, conf, merged_kernel_pending=False):
-    """None = safe to run, else the reason it is skipped"""
-    keep = conf.get("DEPCLEAN_KEEP", "").split()
-    for a in atoms:
-        if any(fnmatch.fnmatchcase(a, p) for p in keep):
-            return f"would remove protected package {a}"
-    if len(atoms) > int(conf.get("DEPCLEAN_MAX", "20") or 20):
-        return f"would remove {len(atoms)} packages (limit {conf.get('DEPCLEAN_MAX')})"
-    return None
-
-
 def parse_pending(text):
     return [ln.strip() for ln in text.splitlines() if re.match(r"^\[(ebuild|binary)\s", ln.strip())]
+
+
+def depclean_plan(atoms, conf):
+    """(remove, kept, why_not). Protected packages (old kernels, ZFS, boot, firmware, Horcrux) are left out of the removal instead of
+    blocking it; the rest is removed by name when it is no more than DEPCLEAN_MAX (a bigger set usually means a broken world file)."""
+    keep = conf.get("DEPCLEAN_KEEP", "").split()
+    remove, kept = [], []
+    for a in atoms:
+        (kept if any(fnmatch.fnmatchcase(a, p) for p in keep) else remove).append(a)
+    remove = list(dict.fromkeys(remove))
+    if len(remove) > int(conf.get("DEPCLEAN_MAX", "20") or 20):
+        return remove, kept, f"would remove {len(remove)} packages (limit {conf.get('DEPCLEAN_MAX')})"
+    return remove, kept, None
+
+
+# ---------------------------------------------------------------- sync
+
+SYNC_ACTION = re.compile(r"^Action: sync for repo: (\S+), returned code = (-?\d+)")
+SYNC_ERROR = re.compile(r"(!!!|Manifest mismatch|rsync error|rsync: |fatal: |error: |timed out|returned code = [1-9])", re.I)
+
+
+def parse_sync(lines):
+    """{repo: return code} from `emaint sync` output (one 'Action: sync for repo: X, returned code = N' line per repository)"""
+    codes = {}
+    for ln in lines:
+        m = SYNC_ACTION.match(ln.strip())
+        if m:
+            codes[m.group(1)] = int(m.group(2))
+    return codes
+
+
+def sync_errors(lines, limit=3):
+    """the lines that say why a sync failed ('!!! Manifest verification failed', 'Manifest mismatch for ...'), without the Action summary"""
+    out = []
+    for ln in lines:
+        s = ln.strip()
+        if s and SYNC_ERROR.search(s) and not SYNC_ACTION.match(s) and "cannot properly execute" not in s and s not in out:
+            out.append(s[:160])
+    return out[:limit]
+
+
+def gentoo_repo_path():
+    if GENTOO_REPO:
+        return GENTOO_REPO
+    try:
+        p = subprocess.run(["portageq", "get_repo_path", "/", "gentoo"], capture_output=True, text=True, timeout=60).stdout.strip()
+        if p:
+            return p
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "/var/db/repos/gentoo"
+
+
+def tree_age_hours(path):
+    """age of the gentoo tree from metadata/timestamp.chk ('Tue, 17 Nov 2026 14:45:00 +0000'); None when there is no such file"""
+    import email.utils
+    try:
+        with open(os.path.join(path, "metadata", "timestamp.chk")) as f:
+            t = email.utils.parsedate_to_datetime(f.read().strip())
+    except (OSError, TypeError, ValueError, IndexError):
+        return None
+    return (now() - t.timestamp()) / 3600
+
+
+def do_sync(conf, log, runner):
+    """`emaint sync -a`, then each failed repository again on its own (a fresh rsync mirror: a mirror caught mid-update serves a tree
+    whose Manifest does not verify, and Portage then keeps the old tree). Returns (ok, step detail, error, warnings).
+    A non-zero exit with every repository at code 0 is a post-sync hook (eix-update and friends): a warning, provided the gentoo tree is
+    fresh, not a failed sync."""
+    rc, lines = runner(prio(["emaint", "sync", "-a"]), log, full=True)
+    codes = parse_sync(lines)
+    errs = {}
+    failed = [r for r, c in codes.items() if c != 0]
+    for r in failed:
+        errs[r] = sync_errors(lines)
+    warnings, notes = [], []
+    if rc != 0 and not codes:
+        return False, rc, "emaint sync -a failed: " + " | ".join((sync_errors(lines) or lines)[-3:]), warnings
+    retries = int(conf.get("SYNC_RETRIES", "2") or 0)
+    for r in list(failed):
+        for i in range(retries):
+            log.write(f"horcrux-autoupdate: repository {r} failed to sync ({'; '.join(errs[r]) or 'no reason printed'}), "
+                      f"retry {i + 1}/{retries} in {conf.get('SYNC_RETRY_DELAY')} s\n")
+            log.flush()
+            SLEEP(float(conf.get("SYNC_RETRY_DELAY", "120") or 0))
+            rrc, rlines = runner(prio(["emaint", "sync", "-r", r]), log, full=True)
+            rcode = parse_sync(rlines).get(r, rrc)
+            if rcode == 0:
+                notes.append(f"{r} synced on retry {i + 1} (first attempt: {'; '.join(errs[r]) or 'failed'})")
+                failed.remove(r)
+                break
+            errs[r] = sync_errors(rlines) or errs[r]
+    if failed:
+        why = "; ".join(f"{r}: {' / '.join(errs[r]) or 'failed'}" for r in failed)
+        return False, 1, f"repository sync failed after {retries} retries: {why}", warnings
+    if rc != 0 and not notes:  # every repository returned 0 in the first pass, yet emaint failed: a post-sync hook
+        warnings.append("emaint sync -a exited %d with every repository synced (a post-sync hook failed: %s)"
+                        % (rc, " | ".join(sync_errors(lines)) or "see the log"))
+    if "gentoo" in codes:
+        age = tree_age_hours(gentoo_repo_path())
+        limit = float(conf.get("SYNC_MAX_AGE_HOURS", "48") or 48)
+        if age is not None and age > limit:
+            return False, 1, f"gentoo tree is {age:.0f} h old after the sync (limit {limit:.0f} h): the sync did not bring a new tree", warnings
+    detail = "ok" if not notes and not warnings else "ok: " + "; ".join(notes + warnings)
+    return True, detail if detail != "ok" else 0, "", warnings
 
 
 # ---------------------------------------------------------------- the run
@@ -411,10 +510,12 @@ def do_run(conf, reason="manual", runner=sh):
     with open(logpath, "w") as log:
         log.write(f"horcrux-autoupdate {VERSION} {iso(started)} trigger={reason}\n")
         if yes(conf["SYNC"]):
-            rc, tail = runner(prio(["emaint", "sync", "-a"]), log)
-            st["steps"]["sync"] = rc
-            if rc != 0:
-                fail("sync", "emaint sync -a failed: " + " | ".join(tail[-3:]))
+            ok, detail, err, warns = do_sync(conf, log, runner)
+            st["steps"]["sync"] = detail
+            if warns:
+                st["warnings"] = warns
+            if not ok:
+                fail("sync", err)
         ok, detail = snapshot(log, conf)
         st["steps"]["snapshot"] = detail
         if not ok:
@@ -434,14 +535,15 @@ def do_run(conf, reason="manual", runner=sh):
                     st["steps"]["depclean"] = "skipped: pretend run failed"
                 else:
                     atoms = parse_depclean("\n".join(lines))
-                    why = depclean_verdict(atoms, conf)
+                    remove, kept, why = depclean_plan(atoms, conf)
+                    kept_note = f" (kept protected: {' '.join(dict.fromkeys(kept))})" if kept else ""
                     if why:
-                        st["steps"]["depclean"] = f"skipped: {why}"
-                    elif not atoms:
-                        st["steps"]["depclean"] = "nothing to remove"
+                        st["steps"]["depclean"] = f"skipped: {why}{kept_note}"
+                    elif not remove:
+                        st["steps"]["depclean"] = "nothing to remove" + kept_note
                     else:
-                        rc, tail = runner(prio(["emerge", "--ask=n", "--color=n", "--nospinner", "--depclean"]), log)
-                        st["steps"]["depclean"] = f"removed {len(atoms)}" if rc == 0 else rc
+                        rc, tail = runner(prio(["emerge", "--ask=n", "--color=n", "--nospinner", "--depclean"] + remove), log)
+                        st["steps"]["depclean"] = f"removed {len(remove)}{kept_note}" if rc == 0 else rc
                         if rc != 0:
                             fail("depclean", "emerge --depclean failed: " + " | ".join(tail[-3:]))
             else:
@@ -561,6 +663,8 @@ def check_result(conf, st, rb=None):
     needed = st.get("reboot_required") if rb is None else rb
     if needed:
         msg += ", reboot required: " + "; ".join(st.get("reboot_reasons", []))
+    if st.get("warnings"):
+        return 1, msg + ", warning: " + "; ".join(st["warnings"])[:200]
     return 0, msg
 
 

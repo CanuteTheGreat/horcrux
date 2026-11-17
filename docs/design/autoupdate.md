@@ -9,10 +9,19 @@ Trigger: hourly, one per init system (init parity): `/etc/cron.d/horcrux-autoupd
 since the last attempt, so a machine that was off at night catches up when it is next on.
 
 One run (`horcrux-autoupdate run`), at nice 19 / ionice idle, under `flock` and skipped while another emerge runs (or on battery):
-1. `emaint sync -a`
+1. `emaint sync -a`. A repository that returns non-zero (typically an rsync mirror caught mid-update, whose tree fails Manifest
+   verification so Portage keeps the old one) is synced again on its own, `SYNC_RETRIES` (2) times after `SYNC_RETRY_DELAY` (120 s);
+   only then does the run fail, with the repository and the reason (`gentoo: Manifest mismatch for www-apps/Manifest.gz`) in the error.
+   A non-zero exit with every repository at code 0 is a post-sync hook (eix-update): a warning (`check` exits 1), not a failed sync,
+   as long as the gentoo tree's `metadata/timestamp.chk` is at most `SYNC_MAX_AGE_HOURS` (48) old.
+   The package also installs `/etc/portage/repo.postsync.d/50-horcrux-md5-cache`: git overlays that ship no metadata cache get one
+   from `egencache` after each sync (kept out of `git status`; never the gentoo repo or a repo whose cache is tracked in git). Without it
+   eix-update falls back to `ebuild ... depend`, which current Portage refuses, and prints `cannot properly execute` per ebuild.
 2. ZFS root: boot-environment snapshot `pre-upgrade-*` through `horcrux-be snapshot` (plain `zfs snapshot` if the tool is absent). No snapshot, no update.
 3. `emerge -uDN --with-bdeps=y --keep-going @world`, binpkgs from the binhost first (`--getbinpkg --usepkg`); `app-emulation/horcrux-bin` is excluded from binpkgs (its ebuild fetches a tarball).
-4. `emerge --depclean` only when `--pretend` removes no kernel/ZFS/boot/firmware/Horcrux package and at most `DEPCLEAN_MAX` (20) packages.
+4. `emerge --depclean <packages>`: the `--pretend` list minus the protected kernel/ZFS/boot/firmware/Horcrux packages (`DEPCLEAN_KEEP`,
+   kept and named in the status), when that is at most `DEPCLEAN_MAX` (20) packages. A bigger set usually means a package is missing
+   from the world file: nothing is removed.
 5. `@preserved-rebuild` when Portage preserved libraries.
 6. `etc-update --preen` (trivial changes only; `ETC_UPDATE=all` selects `--automode -5`). Pending config files are counted in the status.
 
