@@ -16,7 +16,7 @@ trap cleanup EXIT
 docker run -d --name "$NAME" --memory 3g "$IMAGE" sleep 1800 >/dev/null
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/vm_advanced_e2e.py" "$NAME":/tmp/vm_advanced_e2e.py
-docker exec "$NAME" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+docker exec "$NAME" bash -c 'rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   qemu-system-x86 qemu-system-common qemu-utils iproute2 curl python3 libvirt0 >/dev/null
   have() { command -v virtiofsd >/dev/null || [ -x /usr/lib/qemu/virtiofsd ] || [ -x /usr/libexec/virtiofsd ]; }
   have || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq virtiofsd >/dev/null || true

@@ -56,7 +56,7 @@ slapd slapd/no_configuration boolean false
 EOF
 # a mirror hiccup makes `apt-get update -qq` exit 0 without an index: retry until slapd has a candidate
 for t in 1 2 3 4 5; do
-  apt-get update -qq >/dev/null 2>&1 || true
+  rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq >/dev/null 2>&1 || true
   apt-cache policy slapd | grep -q "Candidate: [0-9]" && break
   sleep 3
 done
@@ -138,7 +138,7 @@ docker cp "$TESTBIN" "$ID-run":/usr/local/bin/auth-realms-e2e
 docker cp "$TMP/pebble-ca.pem" "$ID-run":/etc/pebble-ca.pem
 docker exec "$ID-run" bash -c '
 set -e
-(ldconfig -p | grep -q libvirt.so.0 && command -v openssl >/dev/null) || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libvirt0 openssl >/dev/null)
+(ldconfig -p | grep -q libvirt.so.0 && command -v openssl >/dev/null) || (rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libvirt0 openssl >/dev/null)
 id pamtester >/dev/null 2>&1 || useradd -m pamtester
 echo "pamtester:pam-host-pass-1" | chpasswd
 groupadd -f horcrux-admin

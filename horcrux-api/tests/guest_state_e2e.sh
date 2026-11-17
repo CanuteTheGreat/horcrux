@@ -27,7 +27,7 @@ docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$HERE/hx_node.py" "$NAME":/hx/hx_node.py
 docker cp /tmp/$NAME-cirros.img "$NAME":/var/lib/hx/images/cirros.img
 
-docker exec "$NAME" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+docker exec "$NAME" bash -c 'rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   qemu-system-x86 qemu-utils iproute2 curl python3 libvirt0 >/dev/null'
 
 # One env for the API and for `horcrux-api guests ...` (what the unit runs).

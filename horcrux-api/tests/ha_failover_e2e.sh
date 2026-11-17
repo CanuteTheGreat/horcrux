@@ -66,7 +66,7 @@ done
 rm -f /tmp/$TAG-start-api.sh
 
 for n in "${NODES[@]}"; do
-  docker exec "$n" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+  docker exec "$n" bash -c 'rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     qemu-system-x86 qemu-utils ovmf iproute2 nftables curl python3 libvirt0 procps >/dev/null' &
 done
 wait

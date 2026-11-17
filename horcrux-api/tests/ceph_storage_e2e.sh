@@ -23,7 +23,7 @@ docker cp "$BIN" "$CT":/usr/local/bin/horcrux-api
 docker cp "$HERE/ceph_cluster_boot.sh" "$CT":/tmp/ceph_cluster_boot.sh
 docker cp "$HERE/ceph_storage_e2e.py" "$CT":/tmp/ceph_storage_e2e.py
 
-docker exec "$CT" bash -c 'DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq \
+docker exec "$CT" bash -c 'rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq \
   qemu-utils iproute2 curl python3 libvirt0 udev >/dev/null'
 docker exec "$CT" bash /tmp/ceph_cluster_boot.sh || { echo "FAIL the Ceph test cluster did not come up"; exit 1; }
 echo "ok - single-node Ceph cluster is up (hxpool)"

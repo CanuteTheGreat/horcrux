@@ -77,7 +77,7 @@ done
 rm -f /tmp/$TAG-cirros.img /tmp/$TAG-start-api.sh /tmp/$TAG-env.sh
 
 for n in "$N1" "$N2"; do
-  docker exec "$n" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+  docker exec "$n" bash -c 'rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     qemu-system-x86 qemu-utils ovmf swtpm swtpm-tools iproute2 nftables curl python3 libvirt0 genisoimage >/dev/null' &
 done
 wait

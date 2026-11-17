@@ -36,7 +36,7 @@ docker cp "$(dirname "$0")/sdn_cni_e2e.py" "$NAME":/tmp/sdn_cni_e2e.py
 if [ -n "$CONTRACT" ]; then
   docker cp "$CONTRACT" "$NAME":/usr/local/bin/api_contract
 fi
-docker exec "$NAME" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+docker exec "$NAME" bash -c 'rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   containernetworking-plugins nftables iproute2 iputils-ping curl python3 libvirt0 >/dev/null'
 
 docker exec "$NAME" bash -c '

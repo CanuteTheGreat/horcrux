@@ -38,7 +38,7 @@ mkdir -p /sys/fs/cgroup/init.scope
 for p in $(cat /sys/fs/cgroup/cgroup.procs); do echo "$p" > /sys/fs/cgroup/init.scope/cgroup.procs 2>/dev/null || true; done
 sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgroup/cgroup.subtree_control
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq >/dev/null
 (apt-get install -y -qq lxc-utils || apt-get install -y -qq lxc) >/dev/null; apt-get install -y -qq uidmap xz-utils e2fsprogs iproute2 curl libvirt0 nftables python3 >/dev/null
 mkdir -p /tmp/gsct-data
 cat > /tmp/env.sh <<EOF

@@ -23,7 +23,7 @@ docker cp "$(dirname "$0")/fixtures/ceph" "$NAME":/tmp/ceph-fx
 # universe packages like openrc have "no installation candidate"): retry until
 # the package is really known.
 docker exec "$NAME" bash -c 'for i in 1 2 3 4 5; do
-  apt-get update -qq >/dev/null 2>&1
+  rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq >/dev/null 2>&1
   apt-cache policy openrc | grep -q "Candidate: [0-9]" && break
   echo "apt index incomplete (attempt $i), retrying"; sleep 10
 done

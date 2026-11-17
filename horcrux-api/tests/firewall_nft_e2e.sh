@@ -17,8 +17,8 @@ trap cleanup EXIT
 
 docker run -d --name "$NAME" --cap-add NET_ADMIN --memory 1g "$IMAGE" sleep 900 >/dev/null
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
-docker exec "$NAME" bash -c '(command -v nft && ldconfig -p | grep -q libvirt.so.0) >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nftables curl libvirt0 >/dev/null)'
-docker exec "$NAME" bash -c 'command -v python3 >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 >/dev/null)'
+docker exec "$NAME" bash -c '(command -v nft && ldconfig -p | grep -q libvirt.so.0) >/dev/null || (rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nftables curl libvirt0 >/dev/null)'
+docker exec "$NAME" bash -c 'command -v python3 >/dev/null || (rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 >/dev/null)'
 docker cp "$(dirname "$0")/firewall_objects_e2e.py" "$NAME":/tmp/firewall_objects_e2e.py
 
 docker exec "$NAME" bash -c '

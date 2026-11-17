@@ -28,7 +28,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! docker run --rm --privileged -v /lib/modules:/lib/modules:ro "$IMAGE" sh -c 'apt-get update -qq && apt-get install -y -qq kmod >/dev/null && modprobe iscsi_tcp' >/dev/null 2>&1; then
+if ! docker run --rm --privileged -v /lib/modules:/lib/modules:ro "$IMAGE" sh -c 'rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && apt-get install -y -qq kmod >/dev/null && modprobe iscsi_tcp' >/dev/null 2>&1; then
   echo "SKIP iscsi_tcp cannot be loaded on this host"; exit 0
 fi
 
@@ -40,7 +40,7 @@ docker cp "$(dirname "$0")/iscsi_storage_e2e.py" "$CLI":/tmp/iscsi_storage_e2e.p
 
 docker exec "$SRV" bash -c "
 set -euo pipefail
-apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tgt >/dev/null
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tgt >/dev/null
 mkdir -p /srv/luns
 truncate -s 1G /srv/luns/a.img; truncate -s 2G /srv/luns/b.img
 tgtd
@@ -51,7 +51,7 @@ tgtadm --lld iscsi --op new --mode logicalunit --tid 1 --lun 2 -b /srv/luns/b.im
 tgtadm --lld iscsi --op bind --mode target --tid 1 -I ALL"
 SRV_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}" "$SRV")
 
-docker exec "$CLI" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+docker exec "$CLI" bash -c 'rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   open-iscsi qemu-utils iproute2 curl python3 libvirt0 udev >/dev/null'
 if docker exec "$CLI" iscsiadm -m session 2>&1 | grep -qi "can not connect\|not connect to iSCSI daemon"; then
   echo "SKIP the host has no iscsid to talk to"; exit 0

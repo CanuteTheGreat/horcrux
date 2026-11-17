@@ -130,7 +130,7 @@ sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgro
 export DEBIAN_FRONTEND=noninteractive
 # Newer Ubuntu/Debian renamed lxc-utils to lxc, and a transient mirror hiccup leaves no package lists
 # ("Unable to locate package"): retry the update, then take whichever name the archive has.
-for i in 1 2 3; do apt-get update -qq >/dev/null && break; sleep 5; done
+for i in 1 2 3; do rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq >/dev/null && break; sleep 5; done
 (apt-get install -y -qq lxc-utils >/dev/null 2>&1 || apt-get install -y -qq lxc >/dev/null)
 apt-get install -y -qq uidmap xz-utils e2fsprogs iproute2 iputils-ping dnsmasq-base curl libvirt0 nftables >/dev/null
 lxc-start --version

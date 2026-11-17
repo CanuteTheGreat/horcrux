@@ -36,7 +36,7 @@ docker cp "$(dirname "$0")/nfs_storage_e2e.py" "$CLI":/tmp/nfs_storage_e2e.py
 
 docker exec "$SRV" bash -c '
 set -euo pipefail
-apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nfs-ganesha nfs-ganesha-vfs dbus qemu-utils >/dev/null
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nfs-ganesha nfs-ganesha-vfs dbus qemu-utils >/dev/null
 mkdir -p /run/dbus /var/run/ganesha /srv/export; dbus-daemon --system --fork
 cat > /etc/ganesha/ganesha.conf <<C
 NFS_CORE_PARAM { Protocols = 4; NFS_Port = 2049; Enable_NLM = false; Enable_RQUOTA = false; }
@@ -48,7 +48,7 @@ for i in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/2049) 2>/dev/null && exit 0;
 echo "ganesha did not listen"; tail -20 /tmp/ganesha.log; exit 1'
 SRV_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}" "$SRV")
 
-docker exec "$CLI" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+docker exec "$CLI" bash -c 'rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   nfs-common qemu-utils iproute2 curl python3 libvirt0 >/dev/null'
 docker exec -e SRV_IP="$SRV_IP" "$CLI" bash -c '
 set -euo pipefail

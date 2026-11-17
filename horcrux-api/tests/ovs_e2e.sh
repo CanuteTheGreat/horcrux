@@ -15,7 +15,7 @@ docker run -d --name "$NAME" --privileged --memory 1g --memory-swap 1g -v /lib/m
 bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/ovs_e2e.py" "$NAME":/tmp/ovs_e2e.py
-docker exec "$NAME" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+docker exec "$NAME" bash -c 'rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   openvswitch-switch kmod iproute2 curl python3 libvirt0 >/dev/null'
 
 docker exec "$NAME" bash -c '

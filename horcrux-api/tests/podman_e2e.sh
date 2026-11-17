@@ -60,7 +60,7 @@ docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$TESTBIN" "$NAME":/usr/local/bin/it
 docker exec "$NAME" bash -c '
 set -e
-for i in 1 2 3; do apt-get update -qq && break; sleep 5; done
+for i in 1 2 3; do rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && break; sleep 5; done
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq podman netavark aardvark-dns crun iproute2 iputils-ping \
   curl libvirt0 libpam0g >/dev/null
 # the CI image ships a docker CLI; drop it so nothing can silently fall back to Docker

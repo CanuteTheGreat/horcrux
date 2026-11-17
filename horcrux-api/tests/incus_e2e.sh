@@ -102,7 +102,7 @@ sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgro
 for i in $(seq 0 63); do [ -e /dev/loop$i ] || mknod -m 660 /dev/loop$i b 7 $i; done
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq >/dev/null
 pkgs="incus python3 python3-cryptography curl iproute2 libvirt0"
 [ "$KVM" = 1 ] && pkgs="$pkgs qemu-system-x86 ovmf"
 apt-get install -y -qq $pkgs >/tmp/apt.log 2>&1 || { tail -30 /tmp/apt.log; exit 1; }

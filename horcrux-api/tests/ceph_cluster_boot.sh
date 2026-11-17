@@ -6,7 +6,7 @@ set -euo pipefail
 # Name the failing command and keep daemon logs in the CI log (run 18163: bare "cluster did not come up").
 trap 'rc=$?; echo "ceph boot FAILED (rc=$rc) line $LINENO: $BASH_COMMAND"; ceph -s 2>&1 | tail -20; for f in /var/log/ceph/*.log; do echo "--- $f"; tail -25 "$f"; done 2>/dev/null' ERR
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq && apt-get install -y -qq ceph-mon ceph-mgr ceph-osd ceph-common uuid-runtime >/dev/null
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa*.sources 2>/dev/null; apt-get update -qq && apt-get install -y -qq ceph-mon ceph-mgr ceph-osd ceph-common uuid-runtime >/dev/null
 mkdir -p /var/run/ceph /var/log/ceph; chown ceph:ceph /var/run/ceph /var/log/ceph
 FSID=$(uuidgen); HOST=$(hostname); IP=127.0.0.1
 cat > /etc/ceph/ceph.conf <<C
