@@ -94,6 +94,23 @@ const RUNTIMES: [(&str, &str); 5] = [
     ("lxd", "LXD"),
 ];
 
+/// The warning for the chosen runtime when the node cannot run it, else None.
+/// `statuses` is empty until the node has answered (no warning then).
+pub fn runtime_warning(statuses: &[api::RuntimeStatus], runtime: &str) -> Option<String> {
+    let s = statuses.iter().find(|s| s.runtime == runtime)?;
+    if s.available {
+        return None;
+    }
+    let msg = s
+        .message
+        .clone()
+        .unwrap_or_else(|| format!("{runtime} isn't usable on this node."));
+    Some(match s.hint.as_deref().filter(|h| !h.is_empty()) {
+        Some(h) => format!("{msg} {h}"),
+        None => msg,
+    })
+}
+
 /// Raw values of the LXC section of the form.
 #[derive(Clone, Debug, Default)]
 pub struct LxcForm {
@@ -199,6 +216,15 @@ pub fn ContainerCreate() -> impl IntoView {
     let (start_after, set_start_after) = create_signal(true);
     let (creating, set_creating) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
+
+    // Podman/Docker availability on this node, shown before Create is pressed.
+    let (runtimes, set_runtimes) = create_signal(Vec::<api::RuntimeStatus>::new());
+    spawn_local(async move {
+        if let Ok(r) = api::get_container_runtimes().await {
+            set_runtimes.set(r);
+        }
+    });
+    let warning = move || runtime_warning(&runtimes.get(), &runtime.get());
 
     // LXC section.
     let lxc_form = create_rw_signal(LxcForm {
@@ -348,11 +374,16 @@ pub fn ContainerCreate() -> impl IntoView {
                                 .iter()
                                 .filter(|(v, _)| features.has(v))
                                 .map(|(v, label)| {
-                                    view! { <option value=*v selected=move || runtime.get() == *v>{*label}</option> }
+                                    let down = runtime_warning(&runtimes.get(), v).is_some();
+                                    let text = if down { format!("{label} (not available on this node)") } else { label.to_string() };
+                                    view! { <option value=*v selected=move || runtime.get() == *v>{text}</option> }
                                 })
                                 .collect_view()
                         }}
                     </select>
+                    {move || warning().map(|w| view! {
+                        <div class="alert alert-warning" id="ct-runtime-warning" role="status">{w}</div>
+                    })}
                 </div>
                 <div class="form-group">
                     <label for="ct-image">{move || if oci() { "Image" } else { "Template / rootfs" }}</label>
@@ -641,6 +672,31 @@ mod tests {
         ] {
             assert!(bad.to_options().is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn warns_when_the_chosen_runtime_is_unavailable() {
+        let down = api::RuntimeStatus {
+            runtime: "podman".into(),
+            available: false,
+            reason: Some("podman-missing".into()),
+            message: Some("Podman isn't installed on this node.".into()),
+            hint: Some("Install it.".into()),
+        };
+        let up = api::RuntimeStatus {
+            runtime: "docker".into(),
+            available: true,
+            ..Default::default()
+        };
+        let all = [down, up];
+        assert_eq!(
+            runtime_warning(&all, "podman").as_deref(),
+            Some("Podman isn't installed on this node. Install it.")
+        );
+        assert_eq!(runtime_warning(&all, "docker"), None);
+        // not answered yet, or a runtime the probe does not cover: no warning
+        assert_eq!(runtime_warning(&[], "podman"), None);
+        assert_eq!(runtime_warning(&all, "lxc"), None);
     }
 
     #[test]

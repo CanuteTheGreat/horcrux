@@ -22,9 +22,28 @@ fn docker_socket_present() -> bool {
 
 /// Why `runtime` (`docker` / `podman`) cannot be used on this node, if it cannot.
 pub fn container_engine(runtime: &str) -> Result<(), ApiError> {
+    engine_check(
+        runtime,
+        in_path(runtime_bin(runtime)),
+        docker_socket_present(),
+    )
+}
+
+fn runtime_bin(runtime: &str) -> &'static str {
+    if runtime == "podman" {
+        "podman"
+    } else {
+        "docker"
+    }
+}
+
+/// The decision behind [`container_engine`], free of host probing so it can
+/// be unit-tested: `have_bin` = the CLI is on PATH, `socket` = the Docker
+/// socket exists (Docker only).
+pub fn engine_check(runtime: &str, have_bin: bool, socket: bool) -> Result<(), ApiError> {
     match runtime {
         "podman" => {
-            if in_path("podman") {
+            if have_bin {
                 Ok(())
             } else {
                 Err(ApiError::NotAvailable {
@@ -36,14 +55,14 @@ pub fn container_engine(runtime: &str) -> Result<(), ApiError> {
             }
         }
         _ => {
-            if !in_path("docker") && !docker_socket_present() {
+            if !have_bin && !socket {
                 Err(ApiError::NotAvailable {
                     reason: "docker-missing",
                     message: "Docker isn't installed on this node.".into(),
                     hint: "Install app-containers/docker, or use LXC or Podman containers instead."
                         .into(),
                 })
-            } else if !docker_socket_present() {
+            } else if !socket {
                 Err(ApiError::NotAvailable {
                     reason: "docker-not-running",
                     message: "The Docker service isn't running on this node.".into(),
@@ -55,6 +74,59 @@ pub fn container_engine(runtime: &str) -> Result<(), ApiError> {
             }
         }
     }
+}
+
+/// One OCI runtime's availability, for the container create form.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RuntimeStatus {
+    pub runtime: String,
+    pub available: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub hint: Option<String>,
+}
+
+pub fn runtime_status(runtime: &str, check: Result<(), ApiError>) -> RuntimeStatus {
+    match check {
+        Ok(()) => RuntimeStatus {
+            runtime: runtime.into(),
+            available: true,
+            reason: None,
+            message: None,
+            hint: None,
+        },
+        Err(ApiError::NotAvailable {
+            reason,
+            message,
+            hint,
+        }) => RuntimeStatus {
+            runtime: runtime.into(),
+            available: false,
+            reason: Some(reason.into()),
+            message: Some(message),
+            hint: Some(hint),
+        },
+        Err(e) => RuntimeStatus {
+            runtime: runtime.into(),
+            available: false,
+            reason: Some("unknown".into()),
+            message: Some(format!("{e:?}")),
+            hint: None,
+        },
+    }
+}
+
+/// `GET /api/container-runtimes`: whether Podman and Docker are usable here.
+pub async fn container_runtimes() -> axum::Json<Vec<RuntimeStatus>> {
+    axum::Json(
+        ["podman", "docker"]
+            .iter()
+            .map(|r| runtime_status(r, container_engine(r)))
+            .collect(),
+    )
 }
 
 pub fn no_log_source(detail: &str) -> ApiError {
@@ -134,6 +206,21 @@ pub fn iproute2() -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_status_says_why_a_runtime_is_unusable() {
+        let ok = runtime_status("podman", engine_check("podman", true, false));
+        assert!(ok.available && ok.reason.is_none());
+        let p = runtime_status("podman", engine_check("podman", false, false));
+        assert!(!p.available);
+        assert_eq!(p.reason.as_deref(), Some("podman-missing"));
+        assert!(p.hint.as_deref().unwrap().contains("Install"));
+        let d = runtime_status("docker", engine_check("docker", false, false));
+        assert_eq!(d.reason.as_deref(), Some("docker-missing"));
+        let off = runtime_status("docker", engine_check("docker", true, false));
+        assert_eq!(off.reason.as_deref(), Some("docker-not-running"));
+        assert!(runtime_status("docker", engine_check("docker", true, true)).available);
+    }
 
     #[test]
     fn a_missing_tool_is_a_424_not_a_500() {

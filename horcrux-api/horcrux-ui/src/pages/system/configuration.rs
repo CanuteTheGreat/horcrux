@@ -22,6 +22,10 @@ pub fn SystemConfigurationPage() -> impl IntoView {
     let (form_timezone, set_form_timezone) = create_signal(String::new());
     let (form_locale, set_form_locale) = create_signal(String::new());
 
+    // Time zones / locales the node itself offers (its current value included)
+    let (tz_options, set_tz_options) = create_signal(Vec::<String>::new());
+    let (locale_options, set_locale_options) = create_signal(Vec::<String>::new());
+
     // Network configuration
     let (selected_interface, set_selected_interface) = create_signal(None::<NetworkInterface>);
     let (show_interface_modal, set_show_interface_modal) = create_signal(false);
@@ -56,6 +60,11 @@ pub fn SystemConfigurationPage() -> impl IntoView {
             Err(e) => {
                 set_error_message.set(Some(format!("Failed to load system configuration: {}", e)))
             }
+        }
+
+        if let Ok(o) = get_system_config_options().await {
+            set_tz_options.set(o.timezones);
+            set_locale_options.set(o.locales);
         }
 
         match get_network_interfaces().await {
@@ -374,14 +383,16 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                                 prop:value=form_timezone
                                                 on:change=move |ev| set_form_timezone.set(event_target_value(&ev))
                                             >
-                                                <option value="UTC">"UTC"</option>
-                                                <option value="America/New_York">"America/New_York"</option>
-                                                <option value="America/Los_Angeles">"America/Los_Angeles"</option>
-                                                <option value="Europe/London">"Europe/London"</option>
-                                                <option value="Europe/Berlin">"Europe/Berlin"</option>
-                                                <option value="Asia/Tokyo">"Asia/Tokyo"</option>
-                                                <option value="Asia/Shanghai">"Asia/Shanghai"</option>
-                                                <option value="Australia/Sydney">"Australia/Sydney"</option>
+                                                {move || {
+                                                    let cur = form_timezone.get();
+                                                    crate::utils::choices_with_current(tz_options.get(), &cur)
+                                                        .into_iter()
+                                                        .map(|v| {
+                                                            let sel = v == cur;
+                                                            view! { <option value=v.clone() selected=sel>{v.clone()}</option> }
+                                                        })
+                                                        .collect_view()
+                                                }}
                                             </select>
                                         </div>
                                         <div class="form-group">
@@ -390,14 +401,16 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                                 prop:value=form_locale
                                                 on:change=move |ev| set_form_locale.set(event_target_value(&ev))
                                             >
-                                                <option value="en_US.UTF-8">"English (US)"</option>
-                                                <option value="en_GB.UTF-8">"English (GB)"</option>
-                                                <option value="de_DE.UTF-8">"German"</option>
-                                                <option value="fr_FR.UTF-8">"French"</option>
-                                                <option value="es_ES.UTF-8">"Spanish"</option>
-                                                <option value="it_IT.UTF-8">"Italian"</option>
-                                                <option value="ja_JP.UTF-8">"Japanese"</option>
-                                                <option value="zh_CN.UTF-8">"Chinese (Simplified)"</option>
+                                                {move || {
+                                                    let cur = form_locale.get();
+                                                    crate::utils::choices_with_current(locale_options.get(), &cur)
+                                                        .into_iter()
+                                                        .map(|v| {
+                                                            let sel = v == cur;
+                                                            view! { <option value=v.clone() selected=sel>{v.clone()}</option> }
+                                                        })
+                                                        .collect_view()
+                                                }}
                                             </select>
                                         </div>
                                     </div>
@@ -559,14 +572,16 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                             prop:value=form_ntp_timezone
                                             on:change=move |ev| set_form_ntp_timezone.set(event_target_value(&ev))
                                         >
-                                            <option value="UTC">"UTC"</option>
-                                            <option value="America/New_York">"America/New_York"</option>
-                                            <option value="America/Los_Angeles">"America/Los_Angeles"</option>
-                                            <option value="Europe/London">"Europe/London"</option>
-                                            <option value="Europe/Berlin">"Europe/Berlin"</option>
-                                            <option value="Asia/Tokyo">"Asia/Tokyo"</option>
-                                            <option value="Asia/Shanghai">"Asia/Shanghai"</option>
-                                            <option value="Australia/Sydney">"Australia/Sydney"</option>
+                                            {move || {
+                                                    let cur = form_ntp_timezone.get();
+                                                    crate::utils::choices_with_current(tz_options.get(), &cur)
+                                                        .into_iter()
+                                                        .map(|v| {
+                                                            let sel = v == cur;
+                                                            view! { <option value=v.clone() selected=sel>{v.clone()}</option> }
+                                                        })
+                                                        .collect_view()
+                                                }}
                                         </select>
                                     </div>
 

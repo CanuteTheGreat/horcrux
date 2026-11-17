@@ -385,8 +385,12 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
 }
 
 .form-group input,
-.form-group select {
+.form-group select,
+.form-group textarea {
     width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+    resize: vertical;
     padding: 0.75rem;
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -394,7 +398,8 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
 }
 
 .form-group input:focus,
-.form-group select:focus {
+.form-group select:focus,
+.form-group textarea:focus {
     outline: none;
     border-color: var(--primary);
 }

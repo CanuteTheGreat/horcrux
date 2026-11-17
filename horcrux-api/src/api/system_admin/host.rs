@@ -21,6 +21,7 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/system/config",
             get(get_config).post(set_config).put(set_config),
         )
+        .route("/api/system/config/options", get(get_config_options))
         .route("/api/system/network/interfaces", get(list_interfaces))
         .route(
             "/api/system/network/interfaces/:name",
@@ -121,6 +122,105 @@ fn current_locale() -> String {
         }
     }
     std::env::var("LANG").unwrap_or_else(|_| "C".into())
+}
+
+// ------------------------------------------------- time zone / locale choices
+
+/// What the node itself offers for the Time zone and Locale selects.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConfigOptions {
+    pub timezones: Vec<String>,
+    pub locales: Vec<String>,
+}
+
+/// Every time zone under `<zoneinfo>` (a TZif file), as `Area/City` names.
+/// Skips the `posix/` and `right/` duplicates and non-zone files.
+pub fn list_zoneinfo(root: &std::path::Path) -> Vec<String> {
+    fn walk(dir: &std::path::Path, prefix: &str, out: &mut Vec<String>, depth: u8) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let rel = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if prefix.is_empty() && matches!(name.as_str(), "posix" | "right" | "Etc.d") {
+                continue;
+            }
+            let path = e.path();
+            if path.is_dir() {
+                if depth < 4 {
+                    walk(&path, &rel, out, depth + 1);
+                }
+            } else if is_tzif(&path) && !name.contains('.') {
+                out.push(rel);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, "", &mut out, 0);
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn is_tzif(p: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut b = [0u8; 4];
+    std::fs::File::open(p)
+        .and_then(|mut f| f.read_exact(&mut b))
+        .map(|_| &b == b"TZif")
+        .unwrap_or(false)
+}
+
+/// Merge the node's own list with its current value (kept even when the
+/// system lists nothing for it), sorted and de-duplicated.
+pub fn with_current(mut list: Vec<String>, current: &str) -> Vec<String> {
+    if !current.is_empty() {
+        list.push(current.to_string());
+    }
+    list.sort();
+    list.dedup();
+    list
+}
+
+/// Parse `locale -a` output: one name per line, only names the API accepts.
+pub fn parse_locale_list(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && valid_locale(l))
+        .map(String::from)
+        .collect()
+}
+
+async fn get_config_options() -> Json<ConfigOptions> {
+    let mut zones = list_zoneinfo(&rooted("usr/share/zoneinfo"));
+    if zones.is_empty() {
+        if let Ok(t) = run("timedatectl", &["list-timezones"]).await {
+            zones = t
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect();
+        }
+    }
+    let mut locales = run("locale", &["-a"])
+        .await
+        .map(|t| parse_locale_list(&t))
+        .unwrap_or_default();
+    for l in ["C", "POSIX"] {
+        if !locales.iter().any(|x| x == l) {
+            locales.push(l.to_string());
+        }
+    }
+    Json(ConfigOptions {
+        timezones: with_current(zones, &current_timezone()),
+        locales: with_current(locales, &current_locale()),
+    })
 }
 
 fn current_hostname() -> String {
@@ -1173,6 +1273,29 @@ pub(crate) fn data_dir_usage_percent() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn option_lists_come_from_the_node_and_keep_the_current_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let z = dir.path();
+        std::fs::create_dir_all(z.join("Europe")).unwrap();
+        std::fs::create_dir_all(z.join("posix/Europe")).unwrap();
+        std::fs::create_dir_all(z.join("Etc")).unwrap();
+        for f in ["Europe/Berlin", "posix/Europe/Berlin", "Etc/UTC", "UTC"] {
+            std::fs::write(z.join(f), b"TZif2").unwrap();
+        }
+        std::fs::write(z.join("tzdata.zi"), b"# not a zone").unwrap();
+        std::fs::write(z.join("zone.tab"), b"TZif").unwrap();
+        let got = list_zoneinfo(z);
+        assert_eq!(got, vec!["Etc/UTC", "Europe/Berlin", "UTC"]);
+        // the node's own zone is always offered, even if the tree lacks it
+        let merged = with_current(got, "Mars/Base");
+        assert!(merged.contains(&"Mars/Base".to_string()));
+        assert!(merged.contains(&"Etc/UTC".to_string()));
+        assert_eq!(with_current(vec!["a".into(), "a".into()], "a"), vec!["a"]);
+        let l = parse_locale_list("C\nC.utf8\nen_US.utf8\nbad name;\n\nPOSIX\n");
+        assert_eq!(l, vec!["C", "C.utf8", "en_US.utf8", "POSIX"]);
+    }
 
     #[test]
     fn names_zones_and_locales_are_validated() {

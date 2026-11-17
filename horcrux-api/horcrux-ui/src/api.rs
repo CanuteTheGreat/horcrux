@@ -4427,6 +4427,12 @@ pub struct SystemConfiguration {
     pub locale: String,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SystemConfigOptions {
+    pub timezones: Vec<String>,
+    pub locales: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NetworkInterface {
     pub name: String,
@@ -4521,6 +4527,11 @@ pub struct ServiceStatus {
 /// Get system configuration
 pub async fn get_system_configuration() -> Result<SystemConfiguration, ApiError> {
     fetch_json("/system/config").await
+}
+
+/// Time zones and locales the node itself offers (its current ones included)
+pub async fn get_system_config_options() -> Result<SystemConfigOptions, ApiError> {
+    fetch_json("/system/config/options").await
 }
 
 /// Update system configuration
@@ -5486,6 +5497,23 @@ pub async fn update_stack(
 pub struct WsTicketResponse {
     pub ticket: String,
     pub ws_path: String,
+}
+
+/// Whether an OCI runtime (podman, docker) is usable on this node.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeStatus {
+    pub runtime: String,
+    pub available: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub hint: Option<String>,
+}
+
+pub async fn get_container_runtimes() -> Result<Vec<RuntimeStatus>, ApiError> {
+    fetch_json("/container-runtimes").await
 }
 
 pub async fn get_images(runtime: &str) -> Result<Vec<ImageInfo>, ApiError> {

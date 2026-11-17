@@ -67,6 +67,16 @@ pub fn format_unix_secs(secs: i64) -> String {
         .unwrap_or_else(|| secs.to_string())
 }
 
+/// Options for a `<select>`: the node's own list plus the current value, so a
+/// value the list lacks is still shown and selectable (never a blank select).
+pub fn choices_with_current(mut list: Vec<String>, current: &str) -> Vec<String> {
+    if !current.is_empty() && !list.iter().any(|v| v == current) {
+        list.push(current.to_string());
+        list.sort();
+    }
+    list
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,5 +93,13 @@ mod tests {
         );
         assert_eq!(format_rfc3339("garbage"), "garbage");
         assert_eq!(format_unix_secs(1792162839), "2026-10-16 15:00:39 UTC");
+    }
+
+    #[test]
+    fn select_choices_always_include_the_current_value() {
+        let got = choices_with_current(vec!["Europe/Berlin".into()], "Etc/UTC");
+        assert_eq!(got, vec!["Etc/UTC", "Europe/Berlin"]);
+        assert_eq!(choices_with_current(vec!["a".into()], "a"), vec!["a"]);
+        assert!(choices_with_current(vec![], "").is_empty());
     }
 }

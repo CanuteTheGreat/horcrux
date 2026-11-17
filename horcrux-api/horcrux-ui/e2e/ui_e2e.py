@@ -503,6 +503,37 @@ def main():
         expect(page.locator("#create-container-error")).to_contain_text("name", timeout=30000)
         assert page.url == f"{BASE}/containers/create"
 
+        # Finding 13: Podman/Docker availability is stated up front (never only
+        # when Create fails) and the textareas are as wide as the inputs.
+        runtimes = {r["runtime"]: r for r in api_get("/api/container-runtimes", tok)}
+        assert set(runtimes) == {"podman", "docker"}, runtimes
+        page.goto(f"{BASE}/containers/create")
+        page.locator("#ct-image").wait_for()
+        want = runtimes["podman"]
+        if want["available"]:
+            expect(page.locator("#ct-runtime-warning")).to_have_count(0)
+        else:
+            expect(page.locator("#ct-runtime-warning")).to_contain_text(want["message"], timeout=30000)
+        widths = {
+            sel: page.locator(sel).bounding_box()["width"]
+            for sel in ("#ct-image", "#ct-memory", "#ct-cpus", "#ct-ports", "#ct-env", "#ct-volumes")
+        }
+        # Memory and CPUs share a row; ports/env/volumes span the full width.
+        assert abs(widths["#ct-ports"] - widths["#ct-image"]) < 2, widths
+        assert abs(widths["#ct-env"] - widths["#ct-image"]) < 2, widths
+        assert abs(widths["#ct-volumes"] - widths["#ct-image"]) < 2, widths
+        assert widths["#ct-memory"] > 100 and widths["#ct-cpus"] > 100, widths
+
+        # Finding 16: Timezone/Locale list what the node has and include its own value.
+        cfg = api_get("/api/system/config", tok)
+        opts = api_get("/api/system/config/options", tok)
+        assert len(opts["timezones"]) > 8 and cfg["timezone"] in opts["timezones"], opts["timezones"][:5]
+        assert cfg["locale"] in opts["locales"], (cfg["locale"], opts["locales"][:5])
+        page.goto(f"{BASE}/system/config")
+        tz = page.locator("select:has(option[value='%s'])" % cfg["timezone"]).first
+        expect(tz).to_have_value(cfg["timezone"], timeout=30000)
+        assert tz.locator("option").count() == len(opts["timezones"]), "select lists the node's zones"
+
         # ---- Stop / Delete from the list reflect real state ----------------
         page.goto(f"{BASE}/containers")
         row = page.locator(f"tr[data-container-id='{CT}']")

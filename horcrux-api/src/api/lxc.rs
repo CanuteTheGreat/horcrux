@@ -19,6 +19,10 @@ use std::sync::Arc;
 pub fn lxc_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/lxc/host", get(host_info))
+        .route(
+            "/api/container-runtimes",
+            get(crate::api::unavailable::container_runtimes),
+        )
         .route("/api/lxc/templates/catalog", get(template_catalog))
         .route(
             "/api/lxc/templates",
