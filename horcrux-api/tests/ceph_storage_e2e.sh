@@ -6,6 +6,7 @@
 # API and checks each with `rbd info`.
 # Usage: horcrux-api/tests/ceph_storage_e2e.sh <horcrux-api binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
 IMAGE=${2:-ubuntu:24.04}
 TAG="${HX_RUN_TAG:-$$}"
@@ -19,6 +20,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker run -d --name "$CT" --memory 4g --memory-swap 4g --cpus 3 "$IMAGE" sleep 1800 >/dev/null
+hx_sibling_apt_prep "$CT"
 docker cp "$BIN" "$CT":/usr/local/bin/horcrux-api
 docker cp "$HERE/ceph_cluster_boot.sh" "$CT":/tmp/ceph_cluster_boot.sh
 docker cp "$HERE/ceph_storage_e2e.py" "$CT":/tmp/ceph_storage_e2e.py

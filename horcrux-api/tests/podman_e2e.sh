@@ -11,9 +11,10 @@
 #
 # Usage: horcrux-api/tests/podman_e2e.sh <horcrux-api binary> <it test binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> <it test binary> [image]}
 TESTBIN=${2:?usage: $0 <horcrux-api binary> <it test binary> [image]}
-IMAGE=${3:-catthehacker/ubuntu:act-latest}
+IMAGE=${3:-catthehacker/ubuntu:act-26.04}
 NAME="horcrux-podman-e2e-${HX_RUN_TAG:-$$}"
 
 cleanup() {
@@ -28,6 +29,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker run -d --name "$NAME" --privileged --cgroupns=private --memory 3g --memory-swap 3g "$IMAGE" sleep 3000 >/dev/null
+hx_sibling_apt_prep "$NAME"
 # Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
 bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 # cgroup v2 nesting (what docker:dind's entrypoint does): the sibling's cgroup namespace root

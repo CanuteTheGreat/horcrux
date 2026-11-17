@@ -58,7 +58,7 @@ jobs:
   guest-power:
     name: Save state (VMs, containers with CRIU) + two-node drain / rebalance
     runs-on: kvm-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 180
     env:
       CARGO_BUILD_JOBS: "4"

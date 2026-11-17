@@ -1,0 +1,62 @@
+#!/bin/sh
+# horcrux-admin-groups: every administrator account is in the portage group, so equery, eix and the other Portage tools work for it
+# without sudo.
+#
+# Administrators = local human accounts (UID 1000..59999 in /etc/passwd) that are members of an admin group (wheel, horcrux-admin,
+# patronus-admin), as a supplementary or as the primary group. Idempotent: a member already in every extra group is left alone.
+# Prints one line per change ("added <user> to <group>"); prints nothing when nothing changed. Never removes anyone.
+#
+# Runs from sys-apps/horcrux-core's pkg_postinst (existing installs get it on their next update) and after every tree sync
+# (/etc/portage/postsync.d/60-horcrux-admin-groups, i.e. daily through horcrux-autoupdate), so an administrator added later by hand
+# (useradd -G wheel) is picked up too.
+#
+#   ROOT=/mnt/x horcrux-admin-groups   work on another root (groupadd/gpasswd --root)
+#   DRY_RUN=1 horcrux-admin-groups     print the changes, change nothing
+set -u
+R=${ROOT:-/}
+R=${R%/}
+ADMIN_GROUPS=${HX_ADMIN_GROUPS:-"wheel horcrux-admin patronus-admin"}
+EXTRA_GROUPS=${HX_ADMIN_EXTRA_GROUPS:-"portage"}
+GROUP="$R/etc/group"
+PASSWD="$R/etc/passwd"
+[ -r "$GROUP" ] && [ -r "$PASSWD" ] || exit 0
+rootopt() { [ -n "$R" ] && printf '%s\n' "--root" "$R"; }
+
+gid_of() { awk -F: -v g="$1" '$1==g {print $3; exit}' "$GROUP"; }
+members_of() { awk -F: -v g="$1" '$1==g {print $4; exit}' "$GROUP" | tr ',' '\n' | sed '/^$/d'; }
+
+admins() {
+	for g in $ADMIN_GROUPS; do
+		members_of "$g"
+		gid=$(gid_of "$g")
+		[ -n "$gid" ] && awk -F: -v gid="$gid" '$4==gid {print $1}' "$PASSWD"
+	done | sort -u | while read -r u; do
+		awk -F: -v u="$u" '$1==u && $3>=1000 && $3<60000 {print $1}' "$PASSWD"
+	done
+}
+
+rc=0
+users=$(admins)
+[ -n "$users" ] || exit 0
+for x in $EXTRA_GROUPS; do
+	if [ -z "$(gid_of "$x")" ]; then
+		if [ -n "${DRY_RUN:-}" ]; then
+			echo "would create group $x"
+		elif groupadd -r $(rootopt) "$x"; then
+			echo "created group $x"
+		else
+			echo "horcrux-admin-groups: could not create group $x" >&2; rc=1; continue
+		fi
+	fi
+	for u in $users; do
+		members_of "$x" | grep -qx "$u" && continue
+		if [ -n "${DRY_RUN:-}" ]; then
+			echo "would add $u to $x"
+		elif gpasswd $(rootopt) -a "$u" "$x" >/dev/null; then
+			echo "added $u to $x"
+		else
+			echo "horcrux-admin-groups: could not add $u to $x" >&2; rc=1
+		fi
+	done
+done
+exit $rc

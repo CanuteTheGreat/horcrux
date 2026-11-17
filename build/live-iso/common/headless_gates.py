@@ -131,6 +131,52 @@ def admin_tools_gate(sh, step):
     return ok
 
 
+def portage_group_script(user):
+    """shell (run as root) that reports the admin user's groups and runs equery + eix AS that user (setpriv: no PAM, no password; su otherwise)"""
+    return (f"U={user}; id -nG $U 2>&1 | sed 's/^/GROUPS /'; "
+            "G=$(id -g $U); H=$(getent passwd $U | cut -d: -f6); "
+            "run() { if command -v setpriv >/dev/null 2>&1; then setpriv --reuid=$U --regid=$G --init-groups env -i HOME=$H USER=$U "
+            "PATH=/usr/local/bin:/usr/bin:/bin:/opt/bin sh -c \"$1\"; else su -l -s /bin/sh -c \"$1\" $U; fi; }; "
+            "out=$(run 'equery -q -C list sys-apps/portage' 2>&1); echo \"EQUERY-RC=$?\"; echo \"$out\" | tail -3 | sed 's/^/EQ /'; "
+            "out=$(run 'eix -e -c --nocolor portage' 2>&1); echo \"EIX-RC=$?\"; echo \"$out\" | head -8 | sed 's/^/EIX /'; "
+            "[ -s /var/db/repos/gentoo/profiles/repo_name ] && echo TREE-SYNCED || echo TREE-EMPTY; "
+            "ls -l /var/cache/eix/portage.eix 2>&1 | sed 's/^/EIX-CACHE /'; "
+            "[ ! -e /var/lib/horcrux/firstboot-done ] && pgrep -f '[h]orcrux-firstboot' >/dev/null && echo FIRSTBOOT-RUNNING; echo PG-DONE")
+
+
+def portage_group_verdict(o):
+    """(ok, info): the user is in portage, equery lists portage, eix answers from a readable cache (and finds portage once the tree is synced)"""
+    o = (o or "").replace("\r", "")
+    m = re.search(r"(?m)^GROUPS (.*)$", o)
+    groups = m.group(1).split() if m else []
+    eq_rc = re.search(r"(?m)^EQUERY-RC=(\d+)", o)
+    eix_rc = re.search(r"(?m)^EIX-RC=(\d+)", o)
+    denied = re.search(r"(?i)permission denied|cannot open database|did you forget to create it", o)
+    eq_ok = bool(eq_rc and eq_rc.group(1) == "0" and re.search(r"(?m)^EQ sys-apps/portage-\d", o))
+    synced = "TREE-SYNCED" in o and "FIRSTBOOT-RUNNING" not in o      # a sync still in progress is not judged on eix's results yet
+    eix_found = bool(re.search(r"(?m)^EIX .*\bsys-apps/portage\b", o))
+    # with the image's empty tree eix answers "No matches found" (exit 1) from a valid cache; once the tree is synced it must find portage
+    eix_ok = bool(eix_rc) and not denied and (eix_found if synced else eix_rc.group(1) in ("0", "1"))
+    ok = "PG-DONE" in o and "portage" in groups and eq_ok and eix_ok
+    info = f"groups={' '.join(groups)} equery={'ok' if eq_ok else 'FAIL'} eix={'ok' if eix_ok else 'FAIL'} tree={'synced' if synced else 'empty'}"
+    return ok, (info + " | " + re.sub(r"\s+", " ", o.strip())[-240:])[:420]
+
+
+def portage_group_gate(sh, step, user, wait=0):
+    """the installer-created administrator is in the portage group and runs equery and eix itself without permission errors
+    (owner 2026-11-17). `wait`: at most this many seconds for a RUNNING first-boot tree sync + eix index (horcrux-firstboot), so eix is
+    checked against the real tree where the guest gets one; no first-boot sync running = check at once."""
+    end = time.time() + wait
+    while True:
+        rc, o = sh(portage_group_script(user))
+        ok, info = portage_group_verdict(o)
+        if "FIRSTBOOT-RUNNING" not in (o or "") or time.time() >= end:
+            break
+        time.sleep(15)
+    step("admin-user-in-portage-group-equery-eix-work", ok, info)
+    return ok
+
+
 def verifies(secret, shash):
     """True when the crypt hash `shash` ($1$/$5$/$6$ with plain salt) is the hash of `secret` (openssl reads the secret from stdin: never in argv)."""
     m = re.match(r"^\$(1|5|6)\$(?:rounds=\d+\$)?([^$]{1,16})\$", shash or "")

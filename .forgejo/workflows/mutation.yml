@@ -67,7 +67,7 @@ jobs:
     # shared mutation/chaos lane (x86 slots on rw-man-01..05 since 2026-10-18,
     # ctg-infrastructure ci-runners/README.md); jobs that must stay on colo set CI_COLO_ONLY=1.
     runs-on: mutation-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4

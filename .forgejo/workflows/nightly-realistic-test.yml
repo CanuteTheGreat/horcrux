@@ -35,7 +35,7 @@ jobs:
     # `ip netns` work. On the unprivileged linux-cross-x86_64 pool that test
     # was silently skipped every night and the VM boot ran under TCG.
     runs-on: kvm-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     # Covers compile + docker test + the (TCG-sized) qemu boot deadline in
     # nightly_realistic_tests.rs + cleanup; KVM boots take seconds.
     timeout-minutes: 45
@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Ensure Node.js is present (self-heal)
-        # This job's container (catthehacker/ubuntu:act-latest) is reused
+        # This job's container (catthehacker/ubuntu:act-26.04) is reused
         # by the the emulated runner host runner across many job runs instead of being
         # recreated per-run (confirmed via `docker ps -a` in a prior failed
         # run showing other jobs' containers still alive hours later). On
@@ -138,7 +138,7 @@ jobs:
 
       - name: Ensure Node.js is present (self-heal, pre-cache)
         # Second check, right before the next node-dependent (JS) action.
-        # This job's container (catthehacker/ubuntu:act-latest) is reused
+        # This job's container (catthehacker/ubuntu:act-26.04) is reused
         # by the the emulated runner host runner across many job runs instead of being
         # recreated per-run (confirmed via `docker ps -a` in a prior failed
         # run showing other jobs' containers still alive hours later). On

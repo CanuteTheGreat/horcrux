@@ -1068,6 +1068,10 @@ class Installer:
         if p.get("web_auth") == "pam" and c.get("install_type", "server") != "desktop" and c.get("user_name"):
             from . import desktop
             desktop.create_user(self)
+        # eix answers only from its cache: build it now so `eix` works for the administrator from the first login (the post-sync
+        # hooks of eix and horcrux-firstboot refresh it once the tree is synced)
+        if os.path.exists(f"{T}/usr/bin/eix-update"):
+            self.run(["eix-update", "-q"], chroot=True, check=False)
         # legacy first-boot web password file (products whose web UI keeps its own accounts, e.g. Patronus)
         pf = p.get("admin_password_file")
         if c["web_password"] and pf:

@@ -20,7 +20,7 @@ jobs:
   vmtest:
     name: vmtest selftest + install smoke (KVM)
     runs-on: kvm-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 300
     env:
       VMTEST_CACHE: /tmp/vmtest-cache

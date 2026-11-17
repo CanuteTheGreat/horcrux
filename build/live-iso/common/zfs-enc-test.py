@@ -592,6 +592,7 @@ class ZRun(qt.Runner):
         """the server gate: every desktop regression gate that does not need a display, plus the headless ones"""
         a = self.z
         self.headless_checks()
+        qt.HG.portage_group_gate(self.sh, self.step, "hxadmin", wait=int(qt.T(300)))     # the installer's administrator: portage group, equery + eix (owner 2026-11-17)
         if getattr(a, "public", False):
             self.public_image_checks()
         self.core_checks()
@@ -999,6 +1000,7 @@ class ZRun(qt.Runner):
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
         qt.greeter_no_session_gate(self.sh, self.step, "owner", "gdm", wait=60)         # OWNER RULE: after the disk unlock the greeter shows, no user session exists before a greeter login
         self.desktop_exec_check()
+        qt.HG.portage_group_gate(self.sh, self.step, "owner", wait=int(qt.T(300)))       # the desktop user is an administrator: portage group, equery + eix (owner 2026-11-17)
         if getattr(self.z, "public", False):
             self.public_image_checks()
         self.keyring_pam_checks()

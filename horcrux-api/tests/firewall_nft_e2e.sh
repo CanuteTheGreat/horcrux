@@ -8,14 +8,16 @@
 #
 # Usage: horcrux-api/tests/firewall_nft_e2e.sh <path-to-horcrux-api-binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
-IMAGE=${2:-catthehacker/ubuntu:act-latest}
+IMAGE=${2:-catthehacker/ubuntu:act-26.04}
 NAME="horcrux-nft-e2e-${HX_RUN_TAG:-$$}"
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker run -d --name "$NAME" --cap-add NET_ADMIN --memory 1g "$IMAGE" sleep 900 >/dev/null
+hx_sibling_apt_prep "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker exec "$NAME" bash -c '(command -v nft && ldconfig -p | grep -q libvirt.so.0) >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nftables curl libvirt0 >/dev/null)'
 docker exec "$NAME" bash -c 'command -v python3 >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 >/dev/null)'

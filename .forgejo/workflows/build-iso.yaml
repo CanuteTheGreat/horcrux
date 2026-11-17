@@ -31,7 +31,7 @@ jobs:
   build-iso:
     name: Build x86_64 ISO
     runs-on: linux-cross-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
 
     steps:
       - name: Checkout repository

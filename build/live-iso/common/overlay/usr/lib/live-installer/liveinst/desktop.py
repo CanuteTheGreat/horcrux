@@ -12,8 +12,18 @@ from . import autologin
 DIR = "/usr/share/horcrux/desktop"
 MARKER = DIR + "/installed"
 SERVICES = DIR + "/services.list"
-GROUPS = ["wheel", "horcrux-admin", "audio", "video", "usb", "plugdev", "input", "render", "cdrom", "lp", "lpadmin",
+GROUPS = ["wheel", "horcrux-admin", "portage", "audio", "video", "usb", "plugdev", "input", "render", "cdrom", "lp", "lpadmin",
           "libvirt", "kvm", "users", "pipewire"]
+# groups every administrator account gets on a Gentoo-based install, whatever the edition, init system or installer path
+# (Portage tools such as equery and eix are run by the admin without sudo); created (-r) when the image lacks one, so the
+# filter on existing groups in create_user can never drop them
+ADMIN_GROUPS = ("wheel", "portage")
+
+
+def ensure_admin_groups(inst):
+    """create the admin groups missing in the target (acct-group/portage normally provides portage)"""
+    for g in ADMIN_GROUPS:
+        inst.run(["groupadd", "-f"] + (["-r"] if g != "wheel" else []) + [g], chroot=True, check=False)
 
 
 def admin_group(p):
@@ -76,9 +86,10 @@ def create_user(inst):
     prof = getattr(inst, "p", {})
     pam = prof.get("web_auth") == "pam"
     ag = admin_group(prof)
-    for g in ("wheel", ag) if pam else ("wheel",):
-        inst.run(["groupadd", "-f", g] + (["-r"] if g == ag else []), chroot=True, check=False)
-    have = set(l.split(":")[0] for l in open(f"{T}/etc/group"))
+    ensure_admin_groups(inst)
+    if pam:
+        inst.run(["groupadd", "-f", "-r", ag], chroot=True, check=False)
+    have = set(l.split(":")[0] for l in open(f"{T}/etc/group")) | set(ADMIN_GROUPS)    # ensure_admin_groups created them
     wanted = [ag if g == "horcrux-admin" else g for g in GROUPS + extra_groups(T, name)]
     groups = ",".join(g for g in dict.fromkeys(wanted) if g in have)
     # the home dataset is mounted above the root BE by zfsroot.mount()/mount_rest() (they fail the install

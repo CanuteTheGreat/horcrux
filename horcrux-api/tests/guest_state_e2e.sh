@@ -6,8 +6,9 @@
 #
 # Usage: horcrux-api/tests/guest_state_e2e.sh <path-to-horcrux-api-binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
-IMAGE=${2:-catthehacker/ubuntu:act-latest}
+IMAGE=${2:-catthehacker/ubuntu:act-26.04}
 HERE=$(cd "$(dirname "$0")" && pwd)
 NAME="horcrux-gs-e2e-${HX_RUN_TAG:-$$}"
 CIRROS_URL=${CIRROS_URL:-https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img}
@@ -19,6 +20,7 @@ DEV=(--device /dev/net/tun)
 if [ -e /dev/kvm ] && [ "${HX_NO_KVM:-0}" != 1 ]; then DEV+=(--device /dev/kvm); echo "KVM: yes"; else echo "KVM: no (TCG)"; fi
 docker run -d --name "$NAME" --hostname gsnode --privileged "${DEV[@]}" \
   --memory 4g "$IMAGE" sleep 7200 >/dev/null
+hx_sibling_apt_prep "$NAME"
 # Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
 bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 curl -sfL --retry 3 -o /tmp/$NAME-cirros.img "$CIRROS_URL"

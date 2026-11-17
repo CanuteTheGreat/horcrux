@@ -27,7 +27,8 @@ EOF
 echo 'root:horcrux' | chpasswd
 
 # Create horcrux user
-useradd -m -G wheel -s /bin/bash horcrux || true
+groupadd -f -r portage
+useradd -m -G wheel,portage -s /bin/bash horcrux || true
 echo 'horcrux:horcrux' | chpasswd
 
 # Configure sudo

@@ -85,6 +85,64 @@ pub fn lookup(username: &str) -> Option<(u32, Vec<String>)> {
     Some((u.uid.as_raw(), groups))
 }
 
+/// Host groups every web administrator also gets: on a Gentoo-based install
+/// the admin runs `equery`/`eix` without sudo, which needs `portage`. The
+/// installer puts the first administrator there; this covers administrators
+/// added to an admin group later (applied at their next PAM login).
+pub const ADMIN_HOST_GROUPS: &[&str] = &["portage"];
+
+/// The `ADMIN_HOST_GROUPS` a human account (uid 1000..59999) still lacks.
+/// System and unknown accounts get none.
+pub fn missing_admin_host_groups(uid: Option<u32>, groups: &[String]) -> Vec<&'static str> {
+    match uid {
+        Some(u) if (1000..60000).contains(&u) => ADMIN_HOST_GROUPS
+            .iter()
+            .copied()
+            .filter(|g| !groups.iter().any(|m| m == g))
+            .collect(),
+        _ => vec![],
+    }
+}
+
+/// Adds an administrator to the missing `ADMIN_HOST_GROUPS` that exist on
+/// this host (`gpasswd -a`, needs root; a host without the group, e.g. a
+/// non-Gentoo node, is left alone). Returns the groups it was added to.
+pub fn ensure_admin_host_groups(
+    username: &str,
+    uid: Option<u32>,
+    groups: &[String],
+) -> Vec<String> {
+    use nix::unistd::{geteuid, Group};
+    let mut added = vec![];
+    if !geteuid().is_root() {
+        return added;
+    }
+    for g in missing_admin_host_groups(uid, groups) {
+        if Group::from_name(g).ok().flatten().is_none() {
+            continue;
+        }
+        match std::process::Command::new("gpasswd")
+            .args(["-a", username, g])
+            .output()
+        {
+            Ok(o) if o.status.success() => added.push(g.to_string()),
+            Ok(o) => tracing::warn!(
+                "could not add administrator {} to group {}: {}",
+                username,
+                g,
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+            Err(e) => tracing::warn!(
+                "gpasswd unavailable ({}): {} not added to {}",
+                e,
+                username,
+                g
+            ),
+        }
+    }
+    added
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +239,27 @@ mod tests {
         let (uid, _) = lookup("root").expect("root exists");
         assert_eq!(uid, 0);
         assert!(lookup("no-such-user-hxpam").is_none());
+    }
+
+    #[test]
+    fn human_admins_get_portage_system_accounts_never() {
+        assert_eq!(
+            missing_admin_host_groups(Some(1000), &g(&["wheel"])),
+            vec!["portage"]
+        );
+        assert_eq!(
+            missing_admin_host_groups(Some(1001), &g(&["horcrux-admin", "portage"])),
+            Vec::<&str>::new()
+        );
+        assert!(missing_admin_host_groups(Some(0), &g(&["wheel"])).is_empty());
+        assert!(missing_admin_host_groups(Some(250), &g(&["wheel"])).is_empty());
+        assert!(missing_admin_host_groups(Some(65534), &g(&["wheel"])).is_empty());
+        assert!(missing_admin_host_groups(None, &g(&["wheel"])).is_empty());
+    }
+
+    #[test]
+    fn ensure_skips_unknown_groups_and_accounts() {
+        // system account: nothing to do, whatever the caller's privileges
+        assert!(ensure_admin_host_groups("root", Some(0), &[]).is_empty());
     }
 }

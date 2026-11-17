@@ -38,13 +38,13 @@ jobs:
     # so VMs boot with KVM and the CNI isolation scenario's `ip netns` works
     # (it was skipped every night on the unprivileged linux-cross pool).
     runs-on: kvm-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
       - name: Ensure Node.js is present (self-heal)
-        # This job's container (catthehacker/ubuntu:act-latest) is reused
+        # This job's container (catthehacker/ubuntu:act-26.04) is reused
         # by the the emulated runner host runner across many job runs instead of being
         # recreated per-run (confirmed via `docker ps -a` in a prior failed
         # run showing other jobs' containers still alive hours later). On

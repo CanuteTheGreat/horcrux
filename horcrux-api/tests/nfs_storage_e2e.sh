@@ -13,6 +13,7 @@
 # nfs-ganesha 6.5 serves it correctly on every client kernel tried.
 # Usage: horcrux-api/tests/nfs_storage_e2e.sh <horcrux-api binary> [image] [server image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [image] [server image]}
 IMAGE=${2:-ubuntu:24.04}
 SRV_IMAGE=${3:-${HX_NFS_SERVER_IMAGE:-debian:trixie}}
@@ -30,7 +31,9 @@ trap cleanup EXIT
 docker network create "$NET" >/dev/null
 # /srv/export must be a real (non-overlay) filesystem: ganesha needs file handles.
 docker run -d --name "$SRV" --network "$NET" --privileged -v /srv/export --memory 1g "$SRV_IMAGE" sleep 1800 >/dev/null
+hx_sibling_apt_prep "$SRV"
 docker run -d --name "$CLI" --network "$NET" --privileged --memory 1g "$IMAGE" sleep 1800 >/dev/null
+hx_sibling_apt_prep "$CLI"
 docker cp "$BIN" "$CLI":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/nfs_storage_e2e.py" "$CLI":/tmp/nfs_storage_e2e.py
 

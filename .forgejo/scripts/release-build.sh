@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Release build of the `horcrux` CLI and the `horcrux-api` server for ONE
 # Rust target, on the x86_64 Ubuntu CI job container
-# (catthehacker/ubuntu:act-latest). Used by release.yml and build-iso.yaml.
+# (catthehacker/ubuntu:act-26.04). Used by release.yml and build-iso.yaml.
 #
 #   .forgejo/scripts/release-build.sh <rust-target>
 #
@@ -72,6 +72,10 @@ use_cross_gcc() {
     export "CARGO_TARGET_${upper}_LINKER=${gnu}-gcc"
     export "CC_${lower}=${gnu}-gcc" "CXX_${lower}=${gnu}-g++" "AR_${lower}=${gnu}-ar"
 }
+
+# The runner image's Launchpad PPAs (unused here) answer 404/503 for new
+# Ubuntu releases and make every `apt-get update` below exit 100.
+as_root rm -f /etc/apt/sources.list.d/*ppa*
 
 build_api=true
 case "$target" in

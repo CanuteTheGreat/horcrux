@@ -175,7 +175,8 @@ EOF
     run_in_chroot "echo 'root:horcrux' | chpasswd"
 
     # Create horcrux user
-    run_in_chroot "useradd -m -G wheel -s /bin/bash horcrux" || true
+    run_in_chroot "groupadd -f -r portage" || true
+    run_in_chroot "useradd -m -G wheel,portage -s /bin/bash horcrux" || true
     run_in_chroot "echo 'horcrux:horcrux' | chpasswd"
 
     # Configure sudo

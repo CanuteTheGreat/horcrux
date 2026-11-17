@@ -25,6 +25,7 @@
 # The API serves HTTPS from its node-local CA; every client validates the
 # certificate against that CA (/api/tls/ca.pem).
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 MODE=${1:?usage: $0 ct|vm|serve|stop|exec ...}
 HERE=$(cd "$(dirname "$0")" && pwd)
 IMAGE=${INCUS_E2E_IMAGE:-ubuntu:24.04}
@@ -82,6 +83,7 @@ fi
 
 docker run -d --init --name "$NAME" --privileged --cgroupns=private --memory 6g --memory-swap 6g \
   "${NET_ARGS[@]}" "${DEV_ARGS[@]}" "$IMAGE" sleep 7200 >/dev/null
+hx_sibling_apt_prep "$NAME"
 # Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
 bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api

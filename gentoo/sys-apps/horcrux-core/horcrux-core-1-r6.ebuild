@@ -40,7 +40,15 @@ KEYWORDS="amd64 arm64"
 #   login, so an ssh session kept a logged-out GNOME session's gnome-shell alive; also keeps servers' ssh logins from spawning user services).
 # /usr/lib/udev/rules.d/80-horcrux-udisks-hide.rules: UDISKS_IGNORE for ZFS pool members/zvols, the installer's mirror ESP/boot copies and the swap, so
 #   GNOME Files / Thunar (udisks2+gvfs) never list rpool, boot2, ESP2 ... as removable drives (observed on a desktop install). Init-neutral: plain udev rules.
+# /usr/sbin/horcrux-admin-groups (-r6): every administrator account (wheel / horcrux-admin / patronus-admin member, UID >= 1000) is in the portage group, so
+#   equery and eix work without sudo. The installers create the first administrator that way; pkg_postinst fixes existing installs on their next update, and
+#   /etc/portage/postsync.d/60-horcrux-admin-groups re-checks after every tree sync (daily via horcrux-autoupdate), so an admin added later by hand is
+#   covered too. gentoolkit (equery) and eix are part of core for the same reason; pkg_postinst builds the eix cache when it is missing.
 RDEPEND="
+	acct-group/portage
+	app-portage/eix
+	app-portage/gentoolkit
+	sys-apps/shadow
 	sys-auth/horcrux-ssh-pam
 	net-misc/chrony
 	net-misc/horcrux-time
@@ -65,6 +73,9 @@ src_install() {
 	newins "${FILESDIR}"/containerd-rc.conf horcrux-containerd.conf
 	insinto /usr/lib/udev/rules.d
 	doins "${FILESDIR}"/80-horcrux-udisks-hide.rules
+	dosbin "${FILESDIR}"/horcrux-admin-groups
+	exeinto /etc/portage/postsync.d
+	newexe "${FILESDIR}"/postsync-admin-groups 60-horcrux-admin-groups
 	# marker: this is a Horcrux install (the installer, the QEMU gates and `horcrux-time-config` read it)
 	insinto /usr/share/horcrux
 	newins - core-release <<-EOF
@@ -79,5 +90,15 @@ pkg_postinst() {
 	# re-evaluate the already-present disks now (no reboot, no session restart) so udisks drops the system storage at once
 	if [[ -z ${ROOT} ]] && command -v udevadm >/dev/null 2>&1; then
 		udevadm trigger --subsystem-match=block --action=change || true
+	fi
+	# administrators into the portage group (idempotent; also run after every tree sync)
+	local line
+	while IFS= read -r line; do
+		[[ -n ${line} ]] && elog "horcrux-admin-groups: ${line}"
+	done < <(ROOT="${EROOT}" "${EROOT%/}"/usr/sbin/horcrux-admin-groups 2>&1)
+	# eix answers only from its cache: build it once so `eix` works right away (eix's own post-sync hook keeps it current). Only on a booted install
+	# (firstboot done), never during an image build, whose tree is not shipped
+	if [[ -z ${ROOT} ]] && [[ -e /var/lib/horcrux/firstboot-done ]] && [[ ! -s /var/cache/eix/portage.eix ]] && command -v eix-update >/dev/null 2>&1; then
+		eix-update -q >/dev/null 2>&1 && elog "eix cache built (eix-update)" || ewarn "eix-update failed: run it once by hand"
 	fi
 }

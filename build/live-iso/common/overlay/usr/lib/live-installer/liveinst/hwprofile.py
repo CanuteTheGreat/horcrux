@@ -135,7 +135,11 @@ def add_desktop_user(inst, d):
         have = {l.split(":")[0] for l in open(f"{inst.target}/etc/group")}
     except OSError:
         have = set()
-    groups = ",".join(g for g in ("wheel", "audio", "video", "input", "plugdev", "users", "lp", "cdrom", "usb", "pipewire") if g in have or not have)
+    from . import desktop
+    desktop.ensure_admin_groups(inst)
+    if have:
+        have |= set(desktop.ADMIN_GROUPS)
+    groups = ",".join(g for g in ("wheel", "portage", "audio", "video", "input", "plugdev", "users", "lp", "cdrom", "usb", "pipewire") if g in have or not have)
     inst.run(["useradd", "-m", "-G", groups, "-s", "/bin/bash", u], chroot=True, check=False)
     if d.get("password_hash"):
         inst.run(["chpasswd", "-e"], chroot=True, input_=f"{u}:{d['password_hash']}\n")

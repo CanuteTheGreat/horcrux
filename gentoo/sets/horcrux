@@ -4,9 +4,10 @@
 # Copy to /etc/portage/sets/horcrux
 
 # =============================================================================
-# PORTAGE ADMIN TOOLS (equery, eclean, revdep-rebuild, euse): on every Gentoo install
+# PORTAGE ADMIN TOOLS (equery, eclean, revdep-rebuild, euse, eix): on every Gentoo install
 # =============================================================================
 app-portage/gentoolkit
+app-portage/eix
 
 # =============================================================================
 # CORE VIRTUALIZATION

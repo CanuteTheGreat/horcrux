@@ -9,8 +9,9 @@
 #
 # Usage: horcrux-api/tests/vm_migrate_e2e.sh <path-to-horcrux-api-binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
-IMAGE=${2:-catthehacker/ubuntu:act-latest}
+IMAGE=${2:-catthehacker/ubuntu:act-26.04}
 HERE=$(cd "$(dirname "$0")" && pwd)
 TAG="${HXMIG_TAG:-hxmig-${HX_RUN_TAG:-$$}}"
 N1="$TAG-n1"
@@ -36,6 +37,7 @@ for n in "$N1" "$N2"; do
   host=node1; [ "$n" = "$N2" ] && host=node2
   docker run -d --name "$n" --hostname "$host" --network "$NET" --cap-add NET_ADMIN "${DEV[@]}" \
     --memory 3g -v "$VOL":/shared "$IMAGE" sleep 7200 >/dev/null
+  hx_sibling_apt_prep "$n"
 done
 
 curl -sfL --retry 3 -o /tmp/$TAG-cirros.img "$CIRROS_URL"

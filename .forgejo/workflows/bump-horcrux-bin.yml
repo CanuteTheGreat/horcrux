@@ -25,7 +25,7 @@ jobs:
   bump:
     name: Cut a new horcrux-bin version for the current daily manager tarball
     runs-on: arm64-light  # light git/curl job; never queue it behind heavy x86 builds
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

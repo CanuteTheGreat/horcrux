@@ -728,6 +728,27 @@ async fn pam_login_checked(
     if role == sysgroups::ROLE_ADMIN && !legacy_store_writable() {
         disable_legacy_admin(state).await;
     }
+    if role == sysgroups::ROLE_ADMIN {
+        // administrators run the Portage tools (equery, eix) on the host: a system admin added after the install gets the portage group here
+        let (n, g) = (name.to_string(), groups.clone());
+        let added =
+            tokio::task::spawn_blocking(move || sysgroups::ensure_admin_host_groups(&n, uid, &g))
+                .await
+                .unwrap_or_default();
+        if !added.is_empty() {
+            tracing::info!("administrator {} added to host group(s) {:?}", name, added);
+            audit(
+                state,
+                AuditEventType::ConfigChanged,
+                true,
+                Some(name),
+                None,
+                "admin-host-groups",
+                Some(format!("{} added to {}", name, added.join(","))),
+            )
+            .await;
+        }
+    }
     Ok(user)
 }
 

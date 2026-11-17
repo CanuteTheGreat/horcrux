@@ -13,6 +13,12 @@ API route.
   root refused by default): see [WEB-LOGIN-PAM.md](WEB-LOGIN-PAM.md).
   Upgraded installs keep their old Horcrux-only accounts read-only for one
   release; the legacy `admin` is disabled by the first PAM administrator login.
+- Administrators are also members of the host's `portage` group, so `equery`,
+  `eix` and the other Portage tools work for them without sudo: the installer
+  creates the first administrator that way, an administrator's PAM login adds
+  the group when it is missing, and `sys-apps/horcrux-core` runs
+  `horcrux-admin-groups` on update and after every tree sync for accounts added
+  by hand (members of `wheel`/`horcrux-admin`, UID >= 1000).
 - Public self-registration (`POST /api/auth/register`) is **off**. Turn it on
   only deliberately (`HORCRUX_ALLOW_REGISTRATION=true` or
   `[auth] allow_registration = true`); such accounts start with no

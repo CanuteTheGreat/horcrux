@@ -17,11 +17,40 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify-release:
+    # A release tag must be semver (vMAJOR.MINOR.PATCH[-pre]), equal the workspace
+    # version in Cargo.toml and have its CHANGELOG.md section (ci/release.sh cuts
+    # all three together). Policy: docs/UPDATE-POLICY.md.
+    name: Verify release tag
+    runs-on: linux-any
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag, Cargo version and changelog agree
+        run: |
+          set -eu
+          if [ "${GITHUB_REF#refs/tags/}" = "$GITHUB_REF" ]; then
+            echo "not a tag push: checking only that CHANGELOG.md matches the existing tags"
+            python3 ci/changelog.py --check
+            exit 0
+          fi
+          tag="$GITHUB_REF_NAME"
+          echo "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$' ||
+            { echo "::error::$tag is not a semver release tag (vMAJOR.MINOR.PATCH[-pre])"; exit 1; }
+          cargo_ver="$(python3 -c 'import re; print(re.search(r"\[workspace\.package\][^\[]*?\nversion\s*=\s*\"([^\"]+)\"", open("Cargo.toml").read()).group(1))')"
+          [ "v$cargo_ver" = "$tag" ] ||
+            { echo "::error::tag $tag but Cargo.toml says $cargo_ver: cut releases with ci/release.sh"; exit 1; }
+          python3 ci/changelog.py --check
+          python3 ci/changelog.py --section "$tag"
+
   build-release:
+    needs: [verify-release]
     name: Build Release
     runs-on: linux-cross-x86_64
     # Same multi-arch job image as ci.yml (the runner default is not pinned).
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -83,8 +112,9 @@ jobs:
 
   build-ui-release:
     name: Build Web UI Release
+    needs: [verify-release]
     runs-on: linux-cross-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     steps:
       - uses: actions/checkout@v4
         with:

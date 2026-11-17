@@ -36,7 +36,7 @@ jobs:
   incus-vm-console:
     name: Incus VM serial + SPICE consoles (real KVM)
     runs-on: kvm-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 75
     env:
       HX_RUN_TAG: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}   # run-scoped sibling container/network/volume names: exact cleanup, no collision with other jobs
