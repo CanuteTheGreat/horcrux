@@ -51,6 +51,23 @@ src_install() {
 	# optional /etc payload (live-ISO init services, console-menu profile hook, zram-swap, installer profile): only variants whose tarball has
 	# an etc/ tree get it (the Surface image); the hogshead tarball has none. cp -a keeps the init scripts executable.
 	if [[ -d etc ]]; then cp -a etc "${ED}/" || die; fi
+	# horcrux-be-health's systemd unit: the OpenRC script travels in the etc/ payload above, the unit would not (usr/lib/systemd)
+	if [[ -f usr/lib/systemd/system/horcrux-be-health.service ]]; then
+		insinto /usr/lib/systemd/system
+		doins usr/lib/systemd/system/horcrux-be-health.service
+	fi
 	# byte-compile here so the .pyc files are owned by this package instead of appearing at first run
 	python_optimize "${ED}/usr/lib/live-installer"
+}
+
+pkg_postinst() {
+	# Existing ZFS-root installs (written before boot-environment auto-fallback) get the health service enabled and a grub.cfg with the
+	# fallback logic; a fresh install gets both from the installer. Only when /etc/horcrux/be.conf exists, i.e. horcrux-be is in use.
+	[[ -z ${ROOT} && -f /etc/horcrux/be.conf ]] || return 0
+	if [[ -d /run/systemd/system ]]; then
+		[[ -f /usr/lib/systemd/system/horcrux-be-health.service ]] && systemctl enable horcrux-be-health.service >/dev/null 2>&1
+	elif [[ -x /etc/init.d/horcrux-be-health ]]; then
+		rc-update add horcrux-be-health default >/dev/null 2>&1
+	fi
+	horcrux-be grubcfg >/dev/null 2>&1 || ewarn "horcrux-be grubcfg failed: run it by hand to enable the automatic boot fallback"
 }

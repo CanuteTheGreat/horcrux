@@ -10,6 +10,7 @@ pub fn PackageManagerPage() -> impl IntoView {
     let (package_filter, set_package_filter) = create_signal("all".to_string());
     let (search_query, set_search_query) = create_signal(String::new());
     let (show_updates_only, set_show_updates_only) = create_signal(false);
+    let (snapshot_tick, set_snapshot_tick) = create_signal(0u32);
     let (selected_packages, set_selected_packages) =
         create_signal(std::collections::HashSet::<String>::new());
 
@@ -103,6 +104,7 @@ pub fn PackageManagerPage() -> impl IntoView {
                         "Upgrading '{}' as task {} (follow it on the Tasks page)",
                         package_name, t.upid
                     )));
+                    set_snapshot_tick.update(|n| *n += 1);
                 }
                 Err(e) => set_error_message.set(Some(format!(
                     "Failed to upgrade package '{}': {}",
@@ -121,10 +123,15 @@ pub fn PackageManagerPage() -> impl IntoView {
         match upgrade_all_packages().await {
             Ok(t) => {
                 set_success_message.set(Some(format!(
-                    "Upgrade of all packages started as task {} ({} pending; follow it on the Tasks page)",
+                    "Upgrade of all packages started as task {} ({} pending; follow it on the Tasks page){}",
                     t.upid,
-                    t.pending.unwrap_or(0)
+                    t.pending.unwrap_or(0),
+                    t.snapshot
+                        .as_deref()
+                        .map(|s| format!(". Snapshot taken first: {s}"))
+                        .unwrap_or_default()
                 )));
+                set_snapshot_tick.update(|n| *n += 1);
             }
             Err(e) => set_error_message.set(Some(format!("Failed to upgrade packages: {}", e))),
         }
@@ -304,6 +311,8 @@ pub fn PackageManagerPage() -> impl IntoView {
                     </button>
                 </div>
             </div>
+
+            <crate::pages::system::boot_environments::PreUpgradeBanner tick=snapshot_tick/>
 
             {move || error_message.get().map(|msg| {
                 clear_messages();

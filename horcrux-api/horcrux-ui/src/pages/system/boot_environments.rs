@@ -14,6 +14,57 @@ fn ask(msg: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The banner on the Packages page: the snapshot taken before the last upgrade and a one-click way back.
+/// Hidden on nodes without ZFS boot environments, and once the running environment has no upgrade snapshot
+/// (right after a rollback). `tick` re-reads it (the page bumps it when an upgrade task starts).
+#[component]
+pub fn PreUpgradeBanner(tick: ReadSignal<u32>) -> impl IntoView {
+    let (info, set_info) = create_signal(None::<BootEnvInfo>);
+    let (msg, set_msg) = create_signal(None::<Result<String, String>>);
+    let (busy, set_busy) = create_signal(false);
+    let load = create_action(move |_: &()| async move {
+        // 424 (no ZFS root / no horcrux-be) and every other failure just hide the banner: it is a convenience, not the page
+        set_info.set(get_boot_environments().await.ok());
+    });
+    create_effect(move |_| {
+        tick.get();
+        load.dispatch(());
+    });
+    let rollback = create_action(move |snap: &String| {
+        let snap = snap.clone();
+        async move {
+            set_busy.set(true);
+            let r = boot_env_action("/rollback", serde_json::json!({ "snapshot": snap })).await;
+            set_msg.set(Some(match r {
+                Ok(_) => Ok("Done. The system as it was before that upgrade boots at the next reboot (nothing rebooted now). VM disks and /home are untouched.".to_string()),
+                Err(e) => Err(format!("Roll back failed: {e}")),
+            }));
+            set_busy.set(false);
+            load.dispatch(());
+        }
+    });
+    view! {
+        {move || msg.get().map(|m| match m {
+            Ok(t) => view! { <div class="alert alert-success" id="pre-upgrade-rolled-back">{t}</div> }.into_view(),
+            Err(t) => view! { <div class="alert alert-error">{t}</div> }.into_view(),
+        })}
+        {move || info.get().and_then(|i| i.last_upgrade_snapshot().cloned()).map(|s| {
+            let full = format!("{}@{}", s.be, s.name);
+            let target = full.clone();
+            view! {
+                <div class="alert alert-info" id="pre-upgrade-banner">
+                    "Before the last upgrade Horcrux saved the system as " <a href="/system/boot-environments"><strong>{full}</strong></a>
+                    " (" {when(s.created)} "). If something broke, you can boot the system as it was: "
+                    <button class="btn btn-sm btn-warning" id="pre-upgrade-rollback" disabled=busy
+                        on:click=move |_| if ask("Boot the system as it was before the last upgrade? Nothing reboots now; the next reboot enters the previous version. VM disks and /home are not touched.") {
+                            rollback.dispatch(target.clone());
+                        }>"Roll back to before this upgrade"</button>
+                </div>
+            }
+        })}
+    }
+}
+
 /// Boot environments: every system upgrade is snapshotted first; roll back to the previous version from here
 /// (takes effect at the next reboot; VM disks, /home and logs are separate datasets and are never rolled back).
 #[component]
@@ -105,6 +156,23 @@ pub fn BootEnvironmentsPage() -> impl IntoView {
                             "These directories live on the root boot environment itself, so a rollback would cut you off from their current contents: "
                             {unsafe_paths.iter().map(|d| d.path.clone()).collect::<Vec<_>>().join(", ")}
                             ". Move them to their own datasets before rolling back."
+                            <button class="btn btn-sm btn-primary" id="be-migrate" disabled=busy
+                                on:click=move |_| post("/migrate-data", serde_json::json!({}), "Move data",
+                                    Some("Move these directories onto their own datasets? Stop the VMs and services that use them first; the originals stay in a snapshot until you destroy it. This can take a while for big VM disks and runs as a task.".into()))>
+                                "Move them now"
+                            </button>
+                        </div>
+                    })}
+                    {i.fallback.trial.clone().map(|t| view! {
+                        <div class="alert alert-warning" id="be-trial">
+                            "'" {t.clone()} "' is on trial: if it does not come up healthy in " {i.fallback.tries_max}
+                            " boots (" {i.fallback.tries} " so far), " {i.fallback.good.clone().unwrap_or_else(|| "the previous environment".into())}
+                            " boots again by itself."
+                        </div>
+                    })}
+                    {i.fallback.failed.clone().map(|f| view! {
+                        <div class="alert alert-error" id="be-fallback-pending">
+                            "GRUB gave up on '" {f} "' and booted the previous environment instead."
                         </div>
                     })}
                     <h2>"Environments"</h2>
@@ -113,7 +181,9 @@ pub fn BootEnvironmentsPage() -> impl IntoView {
                         <tbody>
                             {i.environments.iter().map(|e| {
                                 let n1 = e.name.clone(); let n2 = e.name.clone(); let n3 = e.name.clone(); let n4 = e.name.clone();
-                                let state = [(e.running, "running"), (e.active, "boots next"), (e.pinned, "pinned")]
+                                let on_trial = i.fallback.trial.as_deref() == Some(e.name.as_str());
+                                let state = [(e.running, "running"), (e.active, "boots next"), (e.pinned, "pinned"),
+                                             (on_trial, "on trial"), (e.failed, "did not boot healthy")]
                                     .iter().filter(|(on, _)| *on).map(|(_, t)| *t).collect::<Vec<_>>().join(", ");
                                 let (running, active, pinned) = (e.running, e.active, e.pinned);
                                 view! {
@@ -171,6 +241,33 @@ pub fn BootEnvironmentsPage() -> impl IntoView {
                                                 </td>
                                             </tr>
                                         }
+                                    }).collect_view()}
+                                </tbody>
+                            </table>
+                        }.into_view()
+                    }}
+
+                    <h2>"Boot events"</h2>
+                    {if i.events.is_empty() {
+                        view! { <div class="empty-state">"Nothing yet: activating or rolling back an environment, and any automatic fallback, are recorded here."</div> }.into_view()
+                    } else {
+                        view! {
+                            <table class="data-table" id="be-events">
+                                <thead><tr><th>"When"</th><th>"Event"</th><th>"Details"</th></tr></thead>
+                                <tbody>
+                                    {i.events.iter().rev().map(|e| {
+                                        let label = match e.kind.as_str() {
+                                            "fallback" => "Automatic fallback",
+                                            "boot-ok" => "Booted healthy",
+                                            "armed" => "On trial",
+                                            "health-failed" => "Health check failed",
+                                            "snapshot" => "Upgrade snapshot",
+                                            "migrated" => "Data moved",
+                                            other => other,
+                                        }.to_string();
+                                        view! { <tr class=format!("be-event-{}", e.kind)>
+                                            <td>{when(e.ts)}</td><td><strong>{label}</strong></td>
+                                            <td>{e.detail.clone().or_else(|| e.be.clone()).unwrap_or_default()}</td></tr> }
                                     }).collect_view()}
                                 </tbody>
                             </table>

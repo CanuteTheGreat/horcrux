@@ -2,7 +2,7 @@
 //! database, `emerge` changes it), apt on Debian-family hosts. Reading is
 //! instant; changes run as tasks (see `api/tasks.rs`) because `emerge` takes
 //! minutes to hours, one at a time (Portage locks anyway).
-use super::{data_dir, rooted, run, sysroot, user_of, which};
+use super::{data_dir, rooted, run, run_secs, sysroot, user_of, which};
 use crate::api::tasks;
 use crate::error::ApiError;
 use crate::AppState;
@@ -451,6 +451,28 @@ struct TaskRef {
     upid: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pending: Option<usize>,
+    /// Boot-environment snapshot taken as the explicit first step of an upgrade task
+    /// (`BE@pre-upgrade-<stamp>`); rolling back to it boots the system as it was before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot: Option<String>,
+}
+
+/// The explicit "snapshot, then upgrade" step. `horcrux-be pre-upgrade` always takes a
+/// `pre-upgrade-*` snapshot of the running boot environment (the Portage hook that also
+/// exists throttles to one per 30 minutes and is only a safety net). `None` on a node
+/// without ZFS boot environments or with automatic snapshots switched off: the upgrade
+/// itself never waits on or fails because of it.
+async fn pre_upgrade_snapshot() -> Option<String> {
+    which("horcrux-be")?;
+    let out = run_secs("horcrux-be", &["pre-upgrade", "--json"], 120)
+        .await
+        .ok()?;
+    parse_pre_upgrade(&out)
+}
+
+fn parse_pre_upgrade(out: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(out.trim().lines().last()?).ok()?;
+    v.get("snapshot")?.as_str().map(str::to_string)
 }
 
 fn guard_one_at_a_time() -> Result<(), ApiError> {
@@ -512,6 +534,11 @@ async fn start(
 ) -> Res<TaskRef> {
     let pm = need_pm()?;
     guard_one_at_a_time()?;
+    let snapshot = if kind == "package-upgrade" && pm == Pm::Portage {
+        pre_upgrade_snapshot().await
+    } else {
+        None
+    };
     let upid = match pm {
         Pm::Portage => tasks::spawn_command(kind, target, who, "emerge", &portage, &[])?,
         Pm::Apt => tasks::spawn_command(
@@ -530,6 +557,7 @@ async fn start(
     Ok(Json(TaskRef {
         upid,
         pending: None,
+        snapshot,
     }))
 }
 
@@ -689,12 +717,30 @@ async fn update_db(u: AuthExt) -> Res<TaskRef> {
     Ok(Json(TaskRef {
         upid,
         pending: None,
+        snapshot: None,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pre_upgrade_snapshot_name_is_read_from_horcrux_be_json() {
+        assert_eq!(
+            parse_pre_upgrade(
+                "{\"snapshot\": \"horcrux@pre-upgrade-20261117-101500\", \"skipped\": null}\n"
+            ),
+            Some("horcrux@pre-upgrade-20261117-101500".into())
+        );
+        // a node that cannot snapshot answers a reason, never a name; noise before the JSON is ignored
+        assert_eq!(
+            parse_pre_upgrade("horcrux-be: note\n{\"snapshot\": null, \"skipped\": \"not ZFS\"}"),
+            None
+        );
+        assert_eq!(parse_pre_upgrade("not json"), None);
+        assert_eq!(parse_pre_upgrade(""), None);
+    }
 
     #[test]
     fn upgrades_never_take_the_prebuilt_manager_from_a_binary_package() {
