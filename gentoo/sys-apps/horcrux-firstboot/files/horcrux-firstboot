@@ -76,6 +76,11 @@ until have_net && sync_trees; do
 	fi
 	echo "== tree sync not done (network?): retry in 10 minutes"; sleep ${FIRSTBOOT_RETRY:-600}
 done
+# eix answers only from its cache, and emerge-webrsync runs no post-sync hook: index the freshly synced tree now (before the done marker, which
+# means "trees synced and indexed"), so `eix` finds every package from the first day (the installer's cache only knew the image's empty tree)
+if command -v eix-update >/dev/null 2>&1; then
+	echo "== eix cache"; eix-update -q || echo "== eix-update failed (run it by hand)"
+fi
 mkdir -p /var/lib/horcrux; { date -u; [ -n "${partial:-}" ] && echo "partial: tree sync failed with a network"; } > /var/lib/horcrux/firstboot-done
 echo "== done"
 exit 0

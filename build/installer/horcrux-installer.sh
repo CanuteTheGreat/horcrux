@@ -613,8 +613,16 @@ configure_user() {
     done
     unset ROOT_PW_CHECK
 
-    # Create user
-    chroot "$TARGET" useradd -m -G wheel,kvm,libvirt,docker -c "$fullname" -s /bin/bash "$username" 2>/dev/null || true
+    # Create user: wheel (sudo) and portage (equery/eix without sudo) on every install; the runtime groups only where they exist
+    # (useradd -G with one missing group creates NO user at all, which `|| true` used to hide)
+    chroot "$TARGET" groupadd -f -r portage
+    local groups="wheel,portage" g
+    for g in kvm libvirt docker podman; do
+        chroot "$TARGET" getent group "$g" >/dev/null 2>&1 && groups="$groups,$g"
+    done
+    if ! chroot "$TARGET" useradd -m -G "$groups" -c "$fullname" -s /bin/bash "$username"; then
+        log_error "Could not create user $username (groups: $groups)"
+    fi
     echo "$username:$password" | chroot "$TARGET" chpasswd
 
     # Configure sudo

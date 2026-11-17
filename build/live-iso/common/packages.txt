@@ -35,3 +35,6 @@ sys-process/htop
 sys-process/cronie
 # Portage admin tools on every Gentoo install (owner 2026-11-12): equery, eclean, revdep-rebuild, euse, qlist-adjacent helpers
 app-portage/gentoolkit
+# eix (package search from a cache; the installer and the post-sync hooks build the cache), run by the administrator, who is in the
+# portage group on every install
+app-portage/eix

@@ -29,7 +29,8 @@ EOF
 echo 'root:horcrux' | chpasswd
 
 # Create horcrux user
-useradd -m -G wheel,audio,video,plugdev,usb -s /bin/bash horcrux 2>/dev/null || true
+groupadd -f -r portage
+useradd -m -G wheel,portage,audio,video,plugdev,usb -s /bin/bash horcrux 2>/dev/null || true
 echo 'horcrux:horcrux' | chpasswd
 
 # Configure sudo

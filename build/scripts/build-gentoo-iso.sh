@@ -1342,7 +1342,8 @@ HOSTS
     # Create horcrux user with available groups
     # Build group list dynamically based on what exists
     log_info "Creating horcrux user..."
-    local user_groups="wheel"
+    run_chroot "groupadd -f -r portage" || true      # admin users are in portage on every install (equery, eix)
+    local user_groups="wheel,portage"
     for grp in kvm libvirt docker audio video plugdev; do
         if run_chroot "getent group $grp" &>/dev/null; then
             user_groups="$user_groups,$grp"

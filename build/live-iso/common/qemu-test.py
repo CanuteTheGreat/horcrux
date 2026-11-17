@@ -2311,6 +2311,9 @@ class Runner:
         flat = out.strip().replace("\n", " | ")[:220]
         self.step("ssh-key-login-accepted", rc == 0 and "KEYLOGIN-OK" in out, flat)
         HG.admin_tools_gate(lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step)
+        if getattr(self, "P", {}).get("web_user"):
+            # the installer-created administrator: in the portage group, runs equery + eix itself (owner 2026-11-17)
+            HG.portage_group_gate(lambda cmd, timeout=90: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step, self.P["web_user"], wait=int(T(300)))
         HG.docker_forward_gate(lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step, slow=SLOW)
         UG.gate(lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step, HG.b64)
         low = out.lower()

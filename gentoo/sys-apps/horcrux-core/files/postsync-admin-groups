@@ -1,0 +1,5 @@
+#!/bin/sh
+# sys-apps/horcrux-core: after every tree sync (emaint sync / emerge --sync, daily through horcrux-autoupdate), keep every administrator
+# account in the portage group (equery, eix without sudo). See /usr/sbin/horcrux-admin-groups. Never fails the sync.
+[ -x /usr/sbin/horcrux-admin-groups ] && /usr/sbin/horcrux-admin-groups
+exit 0
