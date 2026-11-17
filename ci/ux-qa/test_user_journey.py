@@ -45,6 +45,16 @@ class Journey(unittest.TestCase):
         finally:
             uj.api = real
 
+    def test_server_commands_survive_the_ssh_hop(self):
+        # ssh joins the remote argv with spaces and the remote shell re-splits it: emulate that hop locally
+        import subprocess
+        argv = uj.server_argv("echo a && echo 'b c'", prefix=["ssh", "-o", "BatchMode=yes", "qa-host", "env"])
+        remote = " ".join(argv[4:])
+        out = subprocess.run(["sh", "-c", remote], capture_output=True, text=True).stdout
+        self.assertEqual(out, "a\nb c\n")
+        self.assertEqual(uj.server_argv("x y", prefix=[]), ["sh", "-c", "x y"])
+        self.assertEqual(uj.server_argv("x y", prefix=["docker", "exec", "-i", "c"]), ["docker", "exec", "-i", "c", "sh", "-c", "x y"])
+
     def test_page_checks_are_js_functions(self):
         for js in (uj.REDUNDANT_EMPTY_JS, uj.H_OVERFLOW_JS):
             self.assertTrue(js.lstrip().startswith("() =>"), js[:40])

@@ -98,11 +98,22 @@ def api(method, path, body=None, ok=(200, 201, 202, 204)):
             return e.code, raw.decode("utf8", "replace")
 
 
+def server_argv(cmd, prefix=None):
+    """argv that runs `sh -c cmd` where the server runs. ssh joins its remote arguments with spaces and the remote
+    shell splits them again, so behind an ssh prefix the command is quoted once (unquoted, `sh -c` got only the first
+    word and the rest ran on the ssh host: the review lane read no QEMU command line and made no bridge)."""
+    prefix = PREFIX if prefix is None else prefix
+    argv = ["sh", "-c", cmd]
+    if prefix and os.path.basename(prefix[0]) == "ssh":
+        return prefix + [shlex.quote(a) for a in argv]
+    return prefix + argv
+
+
 def run_on_server(cmd, stdin_path=None, timeout=60):
     """Run a shell command where the server runs (HX_EXEC_PREFIX) or locally."""
     stdin = open(stdin_path, "rb") if stdin_path else None
     try:
-        return subprocess.run(PREFIX + ["sh", "-c", cmd], stdin=stdin, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(server_argv(cmd), stdin=stdin, capture_output=True, text=True, timeout=timeout)
     finally:
         if stdin:
             stdin.close()
