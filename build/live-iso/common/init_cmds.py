@@ -74,7 +74,7 @@ def enabled_list_sh():
     # The manager's D-Bus `list-unit-files` can answer "Failed to list unit files: Connection timed out" on every try from an idle, `running`
     # TCG guest (run 3428: load 1.0, four tries, SYSTEMD_BUS_TIMEOUT=150). Enabled state is the unit-file symlinks on disk, so when the bus
     # query is empty read the same list offline (`--root=/`, no D-Bus); the assertions on that list are unchanged.
-    sed = "sed -E 's/\\\\.(service|target|socket|timer) / /'"
+    sed = "sed -E 's/\\.(service|target|socket|timer) / /'"
     lst = "systemctl {r}list-unit-files --state=enabled --no-legend --plain 2>/dev/null | " + sed
     return (f"if {IS_SYSTEMD}; then {BUS_WAIT}L=$({lst.format(r='')}); [ -n \"$L\" ] || L=$({lst.format(r='--root=/ ')}); printf '%s\\n' \"$L\"; "
             "else rc-update show -v 2>/dev/null | grep -v '|[[:space:]]*$'; fi")
