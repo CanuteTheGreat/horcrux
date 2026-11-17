@@ -22,16 +22,21 @@
 # (the single `live-iso-<project>` group made every run wait for the previous run's SLOWEST job; no image published for 32 h).
 # This file builds ONLY gnome-light-systemd-x86_64. Siblings: see the other live-iso-*.yml. Dispatch inputs: `mode` (daily|dry); `only` is gone.
 # Concurrency: per variant + event + mode + ref. A newer dispatch of the same variant/mode/ref cancels the older one (superseded);
-# the scheduled daily and v* tag runs are never cancelled by a dispatch (their group differs), tag groups are per tag.
+# the push (daily) and v* tag runs are never cancelled by a dispatch (their group differs), tag groups are per tag.
 name: Live ISO (gnome-light-systemd-x86_64)
 
 on:
-  # systemd twin (init-parity phase 3): a nightly slot staggered against the other images, not every main push (one ISO at a time on the
-  # scarce KVM runners); skipped when the published systemd daily already is the current main commit. v* tags build the stable ISO.
-  schedule:
-    - cron: '17 11 * * *'
+  # Event-driven like the OpenRC twin (owner principle: nothing waits for a clock). It was a nightly-only slot, so a green
+  # workflow_dispatch (default mode=dry, never publishes) left the published daily stale while main had image-input commits.
+  # Burst pushes = one build (replace: group below); v* tags build the stable ISO.
   push:
+    branches: [main]
     tags: ['v*']
+    paths:
+      - 'build/live-iso/**'
+      - 'gentoo/**'
+      - 'deploy/**'
+      - '.forgejo/workflows/live-iso-gnome-light-systemd-x86_64.yml'
   workflow_dispatch:
     inputs:
       mode:
