@@ -1422,6 +1422,12 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "UI offers every USE-flag feature of an all-features build"
           MODE=full /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/ui_features_e2e.py
 
+      - name: Create VM form (sliders, default NIC, sound with VNC, ISO pick/upload/download) and ISO Library
+        env:
+          BASE_URL: https://localhost:8006
+          HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
+        run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/vm_create_form_e2e.py
+
       - name: Dashboard banner lists only genuinely unmanaged libvirt domains
         env:
           BASE_URL: https://localhost:8006

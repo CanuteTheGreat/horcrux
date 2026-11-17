@@ -416,6 +416,7 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                         }.into_view(),
 
                         "network" => view! {
+                            <VmDefaultNetworkCard/>
                             <div class="network-config-section">
                                 <div class="section-header">
                                     <h2>"Network Interfaces"</h2>
@@ -706,6 +707,64 @@ pub fn SystemConfigurationPage() -> impl IntoView {
             } else {
                 view! {}.into_view()
             }}
+        </div>
+    }
+}
+
+/// Global default network for new VMs (Create VM attaches the first NIC to
+/// it instead of the hypervisor's own default).
+#[component]
+fn VmDefaultNetworkCard() -> impl IntoView {
+    let (bridges, set_bridges) = create_signal(Vec::<String>::new());
+    let (current, set_current) = create_signal(String::new());
+    let (hv_default, set_hv_default) = create_signal(String::new());
+    let (msg, set_msg) = create_signal(None::<(bool, String)>);
+    // The select stays disabled until both the bridges and the saved value
+    // are in: a choice made in between was overwritten by the late saved
+    // value, so Save stored "per hypervisor" instead of the picked bridge.
+    let (loaded, set_loaded) = create_signal(false);
+    spawn_local(async move {
+        if let Ok(d) = crate::api::get_vm_defaults().await {
+            set_current.set(d.default_network.unwrap_or_default());
+        }
+        if let Ok(o) = crate::api::get_vm_host_options().await {
+            set_bridges.set(o.bridges.iter().map(|b| b.name.clone()).collect());
+            set_hv_default.set(o.default_networks.qemu.clone().unwrap_or_default());
+        }
+        set_loaded.set(true);
+    });
+    let save = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let v = current.get_untracked();
+        spawn_local(async move {
+            let d = crate::api::VmDefaults {
+                default_network: (!v.is_empty()).then_some(v),
+            };
+            match crate::api::put_vm_defaults(&d).await {
+                Ok(_) => set_msg.set(Some((true, "Default VM network saved".into()))),
+                Err(e) => set_msg.set(Some((false, e.message))),
+            }
+        });
+    };
+    view! {
+        <div class="network-config-section" id="vm-default-network">
+            <div class="section-header"><h2>"Default VM network"</h2></div>
+            <form on:submit=save>
+                <div class="form-row">
+                    <select id="vm-default-network-select" disabled=move || !loaded.get() on:change=move |ev| set_current.set(event_target_value(&ev))>
+                        <option value="" selected=move || current.get().is_empty()>
+                            {move || format!("Per hypervisor (QEMU: {})", if hv_default.get().is_empty() { "no bridge found".to_string() } else { hv_default.get() })}
+                        </option>
+                        {move || bridges.get().into_iter().map(|b| {
+                            let sel = b == current.get();
+                            view! { <option value=b.clone() selected=sel>{b.clone()}</option> }
+                        }).collect_view()}
+                    </select>
+                    <button type="submit" id="vm-default-network-save" class="btn btn-primary" disabled=move || !loaded.get()>"Save"</button>
+                </div>
+                <small class="form-help">"New VMs get a network card on this bridge. Leave on \"Per hypervisor\" to use each hypervisor's own network."</small>
+                {move || msg.get().map(|(ok, m)| view! { <div class=if ok { "alert alert-success" } else { "alert alert-error" } id="vm-default-network-msg">{m}</div> })}
+            </form>
         </div>
     }
 }

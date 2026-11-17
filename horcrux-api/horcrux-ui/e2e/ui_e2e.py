@@ -700,8 +700,9 @@ def main():
         # ---- VM display: Create VM form -> console page -> live consoles ----
         page.goto(f"{BASE}/vms/create")
         page.locator(".form-group", has_text="VM Name").locator("input").fill(DISP_VM)
-        page.locator(".form-group", has_text="Memory (MB)").locator("input").fill("512")
-        page.locator(".form-group", has_text="Disk Size (GB)").locator("input").fill("10")
+        for rid, val in (("vm-memory", "512"), ("vm-disk", "10")):
+            page.check(f"#{rid}-custom")
+            page.fill(f"#{rid}-input", val)
         page.select_option("#disp-protocol", "spice")
         page.select_option("#disp-video", "qxl")
         page.select_option("#disp-sound", "ich9-intel-hda")
@@ -1444,8 +1445,9 @@ def storage_volume_checks(page, vid):
     # (the first click used to loop forever re-rendering the rows and crash
     # the tab; edits in one row must survive adding/removing others)
     page.locator(".form-group", has_text="VM Name").locator("input").fill("e2e-ui-multidisk")
-    page.locator(".form-group", has_text="Memory (MB)").locator("input").fill("512")
-    page.locator(".form-group", has_text="Disk Size (GB)").locator("input").fill("10")
+    for rid, val in (("vm-memory", "512"), ("vm-disk", "10")):
+        page.check(f"#{rid}-custom")
+        page.fill(f"#{rid}-input", val)
     page.locator("#vm-create-add-disk").click()
     expect(page.locator(".vm-create-disk")).to_have_count(1, timeout=10000)
     disk1 = page.locator(".vm-create-disk[data-disk='1']")

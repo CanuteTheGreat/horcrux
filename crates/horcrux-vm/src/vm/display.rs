@@ -224,26 +224,33 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
                     format!("usb-redir,bus=spice-xhci.0,chardev=usbredirchr{i},id=usbredir{i}");
                 push(&["-chardev", &chr, "-device", &dev]);
             }
-            // Audio over the SPICE playback/record channels.
-            if display.sound != SoundDevice::None {
-                push(&["-audiodev", "spice,id=snd0"]);
-                match display.sound {
-                    SoundDevice::IntelHda => push(&[
-                        "-device",
-                        "intel-hda,id=sound0",
-                        "-device",
-                        "hda-duplex,bus=sound0.0,audiodev=snd0",
-                    ]),
-                    SoundDevice::Ich9IntelHda => push(&[
-                        "-device",
-                        "ich9-intel-hda,id=sound0",
-                        "-device",
-                        "hda-duplex,bus=sound0.0,audiodev=snd0",
-                    ]),
-                    SoundDevice::Ac97 => push(&["-device", "AC97,audiodev=snd0"]),
-                    SoundDevice::None => {}
-                }
-            }
+        }
+    }
+    // Sound card: audio goes over SPICE's channels when the display is SPICE;
+    // otherwise the card is present but its host-side output is discarded
+    // (guest-side remote access such as RDP can still carry audio).
+    if display.sound != SoundDevice::None {
+        let backend = if display.protocol == DisplayProtocol::Spice {
+            "spice,id=snd0"
+        } else {
+            "none,id=snd0"
+        };
+        push(&["-audiodev", backend]);
+        match display.sound {
+            SoundDevice::IntelHda => push(&[
+                "-device",
+                "intel-hda,id=sound0",
+                "-device",
+                "hda-duplex,bus=sound0.0,audiodev=snd0",
+            ]),
+            SoundDevice::Ich9IntelHda => push(&[
+                "-device",
+                "ich9-intel-hda,id=sound0",
+                "-device",
+                "hda-duplex,bus=sound0.0,audiodev=snd0",
+            ]),
+            SoundDevice::Ac97 => push(&["-device", "AC97,audiodev=snd0"]),
+            SoundDevice::None => {}
         }
     }
     a
@@ -423,7 +430,22 @@ mod tests {
             sound: SoundDevice::IntelHda,
             ..Default::default()
         };
-        assert!(sound_vnc.validate(&x86).is_err());
+        // Sound is allowed with VNC (guest-side RDP/SPICE can carry it).
+        assert!(sound_vnc.validate(&x86).is_ok());
+        let args = qemu_args(&sound_vnc, &x86, &rt(DisplayProtocol::Vnc)).join(" ");
+        assert!(args.contains("-audiodev none,id=snd0") && args.contains("intel-hda,id=sound0"));
+        let spice_snd = VmDisplay {
+            protocol: DisplayProtocol::Spice,
+            sound: SoundDevice::Ac97,
+            ..Default::default()
+        };
+        let args = qemu_args(&spice_snd, &x86, &rt(DisplayProtocol::Spice)).join(" ");
+        assert!(args.contains("-audiodev spice,id=snd0"));
+        let non_x86_sound = VmDisplay {
+            sound: SoundDevice::Ac97,
+            ..Default::default()
+        };
+        assert!(non_x86_sound.validate(&VmArchitecture::Aarch64).is_err());
         let qxl_arm = VmDisplay {
             video: VideoDevice::Qxl,
             ..Default::default()

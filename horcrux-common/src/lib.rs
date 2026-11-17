@@ -882,7 +882,10 @@ pub enum VideoDevice {
     None,
 }
 
-/// Emulated sound card; audio is carried over SPICE, so it needs `protocol: spice`.
+/// Emulated sound card. With SPICE the audio travels over SPICE's playback
+/// channels; with VNC or no display the card is still present in the guest
+/// (audio is not carried by Horcrux's console, but RDP/SPICE/other remote
+/// access inside the guest can use it).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum SoundDevice {
@@ -907,9 +910,6 @@ pub struct VmDisplay {
 impl VmDisplay {
     /// Reject combinations QEMU can't do (or that would silently do nothing).
     pub fn validate(&self, arch: &VmArchitecture) -> std::result::Result<(), String> {
-        if self.sound != SoundDevice::None && self.protocol != DisplayProtocol::Spice {
-            return Err("Sound is carried over SPICE: set the display protocol to spice".into());
-        }
         if self.video == VideoDevice::Qxl && *arch != VmArchitecture::X86_64 {
             return Err("The qxl video card is only available on x86_64 guests".into());
         }

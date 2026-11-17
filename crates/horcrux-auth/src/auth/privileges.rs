@@ -239,6 +239,11 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
                     prefix: "/vms".into(),
                 };
             }
+            // Global VM defaults (default network): read by anyone who can
+            // create VMs, changed with Sys.Modify.
+            if id == "defaults" {
+                return read_write(m, P::VmAudit, P::SysModify, "/nodes");
+            }
             guest_action(m, &format!("/vms/{}", id), arg(2))
         }
 

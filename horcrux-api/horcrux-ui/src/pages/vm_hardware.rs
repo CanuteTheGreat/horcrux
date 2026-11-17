@@ -102,6 +102,10 @@ pub fn HardwareFields(
     /// Network cards and boot order are fixed while the VM runs.
     #[prop(into, default = Signal::derive(|| false))]
     running: Signal<bool>,
+    /// Re-read the host options after an ISO was added from this form
+    /// (the form then offers the "Add an ISO" panel).
+    #[prop(optional)]
+    reload_options: Option<Callback<()>>,
 ) -> impl IntoView {
     let bridges = move || options.get().map(|o| o.bridges).unwrap_or_default();
     let add_nic = move |_| {
@@ -213,20 +217,47 @@ pub fn HardwareFields(
                             .collect();
                         if let Some(c) = &current {
                             if !isos.iter().any(|i| &i.path == c) {
-                                isos.push(api::IsoFile { name: c.clone(), path: c.clone(), size: 0, downloading: false, error: None });
+                                isos.push(api::IsoFile { name: c.clone(), path: c.clone(), size: 0, downloading: false, error: None, storage: String::new(), storage_name: String::new() });
                             }
                         }
                         isos.into_iter().map(|iso| {
                             let sel = current.as_deref() == Some(iso.path.as_str());
-                            let label = if iso.size > 0 { format!("{} ({})", iso.name, api::human_bytes(iso.size)) } else { iso.name.clone() };
+                            let place = if iso.storage_name.is_empty() { String::new() } else { format!(" [{}]", iso.storage_name) };
+                            let label = if iso.size > 0 { format!("{}{} ({})", iso.name, place, api::human_bytes(iso.size)) } else { iso.name.clone() };
                             view! { <option value=iso.path.clone() selected=sel>{label}</option> }
                         }).collect_view()
                     }}
                 </select>
                 <small class="form-help">
-                    "ISOs come from the ISO library (Infrastructure > ISO Library: download one from a URL). The disc can be changed while the VM runs."
+                    "Pick an ISO from any storage, or add one below without leaving this form. The disc can be changed while the VM runs."
                 </small>
+                {move || (options.get().is_some_and(|o| o.isos.iter().all(|i| i.downloading || i.error.is_some()))).then(|| view! {
+                    <p class="form-help" id="vm-no-isos">"There are no ISOs yet: add one below."</p>
+                })}
             </div>
+            {reload_options.map(|reload| {
+                // Open when the host has no ISO yet; after that the user's own
+                // toggling wins (adding an ISO must not collapse the panel).
+                let add_open = create_rw_signal(false);
+                create_effect(move |prev: Option<bool>| {
+                    let empty = options.get().is_some_and(|o| o.isos.is_empty());
+                    if prev != Some(empty) && empty { add_open.set(true); }
+                    empty
+                });
+                let storages = Signal::derive(move || options.get().map(|o| o.iso_storages).unwrap_or_default());
+                let default_storage = Signal::derive(move || options.get().map(|o| o.default_iso_storage).unwrap_or_default());
+                let added = Callback::new(move |iso: api::IsoFile| {
+                    reload.call(());
+                    hardware.update(|h| h.cdrom = Some(iso.path));
+                });
+                view! {
+                    <details class="iso-add-details" id="vm-iso-add" open=move || add_open.get()
+                        on:toggle=move |ev| add_open.set(ev.target().and_then(|t| js_sys::Reflect::get(&t, &"open".into()).ok()).and_then(|v| v.as_bool()).unwrap_or(false))>
+                        <summary>"Add an ISO (upload or download from a URL)"</summary>
+                        <crate::components::IsoAddPanel storages=storages default_storage=default_storage on_added=added prefix="vm-iso"/>
+                    </details>
+                }
+            })}
             <div class="form-group">
                 <label for="vm-boot">"Boot order"</label>
                 <select id="vm-boot" disabled={move || running.get()} on:change=move |ev| {
@@ -700,7 +731,10 @@ pub fn VmHardwarePage() -> impl IntoView {
                 <Show when=is_qemu fallback=|| view! {
                     <p class="form-help">"LXD/Incus VMs get their network and devices from their LXD/Incus profile."</p>
                 }>
-                    <HardwareFields hardware=hardware options=options running=running/>
+                    <HardwareFields hardware=hardware options=options running=running
+                        reload_options=Callback::new(move |_: ()| spawn_local(async move {
+                            if let Ok(o) = api::get_vm_host_options().await { set_options.set(Some(o)); }
+                        }))/>
                     <crate::pages::vm_devices::DeviceSwitches hardware=hardware running=running/>
                     <crate::pages::vm_advanced::AdvancedHardware hardware=hardware running=running/>
                     <crate::pages::vm_passthrough::HostPciPanel hardware=hardware running=running/>

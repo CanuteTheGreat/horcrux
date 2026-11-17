@@ -1,5 +1,5 @@
 //! Infrastructure > ISO Library (`/storage/isos`): the ISO library VM CD-ROM
-//! drives pick from - list, download from a URL, delete.
+//! drives pick from - list, upload, download from a URL, delete.
 use crate::api::{self, IsoFile};
 use leptos::*;
 
@@ -8,9 +8,9 @@ pub fn IsoLibraryPage() -> impl IntoView {
     let (isos, set_isos) = create_signal(Vec::<IsoFile>::new());
     let (error, set_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
-    let (url, set_url) = create_signal(String::new());
-    let (filename, set_filename) = create_signal(String::new());
     let (iso_dir, set_iso_dir) = create_signal(String::new());
+    let (storages, set_storages) = create_signal(Vec::<api::IsoStorage>::new());
+    let (default_storage, set_default_storage) = create_signal(String::new());
 
     let reload = move || {
         spawn_local(async move {
@@ -23,6 +23,8 @@ pub fn IsoLibraryPage() -> impl IntoView {
             }
             if let Ok(o) = api::get_vm_host_options().await {
                 set_iso_dir.set(o.iso_dir);
+                set_storages.set(o.iso_storages);
+                set_default_storage.set(o.default_iso_storage);
             }
         });
     };
@@ -52,25 +54,13 @@ pub fn IsoLibraryPage() -> impl IntoView {
         }
     });
 
-    let download = move |ev: ev::SubmitEvent| {
-        ev.prevent_default();
-        let (u, f) = (url.get(), filename.get());
-        spawn_local(async move {
-            let f = f.trim().to_string();
-            match api::download_iso(u.trim(), (!f.is_empty()).then_some(f.as_str())).await {
-                Ok(iso) => {
-                    set_notice.set(Some(format!("Downloading {}", iso.name)));
-                    set_url.set(String::new());
-                    set_filename.set(String::new());
-                    set_error.set(None);
-                }
-                Err(e) => set_error.set(Some(e.message)),
-            }
-            reload();
-        });
-    };
+    let added = Callback::new(move |iso: api::IsoFile| {
+        set_notice.set(Some(format!("{} is in the ISO library", iso.name)));
+        set_error.set(None);
+        reload();
+    });
 
-    let remove = move |name: String| {
+    let remove = move |(name, storage): (String, String)| {
         if !web_sys::window()
             .and_then(|w| w.confirm_with_message(&format!("Delete {name}?")).ok())
             .unwrap_or(false)
@@ -78,7 +68,7 @@ pub fn IsoLibraryPage() -> impl IntoView {
             return;
         }
         spawn_local(async move {
-            match api::delete_iso(&name).await {
+            match api::delete_iso(&name, &storage).await {
                 Ok(()) => set_notice.set(Some(format!("{name} deleted"))),
                 Err(e) => set_error.set(Some(e.message)),
             }
@@ -92,30 +82,24 @@ pub fn IsoLibraryPage() -> impl IntoView {
                 <h1>"ISO Library"</h1>
             </div>
             <p class="form-help">
-                "Installer and live ISOs for VM CD-ROM drives. Stored in "
+                "Installer and live ISOs for VM CD-ROM drives. Add one by uploading it or downloading it from a URL, into any storage; the image library is "
                 <code>{move || iso_dir.get()}</code>
-                "; ISOs in storage pool directories are listed too."
+                "."
             </p>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="iso-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="iso-error">{e}</div> })}
 
-            <form id="iso-download-form" class="form-row" on:submit=download>
-                <input id="iso-url" type="url" required placeholder="https://.../installer.iso" style="flex: 3"
-                    prop:value=url on:input=move |ev| set_url.set(event_target_value(&ev))/>
-                <input id="iso-filename" type="text" placeholder="file name (optional)" style="flex: 1"
-                    prop:value=filename on:input=move |ev| set_filename.set(event_target_value(&ev))/>
-                <button id="iso-download" type="submit" class="btn btn-primary">"Download from URL"</button>
-            </form>
+            <crate::components::IsoAddPanel storages=storages default_storage=default_storage on_added=added prefix="iso"/>
 
             <table class="vm-table" id="iso-table">
                 <thead>
-                    <tr><th>"Name"</th><th>"Size"</th><th>"Status"</th><th>"Path"</th><th>"Actions"</th></tr>
+                    <tr><th>"Name"</th><th>"Storage"</th><th>"Size"</th><th>"Status"</th><th>"Path"</th><th>"Actions"</th></tr>
                 </thead>
                 <tbody>
                     {move || {
                         let list = isos.get();
                         if list.is_empty() {
-                            view! { <tr><td colspan="5" class="no-data">"No ISO images yet. Download one above." " " <button class="btn btn-primary btn-sm" type="button" on:click=move |_| crate::components::focus::focus_id("iso-url")>"Download an ISO"</button></td></tr> }.into_view()
+                            view! { <tr><td colspan="6" class="no-data" id="iso-empty">"No ISO images yet. Upload one or enter a download URL in the form above."</td></tr> }.into_view()
                         } else {
                             list.into_iter().map(|iso| {
                                 let status = if let Some(e) = &iso.error {
@@ -126,10 +110,12 @@ pub fn IsoLibraryPage() -> impl IntoView {
                                     "ready".to_string()
                                 };
                                 let deletable = !iso.downloading;
-                                let name = iso.name.clone();
+                                let name = (iso.name.clone(), iso.storage.clone());
+                                let storage_name = if iso.storage_name.is_empty() { "Image library".to_string() } else { iso.storage_name.clone() };
                                 view! {
                                     <tr class="iso-row" data-iso=iso.name.clone()>
                                         <td>{iso.name.clone()}</td>
+                                        <td>{storage_name}</td>
                                         <td>{api::human_bytes(iso.size)}</td>
                                         <td class="iso-status">{status}</td>
                                         <td><code>{iso.path.clone()}</code></td>

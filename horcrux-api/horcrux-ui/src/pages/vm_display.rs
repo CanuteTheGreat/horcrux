@@ -14,8 +14,9 @@ fn wire<T: serde::Serialize>(v: &T) -> String {
         .unwrap_or_default()
 }
 
-/// Three selects bound to `display`. Sound is only offered with SPICE (the
-/// audio travels over SPICE's playback/record channels).
+/// Three selects bound to `display`. A sound card can be added with any
+/// display; only SPICE carries its audio to Horcrux's console, so other
+/// displays get a (non-blocking) warning.
 #[component]
 pub fn DisplaySettingsFields(display: RwSignal<VmDisplay>) -> impl IntoView {
     let protocols = [
@@ -48,9 +49,6 @@ pub fn DisplaySettingsFields(display: RwSignal<VmDisplay>) -> impl IntoView {
                 if let Some(p) = parse::<DisplayProtocol>(&event_target_value(&ev)) {
                     display.update(|d| {
                         d.protocol = p;
-                        if p != DisplayProtocol::Spice {
-                            d.sound = SoundDevice::None;
-                        }
                         if p == DisplayProtocol::None {
                             d.video = VideoDevice::None;
                         } else if d.video == VideoDevice::None {
@@ -77,9 +75,8 @@ pub fn DisplaySettingsFields(display: RwSignal<VmDisplay>) -> impl IntoView {
             </select>
         </div>
         <div class="form-group">
-            <label for="disp-sound">"Sound card (over SPICE)"</label>
+            <label for="disp-sound">"Sound card"</label>
             <select id="disp-sound"
-                disabled=move || display.get().protocol != DisplayProtocol::Spice
                 on:change=move |ev| {
                     if let Some(s) = parse::<SoundDevice>(&event_target_value(&ev)) {
                         display.update(|d| d.sound = s);
@@ -89,6 +86,14 @@ pub fn DisplaySettingsFields(display: RwSignal<VmDisplay>) -> impl IntoView {
                     <option value=wire(&s) selected=move || display.get().sound == s>{label}</option>
                 }).collect_view()}
             </select>
+            {move || {
+                let d = display.get();
+                (d.sound != SoundDevice::None && d.protocol != DisplayProtocol::Spice).then(|| view! {
+                    <p class="form-help warning" id="disp-sound-warning">
+                        "Horcrux's console only carries audio over SPICE: with this display the sound card exists in the guest, but you won't hear it in the console. Use SPICE, or RDP or another remote-access tool inside the guest, to get the audio."
+                    </p>
+                })
+            }}
         </div>
     }
 }
