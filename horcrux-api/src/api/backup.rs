@@ -280,6 +280,12 @@ async fn list_backup_storages(State(state): St) -> Json<Vec<BackupStorage>> {
             });
         }
     }
+    // A storage pool with the id "local" (the one created on first start)
+    // takes that id over: resolve_storage("local") picks the pool, so the
+    // default directory would be a second, unreachable "local" entry.
+    if out.iter().skip(1).any(|s| s.id == "local") {
+        out.remove(0);
+    }
     Json(out)
 }
 
