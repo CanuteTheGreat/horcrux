@@ -1478,7 +1478,16 @@ async fn recover_node(
     online: &[String],
     failed: &str,
 ) {
-    let plan = state.ha_manager.plan_relocations(failed, online).await;
+    // A guest that fits on no awake node waits (instead of going to Error) while a
+    // parked node can still be powered on through its BMC; the next pass places it.
+    let can_wake = crate::api::idle_power::capacity_may_arrive(state, online).await;
+    let (plan, waiting) = state
+        .ha_manager
+        .plan_relocations_waking(failed, online, can_wake)
+        .await;
+    if !waiting.is_empty() {
+        crate::api::idle_power::wake_for_capacity(state, &waiting).await;
+    }
     for p in plan {
         tracing::warn!(
             "HA: recovering VM {} of failed node {failed} on {}",

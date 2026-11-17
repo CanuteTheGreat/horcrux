@@ -139,3 +139,111 @@ pub fn spawn(state: Arc<AppState>) {
         }
     });
 }
+
+/// Nodes powered on for HA capacity, with when (so a node that never rejoins is
+/// not woken in a loop, and the next parked node gets its turn).
+static CAPACITY_WAKES: OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = OnceLock::new();
+
+const CAPACITY_WAKE_RETRY: Duration = Duration::from_secs(900);
+
+/// Pick the parked node to wake: first of `plan_wake` that was not already woken
+/// for capacity within [`CAPACITY_WAKE_RETRY`].
+pub fn pick_capacity_wake(
+    nodes: &[power::PowerNode],
+    recent: &std::collections::HashMap<String, std::time::Instant>,
+) -> Option<String> {
+    let open: Vec<power::PowerNode> = nodes
+        .iter()
+        .filter(|n| matches!(n.wake, Some(power::WakeMethod::Bmc)))
+        .filter(|n| {
+            recent
+                .get(&n.name)
+                .is_none_or(|t| t.elapsed() >= CAPACITY_WAKE_RETRY)
+        })
+        .cloned()
+        .collect();
+    power::plan_wake(&open, 1).into_iter().next()
+}
+
+/// The parked node HA would wake for capacity right now, if any.
+pub async fn next_capacity_wake(state: &Arc<AppState>) -> Option<String> {
+    let (_, nodes, _) = power_view(state).await;
+    let map = CAPACITY_WAKES.get_or_init(Default::default).lock().ok()?;
+    pick_capacity_wake(&nodes, &map)
+}
+
+/// True when HA may still gain capacity: a parked node can be woken, or one woken
+/// for capacity in the last [`CAPACITY_WAKE_RETRY`] has not joined (`online`) yet,
+/// so its guests wait for it instead of being failed while it boots.
+pub async fn capacity_may_arrive(state: &Arc<AppState>, online: &[String]) -> bool {
+    if next_capacity_wake(state).await.is_some() {
+        return true;
+    }
+    CAPACITY_WAKES
+        .get_or_init(Default::default)
+        .lock()
+        .map(|m| {
+            m.iter()
+                .any(|(n, t)| t.elapsed() < CAPACITY_WAKE_RETRY && !online.contains(n))
+        })
+        .unwrap_or(false)
+}
+
+/// HA found guests (`vm_ids`) that fit on no awake node: power on one parked node
+/// through its BMC so the next HA pass can place them.
+pub async fn wake_for_capacity(state: &Arc<AppState>, vm_ids: &[String]) {
+    let Some(node) = next_capacity_wake(state).await else {
+        return;
+    };
+    if let Ok(mut m) = CAPACITY_WAKES.get_or_init(Default::default).lock() {
+        m.insert(node.clone(), std::time::Instant::now());
+    }
+    match crate::api::ha_loop::fencing().power_on_node(&node).await {
+        crate::ha::fencing::FencingResult::Success => tracing::warn!(
+            "HA: no awake node can take {} guest(s) ({}): powered {node} on for capacity",
+            vm_ids.len(),
+            vm_ids.join(", ")
+        ),
+        other => tracing::warn!("HA: wake of {node} for capacity failed: {other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod capacity_wake_tests {
+    use super::*;
+    use crate::cluster::power::WakeMethod;
+
+    fn node(name: &str, on: bool, wake: Option<WakeMethod>) -> PowerNode {
+        PowerNode {
+            name: name.into(),
+            labels: vec![power::POWER_LABEL.into()],
+            powered_on: on,
+            running_guests: 0,
+            cpu_percent: 0.0,
+            hosts_osds: false,
+            pinned: false,
+            votes: 1,
+            wake,
+        }
+    }
+
+    #[test]
+    fn capacity_wake_takes_parked_bmc_nodes_one_turn_at_a_time() {
+        let nodes = vec![
+            node("n1", true, Some(WakeMethod::Bmc)),
+            node("n2", false, Some(WakeMethod::Wol([1, 2, 3, 4, 5, 6]))),
+            node("n3", false, Some(WakeMethod::Bmc)),
+            node("n4", false, Some(WakeMethod::Bmc)),
+        ];
+        let mut recent = std::collections::HashMap::new();
+        // WoL-only nodes cannot be woken through the BMC; running nodes are not parked.
+        assert_eq!(pick_capacity_wake(&nodes, &recent).as_deref(), Some("n3"));
+        // n3 was just woken and has not rejoined: n4 is next, then nothing.
+        recent.insert("n3".to_string(), std::time::Instant::now());
+        assert_eq!(pick_capacity_wake(&nodes, &recent).as_deref(), Some("n4"));
+        recent.insert("n4".to_string(), std::time::Instant::now());
+        assert_eq!(pick_capacity_wake(&nodes, &recent), None);
+    }
+}
