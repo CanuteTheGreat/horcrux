@@ -17,9 +17,9 @@ fn hypervisor_from(value: &str) -> VmHypervisor {
 #[component]
 pub fn VmCreate() -> impl IntoView {
     let (name, set_name) = create_signal(String::new());
-    let (cpus, set_cpus) = create_signal(2u32);
-    let (memory, set_memory) = create_signal(2048u64);
-    let (disk_size, set_disk_size) = create_signal(20u64);
+    let cpus = create_rw_signal(2u64);
+    let memory = create_rw_signal(2048u64);
+    let disk_size = create_rw_signal(32u64);
     let (hypervisor, set_hypervisor) = create_signal(VmHypervisor::Qemu);
     let (architecture, set_architecture) = create_signal(VmArchitecture::X86_64);
     let display = create_rw_signal(horcrux_common::VmDisplay::default());
@@ -42,28 +42,66 @@ pub fn VmCreate() -> impl IntoView {
     // component so they are disposed with the page.
     let owner = Owner::current();
     let (host_options, set_host_options) = create_signal(None::<api::VmHostOptions>);
-    spawn_local(async move {
-        if let Ok(o) = api::get_vm_host_options().await {
-            // Proxmox's default: one VirtIO NIC on vmbr0 when the host has
-            // it (other bridges are picked with "Add network card").
-            if let Some(b) = o.bridges.iter().find(|b| b.name == "vmbr0") {
-                let bridge = b.name.clone();
-                hardware.update(|h| {
-                    if h.nets.is_empty() {
-                        h.nets.push(horcrux_common::VmNic {
-                            model: horcrux_common::NicModel::Virtio,
-                            bridge,
-                            mac: None,
-                            vlan: None,
-                        })
+    let load_options = move |first: bool| {
+        spawn_local(async move {
+            if let Ok(o) = api::get_vm_host_options().await {
+                if first {
+                    // Every new VM gets a NIC on the global default network if
+                    // one is set, else the hypervisor's own (QEMU: vmbr0, else
+                    // the bridge the host reaches the network through); the
+                    // user can still change or remove it.
+                    let dn = &o.default_networks;
+                    let bridge = dn.override_network.clone().or_else(|| dn.qemu.clone());
+                    if let Some(bridge) = bridge {
+                        hardware.update(|h| {
+                            if h.nets.is_empty() {
+                                h.nets.push(horcrux_common::VmNic {
+                                    model: horcrux_common::NicModel::Virtio,
+                                    bridge,
+                                    mac: None,
+                                    vlan: None,
+                                })
+                            }
+                        });
                     }
-                });
+                    // Default ISO is not preselected, but the sliders start
+                    // inside what the host can give.
+                    let cpu_max = o.host.cpus.max(1) as u64;
+                    if cpus.get_untracked() > cpu_max {
+                        cpus.set(cpu_max);
+                    }
+                    let mem_max = o.host.max_vm_memory_mb;
+                    if mem_max >= 512 && memory.get_untracked() > mem_max {
+                        memory.set(
+                            *crate::components::memory_steps(mem_max)
+                                .last()
+                                .unwrap_or(&512),
+                        );
+                    }
+                }
+                set_host_options.set(Some(o));
             }
-            set_host_options.set(Some(o));
-        }
-    });
+        });
+    };
+    load_options(true);
     let (creating, set_creating) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
+
+    // GB free where disk0 goes: the chosen pool, else the VM storage dir.
+    let disk_free = move || {
+        host_options
+            .get()
+            .map(|o| match disk0.get().storage {
+                Some(id) => o
+                    .storage_pools
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.available)
+                    .unwrap_or(0),
+                None => o.host.default_disk_available_gb,
+            })
+            .unwrap_or(256)
+    };
 
     let navigate = use_navigate();
     let is_instance = move || matches!(hypervisor.get(), VmHypervisor::Lxd | VmHypervisor::Incus);
@@ -93,7 +131,7 @@ pub fn VmCreate() -> impl IntoView {
             name: name.get(),
             hypervisor: hypervisor.get(),
             memory: memory.get(),
-            cpus: cpus.get(),
+            cpus: cpus.get() as u32,
             disk_size: disk_size.get(),
             status: VmStatus::Stopped,
             architecture: architecture.get(),
@@ -209,40 +247,23 @@ pub fn VmCreate() -> impl IntoView {
                     </select>
                 </div>
 
-                <div class="form-group">
-                    <label>"CPUs"</label>
-                    <input
-                        type="number"
-                        min="1"
-                        max="64"
-                        required
-                        on:input=move |ev| set_cpus.set(event_target_value(&ev).parse().unwrap_or(2))
-                        prop:value=cpus
-                    />
-                </div>
+                <crate::components::ResourceSlider label="CPUs" id="vm-cpus" value=cpus
+                    steps=Signal::derive(move || crate::components::cpu_steps(host_options.get().map(|o| o.host.cpus).unwrap_or(4)))
+                    limit=Signal::derive(move || host_options.get().map(|o| o.host.cpus as u64).unwrap_or(u64::MAX))
+                    hard_max=Signal::derive(move || host_options.get().map(|o| o.host.cpus as u64 * 4).unwrap_or(1024).max(4))
+                    fmt=crate::components::human_cpus unit="vCPUs" limit_what="logical CPUs"/>
 
-                <div class="form-group">
-                    <label>"Memory (MB)"</label>
-                    <input
-                        type="number"
-                        min="512"
-                        step="512"
-                        required
-                        on:input=move |ev| set_memory.set(event_target_value(&ev).parse().unwrap_or(2048))
-                        prop:value=memory
-                    />
-                </div>
+                <crate::components::ResourceSlider label="Memory" id="vm-memory" value=memory
+                    steps=Signal::derive(move || crate::components::memory_steps(host_options.get().map(|o| o.host.max_vm_memory_mb).unwrap_or(8192)))
+                    limit=Signal::derive(move || host_options.get().map(|o| o.host.max_vm_memory_mb).unwrap_or(u64::MAX))
+                    hard_max=Signal::derive(move || host_options.get().map(|o| o.host.memory_mb * 2).unwrap_or(1 << 20).max(512))
+                    fmt=crate::components::human_mb unit="MB" limit_what="available RAM (after the host's reserve)"/>
 
-                <div class="form-group">
-                    <label>"Disk Size (GB)"</label>
-                    <input
-                        type="number"
-                        min="10"
-                        required
-                        on:input=move |ev| set_disk_size.set(event_target_value(&ev).parse().unwrap_or(20))
-                        prop:value=disk_size
-                    />
-                </div>
+                <crate::components::ResourceSlider label="Disk" id="vm-disk" value=disk_size
+                    steps=Signal::derive(move || crate::components::disk_steps(disk_free()))
+                    limit=Signal::derive(move || if host_options.get().is_some() { disk_free() } else { u64::MAX })
+                    hard_max=Signal::derive(move || 1u64 << 20)
+                    fmt=crate::components::human_gb unit="GB" limit_what="free in the selected storage"/>
 
                 <div class="form-group">
                     {move || if is_instance() {
@@ -273,7 +294,7 @@ pub fn VmCreate() -> impl IntoView {
                         <legend>"Disks"</legend>
                         <div class="form-row">
                             <strong>"disk0"</strong>
-                            <span>{move || format!("{} GB", disk_size.get())}</span>
+                            <span id="vm-create-disk0-size">{move || format!("{} GB", disk_size.get())}</span>
                             <super::vm_hardware::DiskOptionFields disk=disk0 prefix="vm-create-disk0"/>
                             <super::vm_hardware::DiskStorageSelect disk=disk0 options=host_options id="vm-create-disk0-storage"/>
                         </div>
@@ -312,7 +333,8 @@ pub fn VmCreate() -> impl IntoView {
                 <super::vm_display::DisplaySettingsFields display=display/>
 
                 <Show when=move || !is_instance()>
-                    <super::vm_hardware::HardwareFields hardware=hardware options=host_options/>
+                    <super::vm_hardware::HardwareFields hardware=hardware options=host_options
+                        reload_options=Callback::new(move |_: ()| load_options(false))/>
                 </Show>
 
                 {move || error.get().map(|err| view! {

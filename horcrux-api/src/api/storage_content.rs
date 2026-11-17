@@ -221,27 +221,41 @@ async fn upload(
     Query(q): Query<UploadQuery>,
     body: Body,
 ) -> Result<(StatusCode, Json<ContentItem>), ApiError> {
-    use tokio::io::AsyncWriteExt;
     let ct = content_type(&q.content)?;
+    let dir = pool_base(&state, &pool_id).await?.join(ct.dir);
+    store_upload(ct, dir, q.filename, q.sha256, body, &pool_id).await
+}
+
+/// Stream a request body into `dir/filename` (via a hidden `.part` file),
+/// checked against the optional SHA-256 and moved into place atomically.
+/// Shared by the pool upload and the ISO library upload.
+pub async fn store_upload(
+    ct: &ContentType,
+    dir: PathBuf,
+    filename: String,
+    sha256: Option<String>,
+    body: Body,
+    label: &str,
+) -> Result<(StatusCode, Json<ContentItem>), ApiError> {
+    use tokio::io::AsyncWriteExt;
     if !ct.uploadable {
         return Err(ApiError::BadRequest(format!(
             "{} cannot be uploaded",
             ct.label
         )));
     }
-    name_ok(ct, &q.filename)?;
-    if let Some(s) = &q.sha256 {
+    name_ok(ct, &filename)?;
+    if let Some(s) = &sha256 {
         if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(ApiError::BadRequest("sha256 must be 64 hex digits".into()));
         }
     }
-    let dir = pool_base(&state, &pool_id).await?.join(ct.dir);
     tokio::fs::create_dir_all(&dir).await?;
-    let target = dir.join(&q.filename);
+    let target = dir.join(&filename);
     if target.exists() {
-        return Err(ApiError::Conflict(format!("{} already exists", q.filename)));
+        return Err(ApiError::Conflict(format!("{filename} already exists")));
     }
-    let part = dir.join(format!(".{}.part", q.filename));
+    let part = dir.join(format!(".{filename}.part"));
     let mut f = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -249,7 +263,7 @@ async fn upload(
         .await
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
-                ApiError::Conflict(format!("{} is already being uploaded", q.filename))
+                ApiError::Conflict(format!("{filename} is already being uploaded"))
             } else {
                 ApiError::from(e)
             }
@@ -270,7 +284,7 @@ async fn upload(
             return Err(ApiError::BadRequest("empty upload".into()));
         }
         let got = hex::encode(hasher.finalize_reset());
-        if let Some(want) = &q.sha256 {
+        if let Some(want) = &sha256 {
             if !want.eq_ignore_ascii_case(&got) {
                 return Err(ApiError::BadRequest(format!(
                     "sha256 mismatch: uploaded data is {got}"
@@ -294,18 +308,18 @@ async fn upload(
     if let Err(e) = tokio::fs::hard_link(&part, &target).await {
         let _ = tokio::fs::remove_file(&part).await;
         return Err(if e.kind() == std::io::ErrorKind::AlreadyExists {
-            ApiError::Conflict(format!("{} already exists", q.filename))
+            ApiError::Conflict(format!("{filename} already exists"))
         } else {
             ApiError::from(e)
         });
     }
     let _ = tokio::fs::remove_file(&part).await;
-    tracing::info!("uploaded {} ({size} bytes) to pool {pool_id}", q.filename);
+    tracing::info!("uploaded {filename} ({size} bytes) to {label}");
     Ok((
         StatusCode::CREATED,
         Json(ContentItem {
             content: ct.id.into(),
-            name: q.filename,
+            name: filename,
             size,
             path: target.to_string_lossy().to_string(),
             modified: chrono::Utc::now().timestamp(),

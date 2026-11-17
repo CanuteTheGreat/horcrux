@@ -6454,6 +6454,59 @@ pub struct IsoFile {
     pub downloading: bool,
     #[serde(default)]
     pub error: Option<String>,
+    /// Storage pool holding it (`""`: the image library).
+    #[serde(default)]
+    pub storage: String,
+    #[serde(default)]
+    pub storage_name: String,
+}
+
+/// A place ISOs can be picked from or added to.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct IsoStorage {
+    pub id: String,
+    pub name: String,
+    pub dir: String,
+    /// GB free.
+    #[serde(default)]
+    pub available: u64,
+}
+
+/// What the host can run: slider bounds in the Create VM form.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HostCapabilities {
+    pub cpus: u32,
+    pub memory_mb: u64,
+    pub memory_reserve_mb: u64,
+    pub max_vm_memory_mb: u64,
+    /// GB free where disks go when no pool is chosen.
+    #[serde(default)]
+    pub default_disk_available_gb: u64,
+}
+
+/// Networks a new VM's first NIC attaches to.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DefaultNetworks {
+    pub qemu: Option<String>,
+    pub incus: Option<String>,
+    pub lxd: Option<String>,
+    #[serde(rename = "override")]
+    pub override_network: Option<String>,
+}
+
+/// GET|PUT /api/vms/defaults
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct VmDefaults {
+    #[serde(default)]
+    pub default_network: Option<String>,
+}
+
+pub async fn get_vm_defaults() -> Result<VmDefaults, ApiError> {
+    fetch_json("/vms/defaults").await
+}
+
+pub async fn put_vm_defaults(d: &VmDefaults) -> Result<VmDefaults, ApiError> {
+    put_json("/vms/defaults", d).await
 }
 
 /// GET /api/vms/host-options
@@ -6474,6 +6527,14 @@ pub struct VmHostOptions {
     /// Storage pools a VM disk can be created in (Create VM / Add disk).
     #[serde(default)]
     pub storage_pools: Vec<VmDiskPool>,
+    #[serde(default)]
+    pub iso_storages: Vec<IsoStorage>,
+    #[serde(default)]
+    pub default_iso_storage: String,
+    #[serde(default)]
+    pub host: HostCapabilities,
+    #[serde(default)]
+    pub default_networks: DefaultNetworks,
 }
 
 /// A storage pool offered for VM disks (`VmHostOptions::storage_pools`).
@@ -6602,16 +6663,61 @@ pub async fn list_isos() -> Result<Vec<IsoFile>, ApiError> {
     fetch_json("/storage/isos").await
 }
 
-pub async fn download_iso(url: &str, filename: Option<&str>) -> Result<IsoFile, ApiError> {
+/// Download an ISO from a URL into `storage` (`""` = image library),
+/// optionally verified against `sha256`.
+pub async fn download_iso(
+    url: &str,
+    filename: Option<&str>,
+    storage: &str,
+    sha256: Option<&str>,
+) -> Result<IsoFile, ApiError> {
     post_json(
         "/storage/isos/download",
-        &serde_json::json!({ "url": url, "filename": filename }),
+        &serde_json::json!({ "url": url, "filename": filename, "storage": storage, "sha256": sha256 }),
     )
     .await
 }
 
-pub async fn delete_iso(name: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/storage/isos/{}", urlencoding::encode(name))).await
+/// Upload a browser `File` into the ISO directory of `storage` (`""` =
+/// image library) as the raw request body, optionally verified against `sha256`.
+pub async fn upload_iso(
+    storage: &str,
+    file: web_sys::File,
+    sha256: Option<&str>,
+) -> Result<IsoFile, ApiError> {
+    let mut q = format!(
+        "/storage/isos/upload?filename={}&storage={}",
+        urlencoding::encode(&file.name()),
+        urlencoding::encode(storage)
+    );
+    if let Some(h) = sha256 {
+        q.push_str(&format!("&sha256={}", urlencoding::encode(h)));
+    }
+    let url = resolve_api_url(&q);
+    let response = with_auth(reqwasm::http::Request::post(&url))
+        .body(file)
+        .send()
+        .await
+        .map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
+    if response.ok() {
+        let text = response.text().await.map_err(|e| ApiError {
+            message: e.to_string(),
+        })?;
+        decode_body(&text)
+    } else {
+        Err(http_error(response).await)
+    }
+}
+
+pub async fn delete_iso(name: &str, storage: &str) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/storage/isos/{}?storage={}",
+        urlencoding::encode(name),
+        urlencoding::encode(storage)
+    ))
+    .await
 }
 
 // Storage content types (Infrastructure > Storage Content) - horcrux-api/src/api/storage_content.rs.

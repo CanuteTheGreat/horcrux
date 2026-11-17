@@ -279,11 +279,12 @@ for card, qdev in (("intel-hda", "intel-hda"), ("ich9-intel-hda", "ich9-intel-hd
     check("-audiodev spice,id=snd0" in qemu_cmdline(), "audio is carried over SPICE")
     call("POST", f"/vms/{AUD}/stop")
     call("DELETE", f"/vms/{AUD}")
-# sound without SPICE is refused plainly
+# sound with a VNC display is accepted (guest-side RDP/SPICE can carry the audio)
 st, e = call("POST", "/vms", {
     "id": AUD, "name": AUD, "hypervisor": "qemu", "architecture": "x86_64",
     "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
     "display": {"protocol": "vnc", "video": "std", "sound": "intel-hda"}, "hardware": {"nets": []},
 }, ok=None)
-check(st in (400, 422) and "SPICE" in json.dumps(e), "a sound card on a VNC display is refused with the reason")
+check(st in (200, 201), "a sound card on a VNC display is accepted")
+call("DELETE", f"/vms/{AUD}")
 print("[vm-advanced-e2e] ALL OK", flush=True)

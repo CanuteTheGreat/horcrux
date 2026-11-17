@@ -802,8 +802,27 @@ impl HaManager {
     /// is moved yet: the caller recovers each plan entry and then calls
     /// [`HaManager::set_placement`].
     pub async fn plan_relocations(&self, failed_node: &str, online: &[String]) -> Vec<Relocation> {
+        self.plan_relocations_waking(failed_node, online, false)
+            .await
+            .0
+    }
+
+    /// [`plan_relocations`](Self::plan_relocations) for a cluster that can still
+    /// power on a parked node. With `can_wake`, a resource that fits on no online
+    /// node is NOT sent to `Error`: it stays `Started` on the failed node and is
+    /// returned in the second list (waiting for capacity), so the caller can wake
+    /// a node and the next HA pass places it. `Error` is terminal, so without
+    /// this a guest stranded by "every awake node is full or incompatible" would
+    /// never be recovered even though a powered-off node could take it.
+    pub async fn plan_relocations_waking(
+        &self,
+        failed_node: &str,
+        online: &[String],
+        can_wake: bool,
+    ) -> (Vec<Relocation>, Vec<String>) {
+        let mut waiting: Vec<String> = Vec::new();
         if !self.is_enabled().await {
-            return Vec::new();
+            return (Vec::new(), waiting);
         }
         let affected: Vec<HaResource> = self
             .resources
@@ -827,6 +846,10 @@ impl HaManager {
             } else {
                 match self.find_best_node_for_migration(&r, Some(online)).await {
                     Ok(Some(t)) => (None, Some(t), String::new()),
+                    Ok(None) if can_wake => {
+                        waiting.push(r.vm_id.clone());
+                        continue;
+                    }
                     Ok(None) => (
                         Some(HaState::Error),
                         None,
@@ -871,7 +894,7 @@ impl HaManager {
                 });
             }
         }
-        plan
+        (plan, waiting)
     }
 
     /// Record that `vm_id` now runs on `node` (placement `seq`), started.
@@ -1796,6 +1819,28 @@ mod tests {
             .plan_relocations("n1", &["n2".to_string()])
             .await
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn no_online_candidate_waits_instead_of_erroring_when_a_node_can_be_woken() {
+        let m = manager_with_vm_on("n1", 3).await;
+        let (plan, waiting) = m.plan_relocations_waking("n1", &[], true).await;
+        assert!(plan.is_empty());
+        assert_eq!(waiting, vec!["vm1".to_string()]);
+        // Not terminal: still Started on the failed node, no Error event.
+        assert_eq!(m.get_resource("vm1").await.unwrap().state, HaState::Started);
+        // Once the woken node is online the same resource is planned onto it.
+        let (plan, waiting) = m
+            .plan_relocations_waking("n1", &["n2".to_string()], true)
+            .await;
+        assert!(waiting.is_empty());
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].target, "n2");
+        // Nothing left to wake: the old terminal behaviour applies.
+        let m2 = manager_with_vm_on("n1", 3).await;
+        let (plan, waiting) = m2.plan_relocations_waking("n1", &[], false).await;
+        assert!(plan.is_empty() && waiting.is_empty());
+        assert_eq!(m2.get_resource("vm1").await.unwrap().state, HaState::Error);
     }
 
     #[tokio::test]

@@ -182,7 +182,14 @@ async fn export_plan_apply_converge_and_prune() {
         .collect();
     assert_eq!(names, ["decl-vm"]);
     assert_eq!(
-        api.get("/storage/pools").await.1.as_array().unwrap().len(),
+        api.get("/storage/pools")
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["id"] != "local") // the install's default pool
+            .count(),
         1,
         "pools are unmanaged by that spec"
     );
@@ -197,10 +204,14 @@ async fn export_plan_apply_converge_and_prune() {
     assert_eq!(v["ok"], true, "{v}");
     assert_eq!(api.get("/vms").await.1.as_array().unwrap().len(), 0);
     assert_eq!(api.get("/sdn/zones").await.1.as_array().unwrap().len(), 0);
-    assert_eq!(
-        api.get("/storage/pools").await.1.as_array().unwrap().len(),
-        0
-    );
+    assert!(api
+        .get("/storage/pools")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|p| p["name"] != "decl"));
 }
 
 #[tokio::test]

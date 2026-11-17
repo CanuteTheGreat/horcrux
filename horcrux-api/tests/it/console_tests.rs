@@ -537,7 +537,7 @@ async fn spice_console_carries_audio_and_usbredir() {
     let c = http();
     let t = token(&c).await;
     let id = "console-spice";
-    // Sound needs SPICE: rejected on a VNC VM.
+    // Sound is allowed on a VNC VM (guest-side RDP/SPICE can carry it).
     let _ = call(&c, &t, reqwest::Method::DELETE, &format!("/vms/{id}"), None).await;
     let (s, b) = call(
         &c,
@@ -550,7 +550,8 @@ async fn spice_console_carries_audio_and_usbredir() {
         "display": {"protocol": "vnc", "video": "std", "sound": "intel-hda"}})),
     )
     .await;
-    assert_eq!(s, 422, "sound without SPICE must be rejected: {b}");
+    assert_eq!(s, 201, "sound with VNC must be accepted: {b}");
+    let _ = call(&c, &t, reqwest::Method::DELETE, &format!("/vms/{id}"), None).await;
 
     for sound in ["intel-hda", "ich9-intel-hda", "ac97"] {
         fresh_vm(

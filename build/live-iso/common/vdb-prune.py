@@ -10,7 +10,7 @@ bug, a strip that eats /usr/src or a toolchain header) stays visible and fails t
 Every pattern here must match a deletion made in the Dockerfile strips (gnome-light / gringotts / setup-rootfs.sh). Adding a pattern is a review
 decision: it means "a user of the installed system does not need this, and re-emerging the package brings it back".
 
-usage: vdb-prune.py [--groups core,dev[,gringotts-fw]] [ROOT]   (default groups: core,dev)
+usage: vdb-prune.py [--groups core,dev[,desktop-size][,gringotts-fw]] [ROOT]   (default groups: core,dev)
 """
 import glob
 import os
@@ -35,6 +35,12 @@ GROUPS = {
     r"^/usr/lib(64)?/.*\.a$",
     r"^/usr/lib/llvm/[^/]+/(include|bin)/",
     r"^/usr/lib/clang/",
+  ],
+  # size strip of the public GNOME edition (project/variants/gnome-light/Dockerfile; not applied to KEEP_DEV images)
+  "desktop-size": [
+    r"^/(usr/)?lib/firmware/nvidia/",            # nouveau GSP firmware; the image's mesa has no nouveau driver
+    r"^/usr/share/fonts/noto/Noto[^/]*(Condensed|SemiBold|Extra)[^/]*\.tt[fc]$",   # what media-fonts/noto[-extra] leaves out
+    r"^/usr/share/fonts/noto-cjk/Noto(Sans|Serif)CJK-(Thin|Light|ExtraLight|DemiLight|SemiBold|Black)\.ttc$",
   ],
   # the private gringotts image also drops firmware of hardware that laptop does not have
   "gringotts-fw": [

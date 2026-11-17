@@ -376,7 +376,8 @@ async fn configuration_survives_process_restart() {
     assert_listed(&client, &token, &base, &created, true).await;
     let log = server.log_text();
     assert!(
-        log.contains("Loaded 1 storage pool(s) from database"),
+        // the pool created above plus the `local` pool seeded on first start
+        log.contains("Loaded 2 storage pool(s) from database"),
         "startup log should report the loaded pool:\n{log}"
     );
 

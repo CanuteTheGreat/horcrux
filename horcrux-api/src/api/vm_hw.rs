@@ -41,6 +41,10 @@ use std::time::Duration;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/vms/host-options", get(host_options))
+        .route(
+            "/api/vms/defaults",
+            get(get_vm_defaults).put(put_vm_defaults),
+        )
         .route("/api/vms/:id/config", put(update_config))
         .route("/api/vms/:id/shutdown", post(shutdown))
         .route("/api/vms/:id/reboot", post(reboot))
@@ -70,6 +74,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/api/storage/isos", get(list_isos))
         .route("/api/storage/isos/download", post(download_iso))
+        .route(
+            "/api/storage/isos/upload",
+            post(upload_iso).layer(axum::extract::DefaultBodyLimit::disable()),
+        )
         .route("/api/storage/isos/:name", delete(delete_iso))
 }
 
@@ -91,6 +99,50 @@ pub struct IsoFile {
     /// Last download error for this file name, if the download failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Storage pool holding the file (`""`: the node's image library).
+    #[serde(default)]
+    pub storage: String,
+    #[serde(default)]
+    pub storage_name: String,
+}
+
+/// A place an ISO can be picked from, uploaded to or downloaded into.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IsoStorage {
+    /// Storage pool id; `""` is the node's image library (`iso_dir`).
+    pub id: String,
+    pub name: String,
+    /// Directory ISOs go to.
+    pub dir: String,
+    /// GB free on its file system.
+    pub available: u64,
+}
+
+/// What this host can run: bounds for the Create VM sliders.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HostCapabilities {
+    /// Logical CPUs.
+    pub cpus: u32,
+    /// Installed RAM (MB).
+    pub memory_mb: u64,
+    /// RAM kept for the host itself (MB).
+    pub memory_reserve_mb: u64,
+    /// Most RAM one VM may be given (`memory_mb - memory_reserve_mb`).
+    pub max_vm_memory_mb: u64,
+    /// GB free where VM disks go when no storage pool is chosen.
+    pub default_disk_available_gb: u64,
+}
+
+/// Networks a new VM's first NIC attaches to.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct DefaultNetworks {
+    /// The QEMU hypervisor's network: a Linux bridge.
+    pub qemu: Option<String>,
+    pub incus: Option<String>,
+    pub lxd: Option<String>,
+    /// Global override (Settings): used instead of the hypervisor's own.
+    #[serde(rename = "override")]
+    pub override_network: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +163,147 @@ pub struct HostOptions {
     /// Storage pools a VM disk can be created in (Create VM / Add disk).
     #[serde(default)]
     pub storage_pools: Vec<crate::api::storage_volumes::VmDiskPool>,
+    /// Storages ISOs can be picked from / added to (always at least the
+    /// image library).
+    #[serde(default)]
+    pub iso_storages: Vec<IsoStorage>,
+    /// Storage ISOs go to unless another is chosen.
+    #[serde(default)]
+    pub default_iso_storage: String,
+    pub host: HostCapabilities,
+    #[serde(default)]
+    pub default_networks: DefaultNetworks,
+}
+
+/// Global VM defaults (Settings): `GET|PUT /api/vms/defaults`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct VmDefaults {
+    /// Network (bridge) every new VM's first NIC attaches to instead of the
+    /// hypervisor's own default; empty/absent = per hypervisor.
+    #[serde(default)]
+    pub default_network: Option<String>,
+}
+
+const VM_DEFAULTS_KIND: &str = "vm_defaults";
+
+pub async fn load_vm_defaults(state: &AppState) -> VmDefaults {
+    crate::db::config_store::ConfigStore::new(&state.database)
+        .load_values::<VmDefaults>(VM_DEFAULTS_KIND)
+        .await
+        .ok()
+        .and_then(|v| v.into_iter().next())
+        .unwrap_or_default()
+}
+
+async fn get_vm_defaults(State(state): State<Arc<AppState>>) -> Json<VmDefaults> {
+    Json(load_vm_defaults(&state).await)
+}
+
+async fn put_vm_defaults(
+    State(state): State<Arc<AppState>>,
+    Json(mut req): Json<VmDefaults>,
+) -> Result<Json<VmDefaults>, ApiError> {
+    req.default_network = req
+        .default_network
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
+    if let Some(n) = &req.default_network {
+        if crate::vm::qemu::HostNet::system()
+            .bridge_vlan_aware(n)
+            .is_none()
+        {
+            return Err(ApiError::BadRequest(format!(
+                "default network {n}: no such bridge on this host (bridges: {})",
+                host_bridges()
+                    .iter()
+                    .map(|b| b.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+    crate::db::config_store::ConfigStore::new(&state.database)
+        .put(VM_DEFAULTS_KIND, "default", &req)
+        .await?;
+    Ok(Json(req))
+}
+
+/// Logical CPUs, RAM and reserve of this host.
+pub fn host_capabilities(default_disk_available_gb: u64) -> HostCapabilities {
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(1);
+    let memory_mb = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|m| {
+            m.lines()
+                .find_map(|l| l.strip_prefix("MemTotal:"))
+                .and_then(|r| {
+                    r.split_whitespace()
+                        .next()
+                        .and_then(|k| k.parse::<u64>().ok())
+                })
+        })
+        .map(|kb| kb / 1024)
+        .unwrap_or(0);
+    let memory_reserve_mb = memory_reserve_mb(memory_mb);
+    HostCapabilities {
+        cpus,
+        memory_mb,
+        memory_reserve_mb,
+        max_vm_memory_mb: memory_mb.saturating_sub(memory_reserve_mb),
+        default_disk_available_gb,
+    }
+}
+
+/// RAM left to the host: 1 GB, or 10% on big hosts.
+pub fn memory_reserve_mb(total_mb: u64) -> u64 {
+    (total_mb / 10).max(1024).min(total_mb / 2)
+}
+
+/// The Linux bridge new QEMU VMs attach to: `vmbr0`, else the bridge the
+/// default route leaves through, else a general-purpose bridge (not one
+/// that belongs to a container runtime).
+pub fn default_qemu_bridge(bridges: &[HostBridge], route_dev: Option<&str>) -> Option<String> {
+    if let Some(b) = bridges.iter().find(|b| b.name == "vmbr0") {
+        return Some(b.name.clone());
+    }
+    if let Some(dev) = route_dev {
+        if let Some(b) = bridges.iter().find(|b| b.name == dev) {
+            return Some(b.name.clone());
+        }
+        // route leaves through a bridge port
+        if let Ok(master) = std::fs::read_link(format!("/sys/class/net/{dev}/master")) {
+            let m = master
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if bridges.iter().any(|b| b.name == m) {
+                return Some(m);
+            }
+        }
+    }
+    let runtime = |n: &str| {
+        [
+            "docker", "podman", "cni", "incusbr", "lxdbr", "lxcbr", "br-",
+        ]
+        .iter()
+        .any(|p| n.starts_with(p))
+    };
+    bridges
+        .iter()
+        .find(|b| !runtime(&b.name))
+        .map(|b| b.name.clone())
+}
+
+/// Interface of the IPv4 default route.
+fn default_route_dev() -> Option<String> {
+    let t = std::fs::read_to_string("/proc/net/route").ok()?;
+    t.lines().skip(1).find_map(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        (f.len() > 2 && f[1] == "00000000" && f[2] != "00000000").then(|| f[0].to_string())
+    })
 }
 
 /// Whether `program` is an executable in PATH.
@@ -254,15 +447,75 @@ pub fn host_bridges() -> Vec<HostBridge> {
 
 /// Directories ISOs are listed from and may be attached from.
 async fn iso_roots(state: &AppState) -> Vec<PathBuf> {
-    let mut roots = vec![image_dir(&state.config.paths.data_dir)];
+    iso_sources(state).await.into_iter().map(|r| r.0).collect()
+}
+
+/// (directory, storage id, storage name) ISOs are listed from.
+async fn iso_sources(state: &AppState) -> Vec<(PathBuf, String, String)> {
+    let mut roots = vec![(
+        image_dir(&state.config.paths.data_dir),
+        String::new(),
+        "Image library".to_string(),
+    )];
     for p in state.storage_manager.list_pools().await {
-        if p.path.starts_with('/') {
+        if p.enabled && p.path.starts_with('/') {
             let base = PathBuf::from(&p.path);
-            roots.push(base.join("template/iso"));
-            roots.push(base);
+            roots.push((base.join("template/iso"), p.id.clone(), p.name.clone()));
+            roots.push((base, p.id, p.name));
         }
     }
     roots
+}
+
+/// Storages an ISO can be added to: the image library and every enabled
+/// directory-backed pool.
+pub async fn iso_storages(state: &AppState) -> Vec<IsoStorage> {
+    let lib = image_dir(&state.config.paths.data_dir);
+    let mut out = Vec::new();
+    let mut pools = state.storage_manager.list_pools().await;
+    pools.sort_by(|a, b| a.name.cmp(&b.name));
+    for p in pools {
+        if p.enabled && p.path.starts_with('/') && std::path::Path::new(&p.path).is_dir() {
+            out.push(IsoStorage {
+                id: p.id,
+                name: p.name,
+                dir: PathBuf::from(&p.path)
+                    .join("template/iso")
+                    .to_string_lossy()
+                    .to_string(),
+                available: p.available,
+            });
+        }
+    }
+    out.push(IsoStorage {
+        id: String::new(),
+        name: "Image library".into(),
+        available: crate::storage::fs_capacity_gb(&nearest_existing(&lib).to_string_lossy())
+            .map(|c| c.1)
+            .unwrap_or(0),
+        dir: lib.to_string_lossy().to_string(),
+    });
+    out
+}
+
+fn nearest_existing(p: &FsPath) -> PathBuf {
+    let mut p = p.to_path_buf();
+    while !p.exists() {
+        if !p.pop() {
+            return PathBuf::from("/");
+        }
+    }
+    p
+}
+
+/// Directory of ISO storage `id` (`""` = image library), or why not.
+pub async fn iso_dir_of(state: &AppState, id: &str) -> Result<(PathBuf, String), ApiError> {
+    iso_storages(state)
+        .await
+        .into_iter()
+        .find(|s| s.id == id)
+        .map(|s| (PathBuf::from(s.dir), s.name))
+        .ok_or_else(|| ApiError::NotFound(format!("ISO storage {id:?} not found")))
 }
 
 fn is_iso_name(name: &str) -> bool {
@@ -283,7 +536,7 @@ fn partial_path(target: &FsPath) -> PathBuf {
 
 async fn scan_isos(state: &AppState) -> Vec<IsoFile> {
     let mut out: Vec<IsoFile> = Vec::new();
-    for root in iso_roots(state).await {
+    for (root, storage, storage_name) in iso_sources(state).await {
         let Ok(rd) = std::fs::read_dir(&root) else {
             continue;
         };
@@ -303,12 +556,19 @@ async fn scan_isos(state: &AppState) -> Vec<IsoFile> {
                 size: e.metadata().map(|m| m.len()).unwrap_or(0),
                 downloading: false,
                 error: None,
+                storage: storage.clone(),
+                storage_name: storage_name.clone(),
             });
         }
     }
     // Downloads in progress (written to a hidden .part file) and failures.
     let state_now = downloads().lock().unwrap().clone();
+    let stores = iso_storages(state).await;
     for (target, err) in state_now {
+        let st = stores
+            .iter()
+            .find(|s| target.parent() == Some(FsPath::new(&s.dir)))
+            .cloned();
         let path_s = target.to_string_lossy().to_string();
         if out.iter().any(|i| i.path == path_s) {
             continue;
@@ -325,6 +585,8 @@ async fn scan_isos(state: &AppState) -> Vec<IsoFile> {
                 .unwrap_or(0),
             downloading: err.is_none(),
             error: err,
+            storage: st.as_ref().map(|s| s.id.clone()).unwrap_or_default(),
+            storage_name: st.map(|s| s.name).unwrap_or_default(),
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -385,8 +647,49 @@ async fn host_options(State(state): State<Arc<AppState>>) -> Json<HostOptions> {
         swtpm: in_path("swtpm"),
         kvm: std::path::Path::new("/dev/kvm").exists(),
         storage_pools: crate::api::storage_volumes::vm_disk_pools(&state).await,
+        iso_storages: iso_storages(&state).await,
+        default_iso_storage: default_iso_storage(&state).await,
+        host: host_capabilities(
+            crate::storage::fs_capacity_gb(
+                &nearest_existing(&state.config.paths.vm_storage).to_string_lossy(),
+            )
+            .map(|c| c.1)
+            .unwrap_or(0),
+        ),
+        default_networks: {
+            let bridges = host_bridges();
+            DefaultNetworks {
+                qemu: default_qemu_bridge(&bridges, default_route_dev().as_deref()),
+                incus: bridges
+                    .iter()
+                    .find(|b| b.name == "incusbr0")
+                    .map(|b| b.name.clone()),
+                lxd: bridges
+                    .iter()
+                    .find(|b| b.name == "lxdbr0")
+                    .map(|b| b.name.clone()),
+                override_network: load_vm_defaults(&state)
+                    .await
+                    .default_network
+                    .filter(|n| bridges.iter().any(|b| &b.name == n)),
+            }
+        },
     })
 }
+
+/// The pool named `local` (created on install) if present, else the first
+/// pool, else the image library.
+async fn default_iso_storage(state: &AppState) -> String {
+    let st = iso_storages(state).await;
+    st.iter()
+        .find(|s| s.id == DEFAULT_POOL_ID)
+        .or_else(|| st.first())
+        .map(|s| s.id.clone())
+        .unwrap_or_default()
+}
+
+/// Id of the storage pool created on first start.
+pub const DEFAULT_POOL_ID: &str = "local";
 
 /// Add a new empty disk to a stopped VM.
 async fn add_disk(
@@ -701,6 +1004,12 @@ pub struct DownloadRequest {
     /// File name in the ISO directory (default: the URL's last path part).
     #[serde(default)]
     pub filename: Option<String>,
+    /// Storage pool to put it in (`""`/absent: the image library).
+    #[serde(default)]
+    pub storage: Option<String>,
+    /// Expected SHA-256 (64 hex digits); a mismatch discards the file.
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 /// A safe file name for the ISO directory, or why not.
@@ -753,7 +1062,12 @@ async fn download_iso(
     if let Some(why) = refused_url(&parsed) {
         return Err(ApiError::Forbidden(why));
     }
-    let dir = image_dir(&state.config.paths.data_dir);
+    if let Some(s) = &req.sha256 {
+        if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(ApiError::BadRequest("sha256 must be 64 hex digits".into()));
+        }
+    }
+    let (dir, _) = iso_dir_of(&state, req.storage.as_deref().unwrap_or("")).await?;
     tokio::fs::create_dir_all(&dir).await?;
     let target = dir.join(&name);
     if target.exists() {
@@ -768,8 +1082,9 @@ async fn download_iso(
     }
     let url = req.url.clone();
     let t = target.clone();
+    let want = req.sha256.clone();
     tokio::spawn(async move {
-        let result = fetch(&url, &t).await;
+        let result = fetch(&url, &t, want.as_deref()).await;
         let mut d = downloads().lock().unwrap();
         match result {
             Ok(()) => {
@@ -790,12 +1105,16 @@ async fn download_iso(
             size: 0,
             downloading: true,
             error: None,
+            storage: req.storage.clone().unwrap_or_default(),
+            storage_name: String::new(),
         }),
     ))
 }
 
-async fn fetch(url: &str, target: &FsPath) -> Result<(), String> {
+async fn fetch(url: &str, target: &FsPath, sha256: Option<&str>) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
     use tokio::io::AsyncWriteExt;
+    let mut hasher = Sha256::new();
     let part = partial_path(target);
     let res: Result<(), String> = async {
         let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
@@ -815,10 +1134,17 @@ async fn fetch(url: &str, target: &FsPath) -> Result<(), String> {
             .await
             .map_err(|e| e.to_string())?;
         while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+            hasher.update(&chunk);
             f.write_all(&chunk).await.map_err(|e| e.to_string())?;
         }
         f.flush().await.map_err(|e| e.to_string())?;
         f.sync_all().await.map_err(|e| e.to_string())?;
+        if let Some(want) = sha256 {
+            let got = hex::encode(hasher.finalize());
+            if !want.eq_ignore_ascii_case(&got) {
+                return Err(format!("sha256 mismatch: downloaded data is {got}"));
+            }
+        }
         tokio::fs::rename(&part, target)
             .await
             .map_err(|e| e.to_string())
@@ -832,11 +1158,62 @@ async fn fetch(url: &str, target: &FsPath) -> Result<(), String> {
 
 /// Delete an ISO from the ISO directory. Refused while a VM's CD-ROM holds
 /// it. A failed download's entry is cleared the same way.
+#[derive(Debug, Deserialize)]
+pub struct UploadIsoQuery {
+    pub filename: String,
+    /// Storage pool id (absent: the image library).
+    #[serde(default)]
+    pub storage: Option<String>,
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
+/// `POST /api/storage/isos/upload?filename=x.iso[&storage=<pool>][&sha256=..]`:
+/// the raw request body is streamed into the ISO directory of that storage.
+async fn upload_iso(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<UploadIsoQuery>,
+    body: axum::body::Body,
+) -> Result<(StatusCode, Json<IsoFile>), ApiError> {
+    let storage = q.storage.clone().unwrap_or_default();
+    let (dir, storage_name) = iso_dir_of(&state, &storage).await?;
+    let ct = crate::api::storage_content::content_type("iso")?;
+    let (_, Json(item)) = crate::api::storage_content::store_upload(
+        ct,
+        dir,
+        q.filename,
+        q.sha256,
+        body,
+        &format!("ISO storage {storage_name}"),
+    )
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(IsoFile {
+            name: item.name,
+            path: item.path,
+            size: item.size,
+            downloading: false,
+            error: None,
+            storage,
+            storage_name,
+        }),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteIsoQuery {
+    /// Storage pool the ISO is in (absent: the image library).
+    #[serde(default)]
+    pub storage: Option<String>,
+}
+
 async fn delete_iso(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<DeleteIsoQuery>,
 ) -> Result<StatusCode, ApiError> {
-    let dir = image_dir(&state.config.paths.data_dir);
+    let (dir, _) = iso_dir_of(&state, q.storage.as_deref().unwrap_or("")).await?;
     let target = dir.join(&name);
     if name.contains('/') || name.starts_with('.') || !is_iso_name(&name) {
         return Err(ApiError::BadRequest(format!("invalid ISO name {name:?}")));
@@ -916,7 +1293,7 @@ mod tests {
             format!("http://localhost:{port}/x.iso"),
             "http://169.254.169.254/latest/meta-data/x.iso".to_string(),
         ] {
-            let err = fetch(&url, &to).await.unwrap_err();
+            let err = fetch(&url, &to, None).await.unwrap_err();
             assert!(err.contains("refusing"), "{url}: {err}");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -927,6 +1304,38 @@ mod tests {
         assert!(!to.exists() && !partial_path(&to).exists());
         std::fs::remove_dir_all(&d).unwrap();
         srv.abort();
+    }
+
+    #[test]
+    fn memory_reserve_leaves_room_for_the_host() {
+        assert_eq!(memory_reserve_mb(63_739), 6_373);
+        assert_eq!(memory_reserve_mb(8_192), 1_024);
+        // tiny hosts keep half
+        assert_eq!(memory_reserve_mb(1_024), 512);
+        assert_eq!(memory_reserve_mb(0), 0);
+    }
+
+    #[test]
+    fn default_bridge_prefers_vmbr0_then_a_general_purpose_bridge() {
+        let b = |n: &str| HostBridge {
+            name: n.into(),
+            vlan_aware: false,
+        };
+        assert_eq!(
+            default_qemu_bridge(&[b("docker0"), b("virbr0"), b("vmbr0")], None).as_deref(),
+            Some("vmbr0")
+        );
+        // container runtimes' own bridges are skipped
+        assert_eq!(
+            default_qemu_bridge(&[b("docker0"), b("podman0"), b("virbr0")], None).as_deref(),
+            Some("virbr0")
+        );
+        assert_eq!(
+            default_qemu_bridge(&[b("br0"), b("virbr0")], Some("br0")).as_deref(),
+            Some("br0")
+        );
+        assert_eq!(default_qemu_bridge(&[b("docker0")], None), None);
+        assert_eq!(default_qemu_bridge(&[], None), None);
     }
 
     #[test]

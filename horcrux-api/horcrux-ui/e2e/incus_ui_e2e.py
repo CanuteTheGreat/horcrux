@@ -171,8 +171,9 @@ def run_vm(page):
     page.goto(f"{BASE}/vms/create")
     page.locator(".form-group", has_text="VM Name").locator("input").fill(VM)
     page.locator("#vm-hypervisor").select_option("incus")
-    page.locator(".form-group", has_text="Memory (MB)").locator("input").fill("1024")
-    page.locator(".form-group", has_text="Disk Size (GB)").locator("input").fill("10")
+    for rid, val in (("vm-memory", "1024"), ("vm-disk", "10")):
+        page.check(f"#{rid}-custom")
+        page.fill(f"#{rid}-input", val)
     # The image field switches to LXD/Incus instance images.
     expect(page.locator("#vm-image")).to_have_attribute("placeholder", re.compile("debian/12"))
     page.fill("#vm-image", "ubuntu/24.04")

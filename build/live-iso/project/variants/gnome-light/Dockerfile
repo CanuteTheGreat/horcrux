@@ -108,7 +108,21 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     # gate: the toolchain still builds a C program that needs libc_nonshared.a and the kernel headers\
     printf '#include <stdio.h>\n#include <linux/types.h>\nint main(void){puts("ok");return 0;}\n' > /tmp/t.c && gcc /tmp/t.c -o /tmp/t && /tmp/t && rm -f /tmp/t /tmp/t.c /tmp/devkeep.lst; \
     echo "desktop" > /etc/live-iso-variant; echo "gnome-light" >> /etc/live-iso-variant; \
+    # binary packages of the horcrux-gnome-defaults emerge (--usepkg=n + FEATURES=buildpkg write them into THIS layer, there is no cache mount on that RUN):\
+    # 369 MB of xz archives (fonts) that the ISO would carry as dead weight\
+    rm -rf /var/cache/binpkgs/* 2>/dev/null || true; \
+    # size strip of the public editions (private KEEP_DEV images have no 2 GiB limit and keep everything). Each item is listed in vdb-prune.py group `desktop-size`,\
+    # re-emerging the package brings it back: (1) NVIDIA GSP firmware (102 MB compressed; it only serves nouveau, and this image's mesa is built VIDEO_CARDS=intel),\
+    # (2) the Condensed/SemiBold/Extra* variants of Noto (exactly what media-fonts/noto[-extra] leaves out; every script stays covered),\
+    # (3) the Thin/Light/ExtraLight/DemiLight/SemiBold/Black weights of Noto CJK (Regular, Medium and Bold of Sans and Serif stay: CJK text renders)\
+    if [ -z "$KEEP_DEV" ]; then \
+    rm -rf /usr/lib/firmware/nvidia; \
+    find /usr/share/fonts/noto -maxdepth 1 -type f \( -name 'Noto*Condensed*.tt[fc]' -o -name 'Noto*SemiBold*.tt[fc]' -o -name 'Noto*Extra*.tt[fc]' \) -delete; \
+    rm -f /usr/share/fonts/noto-cjk/Noto*CJK-Thin.ttc /usr/share/fonts/noto-cjk/Noto*CJK-Light.ttc /usr/share/fonts/noto-cjk/Noto*CJK-ExtraLight.ttc /usr/share/fonts/noto-cjk/Noto*CJK-DemiLight.ttc /usr/share/fonts/noto-cjk/Noto*CJK-SemiBold.ttc /usr/share/fonts/noto-cjk/Noto*CJK-Black.ttc; \
+    test -f /usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc && test -f /usr/share/fonts/noto-cjk/NotoSerifCJK-Bold.ttc; \
+    fc-cache -f >/dev/null 2>&1 || true; \
+    fi; \
     rm -rf /var/db/repos/gentoo/* /var/cache/distfiles/* /var/cache/binhost /usr/share/doc /usr/share/gtk-doc /var/tmp/portage /var/log/emerge* 2>/dev/null || true; \
     find / -xdev -name '*.pyc' -path '*/__pycache__/*' -delete 2>/dev/null || true; \
     # Portage's records match what was stripped on purpose (the reviewed list in common/vdb-prune.py); anything else missing fails the package-contents gate
-    g=core,dev; [ -z "$KEEP_DEV" ] || g=core; python3 /tmp/vdb-prune.py --groups $g && rm -f /tmp/vdb-prune.py
+    g=core,dev,desktop-size; [ -z "$KEEP_DEV" ] || g=core; python3 /tmp/vdb-prune.py --groups $g && rm -f /tmp/vdb-prune.py

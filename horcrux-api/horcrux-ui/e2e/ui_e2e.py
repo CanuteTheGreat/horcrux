@@ -700,8 +700,9 @@ def main():
         # ---- VM display: Create VM form -> console page -> live consoles ----
         page.goto(f"{BASE}/vms/create")
         page.locator(".form-group", has_text="VM Name").locator("input").fill(DISP_VM)
-        page.locator(".form-group", has_text="Memory (MB)").locator("input").fill("512")
-        page.locator(".form-group", has_text="Disk Size (GB)").locator("input").fill("10")
+        for rid, val in (("vm-memory", "512"), ("vm-disk", "10")):
+            page.check(f"#{rid}-custom")
+            page.fill(f"#{rid}-input", val)
         page.select_option("#disp-protocol", "spice")
         page.select_option("#disp-video", "qxl")
         page.select_option("#disp-sound", "ich9-intel-hda")
@@ -714,10 +715,12 @@ def main():
         # stopped VM: the console page's Display settings switch it to VNC
         page.goto(f"{BASE}/vms/{vid}/console")
         page.select_option("#disp-protocol", "vnc")
+        # the sound card stays (VNC carries no audio: a warning says so)
+        expect(page.locator("#disp-sound-warning")).to_be_visible(timeout=10000)
         page.locator("#save-display").click()
         expect(page.locator("#display-notice")).to_contain_text("Saved", timeout=30000)
         d = api_get(f"/api/vms/{vid}", token())["display"]
-        assert d["protocol"] == "vnc" and d["sound"] == "none", d
+        assert d["protocol"] == "vnc" and d["sound"] == "ich9-intel-hda", d
 
         # Start from the VM list; noVNC in the console page really connects
         # to QEMU's VNC server (password-protected, through the ticketed
@@ -1444,8 +1447,9 @@ def storage_volume_checks(page, vid):
     # (the first click used to loop forever re-rendering the rows and crash
     # the tab; edits in one row must survive adding/removing others)
     page.locator(".form-group", has_text="VM Name").locator("input").fill("e2e-ui-multidisk")
-    page.locator(".form-group", has_text="Memory (MB)").locator("input").fill("512")
-    page.locator(".form-group", has_text="Disk Size (GB)").locator("input").fill("10")
+    for rid, val in (("vm-memory", "512"), ("vm-disk", "10")):
+        page.check(f"#{rid}-custom")
+        page.fill(f"#{rid}-input", val)
     page.locator("#vm-create-add-disk").click()
     expect(page.locator(".vm-create-disk")).to_have_count(1, timeout=10000)
     disk1 = page.locator(".vm-create-disk[data-disk='1']")
