@@ -99,7 +99,18 @@ pub fn IsoLibraryPage() -> impl IntoView {
                     {move || {
                         let list = isos.get();
                         if list.is_empty() {
-                            view! { <tr><td colspan="6" class="no-data" id="iso-empty">"No ISO images yet. Upload one or enter a download URL in the form above."</td></tr> }.into_view()
+                            // Plain text links into the form above (no extra button).
+                            let jump = |id: &'static str| move |ev: ev::MouseEvent| {
+                                ev.prevent_default();
+                                crate::components::focus::focus_id(id);
+                            };
+                            view! { <tr><td colspan="6" class="no-data" id="iso-empty">
+                                "No ISO images yet. "
+                                <a href="#iso-file" on:click=jump("iso-file")>"Upload one"</a>
+                                " or "
+                                <a href="#iso-url" on:click=jump("iso-url")>"enter a download URL"</a>
+                                " in the form above."
+                            </td></tr> }.into_view()
                         } else {
                             list.into_iter().map(|iso| {
                                 let status = if let Some(e) = &iso.error {

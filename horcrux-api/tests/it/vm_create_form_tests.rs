@@ -137,10 +137,13 @@ async fn iso_upload_download_and_delete_per_storage() {
     assert_eq!(std::fs::read(v["path"].as_str().unwrap()).unwrap(), data);
     let (s, m) = up("b.iso", "", None, data.clone()).await;
     assert_eq!(s, 201, "{m}");
-    let (s, _) = up("a.iso", "local", None, data.clone()).await;
+    // small body: the handler refuses before reading it, and a big unread
+    // body breaks the pooled connection for the next request
+    let (s, _) = up("a.iso", "local", None, vec![1, 2, 3]).await;
     assert_eq!(s, 409, "duplicate");
 
-    let (_, isos) = api.get("/storage/isos").await;
+    let (s, isos) = api.get("/storage/isos").await;
+    assert_eq!(s, 200, "GET /storage/isos: {isos}");
     let find = |n: &str| {
         isos.as_array()
             .unwrap()
