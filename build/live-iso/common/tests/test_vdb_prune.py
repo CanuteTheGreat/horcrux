@@ -50,6 +50,27 @@ class VdbPrune(unittest.TestCase):
         self.run_prune(root, "--groups", "core,dev,gringotts-fw")
         self.assertNotIn("amdgpu", open(cf).read())
 
+    def test_desktop_size_group_covers_the_public_edition_strip_only(self):
+        """the gnome-light size strip (nvidia GSP firmware, Noto extra variants, thin/black CJK weights) must not leave 'missing file' entries behind,
+        while the kept weights and every other firmware directory stay visible to the package-contents gate"""
+        h = "d41d8cd98f00b204e9800998ecf8427e 1\n"
+        c = (f"obj /usr/lib/firmware/nvidia/ad102/gsp/gsp-535.bin {h}"
+             f"obj /usr/share/fonts/noto/NotoSansArabic-SemiBold.ttf {h}"
+             f"obj /usr/share/fonts/noto/NotoSans-ExtraCondensedItalic.ttf {h}"
+             f"obj /usr/share/fonts/noto/NotoSerifCJK-Light.ttc {h}"
+             f"obj /usr/share/fonts/noto-cjk/NotoSansCJK-Thin.ttc {h}"
+             f"obj /usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc {h}"
+             f"obj /usr/lib/firmware/amdgpu/x.bin {h}")
+        root, cf = self.mkroot(c, [])
+        self.run_prune(root, "--groups", "core,dev")
+        self.assertIn("gsp-535", open(cf).read())          # the group is opt-in
+        self.run_prune(root, "--groups", "core,dev,desktop-size")
+        left = open(cf).read()
+        for gone in ("gsp-535", "Arabic-SemiBold", "ExtraCondensed", "CJK-Thin"):
+            self.assertNotIn(gone, left)
+        for kept in ("NotoSerifCJK-Light.ttc", "NotoSansCJK-Regular", "amdgpu"):   # Serif CJK Light is under /noto/, not /noto-cjk/: untouched; Regular stays
+            self.assertIn(kept, left)
+
 
 class StripLiveGuiKeepsSharedFiles(unittest.TestCase):
     def test_a_file_also_owned_by_a_staying_package_is_not_deleted(self):
