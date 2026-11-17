@@ -1472,7 +1472,7 @@ jobs:
           BASE_URL: https://localhost:8009
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "User journey"
-          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" grub-pc-bin grub-common xorriso
+          bash "$GITHUB_WORKSPACE/ci/apt-install.sh" grub-pc-bin grub-common xorriso iproute2   # iproute2: the journey makes a bridge where the runner allows it (else it warns nic-path-untested)
           mkdir -p /tmp/journey-data /tmp/journey-cni/bin /tmp/journey-cni/conf.d
           HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8009 \
           HORCRUX_DATA_DIR=/tmp/journey-data \

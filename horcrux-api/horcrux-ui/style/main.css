@@ -368,6 +368,7 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
 
 .actions {
     display: flex;
+    flex-wrap: wrap;   /* a VM row's ten buttons wrap inside the cell instead of widening the page */
     gap: 0.5rem;
 }
 
@@ -1038,3 +1039,32 @@ a.stat-card.healthy .stat-value { color: var(--success); }
 .packages-table td, .packages-table th { vertical-align: top; }
 .packages-table td:nth-child(2), .packages-table td:nth-child(4), .packages-table td:nth-child(5) { overflow-wrap: anywhere; word-break: break-word; }
 .packages-table td:nth-child(7) { min-width: 14rem; max-width: 32rem; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
+
+/* Storage Pools page (pages/storage/pool_management.rs). Its classes had no rules at all, so the page
+   rendered as stacked, run-together text ("417.00 GB used84.4%494.00 GB total", "ZFSSnapshots") and
+   the pool card inherited .status-active's green from its own status class. */
+.storage-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin: 1rem 0 1.5rem; }
+.overview-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; }
+.overview-card h4 { font-size: 0.8rem; text-transform: uppercase; color: var(--secondary); margin: 0 0 0.35rem; }
+.overview-card .value { font-size: 1.5rem; font-weight: 700; color: var(--text); }
+.storage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.storage-grid .storage-card { background: var(--surface); color: var(--text); font-weight: 400; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+.storage-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; }
+.storage-info { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.storage-info h3 { margin: 0; font-size: 1.15rem; }
+.type-badge, .storage-header .status-badge { font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 999px;
+    background: var(--light); border: 1px solid var(--border); color: var(--secondary); }
+.storage-header .status-badge.active, .storage-header .status-badge.online { background: var(--ok-bg); color: var(--success); }
+.usage-bar-container { height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+.usage-bar { height: 100%; background: var(--success-solid); }
+.usage-bar.warning { background: var(--warning); }
+.usage-bar.critical { background: var(--danger-solid); }
+.usage-labels { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.85rem; color: var(--secondary); margin-top: 0.35rem; }
+.storage-details .detail-row { display: flex; gap: 0.5rem; font-size: 0.9rem; align-items: baseline; flex-wrap: wrap; }
+.storage-details .label { color: var(--secondary); }
+.storage-details code { overflow-wrap: anywhere; }
+.storage-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.backend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.5rem 1rem; margin-top: 0.5rem; }
+.backend { display: flex; flex-direction: column; }
+.backend span { color: var(--secondary); font-size: 0.875rem; }

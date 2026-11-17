@@ -201,8 +201,20 @@ def select_options(page, sel):
 
 
 def vm_by_name(name):
-    code, vms = api("GET", "/api/vms")
+    try:
+        code, vms = api("GET", "/api/vms")
+    except Exception as e:  # noqa: BLE001  (called between steps: a failed login must not end the run without a report)
+        print(f"  vm_by_name: {type(e).__name__}: {e}", flush=True)
+        return None
     return next((v for v in (vms or []) if v.get("name") == name), None) if code == 200 else None
+
+
+# An empty state that points at a form "above" AND repeats it with its own button (owner finding 18 class).
+REDUNDANT_EMPTY_JS = """() => [...document.querySelectorAll('.no-data, .empty-state')]
+  .filter(e => e.offsetParent !== null && /\\babove\\b/i.test(e.innerText) && e.querySelector('button'))
+  .map(e => e.innerText.trim().slice(0, 120))"""
+# The page scrolls sideways (owner rule: never).
+H_OVERFLOW_JS = "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
 
 
 def main():
@@ -306,6 +318,9 @@ def main():
                 run_on_server("ip link add vmbr0 type bridge && ip link set vmbr0 up", timeout=20)   # the rest of the journey needs one
                 code, opts = api("GET", "/api/vms/host-options")
                 state["bridge"] = bool((opts or {}).get("bridges"))   # an unprivileged runner cannot make one: the VM is then created without a NIC
+                if not state["bridge"]:
+                    finding("j3-create-vm", "nic-path-untested", "no bridge could be created on this test host (needs iproute2 + CAP_NET_ADMIN), so the "
+                            "VM was created WITHOUT a NIC and qemu-has-nic/saved-nic were not really checked", sev="warn")
             j.go("/vms/create", settle=2.5)
             j.shot("create-vm-top")
             n_range = page.locator("form input[type=range]").count()
@@ -415,6 +430,15 @@ def main():
                     expect("j4-boot-iso", "guest-ran-the-iso", stopped, f"the guest did not run the ISO (it never powered itself off within {BOOT_TIMEOUT}s): the VM is not booting the CD-ROM")
                     j.go("/vms")
                     j.shot("vm-list-after-boot")
+                    # a stopped VM's row offers Start, not Shutdown/Reboot/Stop; the row fits the page
+                    row = page.locator(f"tr[data-vm-id='{vid}']").first
+                    if stopped and row.count():
+                        live = {c: row.locator(f"button.{c}").first for c in ("vm-start", "vm-shutdown", "vm-reboot", "vm-stop")}
+                        bad = [c for c in ("vm-shutdown", "vm-reboot", "vm-stop") if live[c].count() and live[c].is_enabled()]
+                        expect("j4-boot-iso", "stopped-vm-power-buttons", not bad and (live["vm-start"].count() == 0 or live["vm-start"].is_enabled()),
+                               f"the stopped VM's row offers {bad or 'no Start'}: power buttons do not follow the VM state")
+                    over = page.evaluate(H_OVERFLOW_JS)
+                    expect("j4-boot-iso", "vm-list-fits", over <= 2, f"the VM list with one VM scrolls sideways by {over}px at 1366 wide")
 
         # ------------------------------------------------------------------ J5 container
         with step(j, "j5-container", "create a container") as _:
@@ -445,6 +469,12 @@ def main():
                     t = j.text()
                     expect(sid, f"{name}-not-blank", len(t) > 150, f"{path} is nearly blank")
                     expect(sid, f"{name}-no-raw-error", not re.search(r"\b(panicked|stack trace|Internal Server Error|NaN|undefined)\b", t), f"{path} shows a raw error/NaN")
+                    red = page.evaluate(REDUNDANT_EMPTY_JS)
+                    expect(sid, f"{name}-empty-state-no-redundant-button", not red, f"{path}: empty state points at the form above and repeats it with a button: {red}")
+                    if path == "/storage" and page.locator(".storage-card").count():
+                        styled = page.evaluate("""() => ['.storage-overview', '.storage-grid', '.usage-labels']
+                            .map(s => document.querySelector(s)).every(e => e && ['grid', 'flex'].includes(getComputedStyle(e).display))""")
+                        expect(sid, "storage-styled", styled, "Storage Pools page is unstyled: totals and the pool card render as stacked run-together text")
                 j.go(routes[0][0])
                 expect(sid, "can-add", page.locator("button, a.btn").filter(has_text=re.compile(add_re, re.I)).count() > 0, f"{routes[0][0]} has no add/create control")
 

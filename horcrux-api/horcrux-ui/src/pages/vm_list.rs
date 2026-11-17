@@ -250,6 +250,10 @@ pub fn VmList() -> impl IntoView {
                                         let saved_state = saved.get().get(&vm.id).cloned();
                                         let blocker = blockers.get().get(&vm.id).cloned();
                                         let running = matches!(vm.status, horcrux_common::VmStatus::Running | horcrux_common::VmStatus::Paused);
+                                        // Power buttons follow the state: a stopped VM cannot be shut down,
+                                        // rebooted or stopped, a running one cannot be started again.
+                                        let is_running = vm.status == horcrux_common::VmStatus::Running;
+                                        let is_stopped = vm.status == horcrux_common::VmStatus::Stopped;
                                         let vm_for_clone = vm.clone();
                                         let status_class = match vm.status {
                                             horcrux_common::VmStatus::Running => "status-running",
@@ -275,7 +279,8 @@ pub fn VmList() -> impl IntoView {
                                                 <td class="actions">
                                                     <A href=console_href class="btn btn-sm btn-primary">"Console"</A>
                                                     <button
-                                                        class="btn btn-sm btn-success"
+                                                        class="btn btn-sm btn-success vm-start"
+                                                        disabled=is_running
                                                         on:click=move |_| start_vm(vm_id_start.clone())
                                                     >{if saved_state.is_some() { "Start (resume)" } else { "Start" }}</button>
                                                     {saved_state.is_some().then(|| view! {
@@ -293,16 +298,19 @@ pub fn VmList() -> impl IntoView {
                                                     {is_qemu.then(|| view! {
                                                         <button
                                                             class="btn btn-sm btn-warning vm-shutdown"
+                                                            disabled=is_stopped
                                                             title="ACPI shutdown (the guest powers itself off)"
                                                             on:click=move |_| shutdown_vm(vm_id_shutdown.clone())
                                                         >"Shutdown"</button>
                                                         <button
                                                             class="btn btn-sm btn-secondary vm-reboot"
+                                                            disabled=is_stopped
                                                             on:click=move |_| reboot_vm(vm_id_reboot.clone())
                                                         >"Reboot"</button>
                                                     })}
                                                     <button
-                                                        class="btn btn-sm btn-warning"
+                                                        class="btn btn-sm btn-warning vm-stop"
+                                                        disabled=is_stopped
                                                         title="Stop immediately (like pulling the power)"
                                                         on:click=move |_| stop_vm(vm_id_stop.clone())
                                                     >"Stop"</button>

@@ -37,6 +37,35 @@ use pages::{
     VolumesPage,
 };
 
+/// Pages mount only for a signed-in browser. Without this, a first visit rendered the dashboard,
+/// which fired a dozen API calls that all answered 401 (console errors, wasted requests) before
+/// UserMenu's session check moved the browser to /login. A browser without a stored token asks
+/// the server once (a session cookie may still be valid) and goes to /login if that fails.
+#[component]
+fn SessionGate(children: ChildrenFn) -> impl IntoView {
+    let location = use_location();
+    let navigate = use_navigate();
+    let (server_session, set_server_session) = create_signal(false);
+    let allowed = create_memo(move |_| {
+        location.pathname.get() == "/login"
+            || api::get_auth_token().is_some()
+            || server_session.get()
+    });
+    create_effect(move |_| {
+        if allowed.get() {
+            return;
+        }
+        let navigate = navigate.clone();
+        spawn_local(async move {
+            match api::get_me().await {
+                Ok(_) => set_server_session.set(true),
+                Err(_) => navigate("/login", Default::default()),
+            }
+        });
+    });
+    view! { <Show when=move || allowed.get() fallback=|| ()>{children()}</Show> }
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
@@ -192,6 +221,7 @@ pub fn App() -> impl IntoView {
             </nav>
 
             <main class="container">
+                <SessionGate>
                 <Routes>
                     <Route path="/" view=Dashboard/>
                     <Route path="/vms" view=VmList/>
@@ -301,6 +331,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/nas/iscsi" view=|| view! { <Gated feature="iscsi-target"><NasIscsiPage/></Gated> }/>
                     <Route path="/nas/s3" view=|| view! { <Gated feature="s3-gateway"><NasS3Page/></Gated> }/>
                 </Routes>
+                </SessionGate>
             </main>
 
             <footer class="footer">

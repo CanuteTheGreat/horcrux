@@ -184,7 +184,12 @@ pub fn DhcpNetworksPage() -> impl IntoView {
                     {move || {
                         let list = nets.get();
                         if list.is_empty() {
-                            view! { <tr><td colspan="10" class="no-data">"No DHCP networks yet. Create one above." " " <button class="btn btn-primary btn-sm" type="button" on:click=move |_| crate::components::focus::focus_id("dhcp-bridge")>"Create a DHCP network"</button></td></tr> }.into_view()
+                            // One way in: a text link into the form above (a second button repeated it).
+                            view! { <tr><td colspan="10" class="no-data" id="dhcp-empty">"No DHCP networks yet. "
+                                <a href="#dhcp-bridge" on:click=move |ev: ev::MouseEvent| {
+                                    ev.prevent_default();
+                                    crate::components::focus::focus_id("dhcp-bridge");
+                                }>"Create one"</a>" with the form above."</td></tr> }.into_view()
                         } else {
                             list.into_iter().map(|n| {
                                 let id = n.id.clone();

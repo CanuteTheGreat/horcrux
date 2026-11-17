@@ -131,7 +131,12 @@ pub fn HostBridgesPage() -> impl IntoView {
                     {move || {
                         let list = bridges.get();
                         if list.is_empty() {
-                            view! { <tr><td colspan="8" class="no-data">"No bridges on this host yet. Create one above." " " <button class="btn btn-primary btn-sm" type="button" on:click=move |_| crate::components::focus::focus_id("bridge-name")>"Create a bridge"</button></td></tr> }.into_view()
+                            // One way in: a text link into the form above (a second button repeated it).
+                            view! { <tr><td colspan="8" class="no-data" id="bridges-empty">"No bridges on this host yet. "
+                                <a href="#bridge-name" on:click=move |ev: ev::MouseEvent| {
+                                    ev.prevent_default();
+                                    crate::components::focus::focus_id("bridge-name");
+                                }>"Create one"</a>" with the form above."</td></tr> }.into_view()
                         } else {
                             list.into_iter().map(|b| {
                                 let n = b.name.clone();

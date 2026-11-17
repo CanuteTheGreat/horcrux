@@ -33,6 +33,23 @@ class Journey(unittest.TestCase):
             if not k.startswith("_"):
                 self.assertTrue(len(v) > 20, f"{k}: say what is wrong and where it is tracked")
 
+    def test_vm_lookup_between_steps_survives_api_errors(self):
+        # a failed login between steps used to end the run with a traceback and no report (the review lane saw nothing)
+        real = uj.api
+
+        def boom(*a, **k):
+            raise OSError("HTTP Error 401: Unauthorized")
+        uj.api = boom
+        try:
+            self.assertIsNone(uj.vm_by_name("x"))
+        finally:
+            uj.api = real
+
+    def test_page_checks_are_js_functions(self):
+        for js in (uj.REDUNDANT_EMPTY_JS, uj.H_OVERFLOW_JS):
+            self.assertTrue(js.lstrip().startswith("() =>"), js[:40])
+        self.assertIn(r"/\babove\b/i", uj.REDUNDANT_EMPTY_JS)
+
 
 if __name__ == "__main__":
     unittest.main()
