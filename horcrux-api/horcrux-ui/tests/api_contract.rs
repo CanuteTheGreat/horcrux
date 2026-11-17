@@ -4345,3 +4345,86 @@ async fn passthrough_metric_servers_and_alert_silence_read_into_ui_types() {
     let p: api::AlertPreview = decode("alert preview", &body.to_string());
     assert_eq!(p.would_fire, p.targets.len());
 }
+
+/// Declarative configuration page: every response the page reads deserializes
+/// into the UI's own types (desired spec, drift + text diff, settings, GitOps
+/// status/config, history, validate, apply preview, rollback preview).
+#[tokio::test]
+async fn declarative_responses_read_into_ui_types() {
+    use reqwest::Method;
+    let c = client();
+    let token = login(&c).await;
+    let name = format!("contract-decl-{}", std::process::id() % 100000);
+    let spec = format!("version: 1\nvms:\n  - {{name: {name}, memory: 64, cpus: 1, power: stopped}}\n");
+
+    // nothing stored: the page's empty state
+    let _ = send_json(&c, &token, Method::DELETE, "/declarative/desired", None).await;
+    let doc: api::declarative::Desired = fetch(&c, &token, "/declarative/desired").await;
+    assert!(!doc.configured);
+    let drift: api::declarative::DriftReport = fetch(&c, &token, "/declarative/drift").await;
+    assert!(!drift.configured && drift.in_sync);
+    let diff: api::declarative::DiffTexts = fetch(&c, &token, "/declarative/drift/diff").await;
+    assert!(!diff.configured);
+    let _: api::declarative::Settings = fetch(&c, &token, "/declarative/settings").await;
+    let g: api::declarative::GitStatus = fetch(&c, &token, "/declarative/gitops/status").await;
+    assert!(!g.configured);
+    let gc: api::declarative::GitConfigDoc = fetch(&c, &token, "/declarative/gitops/config").await;
+    assert!(!gc.configured);
+    let _: api::declarative::HistoryList = fetch(&c, &token, "/declarative/history?limit=5").await;
+
+    // validate answers inline, for good and bad specs
+    let (code, body) = post(&c, &token, "/declarative/desired/validate", json!({"spec": spec})).await;
+    assert_eq!(code, 200, "{body}");
+    let v: api::declarative::ValidateResult = serde_json::from_value(body).expect("UI ValidateResult");
+    assert!(v.ok && !v.items.is_empty(), "{v:?}");
+    let (_, body) = post(&c, &token, "/declarative/desired/validate", json!({"spec": "version: 9"})).await;
+    let v: api::declarative::ValidateResult = serde_json::from_value(body).expect("UI ValidateResult (error)");
+    assert!(!v.ok && v.error.is_some());
+
+    // store it: the drift rows and the text diff read
+    let (code, text) = send_json(
+        &c,
+        &token,
+        Method::PUT,
+        "/declarative/desired",
+        Some(json!({"spec": spec, "source": "ui"})),
+    )
+    .await;
+    assert_eq!(code, 200, "{text}");
+    let put: api::declarative::PutDesiredResult = decode("PUT /declarative/desired", &text);
+    assert!(!put.in_sync && put.drift_count >= 1);
+    let doc: api::declarative::Desired = fetch(&c, &token, "/declarative/desired").await;
+    assert!(doc.configured && doc.spec == spec && doc.source == "ui");
+    let drift: api::declarative::DriftReport = fetch(&c, &token, "/declarative/drift?refresh=true").await;
+    assert!(drift.items.iter().any(|i| i.name == name && i.field == "(resource)"), "{drift:?}");
+    let diff: api::declarative::DiffTexts = fetch(&c, &token, "/declarative/drift/diff").await;
+    assert!(diff.configured && !diff.same && diff.desired.contains(&name));
+    let ex: Value = fetch(&c, &token, "/declarative/export").await;
+    assert!(ex["spec"].is_string());
+
+    // preview, apply, then history + rollback preview
+    let (code, body) = post(&c, &token, "/declarative/desired/apply", json!({"dry_run": true, "source": "ui"})).await;
+    assert_eq!(code, 200, "{body}");
+    let rep: api::declarative::ApplyReport = serde_json::from_value(body).expect("UI ApplyReport (preview)");
+    assert!(rep.history_id.is_none() && !rep.plan.changes.is_empty());
+    let (code, body) = post(&c, &token, "/declarative/desired/apply", json!({"source": "ui"})).await;
+    assert_eq!(code, 200, "{body}");
+    let rep: api::declarative::ApplyReport = serde_json::from_value(body).expect("UI ApplyReport");
+    assert!(rep.ok, "{rep:?}");
+    let id = rep.history_id.expect("recorded");
+    let list: api::declarative::HistoryList = fetch(&c, &token, "/declarative/history?limit=5").await;
+    assert!(list.items.iter().any(|i| i.id == id && i.source == "ui"));
+    let e: api::declarative::HistoryEntry = fetch(&c, &token, &format!("/declarative/history/{id}")).await;
+    assert_eq!(e.spec, spec);
+    assert!(e.results.iter().all(|r| r.status == "applied"));
+    let (code, body) = post(&c, &token, &format!("/declarative/history/{id}/rollback"), json!({"dry_run": true})).await;
+    // the first record on a fresh server has nothing older to go back to
+    assert!(code == 200 || code == 422, "{code} {body}");
+    if code == 200 {
+        let _: api::declarative::RollbackResult = serde_json::from_value(body).expect("UI RollbackResult");
+    }
+
+    // clean up what this test made
+    delete(&c, &token, &format!("/vms/{name}")).await;
+    let _ = send_json(&c, &token, Method::DELETE, "/declarative/desired", None).await;
+}
