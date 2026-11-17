@@ -19,9 +19,10 @@
 #       the API's URL to /tmp/horcrux-lxc-e2e.url and the node CA to
 #       /tmp/horcrux-lxc-e2e-ca.pem. `lxc_e2e.sh stop` removes it.
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 MODE=${1:?usage: $0 test|serve|stop ...}
 HERE=$(cd "$(dirname "$0")" && pwd)
-IMAGE=${LXC_E2E_IMAGE:-catthehacker/ubuntu:act-latest}
+IMAGE=${LXC_E2E_IMAGE:-catthehacker/ubuntu:act-26.04}
 STATE=/tmp/horcrux-lxc-e2e.name
 URL_FILE=/tmp/horcrux-lxc-e2e.url
 CA_OUT=/tmp/horcrux-lxc-e2e-ca.pem
@@ -78,6 +79,7 @@ fi
 # finishing.
 docker run -d --init --name "$NAME" --privileged --cgroupns=private --memory 3g --memory-swap 3g \
   "${NET_ARGS[@]}" "$IMAGE" sleep 7200 >/dev/null
+hx_sibling_apt_prep "$NAME"
 # Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
 bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api

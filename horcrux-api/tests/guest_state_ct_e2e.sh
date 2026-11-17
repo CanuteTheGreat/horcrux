@@ -10,8 +10,9 @@
 #
 # Usage: horcrux-api/tests/guest_state_ct_e2e.sh <path-to-horcrux-api-binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
-IMAGE=${2:-catthehacker/ubuntu:act-latest}
+IMAGE=${2:-catthehacker/ubuntu:act-26.04}
 HERE=$(cd "$(dirname "$0")" && pwd)
 NAME="horcrux-gsct-e2e-${HX_RUN_TAG:-$$}"
 LXCP=/var/lib/lxc-gsct-$$
@@ -26,6 +27,7 @@ trap cleanup EXIT
 
 docker run -d --init --name "$NAME" --privileged --cgroupns=private --memory 3g --memory-swap 3g \
   "$IMAGE" sleep 7200 >/dev/null
+hx_sibling_apt_prep "$NAME"
 # Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
 bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api

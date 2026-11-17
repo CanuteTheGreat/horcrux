@@ -31,7 +31,7 @@ jobs:
   ha-failover:
     name: Three-node HA failover (create/join, recovery, fencing, self-fence)
     runs-on: kvm-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 90
     env:
       CARGO_BUILD_JOBS: "4"

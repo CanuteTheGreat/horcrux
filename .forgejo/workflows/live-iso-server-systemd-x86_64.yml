@@ -50,7 +50,7 @@ jobs:
   live-iso:
     name: Build + test + publish live ISO (server-systemd-x86_64)
     runs-on: kvm-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 480   # the headless server gate (encrypted-ZFS install + serial reboot + checks) is an extra QEMU run per arch; aarch64 runs it under TCG (~2 h)
     steps:
       - name: Checkout

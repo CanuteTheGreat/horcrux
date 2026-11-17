@@ -10,9 +10,10 @@
 #     auth_realms_e2e test binary runs.
 # Usage: auth_realms_e2e.sh <horcrux-api binary> <auth_realms_e2e test binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 API=${1:?usage: $0 <horcrux-api> <test binary> [image]}
 TESTBIN=${2:?usage: $0 <horcrux-api> <test binary> [image]}
-IMAGE=${3:-catthehacker/ubuntu:act-latest}
+IMAGE=${3:-catthehacker/ubuntu:act-26.04}
 ID="hxr${HX_RUN_TAG:-$$}"
 NET="$ID-net"
 TMP=$(mktemp -d)
@@ -35,6 +36,7 @@ docker network create "$NET" >/dev/null
 
 echo "== runner"
 docker run -d --name "$ID-run" --network "$NET" --network-alias horcrux.test --memory 2g "$IMAGE" sleep 3600 >/dev/null
+hx_sibling_apt_prep "$ID-run"
 RUN_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}" "$ID-run")
 echo "runner at $RUN_IP"
 

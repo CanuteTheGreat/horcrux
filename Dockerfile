@@ -43,13 +43,23 @@ RUN echo 'FEATURES="${FEATURES} -ipc-sandbox -network-sandbox -pid-sandbox"' \
 # rsync mirror needed inside a container build)
 RUN emerge-webrsync
 
+# Build with every core. Portage's default MAKEOPTS also caps make at a load
+# average of nproc, and CI runners are shared: whenever another job kept the
+# host busy the dependency build below ran almost serially (protobuf alone
+# 30 min, the whole Gentoo Docker Build past its 100 min limit: ci.yml runs
+# 18116 and 17775).
+RUN printf 'MAKEOPTS="-j%s"\nEMERGE_DEFAULT_OPTS="--jobs=2"\n' "$(nproc)" >> /etc/portage/make.conf
+
 # Register this project's own overlay as a local Portage repo
 RUN mkdir -p /var/db/repos/horcrux-overlay/{app-emulation,metadata,profiles} && \
     echo 'masters = gentoo' > /var/db/repos/horcrux-overlay/metadata/layout.conf && \
     echo 'thin-manifests = true' >> /var/db/repos/horcrux-overlay/metadata/layout.conf && \
     echo 'horcrux-overlay' > /var/db/repos/horcrux-overlay/profiles/repo_name && \
     mkdir -p /etc/portage/repos.conf
-COPY gentoo/app-emulation /var/db/repos/horcrux-overlay/app-emulation
+# Only the horcrux ebuild directory here (not all of gentoo/app-emulation):
+# horcrux-bin is bumped several times a day and would otherwise invalidate the
+# dependency layer below on every build.
+COPY gentoo/app-emulation/horcrux /var/db/repos/horcrux-overlay/app-emulation/horcrux
 # S3 gateway server + client (USE=s3-gateway)
 COPY gentoo/app-misc /var/db/repos/horcrux-overlay/app-misc
 # acct-group/horcrux-admin (horcrux's PAM login group, 25a90eb8): the ebuild's RDEPEND must resolve in this image build
@@ -138,6 +148,16 @@ RUN mkdir -p /etc/portage/package.mask /etc/portage/package.accept_keywords /etc
 # file or directory". Install dev-lang/rust-bin explicitly first so cargo
 # actually exists when we call it.
 RUN emerge --verbose --quiet-build=y dev-lang/rust-bin
+
+# All of horcrux's dependencies in their own layer, before the source tree is
+# copied in: a code change no longer re-emerges them (the layer stays cached
+# until the ebuild, the Portage config or the snapshot layer changes).
+RUN emerge --verbose --quiet-build=y --onlydeps --autounmask-write =app-emulation/horcrux-9999; \
+    etc-update --automode -5 || true
+RUN emerge --verbose --quiet-build=y --onlydeps =app-emulation/horcrux-9999
+
+# The rest of the overlay (other ebuilds are not dependencies of horcrux).
+COPY gentoo/app-emulation /var/db/repos/horcrux-overlay/app-emulation
 
 # The ebuild pulls source via the project's release tarball/vendored crates;
 # for a from-source container build we vendor the working tree directly

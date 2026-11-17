@@ -20,15 +20,17 @@
 # The CI Test job container is unprivileged, so this can't run there.
 # Usage: horcrux-api/tests/sdn_cni_e2e.sh <horcrux-api binary> [api_contract test binary] [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [api_contract binary] [image]}
 CONTRACT=${2:-}
-IMAGE=${3:-catthehacker/ubuntu:act-latest}
+IMAGE=${3:-catthehacker/ubuntu:act-26.04}
 NAME="horcrux-sdn-e2e-${HX_RUN_TAG:-$$}"
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker run -d --name "$NAME" --privileged --memory 1g --memory-swap 1g "$IMAGE" sleep 1800 >/dev/null
+hx_sibling_apt_prep "$NAME"
 # Never let this container change host-global sysctls (see ci/sysctl-guard.sh).
 bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api

@@ -5,6 +5,7 @@
 # `ip link`, plus the structured 424 on a node without Open vSwitch.
 # Usage: horcrux-api/tests/ovs_e2e.sh <horcrux-api binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
 IMAGE=${2:-ubuntu:24.04}
 NAME="horcrux-ovs-e2e-${HX_RUN_TAG:-$$}"
@@ -12,6 +13,7 @@ cleanup() { docker rm -fv "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker run -d --name "$NAME" --privileged --memory 1g --memory-swap 1g -v /lib/modules:/lib/modules:ro "$IMAGE" sleep 1800 >/dev/null
+hx_sibling_apt_prep "$NAME"
 bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/ovs_e2e.py" "$NAME":/tmp/ovs_e2e.py

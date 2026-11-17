@@ -13,6 +13,7 @@
 # anything. Skips (exit 0) when the host cannot load iscsi_tcp or has no iscsid.
 # Usage: horcrux-api/tests/iscsi_storage_e2e.sh <horcrux-api binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
 IMAGE=${2:-ubuntu:24.04}
 TAG="${HX_RUN_TAG:-$$}"
@@ -28,13 +29,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! docker run --rm --privileged -v /lib/modules:/lib/modules:ro "$IMAGE" sh -c 'apt-get update -qq && apt-get install -y -qq kmod >/dev/null && modprobe iscsi_tcp' >/dev/null 2>&1; then
+if ! docker run --rm --privileged -v /lib/modules:/lib/modules:ro "$IMAGE" sh -c 'rm -f /etc/apt/sources.list.d/*ppa* /etc/apt/sources.list.d/*.list; apt-get update -qq -o Acquire::Retries=5 && apt-get install -y -qq kmod >/dev/null && modprobe iscsi_tcp' >/dev/null 2>&1; then
   echo "SKIP iscsi_tcp cannot be loaded on this host"; exit 0
 fi
 
 docker network create "$NET" >/dev/null
 docker run -d --name "$SRV" --network "$NET" --privileged --memory 1g "$IMAGE" sleep 1800 >/dev/null
+hx_sibling_apt_prep "$SRV"
 docker run -d --name "$CLI" --network host --privileged -v /dev:/dev -v /var/lib/iscsi:/var/lib/iscsi --memory 1g "$IMAGE" sleep 1800 >/dev/null
+hx_sibling_apt_prep "$CLI"
 docker cp "$BIN" "$CLI":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/iscsi_storage_e2e.py" "$CLI":/tmp/iscsi_storage_e2e.py
 

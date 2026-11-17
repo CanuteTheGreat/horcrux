@@ -42,7 +42,7 @@ jobs:
   vm-migration:
     name: Two-node VM migration (live, offline, cancel, shared storage)
     runs-on: kvm-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 90
     env:
       CARGO_BUILD_JOBS: "4"

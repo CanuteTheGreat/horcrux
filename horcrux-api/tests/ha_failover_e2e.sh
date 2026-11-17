@@ -7,8 +7,9 @@
 #
 # Usage: horcrux-api/tests/ha_failover_e2e.sh <path-to-horcrux-api-binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
-IMAGE=${2:-catthehacker/ubuntu:act-latest}
+IMAGE=${2:-catthehacker/ubuntu:act-26.04}
 HERE=$(cd "$(dirname "$0")" && pwd)
 TAG="${HXHA_TAG:-hxha-${HX_RUN_TAG:-$$}}"
 NET="$TAG-net"
@@ -33,6 +34,7 @@ for n in "${NODES[@]}"; do
   i=$((i+1))
   docker run -d --name "$n" --hostname "node$i" --network "$NET" --cap-add NET_ADMIN "${DEV[@]}" \
     --memory 2g -v "$VOL":/shared "$IMAGE" sleep 7200 >/dev/null
+  hx_sibling_apt_prep "$n"
 done
 
 i=0

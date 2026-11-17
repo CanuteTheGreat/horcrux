@@ -31,9 +31,9 @@ jobs:
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
     # the race against the working the emulated runner host runner (~every other run).
-    # act-latest is a real multi-arch manifest list, so either runner can
+    # act-26.04 is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     # Fail fast instead of silently consuming the full 3h runner timeout
     # (observed 2026-10-01: run 144/job 5438 ran for exactly 3h00m01s before
     # being cancelled) -- a docs-only job has no business needing anywhere
@@ -60,7 +60,7 @@ jobs:
 
       - name: Ensure Node.js is present (self-heal)
         # Same root cause as ci.yml's identical step (added in fb065bd):
-        # catthehacker/ubuntu:act-latest job containers on the the emulated runner host
+        # catthehacker/ubuntu:act-26.04 job containers on the the emulated runner host
         # runner are reused across runs rather than recreated per-job, and
         # node has been observed vanishing mid-job (after an apt-get
         # install of unrelated packages) between 2026-10-04 and

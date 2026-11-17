@@ -184,9 +184,9 @@ jobs:
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
     # the race against the working the emulated runner host runner (~every other run).
-    # act-latest is a real multi-arch manifest list, so either runner can
+    # act-26.04 is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     steps:
       - uses: actions/checkout@v4
 
@@ -204,7 +204,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
-        # catthehacker/ubuntu:act-latest job containers on the the emulated runner host
+        # catthehacker/ubuntu:act-26.04 job containers on the the emulated runner host
         # runner are reused across runs rather than recreated per-job, and
         # node has been observed vanishing mid-job (after an apt-get
         # install of unrelated packages) between 2026-10-04 and
@@ -270,14 +270,14 @@ jobs:
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
     # the race against the working the emulated runner host runner (~every other run).
-    # act-latest is a real multi-arch manifest list, so either runner can
+    # act-26.04 is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
     # Memory (2026-11-06): sampled anon peak 5.4-5.5 GiB (all-features test build + k3s/LDAP/QEMU tests), so
     # this job needs the 7g runner cap. A job's own container.options --memory can only be <= the runner's
     # (forgejo-runner rejects a larger one), so this line is a statement of need: never lower the
     # linux-cross runner cap below 7g while this job is on that label.
     container:
-      image: catthehacker/ubuntu:act-latest
+      image: catthehacker/ubuntu:act-26.04
       # apparmor=unconfined (2026-11-12): on rw-man-03 (Docker + AppArmor on the 7.0 kernel) the
       # step processes (docker exec) run as `docker-default//&unconfined` while processes the
       # tests spawn can carry plain `docker-default`, and the kernel then denies signals between
@@ -349,7 +349,7 @@ jobs:
           bash ci/install-s3-gateway.sh
 
       - name: Ensure Node.js is present (self-heal)
-        # catthehacker/ubuntu:act-latest job containers on the the emulated runner host
+        # catthehacker/ubuntu:act-26.04 job containers on the the emulated runner host
         # runner are reused across runs rather than recreated per-job, and
         # node has been observed vanishing mid-job (after an apt-get
         # install of unrelated packages) between 2026-10-04 and
@@ -753,9 +753,9 @@ jobs:
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
     # the race against the working the emulated runner host runner (~every other run).
-    # act-latest is a real multi-arch manifest list, so either runner can
+    # act-26.04 is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     needs: [test, plan]
     if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     strategy:
@@ -782,7 +782,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/apt-install.sh" build-essential clang mold libvirt-dev libpam0g-dev
 
       - name: Ensure Node.js is present (self-heal)
-        # catthehacker/ubuntu:act-latest job containers on the the emulated runner host
+        # catthehacker/ubuntu:act-26.04 job containers on the the emulated runner host
         # runner are reused across runs rather than recreated per-job, and
         # node has been observed vanishing mid-job (after an apt-get
         # install of unrelated packages) between 2026-10-04 and
@@ -856,9 +856,9 @@ jobs:
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
     # the race against the working the emulated runner host runner (~every other run).
-    # act-latest is a real multi-arch manifest list, so either runner can
+    # act-26.04 is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     needs: check
     steps:
       - uses: actions/checkout@v4
@@ -909,7 +909,7 @@ jobs:
           trunk --version
 
       - name: Ensure Node.js is present (self-heal)
-        # catthehacker/ubuntu:act-latest job containers on the the emulated runner host
+        # catthehacker/ubuntu:act-26.04 job containers on the the emulated runner host
         # runner are reused across runs rather than recreated per-job, and
         # node has been observed vanishing mid-job (after an apt-get
         # install of unrelated packages) between 2026-10-04 and
@@ -962,9 +962,9 @@ jobs:
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
     # the race against the working the emulated runner host runner (~every other run).
-    # act-latest is a real multi-arch manifest list, so either runner can
+    # act-26.04 is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     steps:
       - uses: actions/checkout@v4
 
@@ -1049,9 +1049,9 @@ jobs:
     # manifest, so "docker create" fails with "image ... does not provide
     # the specified platform (linux/arm64)" every time that runner wins
     # the race against the working the emulated runner host runner (~every other run).
-    # act-latest is a real multi-arch manifest list, so either runner can
+    # act-26.04 is a real multi-arch manifest list, so either runner can
     # pull the variant matching whatever platform it actually requests.
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     needs: [check, plan]
     if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     steps:
@@ -1176,7 +1176,7 @@ jobs:
     # the x86 linux-cross slots (ctg-infrastructure ci-runners). Cache keys carry runner.arch.
     runs-on: linux-any
     timeout-minutes: 45  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     needs: [check, plan]
     if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     steps:
@@ -1273,7 +1273,7 @@ jobs:
   ui-e2e:
     name: UI E2E (browser)
     runs-on: linux-cross-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     needs: [check, plan]
     if: needs.plan.outputs.dup != 'true'
     timeout-minutes: 60
@@ -1588,10 +1588,14 @@ jobs:
   gentoo-use-matrix:
     name: Gentoo USE-flag matrix (ebuild install)
     runs-on: linux-cross-x86_64
-    container: catthehacker/ubuntu:act-latest
-    # Runs after the main Gentoo build so the shared builder-stage layers
-    # (stage3, emerge-webrsync, rust-bin) are already in the daemon's cache.
-    needs: [gentoo-docker-build, plan]
+    container: catthehacker/ubuntu:act-26.04
+    # Runs in parallel with the main Gentoo build: the two used to run in
+    # sequence "so the builder layers are already cached", but the second job
+    # usually lands on another runner, so it waited ~30-60 min for nothing and
+    # then rebuilt everything anyway. The dependency layer (Dockerfile) is now
+    # cached per runner and seeded from Gentoo's binary packages, so each job
+    # is short on its own.
+    needs: [check, plan]
     if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.dup != 'true'
     timeout-minutes: 120
     steps:

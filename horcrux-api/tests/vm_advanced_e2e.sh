@@ -6,14 +6,16 @@
 # the QEMU command line and the host (vm_advanced_e2e.py).
 # Usage: horcrux-api/tests/vm_advanced_e2e.sh <horcrux-api binary> [image]
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
 BIN=${1:?usage: $0 <horcrux-api binary> [image]}
-IMAGE=${2:-catthehacker/ubuntu:act-latest}
+IMAGE=${2:-catthehacker/ubuntu:act-26.04}
 NAME="horcrux-vmadv-e2e-${HX_RUN_TAG:-$$}"
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker run -d --name "$NAME" --memory 3g "$IMAGE" sleep 1800 >/dev/null
+hx_sibling_apt_prep "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/vm_advanced_e2e.py" "$NAME":/tmp/vm_advanced_e2e.py
 docker exec "$NAME" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \

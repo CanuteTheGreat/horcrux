@@ -7,8 +7,11 @@
 set -u
 [ "$#" -gt 0 ] || { echo "usage: $0 pkg..." >&2; exit 2; }
 probe="$1"
+# The runner image carries Launchpad PPAs we never install from; their 404/503s
+# make `apt-get update` fail (Ubuntu 26.04 image, git-core PPA, 2026-11-17).
+sudo rm -f /etc/apt/sources.list.d/*ppa* 2>/dev/null || true
 for attempt in 1 2 3 4 5; do
-  sudo apt-get update -qq || true
+  sudo apt-get update -qq -o Acquire::Retries=3 || true
   if apt-cache policy "$probe" | grep -q 'Candidate: [^(]'; then
     if sudo apt-get install -y "$@"; then exit 0; fi
   fi

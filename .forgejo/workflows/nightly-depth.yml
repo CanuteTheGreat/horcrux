@@ -39,7 +39,7 @@ jobs:
     # rw-man-01: /dev/kvm + privileged job containers (tmpfs mount for the
     # disk-full test). ctg-infrastructure ci-runners/rw-man-kvm.
     runs-on: kvm-x86_64
-    container: catthehacker/ubuntu:act-latest
+    container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
