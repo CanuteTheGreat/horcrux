@@ -49,6 +49,40 @@ RUN emerge-webrsync
 # 30 min, the whole Gentoo Docker Build past its 100 min limit: ci.yml runs
 # 18116 and 17775).
 RUN printf 'MAKEOPTS="-j%s"\nEMERGE_DEFAULT_OPTS="--jobs=2"\n' "$(nproc)" >> /etc/portage/make.conf
+# Binary packages first. A cold build (new runner, evicted BuildKit cache, new
+# snapshot) compiled all ~79 dependencies from source: 5400 s and still on
+# package 77/79 when the 100 min job limit hit (ci.yml run 3420, job 108375).
+# Use the official Gentoo binhost for this arch plus the CTG binhost (signed,
+# systemd lane; our USE flags), and let Portage fall back to source per package
+# when no binpkg matches the USE flags. Both are optional: if a binhost is
+# unreachable the build degrades to the old from-source path, not to a failure.
+ARG TARGETARCH
+RUN getuto >/dev/null 2>&1 || true; \
+    case "${TARGETARCH}" in \
+      arm64) gentoo_bh=arm64/binpackages/23.0/arm64; ctg_arch=arm64 ;; \
+      *)     gentoo_bh=amd64/binpackages/23.0/x86-64; ctg_arch=amd64 ;; \
+    esac; \
+    mkdir -p /etc/portage/binrepos.conf; \
+    printf '[gentoo]\npriority = 1\nsync-uri = https://distfiles.gentoo.org/releases/%s\nlocation = /var/cache/binhost/gentoo\nverify-signature = true\n' \
+      "$gentoo_bh" > /etc/portage/binrepos.conf/gentoobinhost.conf; \
+    (curl -fsSL --retry 3 https://f002.backblazeb2.com/file/ctg-binhost/ctg-binhost-setup.sh \
+      | sh -s -- --arch "$ctg_arch" --init systemd) \
+      || echo "ctg binhost not configured (official binhost only)"; \
+    ls /etc/portage/binrepos.conf/
+# The official binhost lags the tree: its binaries were built against the
+# previous perl (5.42, the tree and stage3 have 5.44) and openssl 3, so mixing
+# them with source-built perl modules / openssl 4 ends in an unsolvable slot
+# conflict (verified with emerge -pv on the snapshot of 2026-11-17). So perl and
+# its modules always build from source, openssl stays on the 3.x the stage3 and
+# the binaries use, and every binary must match the USE flags. containerd wants
+# runc[apparmor,seccomp] but the official runc binary has both off; with
+# --binpkg-respect-use portage can no longer autounmask that, so set it here
+# (runc then compiles, a couple of minutes).
+RUN mkdir -p /etc/portage/package.mask && \
+    echo '>=dev-libs/openssl-4' > /etc/portage/package.mask/horcrux-docker-openssl3 && \
+    mkdir -p /etc/portage/package.use && \
+    echo 'app-containers/runc apparmor seccomp' > /etc/portage/package.use/horcrux-docker-runc && \
+    printf 'EMERGE_DEFAULT_OPTS="${EMERGE_DEFAULT_OPTS} --getbinpkg --usepkg --binpkg-respect-use=y --backtrack=100 --usepkg-exclude '"'"'dev-lang/perl virtual/perl-* dev-perl/* perl-core/*'"'"'"\n' >> /etc/portage/make.conf
 
 # Register this project's own overlay as a local Portage repo
 RUN mkdir -p /var/db/repos/horcrux-overlay/{app-emulation,metadata,profiles} && \
