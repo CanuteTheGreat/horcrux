@@ -95,15 +95,36 @@ pub async fn apply(api: &ApiClient, file: &str, prune: bool, dry_run: bool) -> R
     Ok(())
 }
 
-/// `horcrux export [-f out.yaml]`
-pub async fn export(api: &ApiClient, file: Option<&str>) -> Result<()> {
-    let r: Value = api.get("/api/declarative/export").await?;
+/// `horcrux export [-f out.yaml] [--include-hashes]`
+pub async fn export(api: &ApiClient, file: Option<&str>, include_hashes: bool) -> Result<()> {
+    let path = if include_hashes {
+        "/api/declarative/export?include_hashes=true"
+    } else {
+        "/api/declarative/export"
+    };
+    let r: Value = api.get(path).await?;
     let yaml = r["spec"].as_str().context("no spec in the reply")?;
     match file {
-        Some(f) => std::fs::write(f, yaml).with_context(|| format!("writing {f}"))?,
+        Some(f) => {
+            write_private(f, yaml, include_hashes).with_context(|| format!("writing {f}"))?
+        }
         None => print!("{yaml}"),
     }
     Ok(())
+}
+
+/// Write `text`; a file with password hashes in it is 0600 from the start.
+fn write_private(path: &str, text: &str, private: bool) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    let _ = private;
+    o.open(path)?.write_all(text.as_bytes())
 }
 
 // --------------------------------------------------------- desired state

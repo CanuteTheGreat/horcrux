@@ -981,6 +981,10 @@ pub struct ContainerOptions {
     /// DNS aliases on `network` (compose service names).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub network_aliases: Vec<String>,
+    /// Restart policy (docker/podman `--restart`): `no`, `always`,
+    /// `unless-stopped`, `on-failure` or `on-failure:N`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart: Option<String>,
 }
 
 impl ContainerOptions {
@@ -1041,6 +1045,20 @@ impl ContainerOptions {
         if let Some(n) = &self.network {
             if n.is_empty() || n.starts_with('-') {
                 return Err(format!("invalid network name '{n}'"));
+            }
+        }
+        if let Some(r) = &self.restart {
+            let ok = matches!(
+                r.as_str(),
+                "no" | "always" | "unless-stopped" | "on-failure"
+            ) || r
+                .strip_prefix("on-failure:")
+                .map(|n| n.parse::<u32>().is_ok())
+                .unwrap_or(false);
+            if !ok {
+                return Err(format!(
+                    "invalid restart policy '{r}' (no, always, unless-stopped or on-failure[:N])"
+                ));
             }
         }
         Ok(())
@@ -1361,6 +1379,7 @@ mod tests {
             command: vec!["sleep".into(), "1".into()],
             network: Some("net".into()),
             network_aliases: vec!["web".into()],
+            restart: None,
         };
         assert!(ok.validate().is_ok());
         for bad in [

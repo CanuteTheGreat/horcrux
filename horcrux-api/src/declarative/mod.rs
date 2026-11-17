@@ -316,6 +316,9 @@ pub struct Live {
     pub extra: BTreeMap<String, serde_json::Value>,
     /// Kinds whose `gather` failed (section -> message).
     pub extra_errors: BTreeMap<String, String>,
+    /// What the shipped kinds' plans need that is not spec-shaped (who is
+    /// applying, the API port, runtime probes, ...): see `kinds::ctx`.
+    pub kinds: kinds::ctx::Ctx,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

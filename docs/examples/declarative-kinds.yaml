@@ -1,0 +1,57 @@
+# A declarative spec using the resource kinds (docs/design/declarative-config.md).
+#   horcrux plan  -f declarative-kinds.yaml        # exit 2 = changes pending
+#   horcrux apply -f declarative-kinds.yaml [--prune]
+# A section that is absent is never touched; a listed one is managed.
+version: 1
+
+containers:
+  - name: web
+    image: docker.io/library/nginx:1.27     # runtime absent = Podman (Docker if that is all there is)
+    memory: 256
+    cpus: 1
+    ports: ["8080:80"]
+    env: {TZ: UTC}                          # non-secret values only
+    mounts: ["web-data:/usr/share/nginx/html"]
+    restart: unless-stopped
+    power: running
+    replace: false                          # true = a differing container is re-created
+  - name: scratch
+    runtime: system                         # Incus, else LXD
+    image: images:alpine/3.20
+    memory: 128
+
+volumes:
+  - {name: web-data}                        # never deleted by prune: it holds data
+
+roles:
+  - {name: Operator, description: Run guests, privileges: [VM.Audit, VM.PowerMgmt]}
+users:
+  - {username: admin}                       # listed so prune keeps it
+  - username: alice
+    email: alice@example.org
+    password_ref: {file: /etc/horcrux/secrets/alice}   # never a plaintext password in git
+groups:
+  - {name: ops, members: [alice]}
+acl:
+  - {path: /, subject_type: user, subject: admin, role: Administrator}
+  - {path: /vms, subject_type: group, subject: ops, role: Operator}
+
+firewall:
+  options: {policy_in: accept, policy_out: accept}
+  aliases: [{name: office, cidr: 192.0.2.0/24}]
+  ipsets: [{name: admins, entries: [192.0.2.10, 192.0.2.11]}]
+  rules:                                    # evaluated in this order, per scope
+    - {scope: datacenter, id: ssh-office, action: ACCEPT, protocol: tcp, source: office, dport: "22"}
+    - {scope: datacenter, id: web-admins, action: ACCEPT, protocol: tcp, source: "+admins", dport: "8080"}
+
+backup_jobs:
+  - id: nightly
+    schedule: "0 2 * * *"
+    targets: [web]
+    mode: snapshot
+    compression: zstd
+    retention: {keep_last: 3, keep_daily: 7}
+    notify: failure
+
+ha_groups:
+  - {name: prefer-a, nodes: [node-a, node-b], restricted: false}

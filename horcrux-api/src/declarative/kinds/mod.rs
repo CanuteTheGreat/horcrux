@@ -6,6 +6,13 @@
 //!
 //! 1. `pub mod containers;` below and add `&containers::Containers` to
 //!    `REGISTRY`. That is the only edit outside the new file.
+//!
+//! Kinds shipped here: `containers`, `volumes`, `roles`, `users`, `groups`,
+//! `acl` (the four access kinds share one pure plan, `access`), `firewall`,
+//! `backup_jobs`, `ha_groups`. What a plan needs that is not spec-shaped
+//! (who is applying, the API port, runtime probes, password hashes, built-in
+//! roles, HA usage) lives in `Live::kinds` (`ctx::Ctx`), gathered once by
+//! `exec::gather`.
 //! 2. The kind owns one top-level spec section (`key()`), e.g. `containers`.
 //!    The engine hands the kind that section as raw JSON (YAML parsed into
 //!    `serde_json::Value`) and keeps it in `Spec.extra`, so the kind decides
@@ -32,7 +39,7 @@
 //! A kind that errors in `gather` makes the plan carry an error for that
 //! section (the spec is then not applied), so a failed read can never be
 //! mistaken for "nothing exists".
-use super::{Change, Live, Spec};
+use super::{Action, Change, FieldDiff, Live, Spec};
 use crate::AppState;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -47,6 +54,15 @@ pub struct KindPlan {
     pub deletes: Vec<Change>,
     /// Reasons the section cannot be applied at all.
     pub errors: Vec<String>,
+}
+
+impl KindPlan {
+    /// Append another plan's changes, deletes and errors.
+    pub fn merge(&mut self, o: KindPlan) {
+        self.changes.extend(o.changes);
+        self.deletes.extend(o.deletes);
+        self.errors.extend(o.errors);
+    }
 }
 
 #[async_trait]
@@ -81,8 +97,68 @@ pub trait Kind: Send + Sync {
     ) -> Result<Option<String>, String>;
 }
 
+pub mod access;
+pub mod backup_jobs;
+pub mod containers;
+pub mod ctx;
+pub mod firewall;
+pub mod ha_groups;
+pub mod secret;
+pub mod volumes;
+
+/// A change with the per-field diffs parsed out of its detail lines
+/// (`field: actual -> expected`), so the drift view shows them as fields.
+pub fn ch(kind: &str, name: &str, action: Action, details: Vec<String>) -> Change {
+    let fields = details
+        .iter()
+        .filter_map(|l| {
+            let (field, rest) = l.split_once(": ")?;
+            let (actual, expected) = rest.split_once(" -> ")?;
+            let simple = !field.is_empty()
+                && field
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'));
+            simple.then(|| FieldDiff {
+                field: field.to_string(),
+                expected: expected.to_string(),
+                actual: actual.to_string(),
+            })
+        })
+        .collect();
+    Change {
+        kind: kind.into(),
+        name: name.into(),
+        action,
+        details,
+        fields,
+    }
+}
+
+/// The section as typed spec items. Null / absent = none.
+pub fn items<T: serde::de::DeserializeOwned>(v: &Value) -> Result<Vec<T>, String> {
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_value(v.clone()).map_err(|e| e.to_string())
+}
+
+/// A section as JSON (what `gather` returns).
+pub fn to_json<T: serde::Serialize>(v: &T) -> Result<Value, String> {
+    serde_json::to_value(v).map_err(|e| e.to_string())
+}
+
 /// Every non-built-in kind. Add `&yourkind::YourKind,` here.
-static REGISTRY: &[&dyn Kind] = &[];
+static REGISTRY: &[&dyn Kind] = &[
+    &containers::Containers,
+    &volumes::Volumes,
+    &access::Roles,
+    &access::Users,
+    &access::Groups,
+    &access::Acl,
+    &firewall::Firewall,
+    &backup_jobs::BackupJobs,
+    &ha_groups::HaGroups,
+];
 
 pub fn registry() -> &'static [&'static dyn Kind] {
     REGISTRY

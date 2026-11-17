@@ -459,3 +459,288 @@ fn rollback_helpers_and_secret_free_history_summary() {
     assert_eq!((s.failed, s.ok), (1, false));
     assert_eq!(store::sha256_hex("x").len(), 64);
 }
+
+// ---------------------------------------------------------------- kinds
+
+mod kinds_integration {
+    use super::*;
+    use crate::declarative::kinds::access::CallerInfo;
+    use crate::declarative::kinds::ctx::{Ctx, UserPriv};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    const HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$aaaa$bbbb";
+
+    fn pw_file() -> String {
+        let p = std::env::temp_dir().join(format!("hx-decl-kinds-pw-{}", std::process::id()));
+        std::fs::write(&p, "a-secret-pw-1\n").unwrap();
+        p.display().to_string()
+    }
+
+    fn spec_text() -> String {
+        format!(
+            r#"
+version: 1
+containers:
+  - {{name: web, image: nginx, ports: ["8080:80"], restart: always, power: running}}
+volumes:
+  - {{name: data}}
+roles:
+  - {{name: Operator, privileges: [VM.PowerMgmt]}}
+users:
+  - {{username: admin}}
+  - {{username: alice, password_ref: {{file: {}}}}}
+groups:
+  - {{name: ops, members: [alice]}}
+acl:
+  - {{path: /vms, subject_type: group, subject: ops, role: Operator}}
+firewall:
+  aliases: [{{name: office, cidr: 192.0.2.0/24}}]
+  rules:
+    - {{scope: datacenter, id: ssh, action: ACCEPT, protocol: tcp, source: office, dport: "22"}}
+backup_jobs:
+  - {{id: nightly, schedule: "0 2 * * *", targets: [web]}}
+ha_groups:
+  - {{name: g1, nodes: [n1]}}
+"#,
+            pw_file()
+        )
+    }
+
+    /// A node with one administrator and nothing else, as the kinds' `gather`
+    /// reports it (sections spec-shaped, the rest in `Live::kinds`).
+    fn empty_node() -> Live {
+        let mut live = Live::default();
+        live.kinds = Ctx {
+            caller: Some(CallerInfo {
+                user_id: "id-admin".into(),
+                username: "admin".into(),
+                is_admin: true,
+            }),
+            api_port: 8006,
+            users: BTreeMap::from([(
+                "admin".to_string(),
+                UserPriv {
+                    id: "id-admin".into(),
+                    hash: HASH.into(),
+                },
+            )]),
+            builtin_roles: vec![(
+                "Administrator".into(),
+                vec!["Permissions.Modify".into(), "Sys.Modify".into()],
+            )],
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("containers", json!([])),
+            ("volumes", json!([])),
+            ("roles", json!([])),
+            ("users", json!([{"username": "admin"}])),
+            ("groups", json!([])),
+            (
+                "acl",
+                json!([{"path": "/", "subject_type": "user", "subject": "admin", "role": "Administrator"}]),
+            ),
+            (
+                "firewall",
+                json!({"options": {"policy_in": "accept", "policy_out": "accept"},
+                       "aliases": [], "ipsets": [], "security_groups": [], "rules": []}),
+            ),
+            ("backup_jobs", json!([])),
+            ("ha_groups", json!([])),
+        ] {
+            live.extra.insert(k.to_string(), v);
+        }
+        live
+    }
+
+    #[test]
+    fn every_kind_parses_validates_and_roundtrips_through_yaml_and_json() {
+        let s = parse(&spec_text()).unwrap();
+        for k in [
+            "containers",
+            "volumes",
+            "roles",
+            "users",
+            "groups",
+            "acl",
+            "firewall",
+            "backup_jobs",
+            "ha_groups",
+        ] {
+            assert!(s.extra.contains_key(k), "{k}");
+        }
+        assert_eq!(parse(&serde_yaml::to_string(&s).unwrap()).unwrap(), s);
+        assert_eq!(parse(&serde_json::to_string(&s).unwrap()).unwrap(), s);
+        assert_eq!(kinds::keys().len(), 9);
+    }
+
+    #[test]
+    fn bad_kind_sections_are_rejected_with_the_reason() {
+        for (text, want) in [
+            ("containers: [{name: a, image: x, memroy: 5}]", "memroy"),
+            (
+                "containers: [{name: a, image: x, env: {DB_PASSWORD: p}}]",
+                "secret",
+            ),
+            ("users: [{username: a, password: hunter2}]", "password"),
+            ("users: [{username: a, password_hash: hunter2}]", "argon2"),
+            ("firewall: {rules: [{id: a, action: ACCEPT}]}", "scope"),
+            (
+                "backup_jobs: [{id: a, schedule: daily, targets: []}]",
+                "target",
+            ),
+            ("ha_groups: [{name: a, nodes: []}]", "node"),
+            ("volumes: [{name: -x}]", "volume"),
+            ("nodes: {}", "not supported yet"),
+        ] {
+            let e = parse(text).unwrap_err();
+            assert!(e.contains(want), "{text}: {e}");
+        }
+    }
+
+    #[test]
+    fn plan_orders_the_kinds_dependency_first_with_the_firewall_reload_last() {
+        let s = parse(&spec_text()).unwrap();
+        let p = plan(&s, &empty_node(), false);
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let mut order: Vec<String> = p.changes.iter().map(|c| c.kind.clone()).collect();
+        order.dedup();
+        assert_eq!(
+            order,
+            [
+                "role",
+                "user",
+                "group",
+                "acl",
+                "volume",
+                "container",
+                "fw_alias",
+                "fw_rule",
+                "backup_job",
+                "ha_group",
+                "fw_reload"
+            ]
+        );
+        assert_eq!(
+            actions(&p)
+                .iter()
+                .filter(|a| a.ends_with("container web"))
+                .collect::<Vec<_>>(),
+            ["Create container web", "Start container web"]
+        );
+    }
+
+    #[test]
+    fn a_password_reference_that_cannot_be_read_is_a_plan_error() {
+        let s = parse(
+            "users: [{username: admin}, {username: bob, password_ref: {file: /nonexistent/hx-secret}}]",
+        )
+        .unwrap();
+        let p = plan(&s, &empty_node(), false);
+        assert!(
+            p.errors.iter().any(|e| e.contains("hx-secret")),
+            "{:?}",
+            p.errors
+        );
+    }
+
+    #[test]
+    fn prune_deletes_the_kinds_in_reverse_dependency_order_and_only_in_listed_sections() {
+        let mut live = empty_node();
+        live.extra
+            .insert("ha_groups".into(), json!([{"name": "old", "nodes": ["n"]}]));
+        live.extra.insert(
+            "containers".into(),
+            json!([{"name": "c", "image": "x:1", "runtime": "podman", "power": "stopped"}]),
+        );
+        let s = parse("ha_groups: []\ncontainers: []\nvms: []").unwrap();
+        let p = plan(&s, &live, true);
+        assert_eq!(actions(&p), ["Delete ha_group old", "Delete container c"]);
+        // sections the spec doesn't list are untouched even with prune
+        let p = plan(&parse("vms: []").unwrap(), &live, true);
+        assert!(p.changes.is_empty());
+    }
+
+    #[test]
+    fn a_section_whose_live_state_cannot_be_read_is_a_plan_error_not_a_silent_skip() {
+        let mut live = empty_node();
+        live.extra.remove("backup_jobs");
+        live.extra_errors.insert(
+            "backup_jobs".into(),
+            "this node was built without backups (USE=backup)".into(),
+        );
+        let s = parse("backup_jobs: [{id: a, schedule: daily, targets: [x]}]").unwrap();
+        let p = plan(&s, &live, false);
+        assert!(
+            p.errors.iter().any(|e| e.contains("USE=backup")),
+            "{:?}",
+            p.errors
+        );
+        // and export leaves it out
+        assert!(!export(&live).extra.contains_key("backup_jobs"));
+    }
+
+    #[test]
+    fn export_of_a_populated_node_is_a_fixed_point_for_every_kind() {
+        let mut live = empty_node();
+        live.kinds.users.insert(
+            "alice".into(),
+            UserPriv {
+                id: "id-alice".into(),
+                hash: HASH.into(),
+            },
+        );
+        live.extra.insert(
+            "users".into(),
+            json!([{"username": "admin"}, {"username": "alice", "email": "a@x.org"}]),
+        );
+        live.extra.insert(
+            "roles".into(),
+            json!([{"name": "Operator", "privileges": ["VM.Audit", "VM.PowerMgmt"]}]),
+        );
+        live.extra.insert(
+            "groups".into(),
+            json!([{"name": "ops", "members": ["alice"]}]),
+        );
+        live.extra.insert(
+            "acl".into(),
+            json!([
+                {"path": "/", "subject_type": "user", "subject": "admin", "role": "Administrator"},
+                {"path": "/vms", "subject_type": "group", "subject": "ops", "role": "Operator"}
+            ]),
+        );
+        live.extra.insert(
+            "containers".into(),
+            json!([{"name": "web", "runtime": "podman", "image": "docker.io/library/nginx:latest",
+                    "memory": 256, "cpus": 1, "ports": ["8080:80"], "env": {"TZ": "UTC"},
+                    "restart": "always", "power": "running"}]),
+        );
+        live.extra.insert(
+            "volumes".into(),
+            json!([{"name": "data", "runtime": "podman", "driver": "local"}]),
+        );
+        live.extra.insert(
+            "backup_jobs".into(),
+            json!([{"id": "n", "schedule": "0 2 * * *", "targets": ["web"]}]),
+        );
+        live.extra.insert(
+            "ha_groups".into(),
+            json!([{"name": "g", "nodes": ["n1"], "restricted": true}]),
+        );
+        live.extra.insert(
+            "firewall".into(),
+            json!({"options": {"policy_in": "accept", "policy_out": "accept"},
+                   "aliases": [{"name": "o", "cidr": "192.0.2.0/24"}],
+                   "ipsets": [], "security_groups": [],
+                   "rules": [{"scope": "datacenter", "id": "ssh", "action": "ACCEPT",
+                              "protocol": "tcp", "dport": "22"}]}),
+        );
+        let spec = export(&live);
+        let yaml = serde_yaml::to_string(&spec).unwrap();
+        let back = parse(&yaml).unwrap();
+        assert_eq!(back, spec);
+        let p = plan(&back, &live, true);
+        assert!(p.in_sync(), "{:?} {:?}", actions(&p), p.errors);
+    }
+}

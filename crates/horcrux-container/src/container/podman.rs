@@ -92,12 +92,15 @@ impl PodmanManager {
             .arg("--name")
             .arg(&config.name)
             .arg("--label")
-            .arg(format!("{}={}", super::HORCRUX_ID_LABEL, config.id))
-            .arg("--memory")
-            .arg(format!("{}m", config.memory))
-            .arg("--cpus")
-            .arg(config.cpus.to_string())
-            .args(super::oci_option_args(&config.options))
+            .arg(format!("{}={}", super::HORCRUX_ID_LABEL, config.id));
+        // 0 = no limit (a declarative spec may leave them out)
+        if config.memory > 0 {
+            cmd.arg("--memory").arg(format!("{}m", config.memory));
+        }
+        if config.cpus > 0 {
+            cmd.arg("--cpus").arg(config.cpus.to_string());
+        }
+        cmd.args(super::oci_option_args(&config.options))
             .arg(&config.rootfs) // rootfs is the image name for Podman
             .args(&config.options.command);
 

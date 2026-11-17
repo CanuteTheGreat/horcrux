@@ -168,6 +168,10 @@ pub(crate) fn oci_option_args(opts: &ContainerOptions) -> Vec<String> {
         args.push("--volume".to_string());
         args.push(v.clone());
     }
+    if let Some(r) = &opts.restart {
+        args.push("--restart".to_string());
+        args.push(r.clone());
+    }
     if let Some(net) = &opts.network {
         args.push("--network".to_string());
         args.push(net.clone());
@@ -1597,6 +1601,7 @@ mod tests {
             command: vec!["sleep".into(), "60".into()],
             network: Some("app_default".into()),
             network_aliases: vec!["web".into()],
+            restart: Some("on-failure:2".into()),
         };
         assert_eq!(
             oci_option_args(&opts),
@@ -1607,6 +1612,8 @@ mod tests {
                 "8080:80",
                 "--volume",
                 "data:/data:ro",
+                "--restart",
+                "on-failure:2",
                 "--network",
                 "app_default",
                 "--network-alias",

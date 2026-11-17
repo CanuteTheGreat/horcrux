@@ -251,6 +251,17 @@ impl FirewallManager {
             .collect()
     }
 
+    /// Names of the nodes that have firewall rules.
+    pub async fn nodes_with_rules(&self) -> Vec<String> {
+        self.node_rules
+            .read()
+            .await
+            .iter()
+            .filter(|(_, r)| !r.is_empty())
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
     /// Append a rule to the in-memory list for a scope (no nftables, no DB).
     async fn push_rule(&self, scope: &FirewallScope, rule: FirewallRule) {
         match scope {

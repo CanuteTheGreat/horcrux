@@ -276,6 +276,7 @@ impl StackManager {
                 command,
                 network: Some(Self::stack_network_name(stack_name)),
                 network_aliases: vec![service_name.to_string()],
+                restart: None,
             },
             created_at: None,
             lxc: None,

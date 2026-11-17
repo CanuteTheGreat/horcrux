@@ -359,7 +359,7 @@ fn validate_username(name: &str) -> ApiResult<()> {
     Ok(())
 }
 
-fn validate_password(pw: &str) -> ApiResult<()> {
+pub(crate) fn validate_password(pw: &str) -> ApiResult<()> {
     if pw.chars().count() < 8 {
         return Err(ApiError::ValidationError(
             "password must be at least 8 characters".into(),
@@ -1931,7 +1931,7 @@ async fn get_user(State(state): St, Path(id): Path<String>) -> ApiResult<Json<st
 }
 
 #[derive(Deserialize)]
-struct CreateUserBody {
+pub(crate) struct CreateUserBody {
     username: String,
     #[serde(default)]
     password: Option<String>,
@@ -1959,7 +1959,7 @@ fn yes() -> bool {
     true
 }
 
-async fn create_user(
+pub(crate) async fn create_user(
     State(state): St,
     u: Option<Extension<AuthUser>>,
     Json(req): Json<CreateUserBody>,
@@ -2115,7 +2115,7 @@ async fn update_user(
     get_user(State(state), Path(target.id)).await
 }
 
-async fn ensure_not_last_admin(state: &AppState, target: &User) -> ApiResult<()> {
+pub(crate) async fn ensure_not_last_admin(state: &AppState, target: &User) -> ApiResult<()> {
     let pool = state.database.pool();
     let tp = Principal::load(pool, &target.id).await?;
     if !tp.is_admin() {
@@ -2159,7 +2159,7 @@ async fn toggle_user(
     .await
 }
 
-async fn delete_user(
+pub(crate) async fn delete_user(
     State(state): St,
     u: Option<Extension<AuthUser>>,
     Path(id): Path<String>,

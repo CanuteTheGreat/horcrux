@@ -32,6 +32,7 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
             }
         }
     }
+    live.kinds = super::kinds::ctx::gather_ctx(state).await;
     live
 }
 
@@ -407,7 +408,7 @@ async fn create_vm(state: &Arc<AppState>, spec: &Spec, name: &str) -> Result<Str
 }
 
 /// The message inside an `ApiError`.
-fn api_msg(e: crate::error::ApiError) -> String {
+pub(crate) fn api_msg(e: crate::error::ApiError) -> String {
     use crate::error::ApiError as E;
     match e {
         E::Internal(m)

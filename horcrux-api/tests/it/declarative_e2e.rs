@@ -20,6 +20,15 @@ fn can_make_bridges() -> bool {
     ok
 }
 
+/// The spec text minus some top-level sections.
+fn without(text: &str, keys: &[&str]) -> String {
+    let mut v: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+    for k in keys {
+        v.as_mapping_mut().unwrap().remove(*k);
+    }
+    serde_yaml::to_string(&v).unwrap()
+}
+
 fn kinds(plan: &Value) -> Vec<String> {
     plan["changes"]
         .as_array()
@@ -140,8 +149,13 @@ async fn export_plan_apply_converge_and_prune() {
     for want in ["decl-vm", "bystander", "name: decl", "id: lab"] {
         assert!(text.contains(want), "{want} in export:\n{text}");
     }
+    // (containers and volumes are the shared CI host's own: another job may
+    // start or remove one between the export and the plan)
     let (_, v) = api
-        .post("/declarative/plan", json!({"spec": text, "prune": true}))
+        .post(
+            "/declarative/plan",
+            json!({"spec": without(text, &["containers", "volumes"]), "prune": true}),
+        )
         .await;
     assert_eq!(v["in_sync"], true, "export is a fixed point: {v}");
 
@@ -1000,4 +1014,643 @@ async fn gitops_signed_commits_and_webhook() {
         git_status(&api).await
     );
     assert_eq!(vm_memory(&api, "gs").await, Some(224));
+}
+
+// ===================================================================== kinds
+
+fn errors(v: &Value) -> String {
+    v["plan"]["errors"]
+        .as_array()
+        .or_else(|| v["errors"].as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .unwrap_or_default()
+}
+
+fn all_applied(v: &Value, except: &[&str]) {
+    assert_eq!(v["plan"]["errors"].as_array().map(Vec::len), Some(0), "{v}");
+    for r in v["results"].as_array().unwrap() {
+        if except.contains(&r["kind"].as_str().unwrap()) {
+            continue;
+        }
+        assert_eq!(r["status"], "applied", "{r}");
+    }
+}
+
+#[tokio::test]
+async fn users_groups_roles_acl_apply_with_real_logins_and_safety_rules() {
+    use crate::support::{admin_password, Api};
+    let dir = scratch("declarative-access");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let alice = "agent-test-decl-alice";
+    let sysop = "agent-test-decl-sysop";
+    let pwfile = dir.join("pw");
+    std::fs::write(&pwfile, "first-secret-pw-1\n").unwrap();
+    let spec = format!(
+        "roles:\n  - {{name: Operator, description: Run guests, privileges: [VM.Audit, VM.PowerMgmt]}}\n  - {{name: SysOnly, privileges: [Sys.Audit, Sys.Modify]}}\n\
+         users:\n  - {{username: admin}}\n  - {{username: {alice}, password_ref: {{file: {pw}}}}}\n  - {{username: {sysop}, password_ref: {{file: {pw}}}}}\n\
+         groups:\n  - {{name: decl-ops, members: [{alice}]}}\n\
+         acl:\n  - {{path: /, subject_type: user, subject: admin, role: Administrator}}\n  - {{path: /vms, subject_type: group, subject: decl-ops, role: Operator}}\n  - {{path: /, subject_type: user, subject: {sysop}, role: SysOnly}}\n",
+        pw = pwfile.display()
+    );
+
+    // plan: nothing happens, no secret is shown
+    let (s, v) = api.post("/declarative/plan", json!({"spec": spec})).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["in_sync"], false, "{v}");
+    let k = kinds(&v["plan"]);
+    for want in [
+        "create role Operator",
+        "create user agent-test-decl-alice",
+        "create group decl-ops",
+        "create acl /vms group decl-ops Operator",
+    ] {
+        assert!(k.contains(&want.to_string()), "{want} in {k:?}");
+    }
+    assert!(!v.to_string().contains("first-secret"), "{v}");
+    assert!(api
+        .get("/users")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|u| u["username"] != alice));
+
+    // apply: real accounts that can log in
+    let (s, v) = api.post("/declarative/apply", json!({"spec": spec})).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["ok"], true, "{v}");
+    all_applied(&v, &[]);
+    let users = api.get("/users").await.1;
+    assert!(
+        users
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["username"] == alice),
+        "{users}"
+    );
+    assert!(api
+        .get("/roles")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["name"] == "Operator"));
+    let groups = api.get("/groups").await.1;
+    assert_eq!(groups[0]["members"], json!([alice]), "{groups}");
+    let acl = api.get("/acl").await.1;
+    assert!(
+        acl.as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["path"] == "/vms" && a["subject"] == "decl-ops" && a["role"] == "Operator"),
+        "{acl}"
+    );
+    let c = srv.client();
+    Api::try_login(c.clone(), &srv.base(), alice, "first-secret-pw-1")
+        .await
+        .expect("the declared password works");
+    assert!(
+        Api::try_login(c.clone(), &srv.base(), alice, "wrong-password-1")
+            .await
+            .is_err()
+    );
+
+    // idempotent (the password reference is checked against the live hash)
+    let (_, v) = api.post("/declarative/plan", json!({"spec": spec})).await;
+    assert_eq!(v["in_sync"], true, "{v}");
+
+    // rotate the secret: drift is found and fixed, the old password dies
+    std::fs::write(&pwfile, "second-secret-pw-2\n").unwrap();
+    let (_, v) = api.post("/declarative/plan", json!({"spec": spec})).await;
+    assert!(
+        kinds(&v["plan"]).contains(&"update user agent-test-decl-alice".to_string()),
+        "{v}"
+    );
+    assert!(!v.to_string().contains("second-secret"), "{v}");
+    let (_, v) = api.post("/declarative/apply", json!({"spec": spec})).await;
+    assert_eq!(v["ok"], true, "{v}");
+    Api::try_login(c.clone(), &srv.base(), alice, "second-secret-pw-2")
+        .await
+        .expect("rotated");
+    assert!(
+        Api::try_login(c.clone(), &srv.base(), alice, "first-secret-pw-1")
+            .await
+            .is_err()
+    );
+
+    // export never leaks hashes by default; with the flag an administrator gets
+    // them and the result is still a fixed point
+    let (_, ex) = api.get("/declarative/export").await;
+    let text = ex["spec"].as_str().unwrap();
+    assert!(
+        !text.contains("argon2") && !text.contains("password"),
+        "{text}"
+    );
+    assert!(text.contains(alice));
+    let strip = |t: &str| without(t, &["containers", "volumes"]);
+    let (_, v) = api
+        .post(
+            "/declarative/plan",
+            json!({"spec": strip(text), "prune": true}),
+        )
+        .await;
+    assert_eq!(v["in_sync"], true, "{v}");
+    let (s, ex) = api.get("/declarative/export?include_hashes=true").await;
+    assert_eq!(s, 200, "{ex}");
+    let with = ex["spec"].as_str().unwrap();
+    assert!(with.contains("$argon2"), "hashes requested");
+    let (_, v) = api
+        .post(
+            "/declarative/plan",
+            json!({"spec": strip(with), "prune": true}),
+        )
+        .await;
+    assert_eq!(v["in_sync"], true, "{v}");
+
+    // safety 1: a prune that would leave no administrator is refused whole
+    let before = api.get("/users").await.1.as_array().unwrap().len();
+    let lonely = format!(
+        "users:\n  - {{username: {alice}, password_ref: {{file: {}}}}}\n",
+        pwfile.display()
+    );
+    let (s, v) = api
+        .post("/declarative/apply", json!({"spec": lonely, "prune": true}))
+        .await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["ok"], false, "{v}");
+    assert!(errors(&v).contains("administrator"), "{v}");
+    assert!(v["results"].as_array().unwrap().is_empty(), "{v}");
+    assert_eq!(api.get("/users").await.1.as_array().unwrap().len(), before);
+    // safety 2: the calling user is never disabled or deleted through apply
+    let (_, v) = api
+        .post(
+            "/declarative/plan",
+            json!({"spec": "users: [{username: admin, enabled: false}]"}),
+        )
+        .await;
+    assert!(
+        kinds(&v["plan"]).contains(&"blocked user admin".to_string()),
+        "{v}"
+    );
+    assert!(!errors(&v).is_empty(), "{v}");
+
+    // safety 3: Sys.Modify alone can't touch access control, and sees none of it
+    let op = Api::login_with(c.clone(), &srv.base(), sysop, "second-secret-pw-2").await;
+    let (s, v) = op
+        .post(
+            "/declarative/apply",
+            json!({"spec": "groups: [{name: decl-evil}]"}),
+        )
+        .await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["ok"], false, "{v}");
+    assert!(errors(&v).contains("Permissions.Modify"), "{v}");
+    assert!(api
+        .get("/groups")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|g| g["name"] != "decl-evil"));
+    let (s, ex) = op.get("/declarative/export").await;
+    assert_eq!(s, 200, "{ex}");
+    assert!(!ex["spec"].as_str().unwrap().contains(alice), "{ex}");
+    let (s, _) = op.get("/declarative/export?include_hashes=true").await;
+    assert_eq!(s, 403);
+    let _ = admin_password();
+
+    // teardown through prune: the declared users, group, grants and roles go;
+    // the built-in roles and the caller stay
+    let down = "roles: []\nusers: [{username: admin}]\ngroups: []\nacl: [{path: /, subject_type: user, subject: admin, role: Administrator}]\n";
+    let (_, v) = api
+        .post("/declarative/apply", json!({"spec": down, "prune": true}))
+        .await;
+    assert_eq!(v["ok"], true, "{v}");
+    let users = api.get("/users").await.1;
+    assert_eq!(users.as_array().unwrap().len(), 1, "{users}");
+    assert!(api.get("/groups").await.1.as_array().unwrap().is_empty());
+    let roles = api.get("/roles").await.1;
+    assert!(roles
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["name"] != "Operator" && r["name"] != "SysOnly"));
+    assert!(roles
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["name"] == "Administrator"));
+}
+
+#[tokio::test]
+async fn firewall_applies_orders_and_refuses_to_cut_the_api() {
+    let dir = scratch("declarative-fw");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let spec = "firewall:\n  aliases: [{name: decl-office, cidr: 192.0.2.0/24}]\n  ipsets: [{name: decl-admins, entries: [192.0.2.10, 192.0.2.11]}]\n  security_groups:\n    - {name: decl-web, rules: [{id: https, action: ACCEPT, protocol: tcp, dport: '443'}]}\n  rules:\n    - {scope: datacenter, id: decl-ssh, action: ACCEPT, protocol: tcp, source: decl-office, dport: '22'}\n    - {scope: datacenter, id: decl-http, action: ACCEPT, protocol: tcp, source: '+decl-admins', dport: '80'}\n";
+    let (s, v) = api.post("/declarative/apply", json!({"spec": spec})).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["plan"]["errors"].as_array().map(Vec::len), Some(0), "{v}");
+    // loading into nftables needs nft; everything else is plain config
+    for r in v["results"].as_array().unwrap() {
+        if r["kind"] == "fw_reload" {
+            assert!(
+                r["status"] == "applied"
+                    || r["message"]
+                        .as_str()
+                        .unwrap()
+                        .to_lowercase()
+                        .contains("nft"),
+                "{r}"
+            );
+        } else {
+            assert_eq!(r["status"], "applied", "{r}");
+        }
+    }
+    let ids = |v: Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        ids(api.get("/firewall/rules").await.1),
+        ["decl-ssh", "decl-http"]
+    );
+    assert!(api
+        .get("/firewall/aliases")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["name"] == "decl-office"));
+    assert!(api
+        .get("/firewall/ipsets")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["name"] == "decl-admins"));
+    assert!(api
+        .get("/firewall/security-groups")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|g| g["name"] == "decl-web"));
+
+    // idempotent, and the export is a fixed point
+    let (_, v) = api.post("/declarative/plan", json!({"spec": spec})).await;
+    assert_eq!(v["in_sync"], true, "{v}");
+    let (_, ex) = api.get("/declarative/export").await;
+    let text = ex["spec"].as_str().unwrap();
+    let (_, v) = api
+        .post(
+            "/declarative/plan",
+            json!({"spec": without(text, &["containers", "volumes"]), "prune": true}),
+        )
+        .await;
+    assert_eq!(v["in_sync"], true, "{v}");
+
+    // a security group can't be edited yet: said, not skipped
+    let edited = spec.replace("dport: '443'", "dport: '8443'");
+    let (_, v) = api.post("/declarative/plan", json!({"spec": edited})).await;
+    assert_eq!(
+        kinds(&v["plan"]),
+        ["blocked fw_security_group decl-web"],
+        "{v}"
+    );
+
+    // order matters: swapping the rules re-adds them in the new order
+    let swapped = "firewall:\n  aliases: [{name: decl-office, cidr: 192.0.2.0/24}]\n  ipsets: [{name: decl-admins, entries: [192.0.2.10, 192.0.2.11]}]\n  rules:\n    - {scope: datacenter, id: decl-http, action: ACCEPT, protocol: tcp, source: '+decl-admins', dport: '80'}\n    - {scope: datacenter, id: decl-ssh, action: ACCEPT, protocol: tcp, source: decl-office, dport: '22'}\n";
+    let (_, v) = api
+        .post("/declarative/apply", json!({"spec": swapped}))
+        .await;
+    assert_eq!(
+        kinds(&v["plan"]),
+        [
+            "update fw_rule datacenter/decl-http",
+            "update fw_rule datacenter/decl-ssh",
+            "update fw_reload datacenter"
+        ],
+        "{v}"
+    );
+    assert_eq!(
+        ids(api.get("/firewall/rules").await.1),
+        ["decl-http", "decl-ssh"]
+    );
+
+    // anti-lockout: a rule that drops the API port is refused, nothing added
+    let port = srv.port;
+    let cut = format!(
+        "firewall:\n  rules:\n    - {{scope: datacenter, id: decl-http, action: ACCEPT, protocol: tcp, source: '+decl-admins', dport: '80'}}\n    - {{scope: datacenter, id: decl-ssh, action: ACCEPT, protocol: tcp, source: decl-office, dport: '22'}}\n    - {{scope: datacenter, id: decl-cut, action: DROP, protocol: tcp, dport: '{port}'}}\n"
+    );
+    let (s, v) = api.post("/declarative/apply", json!({"spec": cut})).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["ok"], false, "{v}");
+    assert!(errors(&v).contains("cut this session off"), "{v}");
+    assert!(v["results"].as_array().unwrap().is_empty());
+    assert_eq!(
+        ids(api.get("/firewall/rules").await.1),
+        ["decl-http", "decl-ssh"]
+    );
+    // a range that covers it is refused too; an explicit override lifts the refusal
+    // (planned only: it would really cut this test server off)
+    let range = cut.replace(&format!("'{port}'"), "'1024:65535'");
+    let (_, v) = api.post("/declarative/plan", json!({"spec": range})).await;
+    assert!(errors(&v).contains("cut this session off"), "{v}");
+    let forced = format!("{cut}  allow_lockout: true\n");
+    let (_, v) = api.post("/declarative/plan", json!({"spec": forced})).await;
+    assert_eq!(errors(&v), "", "{v}");
+
+    // teardown by prune: rules go before the sets they use
+    let down = "firewall:\n  aliases: []\n  ipsets: []\n  rules: []\n";
+    let (_, v) = api
+        .post("/declarative/apply", json!({"spec": down, "prune": true}))
+        .await;
+    assert_eq!(v["plan"]["errors"].as_array().map(Vec::len), Some(0), "{v}");
+    for r in v["results"].as_array().unwrap() {
+        if r["kind"] != "fw_reload" {
+            assert_eq!(r["status"], "applied", "{r}");
+        }
+    }
+    assert!(api
+        .get("/firewall/rules")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(api
+        .get("/firewall/aliases")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(api
+        .get("/firewall/ipsets")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn backup_jobs_and_ha_groups_converge_and_prune() {
+    let dir = scratch("declarative-backup-ha");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let spec = "backup_jobs:\n  - {id: decl-nightly, schedule: '0 2 * * *', targets: [decl-guest], retention: {keep_last: 3}, notify: failure}\nha_groups:\n  - {name: decl-g1, nodes: [n1, n2], restricted: true}\n";
+    let (s, v) = api.post("/declarative/apply", json!({"spec": spec})).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["ok"], true, "{v}");
+    all_applied(&v, &[]);
+    let jobs = api.get("/backup-jobs").await.1;
+    assert_eq!(jobs[0]["id"], "decl-nightly", "{jobs}");
+    assert_eq!(jobs[0]["retention"]["keep_last"], 3);
+    assert_eq!(jobs[0]["compression"], "zstd");
+    let groups = api.get("/ha/groups").await.1;
+    assert_eq!(groups[0]["name"], "decl-g1", "{groups}");
+    assert_eq!(groups[0]["restricted"], true);
+
+    let (_, v) = api.post("/declarative/plan", json!({"spec": spec})).await;
+    assert_eq!(v["in_sync"], true, "{v}");
+
+    // change both: one update each
+    let changed = spec
+        .replace("0 2 * * *", "30 3 * * *")
+        .replace("[n1, n2]", "[n1, n3]");
+    let (_, v) = api
+        .post("/declarative/apply", json!({"spec": changed}))
+        .await;
+    assert_eq!(
+        kinds(&v["plan"]),
+        ["update backup_job decl-nightly", "update ha_group decl-g1"],
+        "{v}"
+    );
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(api.get("/backup-jobs").await.1[0]["schedule"], "30 3 * * *");
+    assert_eq!(
+        api.get("/ha/groups").await.1[0]["nodes"],
+        json!(["n1", "n3"])
+    );
+    // the run history of a job is server state, not drift
+    let (_, v) = api
+        .post("/declarative/plan", json!({"spec": changed}))
+        .await;
+    assert_eq!(v["in_sync"], true, "{v}");
+
+    // export is a fixed point, defaults omitted
+    let (_, ex) = api.get("/declarative/export").await;
+    let text = ex["spec"].as_str().unwrap();
+    assert!(
+        text.contains("decl-nightly") && text.contains("decl-g1"),
+        "{text}"
+    );
+    let (_, v) = api
+        .post(
+            "/declarative/plan",
+            json!({"spec": without(text, &["containers", "volumes"]), "prune": true}),
+        )
+        .await;
+    assert_eq!(v["in_sync"], true, "{v}");
+
+    // unlisted jobs/groups survive without prune, go with it
+    let (_, v) = api
+        .post(
+            "/declarative/apply",
+            json!({"spec": "backup_jobs: []\nha_groups: []\n"}),
+        )
+        .await;
+    assert_eq!(v["in_sync"].as_bool().unwrap_or(true), true);
+    assert_eq!(api.get("/backup-jobs").await.1.as_array().unwrap().len(), 1);
+    let (_, v) = api
+        .post(
+            "/declarative/apply",
+            json!({"spec": "backup_jobs: []\nha_groups: []\n", "prune": true}),
+        )
+        .await;
+    assert_eq!(v["ok"], true, "{v}");
+    assert!(api
+        .get("/backup-jobs")
+        .await
+        .1
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(api.get("/ha/groups").await.1.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn containers_and_volumes_use_a_real_runtime_or_say_what_the_node_lacks() {
+    let dir = scratch("declarative-containers");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let name = format!("decl-ct-{}", std::process::id());
+    let vol = format!("decl-vol-{}", std::process::id());
+    let rts = api.get("/containers/runtimes").await.1;
+    let usable: Vec<String> = rts["runtimes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["available"] == true)
+        .map(|r| r["runtime"].as_str().unwrap().to_string())
+        .filter(|r| r == "podman" || r == "docker")
+        .collect();
+    let spec = |env: &str, extra: &str| {
+        format!(
+            "containers:\n  - name: {name}\n    image: busybox:latest\n    command: [sleep, '300']\n    env: {{DECL: {env}}}\n    restart: unless-stopped\n    power: running\n{extra}volumes:\n  - name: {vol}\n"
+        )
+    };
+
+    // bad specs are 422 and touch nothing
+    let (s, _) = api
+        .post(
+            "/declarative/plan",
+            json!({"spec": "containers: [{name: a, image: x, env: {API_TOKEN: abc}}]"}),
+        )
+        .await;
+    assert_eq!(s, 422);
+
+    if usable.is_empty() {
+        // no podman, no docker: the plan says so with the same reason code as the 424
+        let (s, v) = api
+            .post("/declarative/apply", json!({"spec": spec("one", "")}))
+            .await;
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["ok"], false, "{v}");
+        let blocked: Vec<_> = v["results"].as_array().unwrap().iter().collect();
+        assert!(!blocked.is_empty());
+        for r in blocked {
+            assert_eq!(r["status"], "skipped", "{r}");
+            assert!(r["message"].as_str().unwrap().contains("node lacks"), "{r}");
+        }
+        return;
+    }
+
+    // the default runtime is podman, falling back to docker
+    let want = if usable.contains(&"podman".to_string()) {
+        "podman"
+    } else {
+        "docker"
+    };
+    let (s, v) = api
+        .post("/declarative/plan", json!({"spec": spec("one", "")}))
+        .await;
+    assert_eq!(s, 200, "{v}");
+    assert!(
+        v["plan"]["changes"][0]["details"][0]
+            .as_str()
+            .unwrap()
+            .starts_with(want)
+            || kinds(&v["plan"]).iter().any(|k| k.ends_with(&vol)),
+        "{v}"
+    );
+    let (s, v) = api
+        .post("/declarative/apply", json!({"spec": spec("one", "")}))
+        .await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["ok"], true, "{v}");
+    all_applied(&v, &[]);
+    let cts = api.get("/containers").await.1;
+    let ct = cts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == name.as_str())
+        .expect("declared container exists");
+    assert_eq!(ct["runtime"], want, "{ct}");
+    assert_eq!(ct["status"], "running", "{ct}");
+    assert_eq!(ct["restart"], "unless-stopped", "{ct}");
+    let vols = api.get(&format!("/volumes?runtime={want}")).await.1;
+    assert!(
+        vols.as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["name"] == vol.as_str()),
+        "{vols}"
+    );
+
+    // idempotent
+    let (_, v) = api
+        .post("/declarative/plan", json!({"spec": spec("one", "")}))
+        .await;
+    assert_eq!(v["in_sync"], true, "{v}");
+
+    // a changed env is blocked until `replace: true`, then it is re-created and runs again
+    let (_, v) = api
+        .post("/declarative/apply", json!({"spec": spec("two", "")}))
+        .await;
+    assert_eq!(v["ok"], false, "{v}");
+    assert_eq!(v["results"][0]["status"], "skipped", "{v}");
+    let (_, v) = api
+        .post(
+            "/declarative/apply",
+            json!({"spec": spec("two", "    replace: true\n")}),
+        )
+        .await;
+    assert_eq!(v["ok"], true, "{v}");
+    let ct = api.get(&format!("/containers/{name}")).await.1;
+    assert_eq!(ct["status"], "running", "{ct}");
+    assert!(
+        ct["env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e == "DECL=two"),
+        "{ct}"
+    );
+
+    // power: stopped stops it
+    let stopped = spec("two", "").replace("power: running", "power: stopped");
+    let (_, v) = api
+        .post("/declarative/apply", json!({"spec": stopped}))
+        .await;
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(
+        api.get(&format!("/containers/{name}")).await.1["status"],
+        "stopped"
+    );
+
+    // export: a fixed point for the container, no secret env anywhere
+    let (_, ex) = api.get("/declarative/export").await;
+    let text = ex["spec"].as_str().unwrap();
+    assert!(text.contains(&name), "{text}");
+    // prune is only ever planned here: the CI host's other containers are not ours
+    let (s, v) = api
+        .post(
+            "/declarative/apply",
+            json!({"spec": "containers: []", "prune": true, "dry_run": true}),
+        )
+        .await;
+    assert_eq!(s, 200, "{v}");
+    assert!(v["results"].as_array().unwrap().is_empty());
+
+    // cleanup through the REST API
+    let _ = api.delete(&format!("/containers/{name}")).await;
+    let _ = api.delete(&format!("/volumes/{vol}?runtime={want}")).await;
 }

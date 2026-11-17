@@ -277,6 +277,9 @@ enum Commands {
         /// Write to this file instead of stdout
         #[arg(short, long)]
         file: Option<String>,
+        /// Include users' password hashes (a credential: the file is written 0600)
+        #[arg(long)]
+        include_hashes: bool,
     },
     /// Generate shell completions
     Completions {
@@ -1458,9 +1461,10 @@ async fn main() -> Result<()> {
                 .await?
             }
         },
-        Commands::Export { file } => {
-            commands::declarative::export(&api_client, file.as_deref()).await?
-        }
+        Commands::Export {
+            file,
+            include_hashes,
+        } => commands::declarative::export(&api_client, file.as_deref(), include_hashes).await?,
         Commands::Completions { shell } => {
             generate_completions(shell);
         }

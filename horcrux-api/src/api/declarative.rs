@@ -69,6 +69,11 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/declarative/history", get(history))
         .route("/api/declarative/history/:id", get(history_one))
         .route("/api/declarative/history/:id/rollback", post(rollback))
+        // who is calling, for the kinds' safety checks (kinds::ctx)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            declarative::kinds::ctx::caller_layer,
+        ))
 }
 
 /// Routes that carry their own authentication (outside the login layer).

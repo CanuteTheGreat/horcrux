@@ -418,15 +418,15 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         },
         "ha" => read_write(m, P::SysAudit, P::SysModify, "/cluster"),
         // Whole-node desired state: plan/export only read, apply changes
-        // pools, networks and VMs, so it needs node-wide rights.
-        // The GitOps webhook authenticates itself (HMAC over the body).
-        // Read-only POSTs (plan, validate, drift check) need Audit only.
-        "declarative" => match (arg(1), arg(2), m) {
-            ("plan", _, "POST") => need(P::SysAudit, "/"),
-            ("apply", _, "POST") => need(P::SysModify, "/"),
-            ("desired", "validate", "POST") => need(P::SysAudit, "/"),
-            ("drift", "check", "POST") => need(P::SysAudit, "/"),
-            ("gitops", "webhook", "POST") => Requirement::Public,
+        // pools, networks, VMs, containers, firewall, backup jobs and HA
+        // groups, so it needs node-wide rights. Users, groups, roles and ACL
+        // are inside the same spec, so the handlers add the stricter checks:
+        // changing them needs Permissions.Modify on `/` (a Sys.Modify holder
+        // must not promote itself), and export leaves them out - and refuses
+        // `?include_hashes` - unless the caller holds it.
+        "declarative" => match (arg(1), m) {
+            ("plan", "POST") => need(P::SysAudit, "/"),
+            ("apply", "POST") => need(P::SysModify, "/"),
             _ => read_write(m, P::SysAudit, P::SysModify, "/"),
         },
         "firewall" | "cni" | "network-policies" | "sdn" | "network" => {
@@ -690,6 +690,23 @@ mod tests {
             priv_of(requirement("GET", "/api/tls/certificate/info/etc")).0,
             P::SysModify
         );
+    }
+
+    #[test]
+    fn declarative_reads_need_audit_and_apply_needs_modify_node_wide() {
+        for p in ["/api/declarative/export", "/api/declarative/plan"] {
+            let m = if p.ends_with("plan") { "POST" } else { "GET" };
+            assert_eq!(priv_of(requirement(m, p)), (P::SysAudit, "/".into()), "{p}");
+        }
+        assert_eq!(
+            priv_of(requirement("POST", "/api/declarative/apply")),
+            (P::SysModify, "/".into())
+        );
+        // nothing under the area is reachable without a privilege
+        assert!(!matches!(
+            requirement("PUT", "/api/declarative/anything"),
+            Requirement::Public
+        ));
     }
 
     #[test]
