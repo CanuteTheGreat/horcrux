@@ -181,14 +181,14 @@ class ZRun(qt.Runner):
         """`sh` for a status query that can answer empty or late while an emulated guest is still busy (systemd's manager answers `systemctl list-unit-files`
         / `--failed` over D-Bus, whose 25 s call timeout expires under TCG load: runs 3161/3281 got an empty enabled list and `timeout` from a guest whose
         services were fine). Re-ask up to `tries` times until `ok(output)`; the caller asserts on the LAST answer, unchanged. A miss prints the manager state."""
-        rc, o = self.sh(cmd)
+        rc, o = self.sh(cmd, timeout=int(qt.T(120)))
         for _ in range(1, tries):
             if ok(o):
                 break
             time.sleep(qt.T(pause))
-            rc, o = self.sh(cmd)
+            rc, o = self.sh(cmd, timeout=int(qt.T(120)))
         if not ok(o):
-            _r, d = self.sh("systemctl is-system-running 2>&1; cat /proc/loadavg; systemctl list-unit-files --state=enabled --no-legend --plain 2>&1 | head -3", timeout=int(qt.T(90)))
+            _r, d = self.sh("export SYSTEMD_BUS_TIMEOUT=150; systemctl is-system-running 2>&1; cat /proc/loadavg; systemctl list-unit-files --state=enabled --no-legend --plain 2>&1 | head -3", timeout=int(qt.T(90)))
             print(f"[DIAG] {label}: no usable answer after {tries} tries; guest: " + re.sub(r"\s+", " ", d).strip()[:300], flush=True)
         return rc, o
 

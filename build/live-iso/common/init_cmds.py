@@ -64,31 +64,34 @@ def boots_with(init, console_text):
 # ---- guest-side snippets that detect the init at run time (the encrypted-ZFS / desktop gates in zfs-enc-test.py run them; they have no
 # --init argument because the same harness drives every image). `/run/systemd/system` is the same test as crate::init::detect.
 IS_SYSTEMD = "[ -d /run/systemd/system ]"
+# systemctl's D-Bus call gives up after 25 s ("Failed to list unit files: Connection timed out"), and an emulated (TCG) guest can need longer for
+# `list-unit-files` on every try, so re-asking never helps. Raise the client-side call timeout for the status queries (the assertions are unchanged).
+BUS_WAIT = "export SYSTEMD_BUS_TIMEOUT=150; "
 
 
 def enabled_list_sh():
     """one line per service enabled at boot: `<name> | <runlevel>` (OpenRC rc-update show) or `<name> enabled` (systemd, `.service` stripped)"""
-    return (f"if {IS_SYSTEMD}; then systemctl list-unit-files --state=enabled --no-legend --plain 2>/dev/null | sed -E 's/\\.(service|target|socket|timer) / /'; "
+    return (f"if {IS_SYSTEMD}; then {BUS_WAIT}systemctl list-unit-files --state=enabled --no-legend --plain 2>/dev/null | sed -E 's/\\.(service|target|socket|timer) / /'; "
             "else rc-update show -v 2>/dev/null | grep -v '|[[:space:]]*$'; fi")
 
 
 def failed_sh(pattern=""):
     """`crashed <name>` per crashed (OpenRC) / failed (systemd) service, optionally only names matching the ERE `pattern`"""
     g = f" | grep -E '{pattern}'" if pattern else ""
-    return (f"if {IS_SYSTEMD}; then systemctl --failed --no-legend --plain 2>/dev/null | awk '{{print \"crashed\", $1}}'{g}; "
+    return (f"if {IS_SYSTEMD}; then {BUS_WAIT}systemctl --failed --no-legend --plain 2>/dev/null | awk '{{print \"crashed\", $1}}'{g}; "
             f"else rc-status -a 2>/dev/null | grep -Ei 'crashed' | awk '{{print \"crashed\", $1}}'{g}; fi")
 
 
 def running_list_sh(pattern=""):
     """one line per running service (name first), optionally only names matching the ERE `pattern`"""
     g = f" | grep -E '{pattern}'" if pattern else ""
-    return (f"if {IS_SYSTEMD}; then systemctl list-units --type=service --state=running --no-legend --plain 2>/dev/null | awk '{{sub(/\\.service$/, \"\", $1); print $1, \"started\"}}'{g}; "
+    return (f"if {IS_SYSTEMD}; then {BUS_WAIT}systemctl list-units --type=service --state=running --no-legend --plain 2>/dev/null | awk '{{sub(/\\.service$/, \"\", $1); print $1, \"started\"}}'{g}; "
             f"else rc-status -s 2>/dev/null | grep -E 'started' | tr -s ' '{g}; fi")
 
 
 def stopped_sh(pattern):
     """`stopped <name>` for every service matching `pattern` that is enabled at boot but not running (OpenRC rc-status -a; systemd is-active)"""
-    return (f"if {IS_SYSTEMD}; then for u in $(systemctl list-unit-files --type=service --state=enabled --no-legend --plain 2>/dev/null | awk '{{print $1}}' | grep -E '{pattern}'); do "
+    return (f"if {IS_SYSTEMD}; then {BUS_WAIT}for u in $(systemctl list-unit-files --type=service --state=enabled --no-legend --plain 2>/dev/null | awk '{{print $1}}' | grep -E '{pattern}'); do "
             # a unit its own Condition*= skipped (horcrux-firstboot once firstboot-done exists) is not "stopped": the OpenRC script returns early, started
             "systemctl -q is-active $u || [ \"$(systemctl show -P ConditionResult $u)\" = no ] || echo \"stopped ${u%.service}\"; done; "
             f"else rc-status -a 2>/dev/null | grep -Ei 'stopped' | grep -E '{pattern}' | awk '{{print \"stopped\", $1}}'; fi")
