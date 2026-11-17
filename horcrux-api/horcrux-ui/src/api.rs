@@ -5513,7 +5513,7 @@ pub struct RuntimeStatus {
 }
 
 pub async fn get_container_runtimes() -> Result<Vec<RuntimeStatus>, ApiError> {
-    fetch_json("/container-runtimes").await
+    fetch_json("/containers/runtimes").await
 }
 
 pub async fn get_images(runtime: &str) -> Result<Vec<ImageInfo>, ApiError> {

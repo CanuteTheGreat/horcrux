@@ -119,7 +119,7 @@ pub fn runtime_status(runtime: &str, check: Result<(), ApiError>) -> RuntimeStat
     }
 }
 
-/// `GET /api/container-runtimes`: whether Podman and Docker are usable here.
+/// `GET /api/containers/runtimes`: whether Podman and Docker are usable here.
 pub async fn container_runtimes() -> axum::Json<Vec<RuntimeStatus>> {
     axum::Json(
         ["podman", "docker"]

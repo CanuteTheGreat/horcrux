@@ -505,7 +505,7 @@ def main():
 
         # Finding 13: Podman/Docker availability is stated up front (never only
         # when Create fails) and the textareas are as wide as the inputs.
-        runtimes = {r["runtime"]: r for r in api_get("/api/container-runtimes", tok)}
+        runtimes = {r["runtime"]: r for r in api_get("/api/containers/runtimes", tok)}
         assert set(runtimes) == {"podman", "docker"}, runtimes
         page.goto(f"{BASE}/containers/create")
         page.locator("#ct-image").wait_for()
