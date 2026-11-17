@@ -9,8 +9,7 @@ use crate::auth::store::{self, Principal, RealmRecord, RoleRecord, UserUpdate};
 use crate::auth::{password, privileges, realms, sysgroups, totp, webauthn};
 use crate::error::ApiError;
 use crate::middleware::auth::{
-    generate_session_token, AuthUser, SCOPE_TFA_SETUP, TFA_SETUP_TOKEN_TTL_SECS,
-    USER_TOKEN_TTL_SECS,
+    generate_session_token, AuthUser, SCOPE_TFA_SETUP,
 };
 use crate::AppState;
 use axum::{
@@ -437,10 +436,11 @@ async fn issue_login(
     user_agent: Option<&str>,
 ) -> ApiResult<Response> {
     let pool = state.database.pool();
+    // [auth] session_ttl_secs / tfa_setup_ttl_secs in config.toml
     let ttl = if scope.is_some() {
-        TFA_SETUP_TOKEN_TTL_SECS
+        state.config.auth.tfa_setup_ttl_secs as usize
     } else {
-        USER_TOKEN_TTL_SECS
+        state.config.auth.session_ttl_secs as usize
     };
     let sid =
         store::create_session(pool, &user.id, scope, ttl as i64, ip.as_deref(), user_agent).await?;
@@ -1554,7 +1554,7 @@ async fn after_enrollment(state: &AppState, user: &AuthUser) -> ApiResult<Vec<St
         sqlx::query(
             "UPDATE sessions SET scope = NULL, expires_at = ? WHERE id = ? AND scope IS NOT NULL",
         )
-        .bind(store::now() + USER_TOKEN_TTL_SECS as i64)
+        .bind(store::now() + state.config.auth.session_ttl_secs as i64)
         .bind(sid)
         .execute(pool)
         .await

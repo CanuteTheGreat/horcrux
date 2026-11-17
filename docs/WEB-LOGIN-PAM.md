@@ -29,7 +29,11 @@ operator_groups = ["hx-operators"]
 readonly_groups = ["hx-viewers"]
 allow_root      = false
 legacy_local_login = true     # old Horcrux-only accounts keep working this release (see Migration)
+session_ttl_secs   = 86400    # login lifetime, 300 .. 2592000 (HORCRUX_SESSION_TTL_SECS)
+tfa_setup_ttl_secs = 900      # "set up two-factor first" login, 60 .. 3600 (HORCRUX_TFA_SETUP_TTL_SECS)
 ```
+
+Out-of-range lifetimes stop horcrux-api at start with a message naming the key.
 
 Add a user: `useradd -m -G horcrux-admin alice && passwd alice` (or `gpasswd -a alice horcrux-admin`).
 The installer creates the user you type in the "Administrator account" step in `wheel` and

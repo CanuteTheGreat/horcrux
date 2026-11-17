@@ -67,3 +67,11 @@ bin_dir = "/opt/cni/bin"
 conf_dir = "/etc/cni/net.d"
 # Enable CNI features
 enabled = true
+
+[auth]
+# System groups whose members are web/API administrators (PAM login)
+admin_groups = ["horcrux-admin", "wheel"]
+# Login lifetime in seconds (300 .. 2592000). Env: HORCRUX_SESSION_TTL_SECS
+session_ttl_secs = 86400
+# Lifetime of the restricted "set up two-factor first" login (60 .. 3600). Env: HORCRUX_TFA_SETUP_TTL_SECS
+tfa_setup_ttl_secs = 900

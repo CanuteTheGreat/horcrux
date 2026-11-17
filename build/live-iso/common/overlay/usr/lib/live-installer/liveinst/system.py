@@ -441,11 +441,54 @@ def timezones():
     return ["UTC"] + zs
 
 
+# Shown first, and the whole list when the image has no glibc locale data (minimal/test images).
+# hardcode-ok-begin: shortlist/fallback only; the offered list comes from glibc's SUPPORTED file (locales())
 LOCALES = [("en_US.UTF-8", "English (United States)"), ("en_GB.UTF-8", "English (United Kingdom)"),
            ("de_DE.UTF-8", "Deutsch"), ("fr_FR.UTF-8", "Francais"), ("es_ES.UTF-8", "Espanol"),
            ("it_IT.UTF-8", "Italiano"), ("pt_BR.UTF-8", "Portugues (Brasil)"), ("nl_NL.UTF-8", "Nederlands"),
            ("sv_SE.UTF-8", "Svenska"), ("pl_PL.UTF-8", "Polski"), ("ru_RU.UTF-8", "Russian"),
            ("ja_JP.UTF-8", "Japanese"), ("zh_CN.UTF-8", "Chinese (Simplified)")]
+# hardcode-ok-end
+
+I18N = "/usr/share/i18n"
+
+
+def _locale_title(name, i18n):
+    """glibc's own description of a locale (LC_IDENTIFICATION `title`), e.g. "German locale for Germany"."""
+    base = name.split(".")[0]
+    try:
+        with open(os.path.join(i18n, "locales", base), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = re.match(r'\s*title\s+"(.*)"', line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return base
+
+
+def locales(i18n=I18N):
+    """Every UTF-8 locale the installed glibc supports (/usr/share/i18n/SUPPORTED), the shortlist first.
+
+    The installer runs locale-gen for whatever is chosen, so any supported locale works; nothing is limited
+    to a fixed list. Falls back to the shortlist when the image carries no glibc locale data."""
+    names = []
+    try:
+        with open(os.path.join(i18n, "SUPPORTED"), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 2 and parts[1] == "UTF-8" and parts[0].endswith((".UTF-8", ".utf8")):
+                    names.append(parts[0].replace(".utf8", ".UTF-8"))
+    except OSError:
+        return list(LOCALES)
+    if not names:
+        return list(LOCALES)
+    short = {k: v for k, v in LOCALES}
+    have = set(names)
+    out = [(k, v) for k, v in LOCALES if k in have]
+    for n in sorted(set(names) - set(short)):
+        out.append((n, f"{_locale_title(n, i18n)} ({n})"))
+    return out
 
 
 def apply_live_keymap(km):

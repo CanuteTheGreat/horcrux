@@ -434,12 +434,6 @@ pub fn generate_cluster_migration_token(local_hostname: &str) -> Result<String, 
 /// trip; keep it short so a token captured off the wire is near-useless.
 pub const CLUSTER_NODE_TOKEN_TTL_SECS: usize = 30;
 
-/// Lifetime of a normal user login token.
-pub const USER_TOKEN_TTL_SECS: usize = 86400; // 24 hours
-
-/// Lifetime of the restricted second-factor-setup login.
-pub const TFA_SETUP_TOKEN_TTL_SECS: usize = 900;
-
 /// Whether a request authenticated by a `cluster-node` service token may
 /// proceed. Only a read of this node's own usage is allowed -- the token
 /// travels to every registered peer address, so it must never grant general
@@ -579,7 +573,7 @@ mod tests {
         assert_eq!(claims.sub, "user123");
         assert_eq!(claims.username, "admin");
         assert_eq!(claims.sid.as_deref(), Some("sid1"));
-        assert_eq!(claims.exp - claims.iat, USER_TOKEN_TTL_SECS);
+        assert_eq!(claims.exp - claims.iat, 86400);
     }
 
     #[test]

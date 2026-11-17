@@ -169,7 +169,7 @@ class KeymapStage(Stage):
             Field("install_type", "Install type", "choice", c["install_type"], INSTALL_TYPES,
                   disabled=[v for v, _t in INSTALL_TYPES if v not in AVAILABLE_TYPES],
                   hint="Server: headless appliance, hardened defaults. Workstation (desktop) is not available yet."),
-            Field("locale", "Language", "list", c["locale"], S.LOCALES,
+            Field("locale", "Language", "list", c["locale"], S.locales(),
                   hint="Language of the installed system (the installer itself is English)"),
             Field("keymap", "Keyboard layout", "list", c["keymap"], [(k, k) for k in S.keymaps()]),
             Field("timezone", "Time zone", "list", c["timezone"], [(z, z) for z in S.timezones()],

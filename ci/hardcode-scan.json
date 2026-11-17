@@ -1,0 +1,82 @@
+{
+ "_doc": "Scope of ci/hardcode-scan.py: shipped code, UI, installer/ISO inputs, packaged init scripts and helpers.",
+ "include": [
+  "horcrux-api/src/*",
+  "horcrux-api/horcrux-ui/src/*",
+  "horcrux-api/horcrux-ui/*.html",
+  "horcrux-cli/src/*",
+  "horcrux-common/src/*",
+  "crates/*/src/*",
+  "build/live-iso/*",
+  "build/installer/*",
+  "build/scripts/*",
+  "build/catalyst/*",
+  "deploy/*",
+  "gentoo/app-emulation/*/files/*",
+  "gentoo/app-misc/*/files/*",
+  "gentoo/sys-apps/*/files/*",
+  "gentoo/net-misc/*/files/*",
+  "gentoo/app-admin/*/files/*",
+  "gentoo/sys-auth/*/files/*"
+ ],
+ "exclude": [
+  "*.md",
+  "*.png",
+  "*.svg",
+  "*.ico",
+  "*.lock",
+  "*.txt",
+  "*.sha256",
+  "*/tests/*",
+  "*/testdata/*",
+  "build/live-iso/*/tests/*",
+  "*.diff",
+  "*.patch",
+  "build/live-iso/*qemu-test*.py",
+  "build/live-iso/*/vendor/*"
+ ],
+ "test_globs": [
+  "*/tests/*",
+  "*_test.rs",
+  "*_tests.rs",
+  "*/tests.rs",
+  "*test*.py",
+  "*/testing/*",
+  "*/test-machine/*"
+ ],
+ "default_config_globs": [
+  "*/etc/patronus/*.toml",
+  "*/etc/patronus/*.env",
+  "*/etc/patronus/board.sh",
+  "*.example",
+  "*.conf.example",
+  "*/etc/conf.d/*",
+  "*config.example.toml",
+  "*/conf.d/*",
+  "*.confd",
+  "gentoo/*/files/*.toml",
+  "crates/horcrux-core/src/config.rs"
+ ],
+ "build_input_globs": [
+  "build/catalyst/*",
+  "build/scripts/*",
+  "build/live-iso/*/build*.sh",
+  "build/live-iso/*.yml",
+  "*Dockerfile*",
+  "build/live-iso/*/Makefile"
+ ],
+ "product_path_prefixes": [
+  "/etc/horcrux",
+  "/var/lib/horcrux",
+  "/var/log/horcrux",
+  "/run/horcrux",
+  "/var/run/horcrux",
+  "/var/cache/horcrux",
+  "/usr/share/horcrux",
+  "/usr/libexec/horcrux",
+  "/srv",
+  "/mnt",
+  "/data",
+  "/tank"
+ ]
+}

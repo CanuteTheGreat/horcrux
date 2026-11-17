@@ -934,3 +934,31 @@ class DracutDrivers(unittest.TestCase):
 
     def test_dracut_conf_uses_filtered_list(self):
         self.assertIn('add_drivers+=" dm_crypt "', LR.dracut_conf("dm_crypt"))
+
+
+class LocaleChoices(unittest.TestCase):
+    """The language list comes from the image's glibc data, not a fixed list (configurable-everything)."""
+
+    def _i18n(self, supported, titles):
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "locales"))
+        with open(os.path.join(d, "SUPPORTED"), "w") as f:
+            f.write(supported)
+        for name, title in titles.items():
+            with open(os.path.join(d, "locales", name), "w") as f:
+                f.write(f'LC_IDENTIFICATION\ntitle      "{title}"\nEND LC_IDENTIFICATION\n')
+        return d
+
+    def test_every_supported_utf8_locale_is_offered_shortlist_first(self):
+        d = self._i18n("de_DE.UTF-8 UTF-8\nde_DE ISO-8859-1\nen_US.UTF-8 UTF-8\nfy_NL.UTF-8 UTF-8\nis_IS.utf8 UTF-8\n",
+                       {"fy_NL": "Frisian locale for the Netherlands"})
+        got = S.locales(d)
+        keys = [k for k, _ in got]
+        self.assertEqual(keys[:2], ["en_US.UTF-8", "de_DE.UTF-8"])      # shortlist order, only what glibc has
+        self.assertIn(("fy_NL.UTF-8", "Frisian locale for the Netherlands (fy_NL.UTF-8)"), got)
+        self.assertIn("is_IS.UTF-8", keys)                                # .utf8 spelling normalised
+        self.assertNotIn("de_DE", keys)                                   # non-UTF-8 charsets are not offered
+        self.assertNotIn("fr_FR.UTF-8", keys)                             # not supported by this glibc -> not offered
+
+    def test_falls_back_to_the_shortlist_without_glibc_data(self):
+        self.assertEqual(S.locales(tempfile.mkdtemp()), S.LOCALES)

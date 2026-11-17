@@ -59,6 +59,52 @@ pub struct AuthConfig {
     /// administrator has signed in. Set false to refuse them now.
     #[serde(default = "yes_true")]
     pub legacy_local_login: bool,
+    /// Lifetime of a web/API login, in seconds (300 .. 30 days; the login
+    /// token's `exp` and the stored session agree). Env:
+    /// `HORCRUX_SESSION_TTL_SECS`.
+    #[serde(default = "default_session_ttl_secs")]
+    pub session_ttl_secs: u64,
+    /// Lifetime of the restricted "set up two-factor first" login, in
+    /// seconds (60 .. 3600). Env: `HORCRUX_TFA_SETUP_TTL_SECS`.
+    #[serde(default = "default_tfa_setup_ttl_secs")]
+    pub tfa_setup_ttl_secs: u64,
+}
+
+/// Bounds of [`AuthConfig::session_ttl_secs`].
+pub const SESSION_TTL_RANGE: std::ops::RangeInclusive<u64> = 300..=30 * 86_400;
+/// Bounds of [`AuthConfig::tfa_setup_ttl_secs`].
+pub const TFA_SETUP_TTL_RANGE: std::ops::RangeInclusive<u64> = 60..=3_600;
+
+fn default_session_ttl_secs() -> u64 {
+    86_400
+}
+
+fn default_tfa_setup_ttl_secs() -> u64 {
+    900
+}
+
+impl AuthConfig {
+    /// Refuse out-of-range values (a typo must not give week-long or
+    /// instantly-expiring logins silently).
+    pub fn validate(&self) -> Result<(), String> {
+        if !SESSION_TTL_RANGE.contains(&self.session_ttl_secs) {
+            return Err(format!(
+                "[auth] session_ttl_secs = {} is outside {}..={} seconds",
+                self.session_ttl_secs,
+                SESSION_TTL_RANGE.start(),
+                SESSION_TTL_RANGE.end()
+            ));
+        }
+        if !TFA_SETUP_TTL_RANGE.contains(&self.tfa_setup_ttl_secs) {
+            return Err(format!(
+                "[auth] tfa_setup_ttl_secs = {} is outside {}..={} seconds",
+                self.tfa_setup_ttl_secs,
+                TFA_SETUP_TTL_RANGE.start(),
+                TFA_SETUP_TTL_RANGE.end()
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn default_admin_groups() -> Vec<String> {
@@ -78,6 +124,8 @@ impl Default for AuthConfig {
             readonly_groups: vec![],
             allow_root: false,
             legacy_local_login: true,
+            session_ttl_secs: default_session_ttl_secs(),
+            tfa_setup_ttl_secs: default_tfa_setup_ttl_secs(),
         }
     }
 }
@@ -324,6 +372,16 @@ impl HorcruxConfig {
                 "1" | "true" | "yes" | "on"
             );
         }
+        if let Ok(v) = std::env::var("HORCRUX_SESSION_TTL_SECS") {
+            if let Ok(n) = v.trim().parse() {
+                self.auth.session_ttl_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("HORCRUX_TFA_SETUP_TTL_SECS") {
+            if let Ok(n) = v.trim().parse() {
+                self.auth.tfa_setup_ttl_secs = n;
+            }
+        }
         if let Ok(v) = std::env::var("HORCRUX_ALLOW_REGISTRATION") {
             self.auth.allow_registration = matches!(
                 v.trim().to_ascii_lowercase().as_str(),
@@ -444,6 +502,8 @@ impl HorcruxConfig {
             ));
         }
 
+        self.auth.validate().map_err(ConfigError::Validation)?;
+
         // Validate socket patterns contain placeholder
         if !self.qemu.qmp_socket_pattern.contains("{vm_id}") {
             return Err(ConfigError::Validation(
@@ -500,6 +560,51 @@ impl std::error::Error for ConfigError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every key of the node configuration survives a write -> read round
+    /// trip (configurable-everything: nothing is lost or silently reset).
+    #[test]
+    fn every_config_key_round_trips_through_toml() {
+        let mut c = HorcruxConfig::default();
+        c.auth.session_ttl_secs = 3600;
+        c.auth.tfa_setup_ttl_secs = 120;
+        c.auth.allow_root = true;
+        c.server.port = 9443;
+        let text = toml::to_string_pretty(&c).unwrap();
+        let back: HorcruxConfig = toml::from_str(&text).unwrap();
+        assert_eq!(
+            serde_json::to_value(&c).unwrap(),
+            serde_json::to_value(&back).unwrap()
+        );
+        // and a file that leaves keys out gets the documented defaults
+        let without: String = toml::to_string_pretty(&HorcruxConfig::default())
+            .unwrap()
+            .lines()
+            .filter(|l| !l.contains("ttl_secs"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let partial: HorcruxConfig = toml::from_str(&without).unwrap();
+        assert_eq!(partial.auth.session_ttl_secs, 86_400);
+        assert_eq!(partial.auth.tfa_setup_ttl_secs, 900);
+    }
+
+    #[test]
+    fn shipped_example_config_parses_and_validates() {
+        let text = include_str!("../../../horcrux-api/config.example.toml");
+        let c: HorcruxConfig = toml::from_str(text).unwrap();
+        c.validate().unwrap();
+        assert_eq!(c.auth.session_ttl_secs, AuthConfig::default().session_ttl_secs);
+    }
+
+    #[test]
+    fn login_lifetimes_out_of_range_are_refused() {
+        let mut c = HorcruxConfig::default();
+        c.auth.session_ttl_secs = 10;
+        assert!(c.validate().unwrap_err().to_string().contains("session_ttl_secs"));
+        c.auth.session_ttl_secs = 3600;
+        c.auth.tfa_setup_ttl_secs = 99_999;
+        assert!(c.validate().unwrap_err().to_string().contains("tfa_setup_ttl_secs"));
+    }
 
     #[test]
     fn test_default_config() {
