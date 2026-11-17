@@ -16,6 +16,14 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tracing::info;
 
+/// Seconds to wait before each attempt of an image-server GET (first is immediate).
+const GET_RETRY_DELAYS_SECS: [u64; 3] = [0, 2, 6];
+
+/// Server-side or throttling statuses worth another attempt.
+fn retryable_status(code: u16) -> bool {
+    code == 429 || (500..=599).contains(&code)
+}
+
 /// Template used for an LXC container created without an explicit one.
 /// Gentoo is the house default (owner policy); Alpine and every other catalog
 /// distro stay selectable by naming them (`alpine/3.22`). Gentoo publishes only
@@ -188,13 +196,36 @@ impl TemplateStore {
         self.dir.join(d).join(r).join(a).join(v)
     }
 
+    /// GET with up to 3 attempts: a transport error (DNS, reset, timeout) or a
+    /// 5xx/429 from the image server is retried after 2 s and 6 s; any other
+    /// status is returned to the caller as-is. A single dropped request to the
+    /// public image server used to fail a whole container create (CI run 3429).
+    async fn get_with_retry(&self, url: &str) -> Result<reqwest::Response> {
+        let mut last = String::new();
+        for (attempt, delay) in GET_RETRY_DELAYS_SECS.iter().enumerate() {
+            if attempt > 0 {
+                tracing::warn!(
+                    "retrying GET {url} in {delay}s (attempt {}): {last}",
+                    attempt + 1
+                );
+                tokio::time::sleep(Duration::from_secs(*delay)).await;
+            }
+            match self.client.get(url).send().await {
+                Ok(r) if retryable_status(r.status().as_u16()) => {
+                    last = format!("HTTP {}", r.status());
+                }
+                Ok(r) => return Ok(r),
+                Err(e) => last = e.to_string(),
+            }
+        }
+        Err(Error::System(format!(
+            "GET {url}: {last} (after {} attempts)",
+            GET_RETRY_DELAYS_SECS.len()
+        )))
+    }
+
     async fn get_text(&self, url: &str) -> Result<String> {
-        let resp = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| Error::System(format!("GET {url}: {e}")))?;
+        let resp = self.get_with_retry(url).await?;
         if !resp.status().is_success() {
             return Err(Error::System(format!("GET {url}: HTTP {}", resp.status())));
         }
@@ -320,12 +351,7 @@ impl TemplateStore {
             "Downloading LXC template {id} build {} from {url}",
             entry.build
         );
-        let mut resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::System(format!("GET {url}: {e}")))?;
+        let mut resp = self.get_with_retry(&url).await?;
         if !resp.status().is_success() {
             return Err(Error::System(format!("GET {url}: HTTP {}", resp.status())));
         }
@@ -456,6 +482,17 @@ impl TemplateStore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_server_errors_and_throttling_are_retried() {
+        use super::retryable_status;
+        for c in [429u16, 500, 502, 503, 504] {
+            assert!(retryable_status(c), "{c}");
+        }
+        for c in [200u16, 304, 400, 403, 404] {
+            assert!(!retryable_status(c), "{c}");
+        }
+    }
+
     #[test]
     fn default_template_is_gentoo_openrc_and_parses() {
         assert_eq!(
