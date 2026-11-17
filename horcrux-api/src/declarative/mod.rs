@@ -6,8 +6,12 @@
 //! This file is pure (no I/O, no init system, no kernel): spec types,
 //! validation, diff and export. `exec.rs` talks to the managers; the same
 //! code therefore behaves identically on OpenRC and systemd nodes.
+pub mod drift;
 pub mod exec;
+pub mod gitops;
 pub mod kinds;
+pub mod service;
+pub mod store;
 
 use crate::api::sdn_zones::{
     parse_cidr, subnet_id, validate_subnet, validate_vnet, validate_zone, Subnet, VNet, Zone,

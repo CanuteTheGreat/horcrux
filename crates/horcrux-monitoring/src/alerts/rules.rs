@@ -16,6 +16,8 @@ pub enum MetricType {
     NetworkIo,
     NodeLoad,
     VmCount,
+    /// Differences between the declarative desired spec and the node.
+    ConfigDrift,
 }
 
 impl MetricType {
@@ -28,6 +30,7 @@ impl MetricType {
             MetricType::NetworkIo => "Network I/O",
             MetricType::NodeLoad => "Node load",
             MetricType::VmCount => "VM count",
+            MetricType::ConfigDrift => "Configuration drift",
         }
     }
 }

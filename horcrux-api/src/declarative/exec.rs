@@ -35,12 +35,12 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
     live
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ChangeResult {
     #[serde(flatten)]
     pub change: Change,
     /// applied | failed | skipped
-    pub status: &'static str,
+    pub status: String,
     pub message: String,
 }
 
@@ -49,6 +49,9 @@ pub struct ApplyReport {
     pub ok: bool,
     pub plan: Plan,
     pub results: Vec<ChangeResult>,
+    /// The history record of this apply (real applies that had work to do).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_id: Option<String>,
 }
 
 /// Plan against the live node, then apply. `dry_run` stops after the plan.
@@ -59,17 +62,39 @@ pub async fn apply(
     prune: bool,
     dry_run: bool,
 ) -> Result<ApplyReport, String> {
+    apply_with(state, spec, prune, dry_run, None).await
+}
+
+/// `only_deletes`: when set, prune deletes (and prune-blocked items) apply
+/// only to these `(kind, name)` pairs. Rollback uses it so that only what the
+/// rolled-back apply created is removed.
+pub async fn apply_with(
+    state: &Arc<AppState>,
+    spec: &Spec,
+    prune: bool,
+    dry_run: bool,
+    only_deletes: Option<&std::collections::BTreeSet<(String, String)>>,
+) -> Result<ApplyReport, String> {
     let _guard = APPLY_LOCK
         .try_lock()
         .map_err(|_| "another apply is already running on this node".to_string())?;
     let live = gather(state).await;
-    let p = plan(spec, &live, prune);
+    let mut p = plan(spec, &live, prune);
+    if let Some(keep) = only_deletes {
+        p.changes.retain(|c| {
+            let from_prune = c.action == Action::Delete
+                || (c.action == Action::Blocked
+                    && c.details.first().is_some_and(|d| d.starts_with("prune:")));
+            !from_prune || keep.contains(&(c.kind.clone(), c.name.clone()))
+        });
+    }
     let mut results = Vec::new();
     if dry_run {
         return Ok(ApplyReport {
             ok: p.errors.is_empty() && !p.changes.iter().any(|c| c.action == Action::Blocked),
             plan: p,
             results,
+            history_id: None,
         });
     }
     if !p.errors.is_empty() {
@@ -77,6 +102,7 @@ pub async fn apply(
             ok: false,
             plan: p,
             results,
+            history_id: None,
         });
     }
     let mut ok = true;
@@ -91,7 +117,7 @@ pub async fn apply(
         ok &= status == "applied";
         results.push(ChangeResult {
             change: c.clone(),
-            status,
+            status: status.to_string(),
             message,
         });
     }
@@ -99,6 +125,7 @@ pub async fn apply(
         ok,
         plan: p,
         results,
+        history_id: None,
     })
 }
 

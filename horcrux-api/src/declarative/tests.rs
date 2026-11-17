@@ -273,3 +273,189 @@ fn immutable_network_and_pool_changes_are_blocked_not_silently_dropped() {
     live.pools[0].enabled = false;
     assert!(actions(&plan(&s, &live, false)).contains(&"Update storage_pool fast".to_string()));
 }
+
+fn live_disk(size: u64, bus: &str) -> VmDisk {
+    VmDisk {
+        path: "/x".into(),
+        size_gb: size,
+        disk_type: bus.into(),
+        cache: String::new(),
+        discard: false,
+        ssd: false,
+        iothread: false,
+        storage: None,
+    }
+}
+
+#[test]
+fn running_vm_cold_changes_need_a_stop_or_are_blocked_with_a_reason() {
+    let live = Live {
+        vms: vec![live_vm("app1", VmStatus::Running)],
+        ..Default::default()
+    };
+    // memory change on a running VM, power left alone: blocked, says why
+    let s = parse("vms: [{name: app1, memory: 1024, cpus: 2}]").unwrap();
+    let p = plan(&s, &live, false);
+    assert_eq!(actions(&p), ["Blocked vm app1"]);
+    assert!(p.changes[0]
+        .details
+        .iter()
+        .any(|d| d.contains("stop it first")));
+    assert_eq!(p.changes[0].fields[0].field, "memory");
+    // power: stopped in the spec makes the engine do the stop itself
+    let s = parse("vms: [{name: app1, memory: 1024, cpus: 2, power: stopped}]").unwrap();
+    let p = plan(&s, &live, false);
+    assert_eq!(actions(&p), ["Stop vm app1", "Update vm app1"]);
+}
+
+#[test]
+fn disk_growth_is_hot_shrink_and_removal_are_blocked_new_disk_is_cold() {
+    let mut vm = live_vm("app1", VmStatus::Running);
+    vm.disks = vec![live_disk(8, "virtio"), live_disk(4, "virtio")];
+    let live = Live {
+        vms: vec![vm],
+        ..Default::default()
+    };
+    let grow =
+        parse("vms: [{name: app1, memory: 512, cpus: 2, disks: [{size_gb: 16}, {size_gb: 4}]}]")
+            .unwrap();
+    let p = plan(&grow, &live, false);
+    assert_eq!(
+        actions(&p),
+        ["Update vm app1"],
+        "growing works while running"
+    );
+    assert_eq!(p.changes[0].fields[0].field, "disk0.size_gb");
+    assert_eq!(p.changes[0].fields[0].actual, "8");
+    let shrink =
+        parse("vms: [{name: app1, memory: 512, cpus: 2, disks: [{size_gb: 2}, {size_gb: 4}]}]")
+            .unwrap();
+    assert_eq!(actions(&plan(&shrink, &live, false)), ["Blocked vm app1"]);
+    let fewer = parse("vms: [{name: app1, memory: 512, cpus: 2, disks: [{size_gb: 8}]}]").unwrap();
+    let p = plan(&fewer, &live, false);
+    assert_eq!(actions(&p), ["Blocked vm app1"]);
+    assert!(p.changes[0]
+        .details
+        .iter()
+        .any(|d| d.contains("detaches data")));
+    let more = parse(
+        "vms: [{name: app1, memory: 512, cpus: 2, disks: [{size_gb: 8}, {size_gb: 4}, {size_gb: 1}]}]",
+    )
+    .unwrap();
+    // a new disk is a cold change: the VM is running, so it is blocked
+    assert_eq!(actions(&plan(&more, &live, false)), ["Blocked vm app1"]);
+}
+
+#[test]
+fn subnet_and_vnet_edits_are_updates() {
+    let s = parse(SPEC).unwrap();
+    let mut live = Live::default();
+    live.pools.push(pool("p1", "fast"));
+    live.zones.push(Zone {
+        id: "lab".into(),
+        zone_type: "simple".into(),
+        description: String::new(),
+        uplink: None,
+        local_ip: None,
+        peers: vec![],
+        mtu: None,
+        dst_port: None,
+    });
+    live.vnets.push(VNet {
+        id: "web".into(),
+        zone: "lab".into(),
+        alias: Some("old".into()),
+        tag: None,
+        vlan_aware: false,
+    });
+    live.subnets.push(Subnet {
+        id: "web-10.20.0.0-24".into(),
+        vnet: "web".into(),
+        cidr: "10.20.0.0/24".into(),
+        gateway: Some("10.20.0.254".into()),
+        snat: false,
+    });
+    let p = plan(&s, &live, false);
+    let a = actions(&p);
+    assert!(a.contains(&"Update vnet web".to_string()), "{a:?}");
+    assert!(
+        a.contains(&"Update subnet web-10.20.0.0-24".to_string()),
+        "{a:?}"
+    );
+    let sub = p.changes.iter().find(|c| c.kind == "subnet").unwrap();
+    let f: Vec<_> = sub
+        .fields
+        .iter()
+        .map(|f| (f.field.as_str(), f.expected.as_str(), f.actual.as_str()))
+        .collect();
+    assert_eq!(
+        f,
+        [
+            ("gateway", "10.20.0.1", "10.20.0.254"),
+            ("snat", "true", "false")
+        ]
+    );
+}
+
+#[test]
+fn drift_items_flatten_plans_per_field() {
+    let live = Live {
+        vms: vec![live_vm("app1", VmStatus::Stopped)],
+        ..Default::default()
+    };
+    let s = parse("storage_pools: [{name: fast, type: directory, path: /srv/fast}]\nvms: [{name: app1, memory: 1024, cpus: 2, power: running}]").unwrap();
+    let items = drift::items_of(&plan(&s, &live, false));
+    let f: Vec<_> = items
+        .iter()
+        .map(|i| {
+            format!(
+                "{}/{}/{}: {} vs {}",
+                i.kind, i.name, i.field, i.expected, i.actual
+            )
+        })
+        .collect();
+    assert_eq!(
+        f,
+        [
+            "storage_pool/fast/(resource): present vs missing",
+            "vm/app1/memory: 1024 vs 512",
+            "vm/app1/power: running vs stopped",
+        ]
+    );
+    assert!(items.iter().all(|i| !i.blocked));
+}
+
+#[test]
+fn rollback_helpers_and_secret_free_history_summary() {
+    // the history summary counts non-applied results as failed
+    let e = store::HistoryEntry {
+        id: "0000000000001-aaaa".into(),
+        time: store::now(),
+        ts_ms: 1,
+        actor: "admin".into(),
+        source: "api".into(),
+        commit: None,
+        spec_hash: store::sha256_hex("x"),
+        spec: "x".into(),
+        prune: false,
+        ok: false,
+        plan: Plan::default(),
+        results: vec![
+            exec::ChangeResult {
+                change: ch("vm", "a", Action::Create, vec![]),
+                status: "applied".into(),
+                message: String::new(),
+            },
+            exec::ChangeResult {
+                change: ch("vm", "b", Action::Create, vec![]),
+                status: "failed".into(),
+                message: "no".into(),
+            },
+        ],
+        rollback_of: None,
+        summary: "1 applied, 1 failed".into(),
+    };
+    let s = e.summarize();
+    assert_eq!((s.failed, s.ok), (1, false));
+    assert_eq!(store::sha256_hex("x").len(), 64);
+}

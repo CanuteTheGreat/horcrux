@@ -123,7 +123,13 @@ async fn preview(
         // a CPU percentage needs two readings
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
-    let samples = node_samples(&node, &data_dir, vm_count, &mut prev);
+    let mut samples = node_samples(&node, &data_dir, vm_count, &mut prev);
+    if cond.metric_type == MetricType::ConfigDrift {
+        let n = crate::declarative::drift::cached_or_check(&state)
+            .await
+            .count;
+        samples.push((MetricType::ConfigDrift, node.clone(), n as f64));
+    }
     let targets: Vec<PreviewTarget> = samples
         .into_iter()
         .filter(|(m, t, _)| {

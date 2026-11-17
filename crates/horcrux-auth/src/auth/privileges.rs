@@ -419,9 +419,14 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "ha" => read_write(m, P::SysAudit, P::SysModify, "/cluster"),
         // Whole-node desired state: plan/export only read, apply changes
         // pools, networks and VMs, so it needs node-wide rights.
-        "declarative" => match (arg(1), m) {
-            ("plan", "POST") => need(P::SysAudit, "/"),
-            ("apply", "POST") => need(P::SysModify, "/"),
+        // The GitOps webhook authenticates itself (HMAC over the body).
+        // Read-only POSTs (plan, validate, drift check) need Audit only.
+        "declarative" => match (arg(1), arg(2), m) {
+            ("plan", _, "POST") => need(P::SysAudit, "/"),
+            ("apply", _, "POST") => need(P::SysModify, "/"),
+            ("desired", "validate", "POST") => need(P::SysAudit, "/"),
+            ("drift", "check", "POST") => need(P::SysAudit, "/"),
+            ("gitops", "webhook", "POST") => Requirement::Public,
             _ => read_write(m, P::SysAudit, P::SysModify, "/"),
         },
         "firewall" | "cni" | "network-policies" | "sdn" | "network" => {

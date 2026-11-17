@@ -590,17 +590,7 @@ impl WebhookManager {
     /// cryptographic hash and provided effectively no authenticity guarantee
     /// despite being advertised to consumers as "HMAC".
     fn generate_hmac_signature(&self, secret: &str, payload: &str) -> String {
-        use hmac::{Hmac, Mac};
-        use sha2::Sha256;
-
-        type HmacSha256 = Hmac<Sha256>;
-
-        let mut mac =
-            HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take a key of any size");
-        mac.update(payload.as_bytes());
-        let result = mac.finalize().into_bytes();
-
-        format!("sha256={}", hex::encode(result))
+        sign_payload(secret, payload.as_bytes())
     }
 
     /// Get recent webhook deliveries
@@ -635,6 +625,35 @@ impl WebhookManager {
             tracing::debug!("Cleaned up {} old webhook deliveries", remove_count);
         }
     }
+}
+
+/// HMAC-SHA256 of `payload`, hex-encoded with a `sha256=` prefix (the
+/// `X-Horcrux-Signature` / GitHub `X-Hub-Signature-256` convention).
+pub fn sign_payload(secret: &str, payload: &[u8]) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC can take a key of any size");
+    mac.update(payload);
+    format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+}
+
+/// Check a received signature header (`sha256=<hex>` or bare hex, as sent by
+/// GitHub, Forgejo and Gitea) against the body, in constant time.
+pub fn verify_signature(secret: &str, payload: &[u8], header: &str) -> bool {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let hex_part = header
+        .trim()
+        .strip_prefix("sha256=")
+        .unwrap_or(header.trim());
+    let Ok(sig) = hex::decode(hex_part) else {
+        return false;
+    };
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC can take a key of any size");
+    mac.update(payload);
+    mac.verify_slice(&sig).is_ok()
 }
 
 #[cfg(test)]

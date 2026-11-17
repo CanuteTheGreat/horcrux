@@ -558,7 +558,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::storage_content::routes())
         .merge(api::resource_pools::routes())
         .merge(api::inventory::routes())
-        .merge(api::declarative::routes())
+        .merge(api::declarative::routes(&state))
         .merge(api::firewall_objects::routes())
         .merge(api::sdn_cni::routes())
         .merge(api::host_net::routes(&state))
@@ -627,6 +627,8 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(features::routes())
         // Host shutdown/boot hook: token-authenticated, loopback tooling.
         .merge(api::guest_state::agent::routes().with_state(state.clone()))
+        // GitOps push webhook: authenticated by its HMAC signature.
+        .merge(api::declarative::public_routes().with_state(state.clone()))
         // Merge OpenAPI / Swagger UI routes (public, for documentation)
         .merge(openapi::openapi_routes())
         // Merge protected routes (with auth middleware)
