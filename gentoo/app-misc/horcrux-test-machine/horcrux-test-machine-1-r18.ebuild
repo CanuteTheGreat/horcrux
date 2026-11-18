@@ -83,8 +83,10 @@ src_install() {
 	newins "${FILESDIR}"/sysctl.conf 50-horcrux-test-machine.conf
 	exeinto /usr/libexec
 	newexe "${FILESDIR}"/horcrux-test-watchdog.sh horcrux-test-watchdog
+	newexe "${FILESDIR}"/horcrux-test-klog.sh horcrux-test-klog
 	insinto /etc/conf.d
 	newins "${FILESDIR}"/horcrux-test-watchdog.conf horcrux-test-watchdog
+	newins "${FILESDIR}"/horcrux-test-klog.conf horcrux-test-klog
 	exeinto /etc/kernel/postinst.d
 	newexe "${FILESDIR}"/horcrux-test-kernel-hook 91-horcrux-test-kernel
 	exeinto /usr/libexec

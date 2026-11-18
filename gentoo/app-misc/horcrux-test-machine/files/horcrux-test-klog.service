@@ -6,9 +6,7 @@ Before=NetworkManager.service
 
 [Service]
 Type=simple
-ExecStart=/bin/dmesg --follow --time-format iso --kernel
-StandardOutput=append:/var/log/kernel-test.log
-StandardError=append:/var/log/kernel-test.log
+ExecStart=/usr/libexec/horcrux-test-klog
 Restart=on-failure
 
 [Install]
