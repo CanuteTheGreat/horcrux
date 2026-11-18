@@ -341,7 +341,8 @@ class VM:
         # So: wait up to 30 s, and on a miss kill that QEMU, restart swtpm and start it again (3 tries); never leave a stuck QEMU behind.
         full = args + ["-qmp", f"unix:{self.qmp_path},server,nowait",
                        "-chardev", f"socket,id=ser0,path={self.ser_path},server=on,wait=off", "-serial", "chardev:ser0",
-                       "-display", "none"]
+                       "-display", "none",
+                       "-d", "cpu_reset", "-D", f"{out}/{name}-qemu-debug.log"]     # why QEMU ended: CPU reset / triple fault dump
         self.sock = None
         self.last_rx = time.time()
         self.poke = False          # serial TUI runs: send Ctrl-L when the line has been silent (see expect_screen)
