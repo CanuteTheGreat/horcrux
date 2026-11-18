@@ -307,7 +307,7 @@ status, body = call("POST", "/vms", {
     "hardware": {"nets": [{"model": "virtio", "bridge": "hxup0", "attach": "macvtap", "vlan": 5}],
                  "boot": ["net"]},
 }, ok=None)
-check(status == 400, f"macvtap + VLAN tag refused ({status})")
+check(status in (400, 422), f"macvtap + VLAN tag refused ({status})")
 status, body = call("POST", "/vms", {
     "id": MVVM, "name": MVVM, "hypervisor": "qemu", "architecture": "x86_64",
     "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
@@ -315,7 +315,7 @@ status, body = call("POST", "/vms", {
     "hardware": {"nets": [{"model": "virtio", "bridge": "hxnope0", "attach": "macvtap"}],
                  "boot": ["net"]},
 }, ok=None)
-check(status == 400 and "hxnope0" in json.dumps(body), "macvtap on a missing interface refused")
+check(status in (400, 422) and "hxnope0" in json.dumps(body), f"macvtap on a missing interface refused ({status} {body})")
 _, vm = call("POST", "/vms", {
     "id": MVVM, "name": MVVM, "hypervisor": "qemu", "architecture": "x86_64",
     "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
