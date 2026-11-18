@@ -1090,3 +1090,6 @@ a.stat-card.healthy .stat-value { color: var(--success); }
 .backend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.5rem 1rem; margin-top: 0.5rem; }
 .backend { display: flex; flex-direction: column; }
 .backend span { color: var(--secondary); font-size: 0.875rem; }
+
+/* Text for assistive technology only (an otherwise empty table header, an icon-only control). */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

@@ -70,7 +70,7 @@ pub fn VmDetailPage() -> impl IntoView {
     view! {
         <div class="vm-detail">
             <div class="page-header"><h1>{move || vm.get().map(|v| format!("{} ({})", v.name, v.id)).unwrap_or_else(id)}</h1></div>
-            <nav class="tabs" id="vm-tabs">
+            <nav class="tabs" id="vm-tabs" aria-label="VM sections">
                 <A href=move || format!("/vms/{}", id()) class="tab tab-active">"Summary"</A>
                 <A href=move || format!("/vms/{}/hardware", id()) class="tab">"Hardware"</A>
                 <A href=move || format!("/vms/{}/console", id()) class="tab">"Console"</A>
@@ -88,7 +88,7 @@ pub fn VmDetailPage() -> impl IntoView {
                     <tr><th>"Pool"</th><td class="vmd-pool">{inv.get().and_then(|i| i.pool).unwrap_or_else(|| "-".into())}</td></tr>
                 </table>
             })}
-            <h3>"Tags"</h3>
+            <h3 aria-level="2">"Tags"</h3>
             <div class="form-row">
                 <input id="vmd-tags" type="text" placeholder="prod, web" style="flex: 3" prop:value=tags_text
                     on:input=move |ev| set_tags_text.set(event_target_value(&ev))/>

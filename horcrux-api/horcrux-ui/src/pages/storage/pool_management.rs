@@ -166,19 +166,19 @@ pub fn StorageManagement() -> impl IntoView {
                 view! {
                     <div class="storage-overview">
                         <div class="overview-card">
-                            <h4>"Total Capacity"</h4>
+                            <h4 aria-level="3">"Total Capacity"</h4>
                             <span class="value">{format_bytes(total_capacity)}</span>
                         </div>
                         <div class="overview-card">
-                            <h4>"Used"</h4>
+                            <h4 aria-level="3">"Used"</h4>
                             <span class="value">{format_bytes(total_used)}</span>
                         </div>
                         <div class="overview-card">
-                            <h4>"Available"</h4>
+                            <h4 aria-level="3">"Available"</h4>
                             <span class="value">{format_bytes(total_capacity - total_used)}</span>
                         </div>
                         <div class="overview-card">
-                            <h4>"Usage"</h4>
+                            <h4 aria-level="3">"Usage"</h4>
                             <span class="value">{format!("{:.1}%", usage_percent)}</span>
                         </div>
                     </div>

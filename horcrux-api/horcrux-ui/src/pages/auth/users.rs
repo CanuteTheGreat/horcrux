@@ -366,6 +366,7 @@ pub fn UsersPage() -> impl IntoView {
 
                 <div class="dropdown-filters">
                     <select
+                        aria-label="Filter by realm"
                         on:change=move |ev| set_realm_filter.set(event_target_value(&ev))
                         class="filter-select"
                     >
@@ -378,6 +379,7 @@ pub fn UsersPage() -> impl IntoView {
                     </select>
 
                     <select
+                        aria-label="Filter by role"
                         on:change=move |ev| set_role_filter.set(event_target_value(&ev))
                         class="filter-select"
                     >
@@ -390,6 +392,7 @@ pub fn UsersPage() -> impl IntoView {
                     </select>
 
                     <select
+                        aria-label="Filter by status"
                         on:change=move |ev| set_status_filter.set(event_target_value(&ev))
                         class="filter-select"
                     >
@@ -469,6 +472,7 @@ pub fn UsersPage() -> impl IntoView {
                                             <th class="checkbox-column">
                                                 <input
                                                     type="checkbox"
+                                                    aria-label="Select all users"
                                                     on:change=select_all_users
                                                     prop:checked=move || {
                                                         let selected = selected_users.get();
@@ -476,6 +480,7 @@ pub fn UsersPage() -> impl IntoView {
                                                         !filtered.is_empty() && filtered.iter().all(|u| selected.contains(&u.id))
                                                     }
                                                 />
+                                                <span class="sr-only">"Select"</span>
                                             </th>
                                             <th>"Username"</th>
                                             <th>"Email"</th>
@@ -502,6 +507,7 @@ pub fn UsersPage() -> impl IntoView {
                                                     <td>
                                                         <input
                                                             type="checkbox"
+                                                            aria-label=format!("Select user {}", user.username)
                                                             prop:checked=is_selected_checkbox
                                                             on:change=move |_| toggle_user_selection(user_id.clone())
                                                         />

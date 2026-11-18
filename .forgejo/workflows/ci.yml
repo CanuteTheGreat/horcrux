@@ -1416,6 +1416,18 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Dashboard links e2e"
           /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/dashboard_links_e2e.py
 
+      - name: Accessibility gate (axe-core, 10 key pages, desktop + phone, light + dark)
+        # e2e/a11y_e2e.py with the vendored axe-core (no CDN). Pages, rule tags and the impact threshold live in
+        # horcrux-ui/e2e/a11y/a11y.json; serious/critical violations fail, moderate/minor are listed. Justified
+        # false positives only in e2e/a11y/a11y-allowlist.json.
+        env:
+          BASE_URL: https://localhost:8006
+          HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
+          A11Y_REPORT: /tmp/a11y-report.json
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Accessibility gate"
+          /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/a11y_e2e.py
+
       - name: UI offers every USE-flag feature of an all-features build
         env:
           BASE_URL: https://localhost:8006
