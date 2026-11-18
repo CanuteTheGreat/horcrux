@@ -581,7 +581,7 @@ def main():
 
         # ---- stacks: shared network + DNS + ports; remove updates list -----
         page.goto(f"{BASE}/containers/stacks")
-        page.get_by_placeholder("stack name").fill(STACK)
+        page.locator("#stack-name").fill(STACK)
         page.locator("select:has(option[value=docker])").first.select_option("docker")
         page.locator("textarea").fill(
             "services:\n"

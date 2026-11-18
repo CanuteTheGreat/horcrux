@@ -136,11 +136,11 @@ pub fn ResourcePoolsPage() -> impl IntoView {
             </p>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="pool-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="pool-error">{e}</div> })}
-            <form id="pool-create-form" class="form-row" on:submit=create>
-                <input id="pool-id" type="text" required placeholder="pool id" prop:value=new_id
-                    on:input=move |ev| set_new_id.set(event_target_value(&ev))/>
-                <input id="pool-comment" type="text" placeholder="comment" style="flex: 2" prop:value=new_comment
-                    on:input=move |ev| set_new_comment.set(event_target_value(&ev))/>
+            <form id="pool-create-form" class="form-row fields" on:submit=create>
+                <div class="form-group"><label for="pool-id">"Pool id"</label><input id="pool-id" type="text" required placeholder="web" prop:value=new_id
+                    on:input=move |ev| set_new_id.set(event_target_value(&ev))/></div>
+                <div class="form-group wide"><label for="pool-comment">"Comment (optional)"</label><input id="pool-comment" type="text" placeholder="Web tier" style="flex: 2" prop:value=new_comment
+                    on:input=move |ev| set_new_comment.set(event_target_value(&ev))/></div>
                 <button id="pool-create" type="submit" class="btn btn-primary">"Create pool"</button>
             </form>
             {move || {

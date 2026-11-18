@@ -161,9 +161,9 @@ pub fn FirewallObjectsPage() -> impl IntoView {
             })}
 
             <h2>"IP sets"</h2>
-            <form id="fwo-set-form" class="form-row" on:submit=create_set>
-                <input id="fwo-set-name" type="text" required placeholder="name" prop:value=set_name
-                    on:input=move |ev| set_set_name.set(event_target_value(&ev))/>
+            <form id="fwo-set-form" class="form-row fields" on:submit=create_set>
+                <div class="form-group"><label for="fwo-set-name">"Set name"</label><input id="fwo-set-name" type="text" required placeholder="trusted-hosts" prop:value=set_name
+                    on:input=move |ev| set_set_name.set(event_target_value(&ev))/></div>
                 <button type="submit" class="btn btn-primary">"Create IP set"</button>
             </form>
             {move || sets.get().into_iter().map(|s| {
@@ -188,7 +188,7 @@ pub fn FirewallObjectsPage() -> impl IntoView {
                             }).collect_view()}
                         </ul>
                         <div class="form-row">
-                            <input class="ipset-entry" type="text" placeholder="10.0.0.0/24" prop:value=entry
+                            <input class="ipset-entry" type="text" aria-label="Address or network to add" placeholder="10.0.0.0/24" prop:value=entry
                                 on:input=move |ev| set_entry.set(event_target_value(&ev))/>
                             <button class="btn btn-sm ipset-entry-add" on:click=move |_| {
                                 let (n, c) = (add_name.clone(), entry.get_untracked());
@@ -211,11 +211,11 @@ pub fn FirewallObjectsPage() -> impl IntoView {
             }).collect_view()}
 
             <h2>"Aliases"</h2>
-            <form id="fwo-alias-form" class="form-row" on:submit=create_alias>
-                <input id="fwo-alias-name" type="text" required placeholder="name" prop:value=alias_name
-                    on:input=move |ev| set_alias_name.set(event_target_value(&ev))/>
-                <input id="fwo-alias-cidr" type="text" required placeholder="10.0.0.5 or 10.0.0.0/24" prop:value=alias_cidr
-                    on:input=move |ev| set_alias_cidr.set(event_target_value(&ev))/>
+            <form id="fwo-alias-form" class="form-row fields" on:submit=create_alias>
+                <div class="form-group"><label for="fwo-alias-name">"Alias name"</label><input id="fwo-alias-name" type="text" required placeholder="office-lan" prop:value=alias_name
+                    on:input=move |ev| set_alias_name.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="fwo-alias-cidr">"Address or network"</label><input id="fwo-alias-cidr" type="text" required placeholder="10.0.0.0/24" prop:value=alias_cidr
+                    on:input=move |ev| set_alias_cidr.set(event_target_value(&ev))/></div>
                 <button type="submit" class="btn btn-primary">"Create alias"</button>
             </form>
             <table class="vm-table" id="fwo-alias-table">

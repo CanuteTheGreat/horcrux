@@ -126,7 +126,7 @@ pub fn ContainerEventsPage() -> impl IntoView {
             <div class="page-header">
                 <h1>"Events"</h1>
                 <div class="header-actions">
-                    <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>
+                    <select aria-label="Container runtime" on:change=move |ev| set_runtime.set(event_target_value(&ev))>
                         <option value="podman">"Podman"</option>
                         <option value="docker">"Docker"</option>
                     </select>

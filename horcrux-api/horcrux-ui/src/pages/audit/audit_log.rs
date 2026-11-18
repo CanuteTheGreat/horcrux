@@ -132,27 +132,27 @@ pub fn AuditLogPage() -> impl IntoView {
                 })
             }}
             <div class="form-row">
-                <select id="audit-view" prop:value=view_mode on:change=move |ev| { view_mode.set(event_target_value(&ev)); page.set(0); reload(); }>
+                <select id="audit-view" aria-label="Event view" prop:value=view_mode on:change=move |ev| { view_mode.set(event_target_value(&ev)); page.set(0); reload(); }>
                     <option value="all">"All events"</option>
                     <option value="security">"Security (denied / suspicious)"</option>
                     <option value="failed">"Failed logins"</option>
                 </select>
-                <input id="audit-search" type="text" placeholder="search action, user, resource, details, IP"
+                <input id="audit-search" type="text" aria-label="Search events" placeholder="Search events"
                     prop:value=search on:input=move |ev| search.set(event_target_value(&ev))
                     on:keydown=move |ev| { if ev.key() == "Enter" { page.set(0); reload(); } }/>
-                <select id="audit-user" prop:value=user on:change=move |ev| { user.set(event_target_value(&ev)); page.set(0); reload(); }>
+                <select id="audit-user" aria-label="User" prop:value=user on:change=move |ev| { user.set(event_target_value(&ev)); page.set(0); reload(); }>
                     <option value="">"any user"</option>
                     {move || opts(|o| o.users.clone())}
                 </select>
-                <select id="audit-type" prop:value=event_type on:change=move |ev| { event_type.set(event_target_value(&ev)); page.set(0); reload(); }>
+                <select id="audit-type" aria-label="Event type" prop:value=event_type on:change=move |ev| { event_type.set(event_target_value(&ev)); page.set(0); reload(); }>
                     <option value="">"any event"</option>
                     {move || opts(|o| o.event_types.clone())}
                 </select>
-                <select id="audit-severity" prop:value=severity on:change=move |ev| { severity.set(event_target_value(&ev)); page.set(0); reload(); }>
+                <select id="audit-severity" aria-label="Severity" prop:value=severity on:change=move |ev| { severity.set(event_target_value(&ev)); page.set(0); reload(); }>
                     <option value="">"any severity"</option>
                     {move || opts(|o| o.severities.clone())}
                 </select>
-                <select id="audit-result" prop:value=result on:change=move |ev| { result.set(event_target_value(&ev)); page.set(0); reload(); }>
+                <select id="audit-result" aria-label="Result" prop:value=result on:change=move |ev| { result.set(event_target_value(&ev)); page.set(0); reload(); }>
                     <option value="">"any result"</option>
                     {move || opts(|o| o.results.clone())}
                 </select>

@@ -73,19 +73,19 @@ pub fn ImagesPage() -> impl IntoView {
             <div class="page-header">
                 <h1>"Images"</h1>
                 <div class="header-actions">
-                    <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>
+                    <select aria-label="Container runtime" on:change=move |ev| set_runtime.set(event_target_value(&ev))>
                         <option value="podman">"Podman"</option>
                         <option value="docker">"Docker"</option>
                     </select>
                     <input
                         type="text"
-                        placeholder="image name (e.g. nginx)"
+                        aria-label="Image name" placeholder="nginx"
                         prop:value=pull_name
                         on:input=move |ev| set_pull_name.set(event_target_value(&ev))
                     />
                     <input
                         type="text"
-                        placeholder="tag"
+                        aria-label="Tag" placeholder="latest"
                         prop:value=pull_tag
                         on:input=move |ev| set_pull_tag.set(event_target_value(&ev))
                     />

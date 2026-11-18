@@ -71,13 +71,13 @@ pub fn VolumesPage() -> impl IntoView {
             <div class="page-header">
                 <h1>"Volumes"</h1>
                 <div class="header-actions">
-                    <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>
+                    <select aria-label="Container runtime" on:change=move |ev| set_runtime.set(event_target_value(&ev))>
                         <option value="podman">"Podman"</option>
                         <option value="docker">"Docker"</option>
                     </select>
                     <input
                         type="text"
-                        placeholder="volume name"
+                        aria-label="Volume name" placeholder="my-volume"
                         prop:value=new_name
                         on:input=move |ev| set_new_name.set(event_target_value(&ev))
                     />

@@ -193,8 +193,9 @@ pub fn VmCreate() -> impl IntoView {
 
             <form on:submit=submit>
                 <div class="form-group">
-                    <label>"VM Name"</label>
+                    <label for="vm-name">"VM Name"</label>
                     <input
+                        id="vm-name"
                         type="text"
                         required
                         placeholder="my-vm"
@@ -204,7 +205,7 @@ pub fn VmCreate() -> impl IntoView {
                 </div>
 
                 <div class="form-group">
-                    <label>"Hypervisor"</label>
+                    <label for="vm-hypervisor">"Hypervisor"</label>
                     // Only the hypervisors compiled into the server (USE flags).
                     <select id="vm-hypervisor" on:change=move |ev| {
                         set_hypervisor.set(hypervisor_from(&event_target_value(&ev)));
@@ -228,8 +229,8 @@ pub fn VmCreate() -> impl IntoView {
                 </div>
 
                 <div class="form-group">
-                    <label>"Architecture"</label>
-                    <select on:change=move |ev| {
+                    <label for="vm-arch">"Architecture"</label>
+                    <select id="vm-arch" on:change=move |ev| {
                         let value = event_target_value(&ev);
                         let arch = match value.as_str() {
                             "aarch64" => VmArchitecture::Aarch64,
@@ -267,25 +268,25 @@ pub fn VmCreate() -> impl IntoView {
 
                 <div class="form-group">
                     {move || if is_instance() {
-                        view! { <label>"Image (optional)"</label> }
+                        view! { <label for="vm-image">"Image (optional)"</label> }
                     } else {
-                        view! { <label>"Boot disk from image (optional)"</label> }
+                        view! { <label for="vm-image">"Boot disk from image (optional)"</label> }
                     }}
                     <input
                         id="vm-image"
                         type="text"
                         placeholder=move || if is_instance() {
-                            "debian/12, images:alpine/3.20 or a local image alias"
+                            "debian/12"
                         } else {
-                            "https://.../cloud-image.qcow2 or a file in the images directory"
+                            "https://example.org/disk.qcow2"
                         }
                         on:input=move |ev| set_image.set(event_target_value(&ev))
                         prop:value=image
                     />
                     {move || if is_instance() {
-                        view! { <small>"The LXD/Incus image the VM is created from (the images: remote, another remote, or a local alias). Empty means Ubuntu 22.04."</small> }
+                        view! { <small>"The LXD/Incus image the VM is created from: debian/12, images:alpine/3.20 or a local image alias. Empty means Ubuntu 22.04."</small> }
                     } else {
-                        view! { <small>"A cloud image or disk image (qcow2, raw, vmdk, vdi, vhdx) becomes the VM's disk, grown to the disk size above."</small> }
+                        view! { <small>"A URL, or a file in the images directory: a cloud image or disk image (qcow2, raw, vmdk, vdi, vhdx) becomes the VM's disk, grown to the disk size above."</small> }
                     }}
                 </div>
 
@@ -303,7 +304,7 @@ pub fn VmCreate() -> impl IntoView {
                             view! {
                                 <div class="form-row vm-create-disk" data-disk=n>
                                     <strong>{format!("disk{n}")}</strong>
-                                    <input type="number" min="1" class="vm-create-disk-size" prop:value={move || row.get().size_gb}
+                                    <input type="number" min="1" class="vm-create-disk-size" aria-label="Disk size in GB" prop:value={move || row.get().size_gb}
                                         on:change=move |ev| { let s = event_target_value(&ev).parse().unwrap_or(1); row.update(|d| d.size_gb = s) }/>
                                     " GB "
                                     <super::vm_hardware::DiskOptionFields disk=row prefix=format!("vm-create-disk{n}")/>

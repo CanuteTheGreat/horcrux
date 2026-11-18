@@ -82,17 +82,17 @@ pub fn ResourcesPage() -> impl IntoView {
             <div class="page-header"><h1>"Resources"</h1></div>
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="res-error">{e}</div> })}
             <div class="form-row">
-                <input id="res-search" type="search" placeholder="Search name, id, tag, pool" style="flex: 3"
+                <input id="res-search" type="search" aria-label="Search resources by name, id, tag or pool" placeholder="Search" style="flex: 3"
                     prop:value=text on:input=move |ev| set_text.set(event_target_value(&ev))
                     on:keydown=move |ev| if ev.key() == "Enter" { run() }/>
-                <select id="res-kind" on:change=move |ev| set_kind.set(event_target_value(&ev))>
+                <select id="res-kind" aria-label="Resource type" on:change=move |ev| set_kind.set(event_target_value(&ev))>
                     <option value="">"All types"</option>
                     <option value="vm">"VMs"</option>
                     <option value="container">"Containers"</option>
                     <option value="storage">"Storage"</option>
                     <option value="pool">"Pools"</option>
                 </select>
-                <select id="res-status" on:change=move |ev| set_status.set(event_target_value(&ev))>
+                <select id="res-status" aria-label="State" on:change=move |ev| set_status.set(event_target_value(&ev))>
                     <option value="">"Any state"</option>
                     <option value="running">"running"</option>
                     <option value="stopped">"stopped"</option>

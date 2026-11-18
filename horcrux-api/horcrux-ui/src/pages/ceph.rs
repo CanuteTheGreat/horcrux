@@ -208,14 +208,14 @@ pub fn CephPage() -> impl IntoView {
             </table>
 
             <h2>"Pools"</h2>
-            <form id="ceph-pool-form" class="form-row" on:submit=create>
-                <input id="ceph-pool-name" type="text" required placeholder="pool name" prop:value=name on:input=move |ev| name.set(event_target_value(&ev))/>
-                <input id="ceph-pool-pg" type="text" placeholder="PGs (power of 2)" prop:value=pg_num on:input=move |ev| pg_num.set(event_target_value(&ev))/>
-                <input id="ceph-pool-size" type="text" placeholder="size" prop:value=size on:input=move |ev| size.set(event_target_value(&ev))/>
-                <select id="ceph-pool-app" prop:value=app on:change=move |ev| app.set(event_target_value(&ev))>
+            <form id="ceph-pool-form" class="form-row fields" on:submit=create>
+                <div class="form-group"><label for="ceph-pool-name">"Pool name"</label><input id="ceph-pool-name" type="text" required placeholder="rbd-fast" prop:value=name on:input=move |ev| name.set(event_target_value(&ev))/></div>
+                <div class="form-group narrow"><label for="ceph-pool-pg">"PGs (power of 2)"</label><input id="ceph-pool-pg" type="text" placeholder="32" prop:value=pg_num on:input=move |ev| pg_num.set(event_target_value(&ev))/></div>
+                <div class="form-group narrow"><label for="ceph-pool-size">"Replicas"</label><input id="ceph-pool-size" type="text" placeholder="3" prop:value=size on:input=move |ev| size.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="ceph-pool-app">"Application"</label><select id="ceph-pool-app" prop:value=app on:change=move |ev| app.set(event_target_value(&ev))>
                     <option value="rbd">"rbd (VM disks)"</option><option value="cephfs">"cephfs"</option>
                     <option value="rgw">"rgw"</option><option value="">"none"</option>
-                </select>
+                </select></div>
                 <button id="ceph-pool-create" type="submit" class="btn btn-primary">"Create pool"</button>
             </form>
             <table class="vm-table" id="ceph-pool-table">

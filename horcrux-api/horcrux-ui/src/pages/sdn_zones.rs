@@ -227,22 +227,22 @@ pub fn SdnZonesPage() -> impl IntoView {
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="sdn-error">{e}</div> })}
 
             <h2>"Zones"</h2>
-            <form id="zone-form" class="form-row" on:submit=add_zone>
-                <input id="zone-id" type="text" required placeholder="zone id, e.g. lab" prop:value=z_id
-                    on:input=move |ev| z_id.set(event_target_value(&ev))/>
-                <select id="zone-type" prop:value=z_type on:change=move |ev| z_type.set(event_target_value(&ev))>
+            <form id="zone-form" class="form-row fields" on:submit=add_zone>
+                <div class="form-group"><label for="zone-id">"Zone id"</label><input id="zone-id" type="text" required placeholder="lab" prop:value=z_id
+                    on:input=move |ev| z_id.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="zone-type">"Type"</label><select id="zone-type" prop:value=z_type on:change=move |ev| z_type.set(event_target_value(&ev))>
                     <option value="simple">"Simple (isolated bridge)"</option>
                     <option value="vlan">"VLAN"</option>
                     <option value="vxlan">"VXLAN"</option>
-                </select>
-                <input id="zone-uplink" type="text" placeholder="VLAN: uplink, e.g. eth0" prop:value=z_uplink
-                    on:input=move |ev| z_uplink.set(event_target_value(&ev))/>
-                <input id="zone-local" type="text" placeholder="VXLAN: this node's address" prop:value=z_local
-                    on:input=move |ev| z_local.set(event_target_value(&ev))/>
-                <input id="zone-peers" type="text" placeholder="VXLAN: peer addresses, comma separated" prop:value=z_peers
-                    on:input=move |ev| z_peers.set(event_target_value(&ev))/>
-                <input id="zone-mtu" type="text" placeholder="MTU (optional)" prop:value=z_mtu
-                    on:input=move |ev| z_mtu.set(event_target_value(&ev))/>
+                </select></div>
+                <div class="form-group"><label for="zone-uplink">"Uplink (VLAN zones)"</label><input id="zone-uplink" type="text" placeholder="eth0" prop:value=z_uplink
+                    on:input=move |ev| z_uplink.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="zone-local">"This node (VXLAN zones)"</label><input id="zone-local" type="text" placeholder="10.0.0.11" prop:value=z_local
+                    on:input=move |ev| z_local.set(event_target_value(&ev))/></div>
+                <div class="form-group wide"><label for="zone-peers">"Peers (VXLAN zones)"</label><input id="zone-peers" type="text" placeholder="10.0.0.12,10.0.0.13" prop:value=z_peers
+                    on:input=move |ev| z_peers.set(event_target_value(&ev))/></div>
+                <div class="form-group narrow"><label for="zone-mtu">"MTU (optional)"</label><input id="zone-mtu" type="text" placeholder="1500" prop:value=z_mtu
+                    on:input=move |ev| z_mtu.set(event_target_value(&ev))/></div>
                 <button id="zone-create" type="submit" class="btn btn-primary">"Add zone"</button>
             </form>
             <table class="vm-table" id="zone-table">
@@ -265,15 +265,15 @@ pub fn SdnZonesPage() -> impl IntoView {
             </table>
 
             <h2>"VNets"</h2>
-            <form id="vnet-form" class="form-row" on:submit=add_vnet>
-                <input id="vnet-id" type="text" required maxlength="8" placeholder="vnet id (bridge name), e.g. web" prop:value=v_id
-                    on:input=move |ev| v_id.set(event_target_value(&ev))/>
-                <select id="vnet-zone" prop:value=v_zone on:change=move |ev| v_zone.set(event_target_value(&ev))>
+            <form id="vnet-form" class="form-row fields" on:submit=add_vnet>
+                <div class="form-group"><label for="vnet-id">"VNet id"</label><input id="vnet-id" type="text" required maxlength="8" placeholder="web" prop:value=v_id
+                    on:input=move |ev| v_id.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="vnet-zone">"Zone"</label><select id="vnet-zone" prop:value=v_zone on:change=move |ev| v_zone.set(event_target_value(&ev))>
                     <option value="">"zone..."</option>
                     {move || zones.get().into_iter().map(|z| view! { <option value=z.id.clone()>{z.id.clone()}</option> }).collect_view()}
-                </select>
-                <input id="vnet-tag" type="text" placeholder="VLAN id / VNI (VLAN and VXLAN zones)" prop:value=v_tag
-                    on:input=move |ev| v_tag.set(event_target_value(&ev))/>
+                </select></div>
+                <div class="form-group narrow"><label for="vnet-tag">"VLAN id or VNI"</label><input id="vnet-tag" type="text" placeholder="100" prop:value=v_tag
+                    on:input=move |ev| v_tag.set(event_target_value(&ev))/></div>
                 <label><input id="vnet-aware" type="checkbox" prop:checked=v_aware
                     on:change=move |ev| v_aware.set(event_target_checked(&ev))/>" VLAN-aware"</label>
                 <button id="vnet-create" type="submit" class="btn btn-primary">"Add VNet"</button>
@@ -310,15 +310,15 @@ pub fn SdnZonesPage() -> impl IntoView {
             </table>
 
             <h2>"Subnets"</h2>
-            <form id="subnet-form" class="form-row" on:submit=add_subnet>
-                <select id="subnet-vnet" prop:value=s_vnet on:change=move |ev| s_vnet.set(event_target_value(&ev))>
+            <form id="subnet-form" class="form-row fields" on:submit=add_subnet>
+                <div class="form-group"><label for="subnet-vnet">"VNet"</label><select id="subnet-vnet" prop:value=s_vnet on:change=move |ev| s_vnet.set(event_target_value(&ev))>
                     <option value="">"vnet..."</option>
                     {move || vnets.get().into_iter().map(|v| view! { <option value=v.id.clone()>{v.id.clone()}</option> }).collect_view()}
-                </select>
-                <input id="subnet-cidr" type="text" required placeholder="10.20.0.0/24" prop:value=s_cidr
-                    on:input=move |ev| s_cidr.set(event_target_value(&ev))/>
-                <input id="subnet-gw" type="text" placeholder="gateway, e.g. 10.20.0.1" prop:value=s_gw
-                    on:input=move |ev| s_gw.set(event_target_value(&ev))/>
+                </select></div>
+                <div class="form-group"><label for="subnet-cidr">"Subnet"</label><input id="subnet-cidr" type="text" required placeholder="10.20.0.0/24" prop:value=s_cidr
+                    on:input=move |ev| s_cidr.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="subnet-gw">"Gateway (optional)"</label><input id="subnet-gw" type="text" placeholder="10.20.0.1" prop:value=s_gw
+                    on:input=move |ev| s_gw.set(event_target_value(&ev))/></div>
                 <label><input id="subnet-snat" type="checkbox" prop:checked=s_snat
                     on:change=move |ev| s_snat.set(event_target_checked(&ev))/>" SNAT (masquerade out)"</label>
                 <button id="subnet-create" type="submit" class="btn btn-primary">"Add subnet"</button>
@@ -349,13 +349,13 @@ pub fn SdnZonesPage() -> impl IntoView {
                     <div id="ipam-panel">
                         <h2>"IPAM: " {v.subnet.clone()}</h2>
                         <p>{format!("{} of {} host addresses allocated, {} free", v.used, v.total, v.free)}</p>
-                        <form id="ipam-form" class="form-row" on:submit=allocate>
-                            <input id="ipam-host" type="text" placeholder="host name" prop:value=a_host
-                                on:input=move |ev| a_host.set(event_target_value(&ev))/>
-                            <input id="ipam-ip" type="text" placeholder="address (empty = next free)" prop:value=a_ip
-                                on:input=move |ev| a_ip.set(event_target_value(&ev))/>
-                            <input id="ipam-mac" type="text" placeholder="MAC (optional)" prop:value=a_mac
-                                on:input=move |ev| a_mac.set(event_target_value(&ev))/>
+                        <form id="ipam-form" class="form-row fields" on:submit=allocate>
+                            <div class="form-group"><label for="ipam-host">"Host name"</label><input id="ipam-host" type="text" placeholder="web-1" prop:value=a_host
+                                on:input=move |ev| a_host.set(event_target_value(&ev))/></div>
+                            <div class="form-group"><label for="ipam-ip">"Address (empty = next free)"</label><input id="ipam-ip" type="text" placeholder="10.20.0.50" prop:value=a_ip
+                                on:input=move |ev| a_ip.set(event_target_value(&ev))/></div>
+                            <div class="form-group"><label for="ipam-mac">"MAC (optional)"</label><input id="ipam-mac" type="text" placeholder="52:54:00:12:34:56" prop:value=a_mac
+                                on:input=move |ev| a_mac.set(event_target_value(&ev))/></div>
                             <button id="ipam-allocate" type="submit" class="btn btn-primary">"Allocate"</button>
                         </form>
                         <table class="vm-table" id="ipam-table">

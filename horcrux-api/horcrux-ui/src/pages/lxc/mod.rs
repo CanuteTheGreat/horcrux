@@ -138,7 +138,7 @@ pub fn LxcTemplatesPage() -> impl IntoView {
 
             <h2>"Catalog (images.linuxcontainers.org)"</h2>
             <div class="form-row">
-                <input id="lxc-catalog-filter" type="text" placeholder="filter: debian, alpine/3.22, ubuntu noble..."
+                <input id="lxc-catalog-filter" type="text" aria-label="Filter the catalog" placeholder="e.g. alpine/3.22"
                     prop:value=filter on:input=move |ev| set_filter.set(event_target_value(&ev))/>
                 <label>
                     <input type="checkbox" prop:checked=variant_default_only

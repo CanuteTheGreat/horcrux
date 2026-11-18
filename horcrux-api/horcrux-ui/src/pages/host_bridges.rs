@@ -106,15 +106,15 @@ pub fn HostBridgesPage() -> impl IntoView {
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="bridge-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="bridge-error">{e}</div> })}
 
-            <form id="bridge-create-form" class="form-row" on:submit=create>
-                <input id="bridge-name" type="text" required placeholder="vmbr0" maxlength="15"
-                    prop:value=name on:input=move |ev| name.set(event_target_value(&ev))/>
-                <input id="bridge-address" type="text" placeholder="host address, e.g. 10.10.0.1/24 (optional)"
-                    prop:value=address on:input=move |ev| address.set(event_target_value(&ev))/>
-                <input id="bridge-ports" type="text" placeholder="ports, e.g. eth1 (optional)"
-                    prop:value=ports on:input=move |ev| ports.set(event_target_value(&ev))/>
-                <input id="bridge-trunk" type="text" placeholder="trunk VLANs on the ports, e.g. 20,30,100-110 (optional)"
-                    prop:value=trunk on:input=move |ev| trunk.set(event_target_value(&ev))/>
+            <form id="bridge-create-form" class="form-row fields" on:submit=create>
+                <div class="form-group"><label for="bridge-name">"Bridge name"</label><input id="bridge-name" type="text" required placeholder="vmbr0" maxlength="15"
+                    prop:value=name on:input=move |ev| name.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="bridge-address">"Host address (optional)"</label><input id="bridge-address" type="text" placeholder="10.10.0.1/24"
+                    prop:value=address on:input=move |ev| address.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="bridge-ports">"Ports (optional)"</label><input id="bridge-ports" type="text" placeholder="eth1"
+                    prop:value=ports on:input=move |ev| ports.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="bridge-trunk">"Trunk VLANs (optional)"</label><input id="bridge-trunk" type="text" placeholder="20,30,100-110"
+                    prop:value=trunk on:input=move |ev| trunk.set(event_target_value(&ev))/></div>
                 <label>
                     <input id="bridge-vlan-aware" type="checkbox" prop:checked=vlan_aware
                         on:change=move |ev| vlan_aware.set(event_target_checked(&ev))/>

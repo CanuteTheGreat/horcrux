@@ -411,14 +411,14 @@ pub fn MetricsExplorerPage() -> impl IntoView {
                                     <div class="add-filter">
                                         <input
                                             type="text"
-                                            placeholder="label"
+                                            aria-label="Filter label" placeholder="label"
                                             class="filter-key-input"
                                             id="filter-key-input"
                                         />
                                         <span>=</span>
                                         <input
                                             type="text"
-                                            placeholder="value"
+                                            aria-label="Filter value" placeholder="value"
                                             class="filter-value-input"
                                             id="filter-value-input"
                                         />
@@ -493,7 +493,7 @@ pub fn MetricsExplorerPage() -> impl IntoView {
                                                     }).collect::<Vec<_>>()}
                                                     <input
                                                         type="text"
-                                                        placeholder="Add label..."
+                                                        aria-label="Group by label" placeholder="label"
                                                         class="group-by-input"
                                                         id="group-by-input"
                                                         on:keydown=move |ev| {

@@ -112,11 +112,12 @@ pub fn NodeShellPage() -> impl IntoView {
                 {move || output.get()}
             </pre>
             <div class="form-section">
+                <label for="shell-input">"Command"</label>
                 <input
                     id="shell-input"
                     type="text"
                     style="width:70%"
-                    placeholder="command, then Enter"
+                    placeholder="uname -a"
                     prop:value=input_line
                     on:input=move |ev| set_input_line.set(event_target_value(&ev))
                     on:keydown=move |ev| {

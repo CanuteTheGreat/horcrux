@@ -188,7 +188,7 @@ pub fn Monitoring() -> impl IntoView {
             <div class="metrics-section" id="performance-trends">
                 <div class="section-header">
                     <h2>"Performance Trends"</h2>
-                    <select id="trend-range" on:change=move |ev| {
+                    <select id="trend-range" aria-label="Time range" on:change=move |ev| {
                         set_range.set(event_target_value(&ev).parse().unwrap_or(3600));
                     }>
                         <option value="900">"Last 15 minutes"</option>

@@ -149,7 +149,7 @@ pub fn GuestPowerPage() -> impl IntoView {
                         <input id="power-delay" type="number" min="0" max="86400" prop:value=n.start_delay_secs
                             on:input=move |ev| { let v = event_target_value(&ev).parse().unwrap_or(0); upd(Box::new(move |n| n.start_delay_secs = v)) }/></label>
                     <label>"Save states to "
-                        <input id="power-dir" type="text" placeholder="default: <data dir>/saved-state/data"
+                        <input id="power-dir" type="text" placeholder="default location" title="Empty uses the saved-state directory inside the data directory"
                             prop:value=n.save_dir.clone().unwrap_or_default()
                             on:input=move |ev| { let v = event_target_value(&ev); upd(Box::new(move |n| n.save_dir = if v.trim().is_empty() { None } else { Some(v.clone()) })) }/></label>
                     <label>"Save timeout (s) "

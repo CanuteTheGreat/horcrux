@@ -142,8 +142,8 @@ pub fn IsoAddPanel(
 
     view! {
         <div class="iso-add" id=id("panel")>
-            <div class="form-row">
-                <label for=id("storage")>"Store in"</label>
+            <div class="form-row fields">
+                <div class="form-group"><label for=id("storage")>"Store in"</label>
                 <select id=id("storage") on:change=move |ev| set_storage.set(Some(event_target_value(&ev)))>
                     {move || {
                         let cur = chosen();
@@ -153,22 +153,26 @@ pub fn IsoAddPanel(
                             view! { <option value=s.id.clone() selected=sel>{label}</option> }
                         }).collect_view()
                     }}
-                </select>
-                <input id=id("sha256") type="text" placeholder="SHA-256 (optional, verifies the file)"
-                    style="flex: 2" prop:value=sha256 on:input=move |ev| set_sha256.set(event_target_value(&ev))/>
+                </select></div>
+                <div class="form-group wide"><label for=id("sha256")>"SHA-256 (optional)"</label>
+                <input id=id("sha256") type="text" placeholder="checksum of the file"
+                    prop:value=sha256 on:input=move |ev| set_sha256.set(event_target_value(&ev))/></div>
             </div>
-            <div class="form-row">
-                <input id=id("file") type="file" accept=".iso,.img" node_ref=file_input/>
+            <div class="form-row fields">
+                <div class="form-group"><label for=id("file")>"ISO file"</label>
+                <input id=id("file") type="file" accept=".iso,.img" node_ref=file_input/></div>
                 <button id=id("upload") type="button" class="btn btn-secondary" disabled=move || busy.get() on:click=upload>
                     "Upload from this computer"
                 </button>
             </div>
-            <div class="form-row">
-                <input id=id("url") type="url" placeholder="https://.../installer.iso" style="flex: 3"
+            <div class="form-row fields">
+                <div class="form-group wide"><label for=id("url")>"Download URL"</label>
+                <input id=id("url") type="url" placeholder="https://example.org/installer.iso"
                     prop:value=url on:input=move |ev| set_url.set(event_target_value(&ev))
-                    on:keydown=move |ev| if ev.key() == "Enter" { ev.prevent_default(); download() }/>
-                <input id=id("filename") type="text" placeholder="file name (optional)" style="flex: 1"
-                    prop:value=filename on:input=move |ev| set_filename.set(event_target_value(&ev))/>
+                    on:keydown=move |ev| if ev.key() == "Enter" { ev.prevent_default(); download() }/></div>
+                <div class="form-group"><label for=id("filename")>"File name (optional)"</label>
+                <input id=id("filename") type="text" placeholder="installer.iso"
+                    prop:value=filename on:input=move |ev| set_filename.set(event_target_value(&ev))/></div>
                 <button id=id("download") type="button" class="btn btn-primary" disabled=move || busy.get() on:click=move |_| download()>
                     "Download from URL"
                 </button>

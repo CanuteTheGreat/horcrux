@@ -344,7 +344,7 @@ pub fn BackupDashboard() -> impl IntoView {
             <div class="dashboard-section">
                 <h2 id="backup-archives">"Backup archives"</h2>
                 <div class="form-group">
-                    <input id="backup-filter" type="text" placeholder="Filter by guest id or name"
+                    <input id="backup-filter" type="text" aria-label="Filter by guest id or name" placeholder="Guest id or name"
                         prop:value=move || filter.get() on:input=move |ev| set_filter.set(event_target_value(&ev))/>
                 </div>
                 {move || {

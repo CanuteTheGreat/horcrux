@@ -522,12 +522,13 @@ pub fn ClusterManagementPage() -> impl IntoView {
             <div class="bg-white rounded-lg shadow p-4 mb-6">
                 <div class="flex items-center space-x-4">
                     <div class="flex-1">
-                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                        <label for="node-search" class="block text-sm font-medium text-gray-700 mb-1">
                             "Search Nodes"
                         </label>
                         <input
+                            id="node-search"
                             type="text"
-                            placeholder="Search by name, address, or architecture..."
+                            placeholder="Name, address or arch"
                             on:input=move |ev| set_search_query.set(event_target_value(&ev))
                             class="w-full px-3 py-2 border border-gray-300 rounded-lg"
                         />
@@ -642,6 +643,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                                     min="0"
                                                                     max=MAX_NODE_WEIGHT.to_string()
                                                                     class="w-24 px-2 py-1 border border-gray-300 rounded"
+                                                                    aria-label="Node weight"
                                                                     prop:value=move || weight_input.get()
                                                                     on:input=move |ev| set_weight_input.set(event_target_value(&ev))
                                                                 />
@@ -655,23 +657,23 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                         </td>
                                                         <td class="px-6 py-4">
                                                             <div class="flex flex-wrap items-center gap-2">
-                                                                <select class="node-role px-2 py-1 border border-gray-300 rounded"
+                                                                <select class="node-role px-2 py-1 border border-gray-300 rounded" aria-label="Node role"
                                                                     prop:value=move || role_sig.get()
                                                                     on:change=move |ev| role_sig.set(event_target_value(&ev))>
                                                                     <option value="compute">"compute"</option>
                                                                     <option value="storage">"storage (Ceph OSD + guests)"</option>
                                                                     <option value="witness">"witness (quorum only, no guests)"</option>
                                                                 </select>
-                                                                <input class="node-labels w-40 px-2 py-1 border border-gray-300 rounded" type="text" placeholder="labels: nvme, lab"
+                                                                <input class="node-labels w-40 px-2 py-1 border border-gray-300 rounded" type="text" aria-label="Node labels" placeholder="nvme, lab"
                                                                     prop:value=move || labels_sig.get()
                                                                     on:input=move |ev| labels_sig.set(event_target_value(&ev))/>
-                                                                <input class="node-max-vcpus w-24 px-2 py-1 border border-gray-300 rounded" type="number" min="1" placeholder="max vCPU"
+                                                                <input class="node-max-vcpus w-28 px-2 py-1 border border-gray-300 rounded" type="number" min="1" aria-label="Max vCPUs" placeholder="vCPUs"
                                                                     prop:value=move || vcpus_sig.get()
                                                                     on:input=move |ev| vcpus_sig.set(event_target_value(&ev))/>
-                                                                <input class="node-max-mem w-28 px-2 py-1 border border-gray-300 rounded" type="number" min="0" step="any" placeholder="max GiB RAM"
+                                                                <input class="node-max-mem w-28 px-2 py-1 border border-gray-300 rounded" type="number" min="0" step="any" aria-label="Max RAM in GiB" placeholder="GiB"
                                                                     prop:value=move || mem_sig.get()
                                                                     on:input=move |ev| mem_sig.set(event_target_value(&ev))/>
-                                                                <input class="node-votes w-24 px-2 py-1 border border-gray-300 rounded" type="number" min="0" max="10" placeholder="votes (1)"
+                                                                <input class="node-votes w-28 px-2 py-1 border border-gray-300 rounded" type="number" min="0" max="10" aria-label="Quorum votes" placeholder="1"
                                                                     title="Corosync quorum votes: empty = 1, 0 = never counts toward quorum"
                                                                     prop:value=move || votes_sig.get()
                                                                     on:input=move |ev| votes_sig.set(event_target_value(&ev))/>
@@ -795,11 +797,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
                             </p>
                             <p class="text-sm text-gray-600">{format!("auto_tie_breaker: {}; external quorum device: {}", tie, qdev)}</p>
                             <div id="qdevice-form" class="flex flex-wrap items-center gap-2 mt-2">
-                                <input id="qdevice-host" type="text" placeholder="qnetd host or IP"
+                                <input id="qdevice-host" type="text" aria-label="Quorum device host" placeholder="qnetd host or IP"
                                     prop:value=move || qdev_host.get()
                                     on:input=move |ev| set_qdev_host.set(event_target_value(&ev))
                                     class="px-3 py-1 border border-gray-300 rounded text-sm" />
-                                <select id="qdevice-algo"
+                                <select id="qdevice-algo" aria-label="Quorum device algorithm"
                                     on:change=move |ev| set_qdev_algo.set(event_target_value(&ev))
                                     class="px-2 py-1 border border-gray-300 rounded text-sm">
                                     <option value="ffsplit">"ffsplit"</option>

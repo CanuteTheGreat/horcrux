@@ -139,26 +139,26 @@ pub fn HaFailoverPage() -> impl IntoView {
                         <div class="grid md:grid-cols-2 gap-6">
                             <div class="space-y-2">
                                 <h3 class="font-medium">"Create a cluster on this node"</h3>
-                                <input class="border p-2 w-full" placeholder="cluster name" data-testid="cluster-create-name"
-                                    prop:value=c_name on:input=move |e| set_c_name.set(event_target_value(&e))/>
-                                <input class="border p-2 w-full" placeholder="address the other nodes reach this node on"
+                                <div class="form-group"><label for="fo-create-name">"Cluster name"</label><input id="fo-create-name" class="border p-2 w-full" placeholder="prod" data-testid="cluster-create-name"
+                                    prop:value=c_name on:input=move |e| set_c_name.set(event_target_value(&e))/></div>
+                                <div class="form-group"><label for="fo-create-address">"This node's address"</label><input id="fo-create-address" class="border p-2 w-full" placeholder="10.0.0.11"
                                     data-testid="cluster-create-address"
-                                    prop:value=c_addr on:input=move |e| set_c_addr.set(event_target_value(&e))/>
+                                    prop:value=c_addr on:input=move |e| set_c_addr.set(event_target_value(&e))/></div>
                                 <button class="bg-blue-600 text-white px-4 py-2 rounded" data-testid="cluster-create" on:click=do_create>"Create cluster"</button>
                             </div>
                             <div class="space-y-2">
                                 <h3 class="font-medium">"Join an existing cluster"</h3>
-                                <input class="border p-2 w-full" placeholder="address of a cluster member (host or host:port)"
+                                <div class="form-group"><label for="fo-join-peer">"Cluster member address"</label><input id="fo-join-peer" class="border p-2 w-full" placeholder="10.0.0.11:8006"
                                     data-testid="cluster-join-peer"
-                                    prop:value=j_peer on:input=move |e| set_j_peer.set(event_target_value(&e))/>
-                                <input class="border p-2 w-full" placeholder="administrator user on that member"
-                                    prop:value=j_user on:input=move |e| set_j_user.set(event_target_value(&e))/>
-                                <input class="border p-2 w-full" type="password" placeholder="its password"
+                                    prop:value=j_peer on:input=move |e| set_j_peer.set(event_target_value(&e))/></div>
+                                <div class="form-group"><label for="fo-join-user">"Administrator user"</label><input id="fo-join-user" class="border p-2 w-full" placeholder="admin"
+                                    prop:value=j_user on:input=move |e| set_j_user.set(event_target_value(&e))/></div>
+                                <div class="form-group"><label for="fo-join-password">"Password"</label><input id="fo-join-password" class="border p-2 w-full" type="password"
                                     data-testid="cluster-join-password"
-                                    prop:value=j_pass on:input=move |e| set_j_pass.set(event_target_value(&e))/>
-                                <input class="border p-2 w-full" placeholder="address the members reach THIS node on"
+                                    prop:value=j_pass on:input=move |e| set_j_pass.set(event_target_value(&e))/></div>
+                                <div class="form-group"><label for="fo-join-address">"This node's address"</label><input id="fo-join-address" class="border p-2 w-full" placeholder="10.0.0.12"
                                     data-testid="cluster-join-address"
-                                    prop:value=j_addr on:input=move |e| set_j_addr.set(event_target_value(&e))/>
+                                    prop:value=j_addr on:input=move |e| set_j_addr.set(event_target_value(&e))/></div>
                                 <button class="bg-blue-600 text-white px-4 py-2 rounded" data-testid="cluster-join" on:click=do_join>"Join cluster"</button>
                             </div>
                         </div>
@@ -193,17 +193,17 @@ pub fn HaFailoverPage() -> impl IntoView {
                     </tbody>
                 </table>
                 <div class="grid md:grid-cols-6 gap-2">
-                    <input class="border p-2" placeholder="id" data-testid="fence-id" prop:value=f_id on:input=move |e| set_f_id.set(event_target_value(&e))/>
-                    <input class="border p-2" placeholder="node to fence" data-testid="fence-node" prop:value=f_node on:input=move |e| set_f_node.set(event_target_value(&e))/>
-                    <select class="border p-2" data-testid="fence-agent" on:change=move |e| set_f_agent.set(event_target_value(&e))>
+                    <div class="form-group"><label for="fo-fence-id">"Device id"</label><input id="fo-fence-id" class="border p-2" placeholder="fence-1" data-testid="fence-id" prop:value=f_id on:input=move |e| set_f_id.set(event_target_value(&e))/></div>
+                    <div class="form-group"><label for="fo-fence-node">"Node to fence"</label><input id="fo-fence-node" class="border p-2" placeholder="node-03" data-testid="fence-node" prop:value=f_node on:input=move |e| set_f_node.set(event_target_value(&e))/></div>
+                    <div class="form-group"><label for="fo-fence-agent">"Fence agent"</label><select id="fo-fence-agent" class="border p-2" data-testid="fence-agent" on:change=move |e| set_f_agent.set(event_target_value(&e))>
                         <option value="Ipmi">"IPMI"</option><option value="Ilo">"HP iLO"</option>
                         <option value="Drac">"Dell DRAC5-8 (IPMI)"</option><option value="Redfish">"Redfish (iDRAC9 / iLO5+)"</option><option value="Ssh">"SSH"</option>
                         <option value="Libvirt">"libvirt"</option><option value="SnmpPdu">"SNMP PDU"</option>
                         <option value="Manual">"Manual"</option>
-                    </select>
-                    <input class="border p-2" placeholder="BMC / PDU address" data-testid="fence-address" prop:value=f_addr on:input=move |e| set_f_addr.set(event_target_value(&e))/>
-                    <input class="border p-2" placeholder="user" prop:value=f_user on:input=move |e| set_f_user.set(event_target_value(&e))/>
-                    <input class="border p-2" type="password" placeholder="password" prop:value=f_pass on:input=move |e| set_f_pass.set(event_target_value(&e))/>
+                    </select></div>
+                    <div class="form-group"><label for="fo-fence-address">"BMC / PDU address"</label><input id="fo-fence-address" class="border p-2" placeholder="10.0.1.5" data-testid="fence-address" prop:value=f_addr on:input=move |e| set_f_addr.set(event_target_value(&e))/></div>
+                    <div class="form-group"><label for="fo-fence-user">"User"</label><input id="fo-fence-user" class="border p-2" placeholder="admin" prop:value=f_user on:input=move |e| set_f_user.set(event_target_value(&e))/></div>
+                    <div class="form-group"><label for="fo-fence-password">"Password"</label><input id="fo-fence-password" class="border p-2" type="password" prop:value=f_pass on:input=move |e| set_f_pass.set(event_target_value(&e))/></div>
                 </div>
                 <button class="mt-2 bg-blue-600 text-white px-4 py-2 rounded" data-testid="fence-add" on:click=do_add_device>"Add fencing device"</button>
             </section>

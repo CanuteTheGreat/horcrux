@@ -361,19 +361,19 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                 <h2>"General System Settings"</h2>
                                 <div class="config-form">
                                     <div class="form-group">
-                                        <label>"Hostname"</label>
-                                        <input
+                                        <label for="cfg-hostname">"Hostname"</label>
+                                        <input id="cfg-hostname"
                                             type="text"
                                             prop:value=form_hostname
                                             on:input=move |ev| set_form_hostname.set(event_target_value(&ev))
-                                            placeholder="hostname"
+                                            placeholder="node-01"
                                         />
                                         <small>"System hostname (without domain)"</small>
                                     </div>
 
                                     <div class="form-group">
-                                        <label>"Domain"</label>
-                                        <input
+                                        <label for="cfg-domain">"Domain"</label>
+                                        <input id="cfg-domain"
                                             type="text"
                                             prop:value=form_domain
                                             on:input=move |ev| set_form_domain.set(event_target_value(&ev))
@@ -495,8 +495,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                 <h2>"DNS Configuration"</h2>
                                 <div class="config-form">
                                     <div class="form-group">
-                                        <label>"DNS Servers"</label>
-                                        <textarea
+                                        <label for="cfg-dns-servers">"DNS Servers"</label>
+                                        <textarea id="cfg-dns-servers"
                                             prop:value=form_dns_servers
                                             on:input=move |ev| set_form_dns_servers.set(event_target_value(&ev))
                                             placeholder="8.8.8.8\n8.8.4.4\n1.1.1.1"
@@ -506,8 +506,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                     </div>
 
                                     <div class="form-group">
-                                        <label>"Search Domains"</label>
-                                        <input
+                                        <label for="cfg-search-domains">"Search Domains"</label>
+                                        <input id="cfg-search-domains"
                                             type="text"
                                             prop:value=form_dns_search_domains
                                             on:input=move |ev| set_form_dns_search_domains.set(event_target_value(&ev))
@@ -534,8 +534,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                 <h2>"Time & NTP Configuration"</h2>
                                 <div class="config-form">
                                     <div class="form-group">
-                                        <label>"NTP Servers"</label>
-                                        <textarea
+                                        <label for="cfg-ntp-servers">"NTP Servers"</label>
+                                        <textarea id="cfg-ntp-servers"
                                             prop:value=form_ntp_servers
                                             on:input=move |ev| set_form_ntp_servers.set(event_target_value(&ev))
                                             placeholder="pool.ntp.org\ntime.google.com\ntime.cloudflare.com"
@@ -591,8 +591,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                             </div>
                             <div class="modal-body">
                                 <div class="form-group">
-                                    <label>"Interface Name"</label>
-                                    <input
+                                    <label for="cfg-interface-name">"Interface Name"</label>
+                                    <input id="cfg-interface-name"
                                         type="text"
                                         prop:value=form_interface_name
                                         on:input=move |ev| set_form_interface_name.set(event_target_value(&ev))
@@ -602,8 +602,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                 </div>
 
                                 <div class="form-group">
-                                    <label>"Configuration Method"</label>
-                                    <select
+                                    <label for="cfg-configuration-method">"Configuration Method"</label>
+                                    <select id="cfg-configuration-method"
                                         prop:value=form_interface_method
                                         on:change=move |ev| set_form_interface_method.set(event_target_value(&ev))
                                     >
@@ -617,8 +617,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                     view! {
                                         <>
                                             <div class="form-group">
-                                                <label>"IP Address"</label>
-                                                <input
+                                                <label for="cfg-ip-address">"IP Address"</label>
+                                                <input id="cfg-ip-address"
                                                     type="text"
                                                     prop:value=form_interface_address
                                                     on:input=move |ev| set_form_interface_address.set(event_target_value(&ev))
@@ -627,8 +627,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                             </div>
 
                                             <div class="form-group">
-                                                <label>"Netmask"</label>
-                                                <input
+                                                <label for="cfg-netmask">"Netmask"</label>
+                                                <input id="cfg-netmask"
                                                     type="text"
                                                     prop:value=form_interface_netmask
                                                     on:input=move |ev| set_form_interface_netmask.set(event_target_value(&ev))
@@ -637,8 +637,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                             </div>
 
                                             <div class="form-group">
-                                                <label>"Gateway"</label>
-                                                <input
+                                                <label for="cfg-gateway">"Gateway"</label>
+                                                <input id="cfg-gateway"
                                                     type="text"
                                                     prop:value=form_interface_gateway
                                                     on:input=move |ev| set_form_interface_gateway.set(event_target_value(&ev))
@@ -652,8 +652,8 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                 }}
 
                                 <div class="form-group">
-                                    <label>"MTU"</label>
-                                    <input
+                                    <label for="cfg-mtu">"MTU"</label>
+                                    <input id="cfg-mtu"
                                         type="number"
                                         prop:value=form_interface_mtu
                                         on:input=move |ev| set_form_interface_mtu.set(event_target_value(&ev).parse().unwrap_or(1500))
@@ -730,7 +730,7 @@ fn VmDefaultNetworkCard() -> impl IntoView {
             <div class="section-header"><h2>"Default VM network"</h2></div>
             <form on:submit=save>
                 <div class="form-row">
-                    <select id="vm-default-network-select" disabled=move || !loaded.get() on:change=move |ev| set_current.set(event_target_value(&ev))>
+                    <select id="vm-default-network-select" aria-label="Default network for new VMs" disabled=move || !loaded.get() on:change=move |ev| set_current.set(event_target_value(&ev))>
                         <option value="" selected=move || current.get().is_empty()>
                             {move || format!("Per hypervisor (QEMU: {})", if hv_default.get().is_empty() { "no bridge found".to_string() } else { hv_default.get() })}
                         </option>

@@ -84,6 +84,7 @@ pub fn TasksPage() -> impl IntoView {
                 <h1>"Tasks"</h1>
                 <div class="header-actions">
                     <select
+                        aria-label="Filter by state"
                         prop:value=filter
                         on:change=move |ev| set_filter.set(event_target_value(&ev))
                     >

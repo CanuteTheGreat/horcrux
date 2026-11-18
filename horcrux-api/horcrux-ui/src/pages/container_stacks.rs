@@ -184,31 +184,37 @@ pub fn StacksPage() -> impl IntoView {
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="stack-notice">{n}</div> })}
 
             <div class="form-section">
-                <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>
+                <div class="form-group"><label for="stack-runtime">"Container runtime"</label>
+                <select id="stack-runtime" on:change=move |ev| set_runtime.set(event_target_value(&ev))>
                     <option value="podman">"Podman"</option>
                     <option value="docker">"Docker"</option>
-                </select>
+                </select></div>
+                <div class="form-group"><label for="stack-name">"Stack name"</label>
                 <input
                     type="text"
                     id="stack-name"
                     disabled=move || editing.get().is_some()
-                    placeholder="stack name"
+                    placeholder="web"
                     prop:value=name
                     on:input=move |ev| set_name.set(event_target_value(&ev))
-                />
+                /></div>
+                <div class="form-group"><label for="stack-compose">"Compose file"</label>
                 <textarea
+                    id="stack-compose"
                     rows="10"
                     style="width: 100%; font-family: monospace;"
                     prop:value=compose
                     on:input=move |ev| set_compose.set(event_target_value(&ev))
-                ></textarea>
+                ></textarea></div>
                 {move || if editing.get().is_some() {
                     view! {
+                        <label for="stack-env">"Extra environment (optional)"</label>
                         <textarea
                             id="stack-env"
+                            aria-label="Extra environment"
                             rows="3"
                             style="width: 100%; font-family: monospace;"
-                            placeholder="extra environment for every service, one KEY=value per line (optional)"
+                            placeholder="KEY=value, one per line"
                             prop:value=env_text
                             on:input=move |ev| set_env_text.set(event_target_value(&ev))
                         ></textarea>

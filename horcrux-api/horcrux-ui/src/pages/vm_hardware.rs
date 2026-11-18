@@ -401,7 +401,7 @@ pub fn SystemFields(
 pub fn DiskOptionFields(disk: RwSignal<VmDisk>, #[prop(into)] prefix: String) -> impl IntoView {
     let p = prefix.clone();
     view! {
-        <select class="vm-disk-bus" id=format!("{p}-bus") on:change=move |ev| {
+        <select class="vm-disk-bus" id=format!("{p}-bus") aria-label="Disk bus" on:change=move |ev| {
             let b = event_target_value(&ev);
             disk.update(|d| {
                 d.disk_type = b;
@@ -415,7 +415,7 @@ pub fn DiskOptionFields(disk: RwSignal<VmDisk>, #[prop(into)] prefix: String) ->
                 view! { <option value=v selected={move || disk.get().disk_type == v}>{*label}</option> }
             }).collect_view()}
         </select>
-        <select class="vm-disk-cache" id=format!("{prefix}-cache") on:change=move |ev| {
+        <select class="vm-disk-cache" id=format!("{prefix}-cache") aria-label="Disk cache mode" on:change=move |ev| {
             let c = event_target_value(&ev);
             disk.update(|d| d.cache = c);
         }>

@@ -76,13 +76,13 @@ pub fn ContainerNetworksPage() -> impl IntoView {
                 <h1>"Container Networks"</h1>
                 <p class="subtitle">"Docker/Podman bridge networks (not Horcrux SDN - see Network page for that)."</p>
                 <div class="header-actions">
-                    <select on:change=move |ev| set_runtime.set(event_target_value(&ev))>
+                    <select aria-label="Container runtime" on:change=move |ev| set_runtime.set(event_target_value(&ev))>
                         <option value="podman">"Podman"</option>
                         <option value="docker">"Docker"</option>
                     </select>
                     <input
                         type="text"
-                        placeholder="network name"
+                        aria-label="Network name" placeholder="my-network"
                         prop:value=new_name
                         on:input=move |ev| set_new_name.set(event_target_value(&ev))
                     />
