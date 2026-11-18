@@ -961,7 +961,9 @@ class Runner:
 
     def ensure_swtpm(self, name):
         d = self.tpm_dirs[name]
-        sock = f"{d}/ctrl.sock"
+        sock = sock_paths(d, "ctrl")[0].replace(".qmp", ".sock") if len(f"{d}/ctrl.sock") > SOCK_MAX else f"{d}/ctrl.sock"   # swtpm's unix socket has the same 108-byte limit
+        self.tpm_socks = getattr(self, "tpm_socks", {})
+        self.tpm_socks[name] = sock
         cur = self.tpm_proc if name == "tpm" else self.tpm_proc2
         if cur is not None and cur.poll() is None:
             return sock
@@ -1001,7 +1003,7 @@ class Runner:
                      "-netdev", f"user,id=n1,net=10.77.0.0/24,host=10.77.0.2,hostfwd=tcp:{FWD_BIND}:{FWD_WEB}-{a.lan_ip}:{self.P['port']},hostfwd=tcp:{FWD_BIND}:{FWD_SSH}-{a.lan_ip}:22",
                      "-device", f"{nic},netdev=n1,mac=52:54:00:00:00:02"]
         if getattr(self, "tpm_ctrl", None):
-            self.tpm_ctrl = self.ensure_swtpm("tpm2" if self.tpm_ctrl.endswith("/tpm2/ctrl.sock") else "tpm")
+            self.tpm_ctrl = self.ensure_swtpm("tpm2" if self.tpm_ctrl == getattr(self, "tpm_socks", {}).get("tpm2") else "tpm")
             args += ["-chardev", f"socket,id=chrtpm,path={self.tpm_ctrl}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
                      "-device", ("tpm-tis" if ARCH == "x86_64" else "tpm-tis-device") + ",tpmdev=tpm0"]
         gpu = A["gpu"]
