@@ -160,28 +160,28 @@ pub fn Dashboard() -> impl IntoView {
             // the page behind the number, pre-filtered where the page can.
             <div class="stats-grid">
                 <A href="/vms" class="stat-card stat-link" attr:id="stat-vms">
-                    <h3>"Virtual Machines"</h3>
+                    <h3 aria-level="2">"Virtual Machines"</h3>
                     <div class="stat-value">
                         {stat(vms_access, Signal::derive(move || vms.get().len().to_string()))}
                     </div>
                 </A>
 
                 <A href="/vms?state=running" class="stat-card stat-link" attr:id="stat-vms-running">
-                    <h3>"Running VMs"</h3>
+                    <h3 aria-level="2">"Running VMs"</h3>
                     <div class="stat-value">
                         {stat(vms_access, Signal::derive(move || count_of(|s| matches!(s, VmStatus::Running)).to_string()))}
                     </div>
                 </A>
 
                 <A href="/vms?state=stopped" class="stat-card stat-link" attr:id="stat-vms-stopped">
-                    <h3>"Stopped VMs"</h3>
+                    <h3 aria-level="2">"Stopped VMs"</h3>
                     <div class="stat-value">
                         {stat(vms_access, Signal::derive(move || count_of(|s| matches!(s, VmStatus::Stopped)).to_string()))}
                     </div>
                 </A>
 
                 <A href="/containers" class="stat-card stat-link" attr:id="stat-containers">
-                    <h3>"Containers"</h3>
+                    <h3 aria-level="2">"Containers"</h3>
                     <div class="stat-value">
                         {move || opt_len(containers.get().map(|c| c.len()))}
                     </div>
@@ -189,7 +189,7 @@ pub fn Dashboard() -> impl IntoView {
 
                 <IfFeature feature="cluster">
                     <A href="/ha/cluster" class="stat-card stat-link" attr:id="stat-cluster-nodes">
-                        <h3>"Cluster Nodes"</h3>
+                        <h3 aria-level="2">"Cluster Nodes"</h3>
                         <div class="stat-value">
                             {stat(nodes_access, Signal::derive(move || cluster_nodes.get().len().to_string()))}
                         </div>
@@ -197,28 +197,28 @@ pub fn Dashboard() -> impl IntoView {
                 </IfFeature>
 
                 <A href="/storage" class="stat-card stat-link" attr:id="stat-storage-pools">
-                    <h3>"Storage Pools"</h3>
+                    <h3 aria-level="2">"Storage Pools"</h3>
                     <div class="stat-value">
                         {move || opt_len(pools.get().map(|p| p.len()))}
                     </div>
                 </A>
 
                 <A href="/alerts" class="stat-card stat-link" attr:id="stat-active-alerts">
-                    <h3>"Active Alerts"</h3>
+                    <h3 aria-level="2">"Active Alerts"</h3>
                     <div class="stat-value" class:alert-count=move || !active_alerts.get().is_empty()>
                         {stat(alerts_access, Signal::derive(move || active_alerts.get().len().to_string()))}
                     </div>
                 </A>
 
                 <A href="/tasks?status=running" class="stat-card stat-link" attr:id="stat-tasks-running">
-                    <h3>"Running Tasks"</h3>
+                    <h3 aria-level="2">"Running Tasks"</h3>
                     <div class="stat-value">
                         {move || opt_len(tasks.get().map(|t| t.iter().filter(|t| t.status == "running").count()))}
                     </div>
                 </A>
 
                 <A href="/monitoring" class="stat-card stat-link" attr:id="stat-cpu">
-                    <h3>"CPU Usage"</h3>
+                    <h3 aria-level="2">"CPU Usage"</h3>
                     <div class="stat-value">
                         {stat(metrics_access, Signal::derive(move || {
                             node_metrics

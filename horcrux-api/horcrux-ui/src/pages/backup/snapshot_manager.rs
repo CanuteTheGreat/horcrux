@@ -427,7 +427,7 @@ pub fn SnapshotManagerPage() -> impl IntoView {
             // Tab Navigation
             <div class="bg-white rounded-lg shadow mb-6">
                 <div class="border-b border-gray-200">
-                    <nav class="-mb-px flex">
+                    <nav class="-mb-px flex" aria-label="Snapshot sections">
                         <button
                             on:click=move |_| set_active_tab.set("snapshots".to_string())
                             class=format!("py-2 px-4 border-b-2 font-medium text-sm {}",

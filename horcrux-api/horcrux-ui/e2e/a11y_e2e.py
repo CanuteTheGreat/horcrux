@@ -7,7 +7,7 @@ run; `list_impacts` (moderate/minor) are printed and written to the report only.
 
 Runs against a live horcrux-api serving the built UI (BASE_URL, default https://localhost:8006,
 admin/ADMIN_PASSWORD). Seeds one VM through the API for the VM detail page and removes it again.
-Env: A11Y_REPORT=path.json, A11Y_WIDTHS=desktop,phone, A11Y_SCHEMES=light,dark, A11Y_PAGES=name,name.
+Env: A11Y_VERBOSE=1 prints the nodes of axe 'incomplete' results, A11Y_REPORT=path.json, A11Y_WIDTHS=desktop,phone, A11Y_SCHEMES=light,dark, A11Y_PAGES=name,name.
 """
 import json
 import os
@@ -82,12 +82,13 @@ def main():
     schemes = [s for s in os.environ.get("A11Y_SCHEMES", ",".join(cfg["schemes"])).split(",") if s]
     only = [p for p in os.environ.get("A11Y_PAGES", "").split(",") if p]
     pages = [p for p in cfg["pages"] if not only or p["name"] in only]
-    opts = {"runOnly": {"type": "tag", "values": cfg["tags"]}, "resultTypes": ["violations"]}
+    opts = {"runOnly": {"type": "tag", "values": cfg["tags"]}, "resultTypes": ["violations", "incomplete"]}
 
     tok = req("POST", "/api/auth/login", body={"username": "admin", "password": PASSWORD})["ticket"]
     req("DELETE", f"/api/vms/{VM_ID}", tok)
     req("POST", "/api/vms", tok, {"id": VM_ID, "name": VM_ID, "hypervisor": "qemu", "architecture": "x86_64",
                                   "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped"})
+    needs_review = Counter()  # axe "incomplete": could not be decided automatically (listed, never fails)
     rows = []  # one per (page, vp, scheme, rule, impact)
     try:
         with sync_playwright() as p:
@@ -109,6 +110,12 @@ def main():
                         settle(tgt)
                         tgt.evaluate(axe_src)
                         res = tgt.evaluate("(o) => axe.run(document, o)", opts)
+                        for v in res.get("incomplete", []):
+                            needs_review[(pg["name"], v["id"])] += 1
+                            if os.environ.get("A11Y_VERBOSE"):
+                                for n in v["nodes"][:6]:
+                                    info = (n.get("any") or [{}])[0]
+                                    print(f"  incomplete {pg['name']} {vp}/{scheme} {v['id']} {' '.join(map(str, n['target']))[:80]} :: {info.get('message', '')[:110]} {info.get('data') if isinstance(info.get('data'), dict) and 'fgColor' in info['data'] else ''}")
                         for v in res["violations"]:
                             nodes = [n for n in v["nodes"] if not allowed(allow, pg["name"], v["id"], " ".join(map(str, n["target"])))]
                             if nodes:
@@ -127,8 +134,15 @@ def main():
     if os.environ.get("A11Y_REPORT"):
         json.dump(rows, open(os.environ["A11Y_REPORT"], "w"), indent=1)
     for label, group in (("FAIL", failing), ("LIST", listed)):
-        for r in sorted(group, key=lambda r: (r["page"], r["rule"])):
-            print(f"{label} {r['impact']:8} {r['page']:10} {r['viewport']}/{r['scheme']} {r['rule']} x{r['count']}: {r['help']} | {'; '.join(r['targets'][:2])}")
+        merged = {}
+        for r in group:
+            m = merged.setdefault((r["page"], r["rule"], r["impact"]), {"n": 0, "combos": [], "r": r})
+            m["n"] = max(m["n"], r["count"])
+            m["combos"].append(f"{r['viewport']}/{r['scheme']}")
+        for (page_name, rule, impact), m in sorted(merged.items()):
+            print(f"{label} {impact:8} {page_name:10} {rule} x{m['n']} [{', '.join(m['combos'])}]: {m['r']['help']} | {'; '.join(m['r']['targets'][:2])}")
+    if needs_review:
+        print("needs manual review (axe incomplete):", {f"{p}:{r}": n for (p, r), n in sorted(needs_review.items())})
     by_rule = Counter()
     for r in rows:
         by_rule[(r["impact"], r["rule"])] += r["count"]
