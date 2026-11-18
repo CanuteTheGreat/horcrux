@@ -1376,3 +1376,13 @@ label.checkbox, .checkbox-label { display: flex; align-items: center; gap: .5rem
 .ha-page .bg-purple-600 { background: #7048b8; color: #fff; }
 .ha-page .text-blue-900 { color: var(--primary); }
 .ha-page .text-red-900 { color: var(--danger); }
+.action-buttons { flex-wrap: nowrap; }
+.resources .vm-table { border-collapse: collapse; }
+.resource-grid:empty { display: none; }
+
+/* generic tables (MFA, permissions, realms, tasks, LXC catalog, sessions, API keys): cells need padding or the columns run together */
+.table, .container-table, .sessions-management-page table, .api-keys-management-page table { width: 100%; border-collapse: collapse; background: var(--surface); }
+:is(.table, .container-table, .sessions-management-page table, .api-keys-management-page table) :is(th, td) {
+    padding: .6rem .75rem; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+:is(.table, .container-table, .sessions-management-page table, .api-keys-management-page table) th {
+    font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary); background: var(--light); }

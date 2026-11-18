@@ -179,7 +179,7 @@ FACTS_JS = r"""() => {
     const l = f.previousElementSibling;
     if (!vis(f) || !l || l.tagName !== 'LABEL' || !vis(l)) continue;
     const lr = l.getBoundingClientRect(), fr = f.getBoundingClientRect();
-    if (Math.abs(lr.top - fr.top) < lr.height && lr.right <= fr.left + 2) unstyled.push("label '" + (l.innerText || '').trim().slice(0, 30) + "' shares a line with its textarea");
+    if (lr.top < fr.bottom - 1 && lr.bottom > fr.top + 1 && lr.right <= fr.left + 2) unstyled.push("label '" + (l.innerText || '').trim().slice(0, 30) + "' shares a line with its textarea");
   }
   const root = document.documentElement;
   return {
