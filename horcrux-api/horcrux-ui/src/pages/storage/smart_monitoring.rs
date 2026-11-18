@@ -165,7 +165,7 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                 if unack > 0 {
                     view! {
                         <div class="alerts-section">
-                            <h2 class="section-title">Active Alerts ({unack})</h2>
+                            <h2 class="section-title">"Active Alerts ("{unack}")"</h2>
                             <div class="alerts-list">
                                 {alerts.get().into_iter().filter(|a| !a.acknowledged).take(5).map(|alert| {
                                     let alert_id = alert.id.clone();
@@ -298,7 +298,7 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                                         </div>
                                         <div class="info-item">
                                             <span class="label">Type</span>
-                                            <span class="value">{disk.disk_type.to_uppercase()} ({disk.interface.clone()})</span>
+                                            <span class="value">{disk.disk_type.to_uppercase()}" ("{disk.interface.clone()}")"</span>
                                         </div>
                                         <div class="info-item">
                                             <span class="label">Capacity</span>
@@ -496,7 +496,7 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                                     </button>
                                 </div>
                                 <div class="modal-body">
-                                    <p><strong>Disk:</strong> {disk.name} ({disk.path})</p>
+                                    <p><strong>Disk:</strong> {disk.name}" ("{disk.path}")"</p>
 
                                     <div class="form-group">
                                         <label>Test Type</label>

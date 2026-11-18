@@ -93,6 +93,13 @@ class PublicText(unittest.TestCase):
 
 
 class CrawlRules(unittest.TestCase):
+    def test_unrendered_view_template_text(self):
+        # Disk Management showed "HDD ({disk.interface.clone()})" and "Partitions ({disk.partitions.len()})".
+        for t in ("Type: HDD({disk.interface.clone()})", "Partitions({disk.partitions.len()})", "Active Alerts ({unack})"):
+            self.assertTrue(uc.BAD_TEXT.search(t), t)
+        for t in ("Type: HDD (sata)", "Partitions (3)", "Run {{x}}".replace("{{x}}", "now")):
+            self.assertFalse(uc.BAD_TEXT.search(t), t)
+
     def test_zero_in_red_is_caught_but_not_green_or_normal(self):
         self.assertTrue(uc.is_red("rgb(198, 45, 18)"))
         self.assertTrue(uc.is_red("rgb(255, 107, 107)"))

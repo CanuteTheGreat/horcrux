@@ -67,7 +67,7 @@ pub fn DiskManagementPage() -> impl IntoView {
                                     </div>
                                     <div class="info-row">
                                         <span class="label">Type:</span>
-                                        <span class="value">{disk.disk_type.to_uppercase()} ({disk.interface.clone()})</span>
+                                        <span class="value">{disk.disk_type.to_uppercase()}" ("{disk.interface.clone()}")"</span>
                                     </div>
                                     <div class="info-row">
                                         <span class="label">Size:</span>
@@ -96,7 +96,7 @@ pub fn DiskManagementPage() -> impl IntoView {
                                 </div>
 
                                 <div class="partitions-section">
-                                    <h4>Partitions ({disk.partitions.len()})</h4>
+                                    <h4>"Partitions ("{disk.partitions.len()}")"</h4>
                                     <div class="partitions-list">
                                         {disk.partitions.iter().map(|part| view! {
                                             <div class="partition-item">

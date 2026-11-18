@@ -40,6 +40,11 @@ import time
 from urllib.parse import urlsplit
 
 
+# Leptos view! text that went out unrendered: bare text next to a block, e.g. `HDD ({disk.interface.clone()})`,
+# is shown literally (owner-visible on Disk Management), so a `{ident.path()}` in page text is a bug.
+BAD_TEXT = re.compile(r"\bundefined\b|\bNaN\b|\[object Object\]|missing field|panicked at|Traceback \(most|RUST_BACKTRACE|\{\{|\}\}|\{[a-z_]\w*(\.[a-z_]\w*(\(\))?)*\}|\.get\(\)\s*(\|\||&&|[<>!=]=)", re.I)
+
+
 def is_red(rgb):
     """True for a clearly red text colour ('rgb(198, 45, 18)'): the colour of a problem."""
     m = re.match(r"rgba?\((\d+),\s*(\d+),\s*(\d+)", rgb or "")
@@ -244,7 +249,7 @@ def main():
     forbidden = [re.compile(p, re.I) for p in cfg["forbidden_names"]]
     pfail = [re.compile(p, re.I) for p in cfg["private_fail"]]
     pwarn = [re.compile(p, re.I) for p in cfg["private_warn"]]
-    bad_text = re.compile(r"\bundefined\b|\bNaN\b|\[object Object\]|missing field|panicked at|Traceback \(most|RUST_BACKTRACE|\{\{|\}\}|\.get\(\)\s*(\|\||&&|[<>!=]=)", re.I)
+    bad_text = BAD_TEXT
     # A bare "404" is a number too (a 404 GB disk, 404 MiB free on the runner), so only the
     # error-shaped forms count: "HTTP 404", "404 Not Found", "Error 404", a lone "404" line.
     notfound = re.compile(
