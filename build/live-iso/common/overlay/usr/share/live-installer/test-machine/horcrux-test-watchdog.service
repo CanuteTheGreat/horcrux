@@ -5,7 +5,6 @@ Before=network.target
 
 [Service]
 Type=simple
-ExecStartPre=-/sbin/modprobe iTCO_wdt
 ExecStart=/usr/libexec/horcrux-test-watchdog
 KillSignal=SIGTERM
 TimeoutStopSec=10
