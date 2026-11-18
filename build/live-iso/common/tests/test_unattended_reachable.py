@@ -200,7 +200,7 @@ class TestMachinePayload(unittest.TestCase):
         self.assertIn("/usr/libexec/horcrux-test-watchdog", out)
         self.assertEqual(inst.files["/usr/libexec/horcrux-test-watchdog"][1], 0o755)
         self.assertIn("AllowSuspend=no", inst.files["/etc/elogind/sleep.conf.d/50-horcrux-test-machine.conf"][0])
-        self.assertIn("kernel.panic = 20", inst.files["/etc/sysctl.d/50-horcrux-test-machine.conf"][0])
+        self.assertIn("kernel.panic = 10", inst.files["/etc/sysctl.d/50-horcrux-test-machine.conf"][0])
         self.assertIn("softdog", inst.files["/usr/libexec/horcrux-test-watchdog"][0])
         self.assertIn((["rc-update", "add", "horcrux-test-watchdog", "default"], True), inst.cmds)
 

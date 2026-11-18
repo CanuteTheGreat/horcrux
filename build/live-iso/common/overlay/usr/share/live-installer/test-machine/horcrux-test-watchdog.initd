@@ -12,7 +12,3 @@ depend() {
 	need localmount
 	before net
 }
-start_pre() {
-	modprobe iTCO_wdt 2>/dev/null
-	return 0
-}
