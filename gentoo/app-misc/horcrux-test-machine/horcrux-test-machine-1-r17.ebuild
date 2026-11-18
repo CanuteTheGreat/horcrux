@@ -83,6 +83,11 @@ src_install() {
 	newins "${FILESDIR}"/sysctl.conf 50-horcrux-test-machine.conf
 	exeinto /usr/libexec
 	newexe "${FILESDIR}"/horcrux-test-watchdog.sh horcrux-test-watchdog
+	insinto /etc/conf.d
+	newins "${FILESDIR}"/horcrux-test-watchdog.conf horcrux-test-watchdog
+	exeinto /etc/kernel/postinst.d
+	newexe "${FILESDIR}"/horcrux-test-kernel-hook 91-horcrux-test-kernel
+	exeinto /usr/libexec
 	newinitd "${FILESDIR}"/horcrux-test-watchdog.initd horcrux-test-watchdog
 	newinitd "${FILESDIR}"/horcrux-test-power.initd horcrux-test-power
 	newinitd "${FILESDIR}"/horcrux-test-klog.initd horcrux-test-klog
@@ -114,8 +119,8 @@ src_install() {
 		     driver options, horcrux-test-power service), no runtime PM on network devices, GNOME/XFCE do not sleep on idle.
 		     Critical-battery hibernate (UPower) is deliberately left alone.
 
-		   A hung machine reboots itself: hardware watchdog (horcrux-test-watchdog, petted only while a root-fs write completes) +
-		   kernel.panic=20 / softlockup_panic, so nobody has to power-cycle a test laptop.
+		   A hung machine reboots itself: hardware watchdog (horcrux-test-watchdog, petted only while a root-fs write completes; timeouts in /etc/conf.d/horcrux-test-watchdog) +
+		   kernel.panic=10 / softlockup+hardlockup panic (sysctl.d), so nobody has to power-cycle a test laptop.
 
 		3. NO PERSONAL APPS, NO PERSONAL DATA (owner order 2026-11-05): only the public Horcrux editions + test tooling + the machine's
 		   hardware enablement. `horcrux-test-machine-check` lists violations (denylist of personal apps/paths + an ALLOWLIST for the
