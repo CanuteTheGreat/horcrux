@@ -660,6 +660,7 @@ mod tests {
         VmNic {
             model: NicModel::Virtio,
             bridge: "br0".into(),
+            attach: Default::default(),
             mac: mac.map(Into::into),
             vlan: None,
         }

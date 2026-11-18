@@ -1051,6 +1051,84 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
     }
 }
 
+/// The host-shutdown half of guest power only works when the
+/// `horcrux-guests` boot service is enabled AND started (init systems stop
+/// only started services at shutdown); without it every running VM is
+/// killed with QEMU at power-off. The packages install the service but a
+/// desktop edition never enabled it, so the manager does: once per node
+/// (a marker file records it, so an administrator who later disables the
+/// service is not overridden), and only where the manager itself is a boot
+/// service. Opt out with `HORCRUX_GUESTS_NO_SERVICE=1`. Never fails the
+/// manager.
+fn ensure_guests_service(data_dir: &Path) {
+    if std::env::var_os("HORCRUX_GUESTS_NO_SERVICE").is_some() {
+        return;
+    }
+    let marker = data_dir.join("saved-state/.guests-service-enabled");
+    if marker.exists() {
+        return;
+    }
+    let p = Path::new;
+    let enabled = if p("/sbin/openrc-run").exists() && p("/etc/init.d/horcrux-guests").exists() {
+        let rl = p("/etc/runlevels/default");
+        if !rl.join("horcrux-api").exists() && !rl.join("horcrux").exists() {
+            return; // the manager isn't started at boot either
+        }
+        let link = rl.join("horcrux-guests");
+        std::fs::symlink_metadata(&link).is_ok()
+            || std::os::unix::fs::symlink("/etc/init.d/horcrux-guests", &link).is_ok()
+    } else if p("/run/systemd/system").is_dir() {
+        let wants = p("/etc/systemd/system/multi-user.target.wants");
+        if !wants.join("horcrux-api.service").exists() && !wants.join("horcrux.service").exists() {
+            return;
+        }
+        let unit = [
+            "/usr/lib/systemd/system",
+            "/lib/systemd/system",
+            "/etc/systemd/system",
+        ]
+        .iter()
+        .map(|d| p(d).join("horcrux-guests.service"))
+        .find(|u| u.exists());
+        let Some(unit) = unit else { return };
+        let link = wants.join("horcrux-guests.service");
+        std::fs::symlink_metadata(&link).is_ok() || std::os::unix::fs::symlink(&unit, &link).is_ok()
+    } else {
+        return;
+    };
+    if !enabled {
+        warn!("guest power: could not enable the horcrux-guests boot service");
+        return;
+    }
+    let _ = std::fs::create_dir_all(marker.parent().unwrap_or(Path::new("/")));
+    let _ = std::fs::write(&marker, chrono::Utc::now().to_rfc3339());
+    info!("guest power: horcrux-guests enabled at boot (guests are saved/shut down cleanly when the host goes down)");
+    // Start it for this boot too, once the manager is up: its start runs the
+    // boot pass, which is a no-op when it already ran for this boot.
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let (prog, args): (&str, &[&str]) = if Path::new("/sbin/openrc-run").exists() {
+            ("rc-service", &["horcrux-guests", "start"])
+        } else {
+            (
+                "systemctl",
+                &["start", "--no-block", "horcrux-guests.service"],
+            )
+        };
+        match tokio::process::Command::new(prog)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+        {
+            Ok(s) if s.success() => info!("guest power: horcrux-guests started"),
+            other => warn!("guest power: starting horcrux-guests: {other:?}"),
+        }
+    });
+}
+
 /// Background work: the host-agent token, the boot pass at API start (unless
 /// `HORCRUX_GUEST_AUTOSTART=0`, when the unit's `guests boot` does it) and the
 /// periodic snapshot of what is running (the crash fallback).
@@ -1058,6 +1136,7 @@ pub fn spawn(state: Arc<AppState>) {
     if let Err(e) = super::agent::ensure_token(&state.config.paths.data_dir) {
         warn!("host-agent token: {e}");
     }
+    ensure_guests_service(&state.config.paths.data_dir);
     let st = state.clone();
     tokio::spawn(async move {
         if std::env::var("HORCRUX_GUEST_AUTOSTART").as_deref() != Ok("0") {

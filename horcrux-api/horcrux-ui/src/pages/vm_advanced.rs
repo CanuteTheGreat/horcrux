@@ -118,6 +118,9 @@ pub fn AdvancedHardware(hardware: RwSignal<VmHardware>, running: Signal<bool>) -
                 <div class="form-group"><label for="vm-adv-smbios-serial">"Serial"</label>
                     <input id="vm-adv-smbios-serial" type="text" disabled={move || running.get()} prop:value={move || sm(|s| s.serial.clone())}
                         on:input=move |ev| set_sm(|s, v| s.serial = v, event_target_value(&ev))/></div>
+                <div class="form-group"><label for="vm-adv-smbios-uuid">"System UUID"</label>
+                    <input id="vm-adv-smbios-uuid" type="text" placeholder="keep a moved guest's identity" disabled={move || running.get()} prop:value={move || sm(|s| s.uuid.clone())}
+                        on:input=move |ev| set_sm(|s, v| s.uuid = v, event_target_value(&ev))/></div>
             </div>
             <div class="form-row">
                 <label><input id="vm-adv-genid" type="checkbox" disabled={move || running.get()}

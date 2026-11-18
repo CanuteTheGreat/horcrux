@@ -58,6 +58,7 @@ pub fn VmCreate() -> impl IntoView {
                                 h.nets.push(horcrux_common::VmNic {
                                     model: horcrux_common::NicModel::Virtio,
                                     bridge,
+                                    attach: Default::default(),
                                     mac: None,
                                     vlan: None,
                                 })

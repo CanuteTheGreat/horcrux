@@ -291,4 +291,63 @@ check(vm["memory"] == 192 and vm["hardware"]["nets"] == [], "cold edit of memory
 status, body = call("DELETE", f"/network/bridges/{BR}", ok=None)
 check(status == 204, "bridge deletable once no VM NIC uses it")
 call("DELETE", f"/vms/{VM}")
+
+# --- macvtap: a NIC directly on a host interface, no bridge -------------------
+# (a desktop host whose wired uplink carries its own address can't be turned
+# into a bridge without cutting itself off; macvtap puts the guest on that LAN
+# with its own MAC instead). The uplink here is a dummy interface: frames the
+# guest sends leave through it, where tcpdump sees them.
+MVVM = "nic-e2e-macvtap"
+sh("ip link add hxup0 type dummy && ip link set hxup0 up")
+_, opts = call("GET", "/vms/host-options")
+status, body = call("POST", "/vms", {
+    "id": MVVM, "name": MVVM, "hypervisor": "qemu", "architecture": "x86_64",
+    "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
+    "display": {"protocol": "none", "video": "std", "sound": "none"},
+    "hardware": {"nets": [{"model": "virtio", "bridge": "hxup0", "attach": "macvtap", "vlan": 5}],
+                 "boot": ["net"]},
+}, ok=None)
+check(status == 400, f"macvtap + VLAN tag refused ({status})")
+status, body = call("POST", "/vms", {
+    "id": MVVM, "name": MVVM, "hypervisor": "qemu", "architecture": "x86_64",
+    "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
+    "display": {"protocol": "none", "video": "std", "sound": "none"},
+    "hardware": {"nets": [{"model": "virtio", "bridge": "hxnope0", "attach": "macvtap"}],
+                 "boot": ["net"]},
+}, ok=None)
+check(status == 400 and "hxnope0" in json.dumps(body), "macvtap on a missing interface refused")
+_, vm = call("POST", "/vms", {
+    "id": MVVM, "name": MVVM, "hypervisor": "qemu", "architecture": "x86_64",
+    "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
+    "display": {"protocol": "none", "video": "std", "sound": "none"},
+    "hardware": {"nets": [{"model": "virtio", "bridge": "hxup0", "attach": "macvtap"}],
+                 "boot": ["net"]},
+})
+mvmac = vm["hardware"]["nets"][0]["mac"]
+check(vm["hardware"]["nets"][0].get("attach") == "macvtap", "macvtap NIC stored")
+cap = subprocess.Popen(
+    ["timeout", "150", "tcpdump", "-i", "hxup0", "-e", "-nn", "-c", "1", "-l",
+     f"ether src {mvmac}"],
+    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+time.sleep(1)
+call("POST", f"/vms/{MVVM}/start")
+links = json.loads(sh("ip -d -j link show"))
+mv = [l for l in links if l.get("linkinfo", {}).get("info_kind") == "macvtap"]
+check(len(mv) == 1 and mv[0].get("address", "").lower() == mvmac.lower()
+      and mv[0].get("link") == "hxup0",
+      f"a macvtap device on hxup0 carries the VM's MAC {mvmac}")
+out, _ = cap.communicate()
+check(mvmac in out.lower(), "guest PXE ROM sent a frame from the VM's MAC out of the host interface")
+_, vm = call("GET", f"/vms/{MVVM}")
+qsock = os.path.splitext(vm["disks"][0]["path"])[0] + ".qmp.sock"
+net = qmp(qsock, "human-monitor-command", {"command-line": "info network"})["return"]
+check(mvmac in net and "user" not in net, "QEMU runs the NIC on the macvtap descriptor")
+check(sh("ip -br link show dev hxup0").split()[1] in ("UP", "UNKNOWN"),
+      "the host interface itself is untouched (still up, no bridge)")
+call("POST", f"/vms/{MVVM}/stop")
+links = json.loads(sh("ip -d -j link show"))
+check(not [l for l in links if l.get("linkinfo", {}).get("info_kind") == "macvtap"],
+      "macvtap device removed when the VM stops")
+call("DELETE", f"/vms/{MVVM}")
+sh("ip link del hxup0")
 print("VM networking e2e: all checks passed")

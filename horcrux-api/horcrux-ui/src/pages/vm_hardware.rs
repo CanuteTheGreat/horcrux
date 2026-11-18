@@ -4,8 +4,8 @@
 //! actions Shutdown / Reboot / Reset).
 use crate::api::{self, VmConfigUpdate, VmHostOptions};
 use horcrux_common::{
-    BootDevice, Firmware, MachineType, NicModel, VmConfig, VmDisk, VmHardware, VmHypervisor, VmNic,
-    VmStatus,
+    BootDevice, Firmware, MachineType, NicAttach, NicModel, VmConfig, VmDisk, VmHardware,
+    VmHypervisor, VmNic, VmStatus,
 };
 use leptos::*;
 use leptos_router::*;
@@ -108,15 +108,21 @@ pub fn HardwareFields(
     reload_options: Option<Callback<()>>,
 ) -> impl IntoView {
     let bridges = move || options.get().map(|o| o.bridges).unwrap_or_default();
+    let uplinks = move || options.get().map(|o| o.macvtap_uplinks).unwrap_or_default();
     let add_nic = move |_| {
-        let bridge = bridges()
-            .first()
-            .map(|b| b.name.clone())
-            .unwrap_or_else(|| "vmbr0".to_string());
+        // a bridge if the host has one, else macvtap on a wired uplink
+        let (bridge, attach) = match bridges().first() {
+            Some(b) => (b.name.clone(), NicAttach::Bridge),
+            None => match uplinks().first() {
+                Some(u) => (u.clone(), NicAttach::Macvtap),
+                None => ("vmbr0".to_string(), NicAttach::Bridge),
+            },
+        };
         hardware.update(|h| {
             h.nets.push(VmNic {
                 model: NicModel::Virtio,
                 bridge,
+                attach,
                 mac: None,
                 vlan: None,
             })
@@ -132,13 +138,35 @@ pub fn HardwareFields(
                     view! { <p class="form-help" id="vm-no-nic">"No network card: the VM has no network."</p> }.into_view()
                 } else {
                     nets.into_iter().enumerate().map(|(i, nic)| {
-                        let mut names: Vec<(String, bool)> =
-                            bridges().into_iter().map(|b| (b.name, b.vlan_aware)).collect();
-                        if !names.iter().any(|(n, _)| *n == nic.bridge) {
-                            names.push((nic.bridge.clone(), false));
+                        // (select value, label, VLAN-aware): bridges, then
+                        // wired host interfaces as macvtap ("macvtap:<if>")
+                        let mut names: Vec<(String, String, bool)> = bridges()
+                            .into_iter()
+                            .map(|b| {
+                                let label = if b.vlan_aware { format!("{} (VLAN-aware)", b.name) } else { b.name.clone() };
+                                (b.name, label, b.vlan_aware)
+                            })
+                            .collect();
+                        for u in uplinks() {
+                            names.push((format!("macvtap:{u}"), format!("{u} - direct on the LAN (macvtap, no bridge)"), false));
                         }
-                        let current_bridge = nic.bridge.clone();
-                        let vlan_aware = names.iter().any(|(n, v)| *n == nic.bridge && *v);
+                        let current_value = if nic.attach == NicAttach::Macvtap {
+                            format!("macvtap:{}", nic.bridge)
+                        } else {
+                            nic.bridge.clone()
+                        };
+                        if !names.iter().any(|(v, _, _)| *v == current_value) {
+                            names.push((current_value.clone(), current_value.clone(), false));
+                        }
+                        let vlan_aware = nic.attach == NicAttach::Bridge
+                            && names.iter().any(|(v, _, a)| *v == current_value && *a);
+                        let vlan_hint = if nic.attach == NicAttach::Macvtap {
+                            "no VLAN tag on macvtap"
+                        } else if vlan_aware {
+                            "VLAN tag (none)"
+                        } else {
+                            "no VLANs on this bridge"
+                        };
                         let model = model_value(nic.model);
                         let vlan = nic.vlan.map(|v| v.to_string()).unwrap_or_default();
                         let mac = nic.mac.clone().unwrap_or_else(|| "generated on save".to_string());
@@ -155,18 +183,30 @@ pub fn HardwareFields(
                                     }).collect_view()}
                                 </select>
                                 <select class="vm-nic-bridge" disabled={move || running.get()}
+                                    title="Bridge the card plugs into, or a wired host interface it sits on directly (macvtap: the guest gets its own address on that LAN; the host itself can't reach the guest)"
                                     on:change=move |ev| {
-                                        let b = event_target_value(&ev);
-                                        hardware.update(|h| if let Some(n) = h.nets.get_mut(i) { n.bridge = b });
+                                        let v = event_target_value(&ev);
+                                        hardware.update(|h| if let Some(n) = h.nets.get_mut(i) {
+                                            match v.strip_prefix("macvtap:") {
+                                                Some(u) => {
+                                                    n.bridge = u.to_string();
+                                                    n.attach = NicAttach::Macvtap;
+                                                    n.vlan = None;
+                                                }
+                                                None => {
+                                                    n.bridge = v.clone();
+                                                    n.attach = NicAttach::Bridge;
+                                                }
+                                            }
+                                        });
                                     }>
-                                    {names.into_iter().map(|(n, aware)| {
-                                        let sel = n == current_bridge;
-                                        let label = if aware { format!("{n} (VLAN-aware)") } else { n.clone() };
-                                        view! { <option value=n.clone() selected=sel>{label}</option> }
+                                    {names.into_iter().map(|(v, label, _)| {
+                                        let sel = v == current_value;
+                                        view! { <option value=v selected=sel>{label}</option> }
                                     }).collect_view()}
                                 </select>
                                 <input class="vm-nic-vlan" type="number" min="1" max="4094"
-                                    placeholder=if vlan_aware { "VLAN tag (none)" } else { "no VLANs on this bridge" }
+                                    placeholder=vlan_hint
                                     disabled={move || running.get() || !vlan_aware}
                                     prop:value=vlan
                                     on:change=move |ev| {
@@ -188,9 +228,9 @@ pub fn HardwareFields(
                 on:click=add_nic>
                 "Add network card"
             </button>
-            {move || (options.get().is_some() && bridges().is_empty()).then(|| view! {
+            {move || (options.get().is_some() && bridges().is_empty() && uplinks().is_empty()).then(|| view! {
                 <p class="error" id="vm-no-bridges">
-                    "This host has no Linux bridge to attach a network card to. "
+                    "This host has no Linux bridge and no wired interface to attach a network card to. "
                     <A href="/network/bridges">"Create one in Host Bridges"</A>
                     ", then come back."
                 </p>

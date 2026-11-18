@@ -6598,6 +6598,9 @@ pub struct VmHostOptions {
     pub host: HostCapabilities,
     #[serde(default)]
     pub default_networks: DefaultNetworks,
+    /// Wired host interfaces a NIC can use directly as macvtap (no bridge).
+    #[serde(default)]
+    pub macvtap_uplinks: Vec<String>,
 }
 
 /// A storage pool offered for VM disks (`VmHostOptions::storage_pools`).

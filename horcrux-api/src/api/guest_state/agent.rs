@@ -221,9 +221,31 @@ mod tests {
     fn openrc_service_needs_the_api_and_storage() {
         let rc = include_str!("../../../../deploy/openrc/horcrux-guests");
         assert!(rc.starts_with("#!/sbin/openrc-run"));
-        assert!(rc.contains("need horcrux localmount"));
+        assert!(rc.contains("need localmount"));
+        // The manager's script is `horcrux` (source package) or `horcrux-api`
+        // (horcrux-bin / images): ordered after both, and never a hard `need`
+        // on one of them (a need on a missing script stops the service from
+        // starting at all, so guests were killed at host power-off).
+        for l in ["use ", "after "] {
+            let line = rc
+                .lines()
+                .find(|x| x.trim_start().starts_with(l))
+                .unwrap_or_default();
+            assert!(
+                line.contains(" horcrux ") && line.contains(" horcrux-api "),
+                "{line}"
+            );
+        }
+        assert!(!rc
+            .lines()
+            .any(|l| l.trim_start().starts_with("need ") && l.contains("horcrux")));
         assert!(rc.contains("horcrux-api guests stop"));
         assert!(rc.contains("horcrux-api guests boot"));
+        // the copy the images ship is the same script
+        assert_eq!(
+            rc,
+            include_str!("../../../../gentoo/app-emulation/horcrux/files/horcrux-guests.initd")
+        );
     }
 
     /// Incus and LXD are ordered before the guests unit under BOTH init

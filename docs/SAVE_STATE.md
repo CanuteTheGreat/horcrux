@@ -135,8 +135,14 @@ order it so shutdown runs it **before** the things it needs go down:
   (`horcrux-api guests stop`) runs while the API, the runtimes, storage and the
   network are still up. `TimeoutStopSec=1800`, `KillMode=none`.
 * OpenRC (Gentoo): `rc-update add horcrux-guests default`
-  (`deploy/openrc/horcrux-guests`: `need horcrux localmount`, `after docker incus
-  lxd lxc netmount`; OpenRC stops in the reverse order).
+  (`deploy/openrc/horcrux-guests`: `need localmount`, `use`+`after horcrux
+  horcrux-api docker incus lxd lxc netmount`; OpenRC stops in the reverse order).
+* The manager enables (and starts) `horcrux-guests` by itself once per node
+  wherever it is itself a boot service, and the horcrux-bin package does the
+  same on install, so a VM is never just killed at host power-off (marker
+  `<data dir>/saved-state/.guests-service-enabled`; an administrator who
+  disables the service later is not overridden; `HORCRUX_GUESTS_NO_SERVICE=1`
+  opts out).
 
 If the API runs sandboxed with `ProtectSystem=strict` (the shipped
 `horcrux.service`), a custom *Save states to* directory must be added to its

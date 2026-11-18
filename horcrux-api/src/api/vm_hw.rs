@@ -173,6 +173,9 @@ pub struct HostOptions {
     pub host: HostCapabilities,
     #[serde(default)]
     pub default_networks: DefaultNetworks,
+    /// Wired host interfaces a NIC can use directly as macvtap (no bridge).
+    #[serde(default)]
+    pub macvtap_uplinks: Vec<String>,
 }
 
 /// Global VM defaults (Settings): `GET|PUT /api/vms/defaults`.
@@ -442,6 +445,35 @@ pub fn vm_bridges_of(bridges: Vec<HostBridge>) -> Vec<HostBridge> {
         .collect()
 }
 
+/// Host interfaces a VM NIC can sit on directly as macvtap (wired, not a
+/// bridge or a bridge port), e.g. the uplink of a desktop or laptop host
+/// whose own network must not be moved onto a bridge.
+pub fn macvtap_uplinks() -> Vec<String> {
+    let host = crate::vm::qemu::HostNet::system();
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir("/sys/class/net") {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            // physical (or VLAN/bond on physical) Ethernet only: virtual
+            // devices such as veth/docker/wg have no `device` link
+            let p = e.path();
+            let physical = p.join("device").exists()
+                || p.join("bonding").is_dir()
+                || std::fs::read_to_string("/proc/net/vlan/config")
+                    .map(|c| {
+                        c.lines()
+                            .any(|l| l.split('|').next().map(str::trim) == Some(&name))
+                    })
+                    .unwrap_or(false);
+            if physical && host.macvtap_problem(&name).is_none() {
+                out.push(name);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Linux bridges on this host.
 pub fn host_bridges() -> Vec<HostBridge> {
     let mut out = Vec::new();
@@ -614,6 +646,15 @@ pub async fn check_host_hardware(state: &AppState, hw: &VmHardware) -> Result<()
         crate::vm::mdev::check_device(std::path::Path::new("/sys"), d)?;
     }
     for (i, nic) in hw.nets.iter().enumerate() {
+        if nic.attach == horcrux_common::NicAttach::Macvtap {
+            if let Some(p) = crate::vm::qemu::HostNet::system().macvtap_problem(&nic.bridge) {
+                return Err(ApiError::BadRequest(format!(
+                    "net{i}: {p} (interfaces that can carry one: {})",
+                    macvtap_uplinks().join(", ")
+                )));
+            }
+            continue;
+        }
         match crate::vm::qemu::HostNet::system().bridge_vlan_aware(&nic.bridge) {
             None => {
                 return Err(ApiError::BadRequest(format!(
@@ -651,6 +692,7 @@ pub async fn check_host_hardware(state: &AppState, hw: &VmHardware) -> Result<()
 async fn host_options(State(state): State<Arc<AppState>>) -> Json<HostOptions> {
     Json(HostOptions {
         bridges: vm_bridges(),
+        macvtap_uplinks: macvtap_uplinks(),
         isos: scan_isos(&state).await,
         iso_dir: image_dir(&state.config.paths.data_dir)
             .to_string_lossy()

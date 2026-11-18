@@ -564,6 +564,7 @@ mod tests {
             protocol: horcrux_common::DisplayProtocol::Spice,
             video: horcrux_common::VideoDevice::Qxl,
             sound: horcrux_common::SoundDevice::IntelHda,
+            relative_mouse: false,
         };
         db.create_vm(&vm).await.unwrap();
         let got = db.get_vm("disk-vm").await.unwrap();
@@ -587,6 +588,7 @@ mod tests {
             nets: vec![VmNic {
                 model: NicModel::E1000,
                 bridge: "vmbr0".into(),
+                attach: Default::default(),
                 mac: Some("02:00:00:aa:bb:cc".into()),
                 vlan: Some(20),
             }],

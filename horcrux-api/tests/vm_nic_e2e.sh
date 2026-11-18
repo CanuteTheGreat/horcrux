@@ -28,7 +28,19 @@ NAME="horcrux-vmnic-e2e-${HX_RUN_TAG:-$$}"
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-docker run -d --name "$NAME" --cap-add NET_ADMIN --device /dev/net/tun --memory 2g "$IMAGE" sleep 1800 >/dev/null
+# macvtap NICs: QEMU gets /dev/tap<ifindex>, a character device whose major is
+# allocated when the macvtap module loads. Load it (making one macvtap in a
+# throwaway network namespace does) and let the sibling use exactly that major.
+docker run -d --name "$NAME-mvt" --cap-add NET_ADMIN "$IMAGE" sleep 300 >/dev/null
+hx_sibling_apt_prep "$NAME-mvt"
+docker exec "$NAME-mvt" sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iproute2 >/dev/null \
+  && ip link add hxd0 type dummy && ip link add link hxd0 name hxm0 type macvtap' || true
+docker rm -f "$NAME-mvt" >/dev/null 2>&1 || true
+MVT_MAJOR=$(awk '$2 == "macvtap" {print $1}' /proc/devices)
+[ -n "$MVT_MAJOR" ] || { echo "FAIL: no macvtap character device major (macvtap module missing on this runner)"; exit 1; }
+
+docker run -d --name "$NAME" --cap-add NET_ADMIN --device /dev/net/tun \
+  --device-cgroup-rule "c $MVT_MAJOR:* rwm" --memory 2g "$IMAGE" sleep 1800 >/dev/null
 hx_sibling_apt_prep "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/vm_nic_e2e.py" "$NAME":/tmp/vm_nic_e2e.py

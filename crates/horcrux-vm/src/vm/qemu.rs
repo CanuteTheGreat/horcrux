@@ -291,6 +291,20 @@ pub fn qemu_command(
     }
 
     args.extend(device_args(&vm.hardware, &vm.disk_path));
+    // Absolute pointer for the graphical console (see VmDisplay::relative_mouse).
+    if x86
+        && vm.display.protocol != horcrux_common::DisplayProtocol::None
+        && vm.display.video != horcrux_common::VideoDevice::None
+        && !vm.display.relative_mouse
+    {
+        if !vm.hardware.usb_controller && vm.hardware.usb.is_empty() {
+            args.extend(["-device".into(), "qemu-xhci,id=hxusb".into()]);
+        }
+        args.extend([
+            "-device".into(),
+            "usb-tablet,bus=hxusb.0,id=hxtablet".into(),
+        ]);
+    }
     args.extend(super::advanced::device_args(vm));
 
     // Serial console, QMP, display protocol, video and sound.
@@ -333,6 +347,44 @@ pub const CDROM_DEVICE_ID: &str = "cdrom0";
 /// monitoring can find it.
 pub fn tap_name(vm_id: &str, index: usize) -> String {
     horcrux_common::vm_tap_name(vm_id, index)
+}
+
+/// File descriptor number QEMU gets the macvtap device of NIC `index` on
+/// (`-netdev tap,fd=N`); `start_vm` moves the opened device there in the
+/// child before exec (see `pass_fds`).
+pub fn macvtap_fd(index: usize) -> i32 {
+    MACVTAP_FD_BASE + index as i32
+}
+
+const MACVTAP_FD_BASE: i32 = 200;
+
+/// Make each `(file, target)` pair's file descriptor appear as `target` in
+/// the child (inheritable, i.e. without close-on-exec). Every source is
+/// first copied above all targets, so a source that happens to sit on
+/// another pair's target number is never overwritten.
+fn pass_fds(cmd: &mut Command, fds: &[(std::fs::File, i32)]) {
+    use std::os::fd::AsRawFd;
+    if fds.is_empty() {
+        return;
+    }
+    let pairs: Vec<(i32, i32)> = fds.iter().map(|(f, t)| (f.as_raw_fd(), *t)).collect();
+    let above = MACVTAP_FD_BASE + horcrux_common::MAX_VM_NICS as i32;
+    // SAFETY: only async-signal-safe calls (fcntl, dup2, close) on plain
+    // integers and a stack array run between fork and exec (no allocation).
+    unsafe {
+        cmd.pre_exec(move || {
+            let mut tmp = [-1i32; horcrux_common::MAX_VM_NICS];
+            for (k, (raw, _)) in pairs.iter().enumerate().take(tmp.len()) {
+                tmp[k] = nix::fcntl::fcntl(*raw, nix::fcntl::FcntlArg::F_DUPFD(above))
+                    .map_err(std::io::Error::from)?;
+            }
+            for (k, (_, target)) in pairs.iter().enumerate().take(tmp.len()) {
+                nix::unistd::dup2(tmp[k], *target).map_err(std::io::Error::from)?;
+                let _ = nix::unistd::close(tmp[k]);
+            }
+            Ok(())
+        });
+    }
 }
 
 /// Ballooning, guest agent channel and USB (controller + passed-through
@@ -389,10 +441,17 @@ fn network_args(vm: &QemuVm, boot: &BootIndex) -> Vec<String> {
     let mut args = Vec::new();
     for (i, nic) in vm.hardware.nets.iter().enumerate() {
         args.push("-netdev".into());
-        args.push(format!(
-            "tap,id=net{i},ifname={},script=no,downscript=no",
-            tap_name(&vm.id, i)
-        ));
+        if nic.attach == horcrux_common::NicAttach::Macvtap {
+            // A macvtap device can't be opened by name: `start_vm` opens its
+            // character device (/dev/tap<ifindex>) and hands it to QEMU as
+            // this descriptor.
+            args.push(format!("tap,id=net{i},fd={}", macvtap_fd(i)));
+        } else {
+            args.push(format!(
+                "tap,id=net{i},ifname={},script=no,downscript=no",
+                tap_name(&vm.id, i)
+            ));
+        }
         let mut dev = format!("{},netdev=net{i},id=nic{i}", nic.model.qemu_device());
         if let Some(mac) = &nic.mac {
             dev.push_str(&format!(",mac={mac}"));
@@ -637,6 +696,8 @@ async fn run_ip(program: &str, args: &[&str]) -> Result<()> {
 #[derive(Debug, Clone)]
 pub struct HostNet {
     sys_class_net: PathBuf,
+    /// Where macvtap character devices (`tap<ifindex>`) appear.
+    dev_dir: PathBuf,
     /// argv prefix that runs `ip` / `bridge`.
     ip: Vec<String>,
     bridge: Vec<String>,
@@ -647,6 +708,7 @@ impl HostNet {
     pub fn system() -> Self {
         Self {
             sys_class_net: PathBuf::from("/sys/class/net"),
+            dev_dir: PathBuf::from("/dev"),
             ip: vec!["ip".into()],
             bridge: vec!["bridge".into()],
         }
@@ -693,6 +755,9 @@ impl HostNet {
     }
 
     async fn setup_tap(&self, vm: &QemuVm, i: usize, nic: &horcrux_common::VmNic) -> Result<()> {
+        if nic.attach == horcrux_common::NicAttach::Macvtap {
+            return self.setup_macvtap(vm, i, nic).await;
+        }
         let vlan_aware = self.bridge_vlan_aware(&nic.bridge).ok_or_else(|| {
             horcrux_common::Error::Validation(format!(
                 "net{i}: bridge {} does not exist on this host",
@@ -724,6 +789,146 @@ impl HostNet {
         Self::run(&self.ip, &["link", "set", &tap, "up"]).await?;
         debug!("VM {}: net{i} = {tap} on {}", vm.id, nic.bridge);
         Ok(())
+    }
+
+    /// Why `name` can't carry a macvtap NIC, or None when it can: it must
+    /// exist and be an Ethernet-like device of its own - not a bridge (use
+    /// bridge mode there), not a bridge port (the bridge owns its frames),
+    /// not Wi-Fi (access points drop frames from a second MAC) and not
+    /// another VM's tap/macvtap.
+    pub fn macvtap_problem(&self, name: &str) -> Option<String> {
+        if !horcrux_common::valid_ifname(name) {
+            return Some(format!("{name:?} is not an interface name"));
+        }
+        let dir = self.sys_class_net.join(name);
+        if !dir.exists() {
+            return Some(format!("host interface {name} does not exist on this host"));
+        }
+        if dir.join("bridge").is_dir() {
+            return Some(format!(
+                "{name} is a bridge: attach the card to the bridge instead of macvtap"
+            ));
+        }
+        if dir.join("brport").exists() || dir.join("master").exists() {
+            return Some(format!(
+                "{name} is a port of a bridge or bond: use that device instead"
+            ));
+        }
+        if dir.join("wireless").exists() || dir.join("phy80211").exists() {
+            return Some(format!(
+                "{name} is a Wi-Fi interface: Wi-Fi access points drop frames from a second MAC, so macvtap only works on wired interfaces"
+            ));
+        }
+        if dir.join("tun_flags").exists() || dir.join("macvtap").is_dir() || name == "lo" {
+            return Some(format!("{name} can't carry a macvtap card"));
+        }
+        None
+    }
+
+    /// NIC `i` as a macvtap device (bridge mode) on the host interface
+    /// `nic.bridge`, carrying the NIC's own MAC. The host's interface and
+    /// its addresses are not touched.
+    async fn setup_macvtap(
+        &self,
+        vm: &QemuVm,
+        i: usize,
+        nic: &horcrux_common::VmNic,
+    ) -> Result<()> {
+        if let Some(p) = self.macvtap_problem(&nic.bridge) {
+            return Err(horcrux_common::Error::Validation(format!("net{i}: {p}")));
+        }
+        if nic.vlan.is_some() {
+            return Err(horcrux_common::Error::Validation(format!(
+                "net{i}: a macvtap card can't carry a VLAN tag; use the VLAN interface (e.g. {}.20) as its host interface",
+                nic.bridge
+            )));
+        }
+        let mac = nic.mac.as_deref().ok_or_else(|| {
+            horcrux_common::Error::Validation(format!(
+                "net{i}: a macvtap card needs a fixed MAC address (save the VM once to generate one)"
+            ))
+        })?;
+        let tap = tap_name(&vm.id, i);
+        if self.exists(&tap) {
+            let _ = Self::run(&self.ip, &["link", "del", &tap]).await;
+        }
+        Self::run(
+            &self.ip,
+            &[
+                "link",
+                "add",
+                "link",
+                &nic.bridge,
+                "name",
+                &tap,
+                "type",
+                "macvtap",
+                "mode",
+                "bridge",
+            ],
+        )
+        .await?;
+        Self::run(&self.ip, &["link", "set", &tap, "address", mac]).await?;
+        Self::run(&self.ip, &["link", "set", &tap, "up"]).await?;
+        debug!("VM {}: net{i} = macvtap {tap} on {}", vm.id, nic.bridge);
+        Ok(())
+    }
+
+    /// Open the character device of every macvtap NIC of `vm` (made by
+    /// `setup_taps`), paired with the descriptor number QEMU expects it on.
+    /// udev creates `/dev/tap<ifindex>`; when it hasn't (yet), the node is
+    /// made from the device number sysfs reports.
+    pub async fn open_macvtaps(&self, vm: &QemuVm) -> Result<Vec<(std::fs::File, i32)>> {
+        let mut out = Vec::new();
+        for (i, nic) in vm.hardware.nets.iter().enumerate() {
+            if nic.attach != horcrux_common::NicAttach::Macvtap {
+                continue;
+            }
+            let tap = tap_name(&vm.id, i);
+            let sys = self.sys_class_net.join(&tap);
+            let ifindex = std::fs::read_to_string(sys.join("ifindex"))
+                .map(|s| s.trim().to_string())
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!("net{i}: macvtap {tap}: {e}"))
+                })?;
+            let node = self.dev_dir.join(format!("tap{ifindex}"));
+            for _ in 0..30 {
+                if node.exists() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            if !node.exists() {
+                let devno = std::fs::read_to_string(sys.join(format!("macvtap/tap{ifindex}/dev")))
+                    .map_err(|e| {
+                        horcrux_common::Error::System(format!(
+                            "net{i}: macvtap {tap} has no character device: {e}"
+                        ))
+                    })?;
+                let (maj, min) = devno.trim().split_once(':').ok_or_else(|| {
+                    horcrux_common::Error::System(format!("net{i}: bad device number {devno:?}"))
+                })?;
+                let (maj, min): (u64, u64) = (maj.parse().unwrap_or(0), min.parse().unwrap_or(0));
+                nix::sys::stat::mknod(
+                    &node,
+                    nix::sys::stat::SFlag::S_IFCHR,
+                    nix::sys::stat::Mode::from_bits_truncate(0o600),
+                    nix::sys::stat::makedev(maj, min),
+                )
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!("net{i}: mknod {}: {e}", node.display()))
+                })?;
+            }
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&node)
+                .map_err(|e| {
+                    horcrux_common::Error::System(format!("net{i}: open {}: {e}", node.display()))
+                })?;
+            out.push((f, macvtap_fd(i)));
+        }
+        Ok(out)
     }
 
     /// Remove a VM's tap devices (after stop, failed start or delete). Taps
@@ -1133,8 +1338,19 @@ impl QemuManager {
         if incoming {
             args = with_incoming(args);
         }
+        // macvtap NICs: QEMU gets their character devices as descriptors.
+        let macvtaps = match HostNet::system().open_macvtaps(vm).await {
+            Ok(f) => f,
+            Err(e) => {
+                super::firmware::stop_swtpm(&vm.disk_path).await;
+                super::advanced::stop_virtiofsd(vm).await;
+                HostNet::system().remove_taps(&vm.id).await;
+                return Err(e);
+            }
+        };
         let mut cmd = Command::new(binary);
         cmd.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
+        pass_fds(&mut cmd, &macvtaps);
 
         debug!("QEMU command: {:?}", cmd);
 
@@ -1142,6 +1358,8 @@ impl QemuManager {
             .output()
             .await
             .map_err(|e| horcrux_common::Error::System(format!("Failed to start VM: {}", e)))?;
+        // QEMU has daemonized with its own copies; the API keeps none open.
+        drop(macvtaps);
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1501,6 +1719,7 @@ mod tests {
             protocol: DisplayProtocol::Spice,
             video: VideoDevice::Qxl,
             sound: SoundDevice::IntelHda,
+            relative_mouse: false,
         };
         let v = vm(VmArchitecture::X86_64, d);
         let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &d).unwrap();
@@ -1560,6 +1779,7 @@ mod tests {
             .map(|model| VmNic {
                 model,
                 bridge: "br1".into(),
+                attach: Default::default(),
                 mac: None,
                 vlan: None,
             })
@@ -1583,12 +1803,14 @@ mod tests {
             VmNic {
                 model: NicModel::Virtio,
                 bridge: "vmbr0".into(),
+                attach: Default::default(),
                 mac: Some("02:00:00:00:00:01".into()),
                 vlan: Some(20),
             },
             VmNic {
                 model: NicModel::E1000,
                 bridge: "br1".into(),
+                attach: Default::default(),
                 mac: Some("02:00:00:00:00:02".into()),
                 vlan: None,
             },
@@ -2085,11 +2307,13 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let r = root.path();
             std::fs::create_dir(r.join("net")).unwrap();
+            std::fs::create_dir(r.join("dev")).unwrap();
             let script = r#"d=$(dirname "$0")
 echo "$(basename "$0") $*" >> "$d/calls"
 if [ -f "$d/fail" ] && [ "$*" = "$(cat "$d/fail")" ]; then echo "RTNETLINK answers: busy" >&2; exit 2; fi
 case "$*" in
   "tuntap add dev "*" mode tap") mkdir "$d/net/$4" ;;
+  "link add link "*" type macvtap mode bridge") mkdir "$d/net/$6" ;;
   "link del "*) rmdir "$d/net/$3" ;;
 esac
 "#;
@@ -2099,6 +2323,7 @@ esac
             let sh = |tool: &str| vec!["sh".to_string(), r.join(tool).to_string_lossy().into()];
             let host = HostNet {
                 sys_class_net: r.join("net"),
+                dev_dir: r.join("dev"),
                 ip: sh("ip"),
                 bridge: sh("bridge"),
             };
@@ -2141,6 +2366,7 @@ esac
         horcrux_common::VmNic {
             model: Default::default(),
             bridge: bridge.into(),
+            attach: Default::default(),
             mac: None,
             vlan,
         }
@@ -2215,6 +2441,160 @@ esac
             ]
         );
         assert!(f.has_dev(&t0) && f.has_dev(&t1));
+    }
+
+    fn macvtap_nic(dev: &str, mac: Option<&str>) -> horcrux_common::VmNic {
+        horcrux_common::VmNic {
+            attach: horcrux_common::NicAttach::Macvtap,
+            mac: mac.map(Into::into),
+            ..nic(dev, None)
+        }
+    }
+
+    #[test]
+    fn a_graphical_console_gets_a_usb_tablet_unless_relative_mouse() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = temp_vm(dir.path(), "tablet");
+        v.display.protocol = horcrux_common::DisplayProtocol::Vnc;
+        v.display.video = horcrux_common::VideoDevice::Std;
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(
+            a.contains("-device qemu-xhci,id=hxusb -device usb-tablet,bus=hxusb.0,id=hxtablet"),
+            "{a}"
+        );
+        // an existing USB controller is reused, never a second one
+        v.hardware.usb_controller = true;
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert_eq!(a.matches("qemu-xhci").count(), 1, "{a}");
+        assert!(a.contains("usb-tablet,bus=hxusb.0"), "{a}");
+        v.display.relative_mouse = true;
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(!a.contains("usb-tablet"), "{a}");
+    }
+
+    #[test]
+    fn macvtap_problem_accepts_only_a_plain_wired_interface() {
+        let f = FakeNet::new();
+        f.add_dev("eth0");
+        f.add_bridge("vmbr0", None);
+        f.add_dev("eth1");
+        std::fs::write(f.net().join("eth1/brport"), "").unwrap();
+        f.add_dev("wlan0");
+        std::fs::create_dir(f.net().join("wlan0/wireless")).unwrap();
+        f.add_dev("tap1");
+        std::fs::write(f.net().join("tap1/tun_flags"), "0x1002").unwrap();
+        let h = &f.host;
+        assert_eq!(h.macvtap_problem("eth0"), None);
+        for (dev, why) in [
+            ("vmbr0", "is a bridge"),
+            ("eth1", "port of a bridge"),
+            ("wlan0", "Wi-Fi"),
+            ("tap1", "can't carry"),
+            ("eth9", "does not exist"),
+            ("../x", "not an interface name"),
+        ] {
+            let p = h.macvtap_problem(dev).unwrap_or_default();
+            assert!(p.contains(why), "{dev}: {p}");
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_taps_puts_a_macvtap_nic_on_the_host_interface_with_its_mac() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = FakeNet::new();
+        f.add_dev("eth0");
+        f.add_bridge("vmbr0", None);
+        let mut v = temp_vm(dir.path(), "mvt");
+        v.hardware.nets = vec![
+            nic("vmbr0", None),
+            macvtap_nic("eth0", Some("02:00:00:5e:10:01")),
+        ];
+        let (t0, t1) = (tap_name(&v.id, 0), tap_name(&v.id, 1));
+        f.host.setup_taps(&v).await.expect("set up");
+        assert_eq!(
+            f.calls(),
+            [
+                format!("ip tuntap add dev {t0} mode tap"),
+                format!("ip link set {t0} master vmbr0"),
+                format!("ip link set {t0} up"),
+                format!("ip link add link eth0 name {t1} type macvtap mode bridge"),
+                format!("ip link set {t1} address 02:00:00:5e:10:01"),
+                format!("ip link set {t1} up"),
+            ]
+        );
+        // QEMU opens the bridge tap by name and gets the macvtap as an fd.
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(
+            a.contains(&format!(
+                "-netdev tap,id=net0,ifname={t0},script=no,downscript=no"
+            )),
+            "{a}"
+        );
+        assert!(
+            a.contains(&format!("-netdev tap,id=net1,fd={} ", macvtap_fd(1))),
+            "{a}"
+        );
+        assert!(
+            a.contains("netdev=net1,id=nic1,mac=02:00:00:5e:10:01"),
+            "{a}"
+        );
+
+        // its character device (made by udev in real life) is opened for QEMU
+        std::fs::write(f.net().join(&t1).join("ifindex"), "42\n").unwrap();
+        std::fs::write(f.root.path().join("dev/tap42"), "").unwrap();
+        let fds = f.host.open_macvtaps(&v).await.expect("opened");
+        assert_eq!(fds.len(), 1);
+        assert_eq!(fds[0].1, macvtap_fd(1));
+    }
+
+    #[tokio::test]
+    async fn setup_taps_refuses_macvtap_without_a_mac_or_on_a_bridge() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = FakeNet::new();
+        f.add_dev("eth0");
+        f.add_bridge("vmbr0", None);
+        let mut v = temp_vm(dir.path(), "mvtbad");
+        v.hardware.nets = vec![macvtap_nic("eth0", None)];
+        let err = f.host.setup_taps(&v).await.unwrap_err();
+        assert!(err.to_string().contains("fixed MAC"), "{err}");
+        v.hardware.nets = vec![macvtap_nic("vmbr0", Some("02:00:00:00:00:09"))];
+        let err = f.host.setup_taps(&v).await.unwrap_err();
+        assert!(err.to_string().contains("is a bridge"), "{err}");
+        assert!(f.calls().is_empty(), "{:?}", f.calls());
+    }
+
+    #[test]
+    fn pass_fds_makes_each_file_appear_on_its_target_descriptor_in_the_child() {
+        // `ls -l /proc/self/fd/<n>` in the child shows where the fd points.
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::write(&a, "").unwrap();
+        std::fs::write(&b, "").unwrap();
+        let fds = vec![
+            (std::fs::File::open(&a).unwrap(), macvtap_fd(0)),
+            (std::fs::File::open(&b).unwrap(), macvtap_fd(1)),
+        ];
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let out = rt.block_on(async {
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c").arg(format!(
+                "readlink /proc/self/fd/{} /proc/self/fd/{}",
+                macvtap_fd(0),
+                macvtap_fd(1)
+            ));
+            pass_fds(&mut cmd, &fds);
+            cmd.output().await.unwrap()
+        });
+        let s = String::from_utf8_lossy(&out.stdout).to_string();
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines.len(), 2, "{s}");
+        assert!(lines[0].ends_with("/a") && lines[1].ends_with("/b"), "{s}");
     }
 
     #[tokio::test]

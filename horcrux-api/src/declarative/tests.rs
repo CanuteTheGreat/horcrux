@@ -220,6 +220,7 @@ fn generated_macs_are_not_drift() {
     vm.hardware.nets = vec![VmNic {
         model: Default::default(),
         bridge: "br0".into(),
+        attach: Default::default(),
         mac: Some("52:54:00:aa:bb:cc".into()),
         vlan: None,
     }];

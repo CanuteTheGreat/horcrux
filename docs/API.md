@@ -437,14 +437,24 @@ Authorization: Bearer <token>
 - Each NIC is a tap device (`tap<hash>i<n>`) plugged into the host bridge; `vlan`
   sets the tap's PVID and needs a VLAN-aware bridge. A missing `mac` is generated
   (locally administered). `model`: `virtio` (default), `e1000`, `rtl8139`.
+- `"attach": "macvtap"` puts the NIC directly on a wired host interface instead
+  of a bridge (`bridge` then names that interface, e.g. `{"bridge": "eth0",
+  "attach": "macvtap"}`): a macvtap device in bridge mode carrying the NIC's
+  MAC, so the guest is on the LAN with its own address while the host's uplink
+  stays as it is (no bridge, nothing moved, no network blip). The host itself
+  can't reach such a guest directly (a macvtap property); other LAN machines
+  and other macvtap guests on the interface can. No `vlan` (use a VLAN
+  interface such as `eth0.20` as the host interface); bridges, bridge ports and
+  Wi-Fi interfaces are refused.
 - `cdrom` must be a file in the ISO library (see ISO Images). It can be changed or
   set to `null` (eject) while the VM runs; everything else needs the VM stopped
   (409 otherwise).
 - `boot`: any order of `disk`, `cdrom`, `net`; default disk then CD-ROM.
 - `PUT /api/vms/:id/config` also takes `name`, `cpus`, `memory` (MB); absent
   fields are kept.
-- `GET /api/vms/host-options`: the host's bridges (`name`, `vlan_aware`), the ISO
-  library and its directory, for VM forms.
+- `GET /api/vms/host-options`: the host's bridges (`name`, `vlan_aware`), the
+  wired interfaces a NIC can use as macvtap (`macvtap_uplinks`), the ISO library
+  and its directory, for VM forms.
 
 ### Shutdown / Reboot / Reset VM
 

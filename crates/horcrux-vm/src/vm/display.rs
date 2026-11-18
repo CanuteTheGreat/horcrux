@@ -381,6 +381,7 @@ mod tests {
             protocol: DisplayProtocol::Spice,
             video: VideoDevice::Qxl,
             sound: SoundDevice::Ich9IntelHda,
+            relative_mouse: false,
         };
         let a = joined(d, DisplayProtocol::Spice);
         assert!(a.contains("-spice port=61002,addr=127.0.0.1"), "{a}");
@@ -411,6 +412,7 @@ mod tests {
             protocol: DisplayProtocol::None,
             video: VideoDevice::None,
             sound: SoundDevice::None,
+            relative_mouse: false,
         };
         let a = joined(d, DisplayProtocol::None);
         assert!(a.contains("-vga none") && !a.contains("-vnc") && !a.contains("-spice"));

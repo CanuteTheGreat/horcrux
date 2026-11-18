@@ -175,13 +175,43 @@ impl NicModel {
     }
 }
 
-/// One VM network card: a tap device on a host Linux bridge.
+/// How a VM network card reaches the network.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NicAttach {
+    /// A tap device plugged into a host Linux bridge (`VmNic::bridge`).
+    #[default]
+    Bridge,
+    /// A macvtap device (bridge mode) directly on a host network interface
+    /// (`VmNic::bridge` names that interface, e.g. the wired uplink). The
+    /// guest gets its own MAC on that LAN without turning the host's uplink
+    /// into a bridge, so the host's own address and connections are never
+    /// touched. As with every macvtap setup, the host itself and the guest
+    /// can't talk to each other directly (other machines and other macvtap
+    /// guests on the same interface can). Wired interfaces only: Wi-Fi
+    /// access points drop frames from a second MAC.
+    Macvtap,
+}
+
+impl NicAttach {
+    pub fn is_bridge(&self) -> bool {
+        *self == NicAttach::Bridge
+    }
+}
+
+/// One VM network card: a tap device on a host Linux bridge, or a macvtap
+/// device directly on a host interface (see `attach`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VmNic {
     #[serde(default)]
     pub model: NicModel,
-    /// Host bridge the NIC's tap device is attached to (e.g. vmbr0, br0).
+    /// Host bridge the NIC's tap device is attached to (e.g. vmbr0, br0);
+    /// with `attach: macvtap` the host interface the macvtap device sits on
+    /// (e.g. eth0).
     pub bridge: String,
+    /// Bridge (default) or macvtap on a host interface.
+    #[serde(default, skip_serializing_if = "NicAttach::is_bridge")]
+    pub attach: NicAttach,
     /// MAC address; generated (locally administered) and stored when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
@@ -341,6 +371,10 @@ pub struct VmSmbios {
     pub serial: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,
+    /// System UUID (keeps a guest's identity when it is moved from another
+    /// hypervisor: licences, management agents, machine-bound keys).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
 }
 
 pub const MAX_VM_SERIAL: usize = 4;
@@ -441,6 +475,9 @@ impl VmAdvanced {
                         ));
                     }
                 }
+            }
+            if sm.uuid.as_deref().is_some_and(|u| !valid_guid(u)) {
+                return Err("SMBIOS UUID must be a UUID (8-4-4-4-12 hex digits)".into());
             }
         }
         if let Some(g) = &self.vmgenid {
@@ -761,6 +798,12 @@ impl VmHardware {
                 if !(1..=4094).contains(&v) {
                     return Err(format!("net{i}: VLAN tag must be 1-4094"));
                 }
+                if n.attach == NicAttach::Macvtap {
+                    return Err(format!(
+                        "net{i}: a VLAN tag needs a VLAN-aware bridge; a macvtap card takes \
+                         the VLAN interface itself (e.g. eth0.20) as its host interface"
+                    ));
+                }
             }
             if let Some(m) = &n.mac {
                 let m = normalize_mac(m).map_err(|e| format!("net{i}: {e}"))?;
@@ -905,6 +948,12 @@ pub struct VmDisplay {
     pub video: VideoDevice,
     #[serde(default)]
     pub sound: SoundDevice,
+    /// x86 VMs with a graphical console get a USB tablet (absolute pointer:
+    /// the mouse in the web console is exactly where the guest draws it).
+    /// `true` leaves only the relative PS/2 mouse, for old guests without
+    /// USB HID support.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relative_mouse: bool,
 }
 
 impl VmDisplay {
@@ -1539,6 +1588,7 @@ mod tests {
         let nic = |bridge: &str| VmNic {
             model: NicModel::Virtio,
             bridge: bridge.into(),
+            attach: Default::default(),
             mac: None,
             vlan: None,
         };

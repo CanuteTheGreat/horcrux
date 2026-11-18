@@ -121,6 +121,11 @@ pkg_postinst() {
 	if [[ -L ${rl}/horcrux-api && ! -e ${rl}/horcrux-ha-fence ]]; then
 		ln -s /etc/init.d/horcrux-ha-fence "${rl}/horcrux-ha-fence" && elog "horcrux-ha-fence enabled in the default runlevel (the manager is)"
 	fi
+	# Guest power: running VMs/containers are saved or shut down cleanly when the host goes down only while horcrux-guests is
+	# started (OpenRC stops only started services); without it QEMU is simply killed at power-off. Enabled wherever the manager is.
+	if [[ -L ${rl}/horcrux-api && ! -e ${rl}/horcrux-guests && -e ${EROOT}/etc/init.d/horcrux-guests ]]; then
+		ln -s /etc/init.d/horcrux-guests "${rl}/horcrux-guests" && elog "horcrux-guests enabled in the default runlevel (the manager is)"
+	fi
 	elog "Horcrux manager installed. It is NOT started by default on a desktop edition (the server profile enables it):"
 	elog "  rc-update add libvirtd default; rc-update add horcrux-api default; rc-service horcrux-api start    # web UI https://<host>:8006"
 	elog "Web UI login: sign in with a SYSTEM user (PAM service /etc/pam.d/horcrux) who is in the horcrux-admin or wheel group; there is no 'admin' account."

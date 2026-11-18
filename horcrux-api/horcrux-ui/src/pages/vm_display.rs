@@ -95,6 +95,17 @@ pub fn DisplaySettingsFields(display: RwSignal<VmDisplay>) -> impl IntoView {
                 })
             }}
         </div>
+        <div class="form-group">
+            <label>
+                <input id="disp-relative-mouse" type="checkbox"
+                    prop:checked=move || display.get().relative_mouse
+                    on:change=move |ev| {
+                        let on = event_target_checked(&ev);
+                        display.update(|d| d.relative_mouse = on);
+                    }/>
+                " Relative mouse only (no USB tablet; for old guests without USB support)"
+            </label>
+        </div>
     }
 }
 

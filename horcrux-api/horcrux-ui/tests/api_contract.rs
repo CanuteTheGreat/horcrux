@@ -415,6 +415,7 @@ async fn ui_types_read_real_api_responses() {
         protocol: horcrux_common::DisplayProtocol::Spice,
         video: horcrux_common::VideoDevice::Qxl,
         sound: horcrux_common::SoundDevice::Ich9IntelHda,
+        relative_mouse: false,
     };
     let r = c
         .put(format!("{}/vms/{vm}/display", api_base()))
@@ -3036,6 +3037,7 @@ async fn vm_hardware_iso_library_and_bridges_read_into_ui_types() {
         hw.nets.push(horcrux_common::VmNic {
             model: horcrux_common::NicModel::E1000,
             bridge: b.name.clone(),
+            attach: Default::default(),
             mac: None,
             vlan: None,
         });

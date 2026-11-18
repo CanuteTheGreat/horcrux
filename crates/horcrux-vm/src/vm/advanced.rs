@@ -144,6 +144,9 @@ pub fn device_args(vm: &QemuVm) -> Vec<String> {
                 fields.push(format!("{k}={}", smbios_value(v)));
             }
         }
+        if let Some(u) = &sm.uuid {
+            fields.push(format!("uuid={u}"));
+        }
         if fields.len() > 1 {
             a.extend(["-smbios".into(), fields.join(",")]);
         }
@@ -608,6 +611,7 @@ mod tests {
             smbios: Some(VmSmbios {
                 manufacturer: Some("Acme, Inc".into()),
                 serial: Some("SN1".into()),
+                uuid: Some("3f2c1a9e-5b7d-4c11-9a0e-7d2b6c4e8f10".into()),
                 ..Default::default()
             }),
             vmgenid: Some("6d1f1b1e-9b53-4b5e-8f0e-0123456789ab".into()),
@@ -634,7 +638,9 @@ mod tests {
         );
         assert!(d.contains("-device ivshmem-plain,memdev=hxshm"), "{d}");
         assert!(
-            d.contains("-smbios type=1,manufacturer=Acme,, Inc,serial=SN1"),
+            d.contains(
+                "-smbios type=1,manufacturer=Acme,, Inc,serial=SN1,uuid=3f2c1a9e-5b7d-4c11-9a0e-7d2b6c4e8f10"
+            ),
             "{d}"
         );
         assert!(

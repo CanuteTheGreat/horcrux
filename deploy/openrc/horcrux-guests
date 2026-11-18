@@ -8,10 +8,13 @@ description="Horcrux guests: save state on host shutdown, resume on boot"
 # named here is still running while this service stops: the API (it does the
 # saving), the container runtimes (CRIU needs them), local/remote storage
 # (the state files are written there) and the network.
+# The manager is `horcrux` (source package) or `horcrux-api` (horcrux-bin,
+# the images): `use` + `after` on both, since a `need` on a name that has no
+# script makes OpenRC refuse to start this service at all.
 depend() {
-	need horcrux localmount
-	use net netmount podman podman-restart docker incus lxd lxc
-	after horcrux podman podman-restart docker incus lxd lxc netmount
+	need localmount
+	use horcrux horcrux-api net netmount podman podman-restart docker incus lxd lxc
+	after horcrux horcrux-api podman podman-restart docker incus lxd lxc netmount
 }
 
 start() {
