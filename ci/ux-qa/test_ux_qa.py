@@ -14,6 +14,7 @@ import check_os_release as osr  # noqa: E402
 import check_public_text as pub  # noqa: E402
 import check_owner_findings as of  # noqa: E402
 import ux_crawl as uc  # noqa: E402
+import check_css_classes as cc  # noqa: E402
 
 GOOD = '''NAME="Horcrux"
 ID=horcrux
@@ -117,6 +118,59 @@ class CrawlRules(unittest.TestCase):
         self.assertEqual(uc.duplicate_titles(same), {})  # /b twice counts once -> X on 2 routes
         same.append(pg("/e", "X"))
         self.assertEqual(list(uc.duplicate_titles(same)), ["X"])
+
+
+class CssClasses(unittest.TestCase):
+    def _tree(self, d, rs, css):
+        os.makedirs(f"{d}/{cc.UI}/src/pages")
+        os.makedirs(f"{d}/{cc.UI}/style")
+        open(f"{d}/{cc.UI}/src/pages/p.rs", "w").write(rs)
+        open(f"{d}/{cc.UI}/style/main.css", "w").write(css)
+
+    def test_undefined_classes_are_found_defined_and_scoped_ones_are_not(self):
+        rs = ('view! { <div class="health-card x-hook"><span class="label">"a"</span>'
+              '<span class={format!("value usage-{}", c)}></span><i class="text-red-600 md:w-1/3"></i></div> }\\n'
+              'let f = |p| if p { "bg-green-50" } else { "bg-red-50" };')
+        css = ".health-card { padding: 1rem; }\\n.label, .value { color: red; }\\n.usage-danger { color: red; }\\n.ha-page .text-red-600 { color: red; }\\n"
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, rs, css)
+            got = {c for _, c, _ in cc.undefined(d)}
+        # x-hook, the ha-page-only utility on a page without ha-page, and the closure colours have no usable rule
+        self.assertEqual(got, {"x-hook", "text-red-600", "md:w-1/3", "bg-green-50", "bg-red-50"})
+
+    def test_ha_page_rules_count_on_pages_that_carry_ha_page(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, 'view! { <div class="ha-page"><b class="font-bold"></b></div> }', ".ha-page .font-bold { font-weight: 700; }\\n")
+            self.assertEqual(cc.undefined(d), [])
+
+    def test_repo_has_no_new_undefined_classes(self):
+        self.assertEqual(os.system(f"{sys.executable} {HERE}/check_css_classes.py >/dev/null"), 0)
+
+
+class UnstyledLayoutRule(unittest.TestCase):
+    def test_unstyled_markup_is_flagged_and_styled_is_not(self):
+        try:
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            browser = pw.firefox.launch()
+        except Exception as e:  # noqa: BLE001  (no browser on this host: the CI crawl itself exercises the rule)
+            self.skipTest(f"no playwright firefox: {e}")
+        try:
+            page = browser.new_page()
+            bad = ("<div><span>Model:</span><span>Intel Xeon</span></div>"
+                   "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></table>"
+                   "<style>td,th{padding:0}</style><form><label>Certificate chain (PEM)</label><textarea></textarea></form>")
+            page.set_content("<style>label,textarea{display:inline}</style>" + bad)
+            got = " | ".join(page.evaluate(uc.FACTS_JS)["unstyled"])
+            for needle in ("runs", "no padding", "textarea"):
+                self.assertIn(needle, got)
+            page.set_content("<div><span>Model:</span> <span>Intel</span></div><table><tr><th>A</th><th>B</th></tr>"
+                             "<tr><td>1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></table>"
+                             "<form><label style='display:block'>Cert</label><textarea></textarea></form>")
+            self.assertEqual(page.evaluate(uc.FACTS_JS)["unstyled"], [])
+        finally:
+            browser.close()
+            pw.stop()
 
 
 class OwnerFindings(unittest.TestCase):

@@ -150,8 +150,40 @@ FACTS_JS = r"""() => {
     const action = [...scope.querySelectorAll('button, a[href], input[type=submit]')].filter(vis).filter(b => !b.closest('nav, aside, header, .sidebar'));
     if (!action.length) empty.push(t.slice(0, 70));
   }
+  // unstyled markup (owner-findings row 34): classes with no CSS rule leave text run together. Three tells that need no class list:
+  // a table whose cells have zero padding, sibling inline elements with no space or margin between their words, and a label
+  // sitting on the same line as the textarea it labels.
+  const unstyled = [];
+  const short = el => (el.id ? '#' + el.id : '') + (el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/)[0] : '') || el.tagName.toLowerCase();
+  for (const t of document.querySelectorAll('table')) {
+    if (!vis(t) || t.rows.length < 2) continue;
+    const cells = [...t.querySelectorAll('th, td')].filter(c => vis(c) && (c.innerText || '').trim());
+    if (cells.length < 4) continue;
+    const bare = cells.filter(c => { const cs = getComputedStyle(c); return parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) < 1; });
+    if (bare.length >= cells.length * 0.8) unstyled.push('table ' + short(t) + ' has cells with no padding: ' + (cells[0].innerText || '').trim().slice(0, 20) + ' | ' + (cells[1].innerText || '').trim().slice(0, 20));
+  }
+  for (const p of document.querySelectorAll('body *')) {
+    if (unstyled.length > 12 || !vis(p) || p.children.length < 2 || ['SCRIPT', 'STYLE', 'SVG', 'PRE', 'CODE'].includes(p.tagName)) continue;
+    for (let i = 0; i + 1 < p.children.length; i++) {
+      const a = p.children[i], b = a.nextElementSibling;
+      if (!b || a.nextSibling !== b || !vis(a) || !vis(b)) continue;   // a text node (even a space) between them = fine
+      const ca = getComputedStyle(a), cb = getComputedStyle(b);
+      if (ca.display !== 'inline' || cb.display !== 'inline') continue;
+      if (parseFloat(ca.marginRight) + parseFloat(cb.marginLeft) + parseFloat(ca.paddingRight) + parseFloat(cb.paddingLeft) > 0.5) continue;
+      const ta = (a.innerText || '').trim(), tb = (b.innerText || '').trim();
+      if (/[A-Za-z0-9:]$/.test(ta) && /^[A-Za-z0-9]/.test(tb) && a.getBoundingClientRect().top === b.getBoundingClientRect().top)
+        unstyled.push(short(p) + ' runs \'' + ta.slice(-14) + '\' into \'' + tb.slice(0, 14) + '\'');
+    }
+  }
+  for (const f of document.querySelectorAll('textarea')) {
+    const l = f.previousElementSibling;
+    if (!vis(f) || !l || l.tagName !== 'LABEL' || !vis(l)) continue;
+    const lr = l.getBoundingClientRect(), fr = f.getBoundingClientRect();
+    if (Math.abs(lr.top - fr.top) < lr.height && lr.right <= fr.left + 2) unstyled.push("label '" + (l.innerText || '').trim().slice(0, 30) + "' shares a line with its textarea");
+  }
   const root = document.documentElement;
   return {
+    unstyled: unstyled.slice(0, 6),
     textLen: text.trim().length, text: text.slice(0, 60000), ownText: ownText.slice(0, 60000), title: document.title,
     overflowX: root.scrollWidth - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), zeroRed, navProblems, empty: empty.slice(0, 3),
     h1: ((document.querySelector('main h1, h1, main h2, h2') || {}).innerText || '').trim().slice(0, 60),
@@ -337,6 +369,8 @@ def main():
                         add("canvas-overlay", "fail", route, vp, scheme, o)
                     for u in f["unlinked"]:
                         add("unlinked-summary", "fail", route, vp, scheme, u)
+                    for u in f["unstyled"]:
+                        add("unstyled-layout", "fail", route, vp, scheme, u)
                     for e in f["empty"]:
                         add("empty-no-action", "fail", route, vp, scheme, e)
                     for color, val, label in f["zeroRed"]:

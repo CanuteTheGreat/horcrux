@@ -526,6 +526,13 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                     }
                                 }).collect_view()}
                             </div>
+                            {move || vms.get().is_empty().then(|| view! {
+                                <p class="empty-note" id="migration-vm-empty">
+                                    "No virtual machines on this cluster yet. Create one on the "
+                                    <a href="/vms/create">"Create VM"</a>
+                                    " page, then it can be migrated from here."
+                                </p>
+                            })}
 
                             <h3>"Containers"</h3>
                             <div class="resource-grid" id="migration-ct-grid">
@@ -607,6 +614,13 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                     }
                                 }).collect_view()}
                             </div>
+                            {move || containers.get().is_empty().then(|| view! {
+                                <p class="empty-note" id="migration-ct-empty">
+                                    "No containers on this cluster yet. Create one on the "
+                                    <a href="/containers">"Containers"</a>
+                                    " page. (Only virtual machines can be migrated live today.)"
+                                </p>
+                            })}
                         </div>
                     </div>
                 </div>

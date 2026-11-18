@@ -1,0 +1,43 @@
+# Classes that deliberately carry no rule of their own. One per line: `name reason` or `prefix* reason`.
+# Anything else used in view! markup must have a selector in horcrux-api/horcrux-ui/style/main.css.
+fa-* Font Awesome icon hooks; no icon font is shipped, so the <i> renders empty (cosmetic; the label text carries the meaning)
+fas Font Awesome icon hook, see fa-*
+cpu-icon icon variant hook on .card-icon (the emoji is the glyph; .card-icon carries the style)
+memory-icon icon variant hook on .card-icon
+network-icon icon variant hook on .card-icon
+system-icon icon variant hook on .card-icon
+performance-icon icon variant hook on .card-icon
+security-icon icon variant hook on .card-icon
+health-dashboard wrapper hook, children carry the layout
+diagnostics-dashboard wrapper hook, children carry the layout
+disk-details wrapper hook, its .detail-row children carry the layout
+info-details wrapper hook, its .detail-row children carry the layout
+network-interfaces wrapper hook, its .interface-stats children carry the layout
+health-overview wrapper hook, its .health-metric children carry the layout
+performance-overview wrapper hook, its .perf-metric children carry the layout
+security-overview wrapper hook, its .security-metric children carry the layout
+system-issues-section wrapper hook
+test-results-section wrapper hook
+issue-content wrapper hook
+test-category cell hook (table cell)
+test-row row hook
+test-status cell hook
+load-avg value hook (styled as .value)
+rx hook for the download figure (inherits colour)
+tx hook for the upload figure (inherits colour)
+dropdown-toggle hook on a .btn; the .dropdown wrapper carries the behaviour
+create-user-form form hook inside .create-user-form-container
+edit-btn hook next to .btn-icon (carries the style)
+table-info footer text hook (inherits)
+page generic page wrapper hook
+table table hook on a <table> styled by its page root
+res-row row hook used by the Resources e2e tests
+resource-list wrapper hook
+resource-name text hook (inherits)
+source-node text hook inside .migration-route
+target-node text hook inside .migration-route
+tab-content wrapper hook inside .resource-tabs
+quota-usage button hook for the e2e tests
+quota-usage-text text hook for the e2e tests
+attr-value cell text hook (inherits)
+total stat-card variant hook (neutral colour is the default)

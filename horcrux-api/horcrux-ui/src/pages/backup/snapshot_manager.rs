@@ -376,7 +376,7 @@ pub fn SnapshotManagerPage() -> impl IntoView {
     };
 
     view! {
-        <div class="p-6">
+        <div class="ha-page p-6">
             <div class="flex justify-between items-center mb-6">
                 <h1 class="text-2xl font-bold">Snapshot Management</h1>
                 <div class="flex space-x-3">

@@ -1090,3 +1090,289 @@ a.stat-card.healthy .stat-value { color: var(--success); }
 .backend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.5rem 1rem; margin-top: 0.5rem; }
 .backend { display: flex; flex-direction: column; }
 .backend span { color: var(--secondary); font-size: 0.875rem; }
+
+/* ======================================================================================================
+   Host-data pages whose markup had no rules at all (owner-findings row 34; ci/ux-qa/check_css_classes.py keeps it so):
+   System Health, System Diagnostics, User Management, Certificates, Resources, Disk Management, SMART Monitoring,
+   HA Migration Center. Without these the pages rendered as stacked, run-together text ("⚡CPUModel:Intel...").
+   They use the dashboard look: surface cards, 1px border, 8px radius, the existing colour variables (light + dark).
+   ====================================================================================================== */
+.alert { padding: .75rem 1rem; border-radius: 6px; margin: .75rem 0; border: 1px solid var(--border); }
+.spinner { width: 1.75rem; height: 1.75rem; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%;
+    animation: hx-spin .9s linear infinite; margin: 0 auto .5rem; }
+@keyframes hx-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+.loading-container { text-align: center; padding: 2rem 1rem; color: var(--secondary); }
+.error-container { background: var(--bad-bg); border: 1px solid var(--danger); border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; }
+.error-container h3 { margin: 0 0 .25rem; color: var(--danger); }
+.error-message { color: var(--danger); overflow-wrap: anywhere; }
+.text-red-600, .text-red-700 { color: var(--danger); }
+.text-orange-600 { color: var(--warning-text); }
+.text-yellow-600 { color: var(--warning-text); }
+.text-green-600 { color: var(--success); }
+.text-blue-600 { color: var(--primary); }
+.text-gray-600 { color: var(--secondary); }
+.bg-red-50 { background: var(--bad-bg); }
+.bg-orange-50, .bg-yellow-50 { background: var(--warn-bg); }
+.bg-green-50 { background: var(--ok-bg); }
+.bg-blue-50 { background: var(--note-bg); }
+.bg-gray-50 { background: var(--light); }
+
+:is(.system-health-page, .diagnostics-page, .users-management-page, .disk-management-page, .smart-monitoring-page, .migration-center-page,
+    .certificates-page, .resources) { min-width: 0; max-width: 100%; }
+:is(.system-health-page, .diagnostics-page, .disk-management-page, .smart-monitoring-page, .migration-center-page) :is(h2) { margin: 1.5rem 0 .75rem; font-size: 1.25rem; }
+.page-description, .users-management-page .description { color: var(--secondary); margin-top: .25rem; }
+.page-header .page-title { margin: 0; }
+.page-header .header-content { min-width: 0; }
+.page-header { flex-wrap: wrap; gap: .75rem; }
+
+/* cards and their grids */
+.health-cards, .diagnostic-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.disk-grid, .disks-grid, .results-grid, .resource-grid, .migration-jobs { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.health-card, .diagnostic-card, .disk-card, .smart-disk-card, .result-card, .resource-card, .migration-job-card, .issue-card, .migration-section,
+.resource-section, .create-user-form-container, .certificates-page section.card {
+    background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; min-width: 0; overflow-wrap: anywhere; }
+.health-card, .diagnostic-card { display: flex; gap: 1rem; align-items: flex-start; }
+.card-icon { font-size: 1.75rem; line-height: 1; flex: none; }
+.card-content { flex: 1 1 auto; min-width: 0; }
+.card-content h3, .resource-header h4, .disk-header h3, .disk-header h4, .result-header h4 { margin: 0 0 .5rem; font-size: 1.05rem; }
+.disk-header, .resource-header, .result-header, .issue-header, .job-header { display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem; flex-wrap: wrap; margin-bottom: .5rem; }
+.disk-header h3, .disk-header h4, .resource-header h4, .result-header h4 { margin-bottom: 0; }
+.filesystem-type, .resource-id, .category-badge, .realm-badge, .role-badge, .smart-badge, .severity-badge, .result-status,
+.diagnostics-page .status-badge, .users-management-page .status-badge {
+    display: inline-block; font-size: .75rem; padding: .1rem .55rem; border-radius: 999px; background: var(--light); border: 1px solid var(--border); color: var(--secondary); white-space: nowrap; }
+.role-badge { background: var(--note-bg); color: var(--text); }
+.users-management-page .status-badge.enabled, .smart-badge.smart-healthy, .smart-badge.smart-ok { background: var(--ok-bg); color: var(--success); }
+.users-management-page .status-badge.disabled, .smart-badge.smart-critical, .smart-badge.smart-failing { background: var(--bad-bg); color: var(--danger); }
+.smart-badge.smart-warning { background: var(--warn-bg); color: var(--warning-text); }
+.disk-card.smart-warning, .smart-disk-card.status-warning { border-left: 4px solid var(--warning); }
+.disk-card.smart-critical, .disk-card.smart-failing, .smart-disk-card.status-critical { border-left: 4px solid var(--danger-solid); }
+.disk-card.smart-healthy, .disk-card.smart-ok, .smart-disk-card.status-healthy { border-left: 4px solid var(--success-solid); }
+
+/* label / value rows */
+:is(.system-health-page, .diagnostics-page, .disk-management-page, .smart-monitoring-page, .migration-center-page) :is(.detail-row, .info-row, .health-metric, .perf-metric, .security-metric, .info-item) {
+    display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; padding: .25rem 0; font-size: .9rem; min-width: 0; }
+:is(.system-health-page, .diagnostics-page, .disk-management-page, .smart-monitoring-page, .migration-center-page) :is(.label, .metric-label) { color: var(--secondary); flex: none; }
+:is(.system-health-page, .diagnostics-page, .disk-management-page, .smart-monitoring-page, .migration-center-page) :is(.value, .metric-value) { text-align: right; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.value.usage-success, .value.usage-warning, .value.usage-danger { font-weight: 700; }
+.usage-success { color: var(--success); }
+.usage-warning { color: var(--warning-text); }
+.usage-danger { color: var(--danger); }
+.cpu-model, .error-details { font-weight: 400; }
+.value.hot, .value.warm { color: var(--danger); }
+.value.warm { color: var(--warning-text); }
+.progress-bar { height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; margin-top: .6rem; }
+.progress-fill { height: 100%; background: var(--primary-solid); border-radius: 4px; }
+.progress-success { background: var(--success-solid); }
+.progress-warning { background: var(--warning); }
+.progress-danger { background: var(--danger-solid); }
+.system-health-page :is(.disk-usage-section, .network-stats-section) { margin-top: 1.5rem; }
+.interface-stats { padding: .35rem 0; border-top: 1px solid var(--border); }
+.interface-stats:first-child { border-top: 0; }
+.interface-name { font-weight: 600; }
+.interface-data { display: flex; gap: 1rem; flex-wrap: wrap; color: var(--secondary); font-size: .9rem; }
+.network-table { overflow-x: auto; max-width: 100%; }
+
+/* tables */
+.network-table table, .tests-table, .users-table, .attributes-table, .info-table, .certificates-page table {
+    width: 100%; border-collapse: collapse; background: var(--surface); }
+.network-table :is(th, td), .tests-table :is(th, td), .users-table :is(th, td), .attributes-table :is(th, td), .info-table :is(th, td), .certificates-page :is(th, td) {
+    padding: .6rem .75rem; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+.network-table th, .tests-table th, .users-table th, .attributes-table th, .certificates-page th {
+    font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary); background: var(--light); }
+.network-table td:not(:first-child) { white-space: nowrap; }
+.text-danger { color: var(--danger); }
+.text-success { color: var(--success); }
+.tests-table-container, .table-container, .network-table { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.tests-table .select-col, .tests-table .test-select, .users-table .checkbox-column { width: 2.25rem; padding-right: 0; }
+.tests-table td.test-description { min-width: 14rem; color: var(--secondary); }
+.tests-table td.test-duration, .tests-table td.test-actions { white-space: nowrap; }
+.test-name { font-weight: 600; }
+
+/* Diagnostics */
+.diagnostics-page .header-actions, .users-management-page .header-actions { flex-wrap: wrap; }
+.diagnostics-page .dropdown { position: relative; }
+.btn-xs { padding: .15rem .5rem; font-size: .75rem; }
+.selected-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.selected-count { color: var(--secondary); font-size: .9rem; }
+.diagnostic-tests-section .section-header { margin: 1.5rem 0 .75rem; }
+.diagnostic-tests-section .section-header h2 { margin: 0; }
+.result-details .detail-row { flex-wrap: wrap; }
+.issues-list { display: flex; flex-direction: column; gap: .75rem; margin-bottom: 1.5rem; }
+.issue-category { color: var(--secondary); font-size: .85rem; }
+.issue-description { margin: .25rem 0 .5rem; }
+.issue-recommendation { background: var(--note-bg); border-radius: 6px; padding: .5rem .75rem; font-size: .9rem; }
+.no-issues, .success-message { background: var(--ok-bg); color: var(--success); border: 1px solid var(--success); border-radius: 8px; padding: .75rem 1rem; }
+
+/* User Management */
+.filters-section { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; margin: 1rem 0; }
+.search-filter { position: relative; flex: 1 1 16rem; min-width: 0; }
+.search-input, .filter-select { padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font: inherit; max-width: 100%; }
+.search-input { width: 100%; padding-left: 2rem; }
+.search-icon { position: absolute; left: .6rem; top: 50%; transform: translateY(-50%); font-size: .85rem; pointer-events: none; }
+.dropdown-filters { display: flex; gap: .5rem; flex-wrap: wrap; }
+.bulk-actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; background: var(--note-bg); border-radius: 6px; padding: .5rem .75rem; margin-bottom: .75rem; }
+.bulk-selection-info, .bulk-action-buttons, .action-buttons { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.btn-link { background: none; border: 0; color: var(--primary); cursor: pointer; text-decoration: underline; font: inherit; padding: 0; }
+.users-management-page .alert { display: flex; gap: .6rem; align-items: center; }
+.users-management-page .alert .alert-message { flex: 1 1 auto; min-width: 0; }
+.alert-icon { font-weight: 700; flex: none; }
+.alert-close { background: none; border: 0; cursor: pointer; font-size: 1.1rem; color: inherit; }
+.user-info { display: flex; flex-direction: column; min-width: 0; }
+.user-info small, .additional-roles { color: var(--secondary); font-size: .8rem; display: block; overflow-wrap: anywhere; }
+.users-table tr.selected { background: var(--note-bg); }
+.actions-cell, .actions-column { white-space: nowrap; width: 1%; }
+.btn-icon.delete-btn { color: var(--danger); }
+.table-footer { display: flex; justify-content: space-between; padding: .6rem .75rem; color: var(--secondary); font-size: .9rem; }
+.icon { margin-right: .25rem; }
+.error-text { color: var(--danger); font-size: .85rem; }
+.no-permission { color: var(--text); }
+.create-user-form-container { margin: 1rem 0; }
+.create-user-form-container h2 { margin: 0 0 1rem; font-size: 1.15rem; }
+.create-user-form-container .form-group input, .create-user-form-container .form-group select, .create-user-form-container .form-group textarea { width: 100%; }
+label.checkbox, .checkbox-label { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; }
+.checkbox-column input, .tests-table input[type=checkbox] { margin: 0; }
+
+/* Certificates: label, field and button stack (they were plain inline elements) */
+.certificates-page { max-width: 60rem; }
+.certificates-page section.card { margin-bottom: 1.25rem; }
+.certificates-page h2 { margin: 0 0 .75rem; font-size: 1.15rem; }
+.certificates-page label { display: block; margin: .75rem 0 .25rem; font-weight: 600; font-size: .9rem; }
+.certificates-page label.checkbox { display: flex; font-weight: 400; }
+.certificates-page :is(input[type=text], input[type=email], input[type=password], textarea) {
+    display: block; width: 100%; padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font: inherit; }
+.certificates-page textarea { font-family: ui-monospace, monospace; font-size: .85rem; }
+.certificates-page .btn { margin: .75rem .5rem 0 0; }
+.certificates-page th { width: 8rem; background: none; text-transform: none; letter-spacing: 0; font-size: .9rem; }
+.certificates-page td, .certificates-page code { overflow-wrap: anywhere; word-break: break-all; }
+.certificates-page td { word-break: normal; overflow-wrap: anywhere; }
+
+/* Resources */
+.resources .form-row { align-items: center; margin-bottom: 1rem; }
+.resources .form-row input[type=search] { flex: 3 1 14rem; min-width: 0; }
+.resources .form-row :is(input, select) { padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font: inherit; }
+.tag-filter { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin: 0 0 1rem; }
+.resources .vm-table { margin-bottom: 1.5rem; }
+.resources td.no-data { text-align: center; }
+.resource-tree, .resource-tree ul { list-style: none; margin: 0; padding-left: 1.25rem; }
+.resource-tree { padding-left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: .75rem 1rem; }
+.tree-node { padding: .15rem 0; }
+.tree-label { font-weight: 600; }
+.tree-tags { color: var(--secondary); }
+.resources h2 { margin: 1.5rem 0 .75rem; }
+
+/* Disk Management */
+.disk-management-page .disk-info { margin: .5rem 0; }
+.disk-usage { margin: .75rem 0; }
+.disk-usage .usage-bar { height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+.usage-fill { display: block; height: 100%; background: var(--primary-solid); }
+.usage-text { display: block; margin-top: .25rem; font-size: .85rem; color: var(--secondary); }
+.partitions-section h4 { margin: .75rem 0 .35rem; font-size: .9rem; color: var(--secondary); }
+.partitions-list { display: flex; flex-direction: column; }
+.partition-item { display: flex; gap: .5rem .75rem; flex-wrap: wrap; align-items: baseline; padding: .3rem 0; border-top: 1px solid var(--border); font-size: .85rem; }
+.partition-name { font-weight: 600; }
+.partition-fs, .partition-size { color: var(--secondary); }
+.partition-mount { margin-left: auto; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+
+/* SMART Monitoring */
+.smart-overview { margin: 1rem 0 1.5rem; }
+.smart-overview .stat-icon { font-size: .9rem; font-weight: 700; color: var(--secondary); min-width: 2.2rem; }
+.alerts-section .section-title, .attributes-section h3, .detail-section h3 { margin: 1rem 0 .5rem; font-size: 1.1rem; }
+.alerts-list { display: flex; flex-direction: column; gap: .5rem; margin-bottom: 1.5rem; }
+.alerts-list .alert-item { display: flex; gap: .75rem; align-items: flex-start; flex-wrap: wrap; }
+.alerts-list .alert-content { flex: 1 1 14rem; min-width: 0; }
+.alerts-list .alert-header { display: flex; gap: .5rem; flex-wrap: wrap; }
+.alert-disk { font-weight: 600; }
+.alert-type { color: var(--secondary); }
+.filter-bar { margin: 0 0 1rem; }
+.filter-buttons { display: flex; gap: .5rem; flex-wrap: wrap; }
+.disk-title { display: flex; flex-direction: column; min-width: 0; }
+.disk-title h3 { margin: 0; }
+.disk-path { color: var(--secondary); font-family: ui-monospace, monospace; font-size: .85rem; }
+.health-score-ring { position: relative; width: 56px; height: 56px; flex: none; }
+.health-ring { width: 100%; height: 100%; }
+.health-value { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 700; }
+.disk-info-grid, .details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: .25rem 1rem; margin: .5rem 0; }
+.disk-info-grid .info-item { flex-direction: column; align-items: flex-start; gap: 0; }
+.disk-info-grid .value { text-align: left; }
+.smart-attributes-preview h4 { margin: .75rem 0 .35rem; font-size: .9rem; color: var(--secondary); }
+.attributes-list { display: flex; flex-direction: column; }
+.attribute-item { display: flex; justify-content: space-between; gap: .75rem; padding: .25rem 0; border-top: 1px solid var(--border); font-size: .85rem; }
+.attribute-item.status-warning, .attr-row.status-warning { color: var(--warning-text); }
+.attribute-item.status-critical, .attribute-item.status-failing, .attr-row.status-critical, .attr-row.status-failing { color: var(--danger); }
+.attr-name { font-weight: 600; }
+.attr-desc { display: block; color: var(--secondary); font-size: .8rem; font-weight: 400; }
+.last-test-info { display: flex; gap: .5rem; margin-top: .5rem; font-size: .85rem; }
+.test-label { color: var(--secondary); }
+.test-result.status-ok { color: var(--success); }
+.test-result.status-fail { color: var(--danger); }
+.disk-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .75rem; }
+.modal { background: var(--surface); color: var(--text); border-radius: 8px; width: 100%; max-width: 36rem; max-height: 90vh; overflow: auto; box-shadow: 0 8px 32px rgba(0,0,0,.4); }
+.modal.modal-xl { max-width: 60rem; }
+.status-indicator { display: inline-block; padding: .25rem .75rem; border-radius: 999px; font-weight: 700; background: var(--light); }
+.status-indicator.status-healthy { background: var(--ok-bg); color: var(--success); }
+.status-indicator.status-warning { background: var(--warn-bg); color: var(--warning-text); }
+.status-indicator.status-critical { background: var(--bad-bg); color: var(--danger); }
+.health-status-large { display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; }
+.health-score-large { display: flex; flex-direction: column; }
+.health-score-large .score { font-size: 2rem; font-weight: 700; }
+.test-type-options { display: flex; flex-direction: column; gap: .5rem; }
+.radio-option { display: flex; gap: .6rem; align-items: flex-start; padding: .6rem .75rem; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.option-content { display: flex; flex-direction: column; }
+.option-title { font-weight: 600; }
+.option-desc { color: var(--secondary); font-size: .85rem; }
+.test-warning { background: var(--note-bg); border-radius: 6px; padding: .5rem .75rem; margin-top: .75rem; font-size: .9rem; }
+.info-table td:first-child { color: var(--secondary); width: 40%; }
+
+/* HA Migration Center */
+.migration-dashboard { margin-bottom: 1.5rem; }
+.modal-content.large { max-width: 48rem; }
+.migration-summary h3 { margin: 0 0 .25rem; }
+.resource-detail { color: var(--secondary); }
+.migration-section, .resource-section { margin-bottom: 1.5rem; }
+.migration-section > h2, .resource-section > h2 { margin-top: 0; }
+.resource-tabs { min-width: 0; }
+.resource-tabs h3 { margin: 1rem 0 .5rem; font-size: 1.05rem; }
+.resource-tabs .empty-note { color: var(--secondary); margin: 0 0 1rem; }
+.resource-actions, .job-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .75rem; }
+.resource-info { min-width: 0; }
+.job-header { align-items: center; }
+.migration-route { display: flex; gap: .5rem; align-items: center; font-weight: 600; flex-wrap: wrap; }
+.migration-route .arrow { color: var(--secondary); }
+.job-details { display: flex; flex-direction: column; gap: .25rem; }
+.job-details .detail-row { flex-wrap: wrap; justify-content: flex-start; }
+.job-details .error-message { background: var(--bad-bg); border-radius: 6px; padding: .5rem .75rem; margin-top: .5rem; }
+.progress-section { margin-top: .75rem; }
+.progress-info { display: flex; justify-content: space-between; gap: .5rem; font-size: .85rem; color: var(--secondary); }
+.progress-text { font-weight: 600; color: var(--text); }
+.estimated-time, .transfer-info { color: var(--secondary); font-size: .85rem; }
+.bulk-summary, .selected-resources, .migration-summary { background: var(--note-bg); border-radius: 6px; padding: .5rem .75rem; margin: .5rem 0; }
+.bulk-resource-item { padding: .25rem 0; border-top: 1px solid var(--border); }
+.live-block-reason { color: var(--warning-text); font-size: .85rem; }
+.migration-center-page .status-badge { display: inline-block; font-size: .75rem; padding: .1rem .55rem; border-radius: 999px; background: var(--light); border: 1px solid var(--border); }
+.migration-center-page .status-running, .migration-center-page .status-completed { background: var(--ok-bg); color: var(--success); }
+.migration-center-page .status-failed { background: var(--bad-bg); color: var(--danger); }
+.migration-center-page .status-stopped, .migration-center-page .status-pending { background: var(--light); color: var(--secondary); }
+
+/* extra utilities the Snapshot Management page (ha-page shim) uses */
+.ha-page .-mb-px { margin-bottom: -1px; }
+.ha-page .bg-green-500 { background: var(--success-solid); color: #fff; }
+.ha-page .divide-gray-200 > * + * { border-color: var(--border); }
+.ha-page .divide-y > * + * { border-top: 1px solid var(--border); }
+.ha-page .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.ha-page .max-w-md { max-width: 28rem; }
+.ha-page .text-gray-800 { color: var(--text); }
+.ha-page .border-b-2 { border-bottom: 2px solid transparent; }
+.ha-page .text-blue-500.border-blue-500, .ha-page .border-blue-500 { border-color: var(--primary); }
+.ha-page .hover\:bg-green-600:hover { filter: brightness(1.1); }
+.ha-page .md\:w-1\/3 { width: 100%; }
+@media (min-width: 768px) { .ha-page .md\:w-1\/3 { width: 33.333%; } .ha-page .md\:grid-cols-5 { grid-template-columns: repeat(5, minmax(0,1fr)); } }
+.text-sm { font-size: .875rem; }
+.ha-page .bg-gray-100 { background: var(--light); }
+.ha-page .bg-gray-200 { background: var(--grid); }
+.ha-page .bg-gray-300 { background: var(--border); }
+.ha-page .bg-gray-600 { background: var(--secondary-solid); color: #fff; }
+.ha-page .bg-green-600 { background: var(--success-solid); color: #fff; }
+.ha-page .bg-purple-600 { background: #7048b8; color: #fff; }
+.ha-page .text-blue-900 { color: var(--primary); }
+.ha-page .text-red-900 { color: var(--danger); }
