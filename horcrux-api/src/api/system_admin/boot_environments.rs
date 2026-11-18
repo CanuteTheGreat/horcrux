@@ -10,6 +10,12 @@
 //! * `POST   /api/system/boot-environments/pin`                  `{target: "be" | "be@snap", pinned: bool}`
 //! * `DELETE /api/system/boot-environments/:name`
 //! * `DELETE /api/system/boot-environments/snapshots/:be/:snap`
+//! * `POST   /api/system/boot-environments/migrate-data`         `{dry_run?}` move data directories that still live inside the
+//!   boot environment (installs from before the VM-disk dataset) onto their own datasets. A dry run answers the plan; a real
+//!   run is a task (`upid`) because copying VM disks takes minutes.
+//!
+//! The list also carries `fallback` (the automatic fallback state: trial environment, boots counted, the environment GRUB returns to)
+//! and `events` (armed / boot-ok / fallback / health-failed / snapshot / migrated), newest last.
 //!
 //! A node without `horcrux-be` or without a ZFS root answers a structured 424, never a 500. Nothing here reboots.
 use super::{run_secs, user_of, which};
@@ -33,6 +39,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/system/boot-environments/snapshot", post(snapshot))
         .route("/api/system/boot-environments/rollback", post(rollback))
         .route("/api/system/boot-environments/pin", post(pin))
+        .route(
+            "/api/system/boot-environments/migrate-data",
+            post(migrate_data),
+        )
         .route(
             "/api/system/boot-environments/:name/activate",
             post(activate),
@@ -167,6 +177,35 @@ async fn rollback(u: AuthExt, body: Option<Json<RollbackReq>>) -> Res<Value> {
         "message": out.trim(),
         "reboot_required": true,
     })))
+}
+
+#[derive(Deserialize, Default)]
+struct MigrateReq {
+    #[serde(default)]
+    dry_run: bool,
+}
+
+async fn migrate_data(u: AuthExt, body: Option<Json<MigrateReq>>) -> Res<Value> {
+    let dry = body.map(|b| b.0.dry_run).unwrap_or(false);
+    if dry {
+        let out = be(&["migrate-data", "--dry-run"]).await?;
+        return Ok(Json(
+            json!({ "ok": true, "dry_run": true, "message": out.trim() }),
+        ));
+    }
+    need_tool()?;
+    // Copying VM disks takes minutes: a task, with the CLI's own progress lines as its log.
+    let who = user_of(&u);
+    let upid = crate::api::tasks::spawn_command(
+        "boot-env-migrate",
+        "data",
+        &who,
+        "horcrux-be",
+        &["migrate-data".to_string()],
+        &[],
+    )?;
+    tracing::info!(user = %who, "boot environment migrate-data started: {upid}");
+    Ok(Json(json!({ "ok": true, "dry_run": false, "upid": upid })))
 }
 
 async fn activate(u: AuthExt, Path(name): Path<String>) -> Res<Value> {

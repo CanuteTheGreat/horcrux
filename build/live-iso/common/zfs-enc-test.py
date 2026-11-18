@@ -418,6 +418,164 @@ class ZRun(qt.Runner):
         rc, o = self.sh("horcrux-be list --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[\"running\"], d[\"active\"], [e[\"name\"] for e in d[\"environments\"]])'")
         self.step("old-environment-still-listed-after-rollback", "rolledback rolledback" in o and "horcrux" in o, o.strip())
 
+    # --- boot-environments phase 2 (docs/design/boot-environments.md): migrate-data on an old layout, the explicit pre-upgrade snapshot,
+    # and AUTOMATIC FALLBACK from a boot environment that never comes up (kernel panic) to the previous one; runs on OpenRC and systemd alike
+    PANIC_RE = r"Kernel panic[^\n]*"
+    PROMPT_RE = r"(?i)(encrypted zfs password|enter passphrase|password for rpool|disk passphrase)[^\n]*"
+
+    def be_json(self):
+        rc, o = self.sh("horcrux-be list --json")
+        try:
+            return json.loads(o[o.index("{"):])
+        except ValueError:
+            return {}
+
+    def be_phase2_services(self):
+        """init parity: the installer enabled the ZFS boot services and the health service on THIS init"""
+        rc, o = self.sh(
+            "if [ -d /run/systemd/system ]; then echo INIT=systemd; for u in zfs-import-cache.service zfs-mount.service zfs-zed.service zfs.target horcrux-be-health.service; do "
+            "echo $u=$(systemctl is-enabled $u 2>&1); done; "
+            "else echo INIT=openrc; for s in zfs-import zfs-mount zfs-zed horcrux-be-health; do echo $s=$(rc-update show -v | grep -E \"^ *$s \" | head -1 | tr -s ' ' | cut -d'|' -f2 | tr -d ' '); done; fi")
+        kv = dict(l.split("=", 1) for l in o.splitlines() if "=" in l)
+        init = kv.get("INIT", "?")
+        bad = [k for k, v in kv.items() if k != "INIT" and (v in ("", "disabled", "masked") or "No such file" in v or "not-found" in v)]
+        self.step("be-zfs-and-health-services-enabled-on-this-init", init in ("openrc", "systemd") and not bad, f"{init}: " + ", ".join(f"{k}={v or '-'}" for k, v in kv.items() if k != "INIT"))
+
+    def be_migrate_data_gate(self):
+        """an install from before the VM-disk dataset: /var/lib/horcrux/vms lives INSIDE the boot environment. Recreate that layout for real,
+        then migrate it: dry run changes nothing, an open file blocks, the real run keeps every byte and survives a boot environment switch."""
+        vms = "/var/lib/horcrux/vms"
+        rc, o = self.sh(f"set -e; rm -rf /root/vms.keep; mkdir /root/vms.keep; cp -a {vms}/. /root/vms.keep/; zfs unmount rpool/var/lib/horcrux/vms; "
+                        f"zfs destroy rpool/var/lib/horcrux/vms; rm -rf {vms}; mkdir -p {vms}; cp -a /root/vms.keep/. {vms}/; "
+                        f"findmnt -no SOURCE -T {vms}; set +e; horcrux-be check; echo CHECK=$?", timeout=300)
+        self.step("old-layout-recreated-guard-flags-vms", "rpool/ROOT/" in o and "CHECK=1" in o and "FAIL" in o and "/var/lib/horcrux/vms" in o, o.strip().replace("\n", " | ")[-300:])
+        rc, o = self.sh("horcrux-be migrate-data --dry-run; echo RC=$?; zfs list -H -o name rpool/var/lib/horcrux/vms 2>&1 | head -1")
+        self.step("migrate-data-dry-run-plans-and-changes-nothing", "RC=0" in o and "MOVE /var/lib/horcrux/vms" in o and "does not exist" in o and "dry run" in o, o.strip().replace("\n", " | ")[-400:])
+        rc, o = self.sh(f"( exec sleep 600 < {vms}/hxbe-vm.qcow2 ) & P=$!; sleep 1; horcrux-be migrate-data; echo RC=$?; kill $P; "
+                        f"zfs list -H -o name rpool/var/lib/horcrux/vms 2>&1 | head -1", timeout=120)
+        self.step("migrate-data-refuses-while-a-process-has-a-vm-disk-open", "RC=3" in o and "BLOCKED" in o and "stop it first" in o and "does not exist" in o, o.strip().replace("\n", " | ")[-400:])
+        rc, o = self.sh("horcrux-be migrate-data; echo RC=$?; horcrux-be check; echo CHECK=$?; findmnt -no SOURCE -T " + vms + "; "
+                        "zfs get -H -o value recordsize,mountpoint,canmount rpool/var/lib/horcrux/vms | tr '\\n' ' '; echo; "
+                        "zfs list -H -t snapshot -o name | grep -c 'migrate-data-'; ls -d " + vms + ".hx-migrating 2>&1 | head -1", timeout=600)
+        self.step("migrate-data-moved-vms-onto-its-own-dataset", "RC=0" in o and "CHECK=0" in o and "rpool/var/lib/horcrux/vms" in o and "64K" in o and "No such file" in o, o.strip().replace("\n", " | ")[-500:])
+        bad = []
+        for path, want in self.VM_DATA.items():
+            rc, o = self.sh(f"cat {path}")
+            if o.strip() != want:
+                bad.append(path)
+        self.step("migrate-data-kept-every-byte", not bad, f"{len(self.VM_DATA)} files checked, damaged or missing: {bad}")
+        rc, o = self.sh("horcrux-be migrate-data; echo RC=$?")
+        self.step("migrate-data-is-idempotent", "RC=0" in o and "nothing to migrate" in o, o.strip().replace("\n", " | ")[-200:])
+        rc, o = self.sh("zpool get -H -o value bootfs rpool; horcrux-be list --json | python3 -c 'import json,sys; print([e[\"kind\"] for e in json.load(sys.stdin)[\"events\"]])'")
+        self.step("migrate-data-recorded-an-event", "migrated" in o, o.strip().replace("\n", " | ")[-200:])
+
+    def boot_installed(self, nvars, name, panic_ok=False):
+        """start the installed system and answer the first thing that happens: a passphrase prompt -> ('up', vm) once ssh answers, or a kernel panic
+        -> ('panic', None) after the guest ended (-no-reboot: the panic=N reset ends QEMU)"""
+        qt.pflash_vars(nvars)
+        vm = qt.VM(name, self.qemu_args(None, True, nvars), self.z.out)
+        m = vm.expect_raw(f"{self.PROMPT_RE}|{self.PANIC_RE}", 420)
+        if not m:
+            vm.p.kill()
+            return "silent", None
+        txt = m.group(0).decode(errors="replace")
+        if "panic" in txt.lower():
+            self.wait_exit(vm, 90)
+            return "panic", None
+        time.sleep(1)
+        vm.send(PASSPHRASE + "\r")
+        return ("up" if self.wait_ssh(timeout=420) else "no-ssh"), vm
+
+    def be_wait_settled(self, what, timeout=240):
+        """the health service runs in the background after boot: wait until the trial is closed"""
+        end = time.time() + qt.T(timeout)
+        d = {}
+        while time.time() < end:
+            d = self.be_json()
+            fb = d.get("fallback", {})
+            if not fb.get("trial") and not fb.get("failed"):
+                return d
+            time.sleep(5)
+        print(f"[DIAG] {what}: fallback state never settled: {d.get('fallback')} events={d.get('events')}", flush=True)
+        return d
+
+    def be_auto_fallback_gate(self, nvars, vm):
+        """upgrade -> snapshot -> broken boot -> automatic fallback -> then a good boot ends the trial. Returns the VM that is up at the end."""
+        a = self.z
+        rc, o = self.sh("rm -f /run/horcrux-be-auto; horcrux-be pre-upgrade --json | tail -1", timeout=120)
+        try:
+            snap = json.loads(o.strip().splitlines()[-1]).get("snapshot") or ""
+        except ValueError:
+            snap = ""
+        self.step("explicit-pre-upgrade-snapshot-step", bool(re.fullmatch(r"[\w.-]+@pre-upgrade-\d{8}-\d{6}", snap)), o.strip()[-200:])
+        # the emerge that follows must NOT snapshot a second time (the explicit step armed the hook's throttle)
+        rc, o = self.sh("N0=$(zfs list -H -t snapshot -o name | grep -c pre-upgrade); cp /var/db/repos/hxbe/app-misc/hx-be-probe/hx-be-probe-1.0.ebuild /var/db/repos/hxbe/app-misc/hx-be-probe/hx-be-probe-3.0.ebuild; "
+                        "emerge -1q --nodeps --usepkg=n --getbinpkg=n =app-misc/hx-be-probe-3.0 2>&1 | tail -3; cat /usr/share/hx-be-probe/version; "
+                        "echo SNAPS=$N0,$(zfs list -H -t snapshot -o name | grep -c pre-upgrade)", timeout=900)
+        mm = re.search(r"SNAPS=(\d+),(\d+)", o)
+        self.step("upgrade-after-explicit-snapshot-takes-no-second-one", "3.0" in o and bool(mm) and mm.group(1) == mm.group(2), o.strip().replace("\n", " | ")[-250:])
+        run0 = (self.be_json().get("running") or "")
+        # boot the previous version (trial), then break that environment's initramfs so it can never come up
+        rc, o = self.sh(f"horcrux-be rollback {snap} --name prevbe && cat /boot/grub/grubenv | tr '\\n' ' ' && "
+                        "grep -c 'load_env' /boot/grub/grub.cfg && grep -c 'panic=' /boot/grub/grub.cfg", timeout=300)
+        self.step("rollback-armed-the-automatic-fallback", "hx_trial=prevbe" in o and f"hx_good={run0}" in o and "not armed" not in o, o.strip().replace("\n", " | ")[-300:])
+        rc, o = self.sh("dd if=/dev/urandom of=/boot/be/prevbe/initramfs.new bs=1M count=2 2>/dev/null && mv -f /boot/be/prevbe/initramfs.new /boot/be/prevbe/initramfs.img && "
+                        "cmp -s /boot/be/prevbe/initramfs.img /boot/be/" + run0 + "/initramfs.img && echo STILL-SAME || echo BROKEN-ONLY-PREVBE")
+        self.step("broken-environment-does-not-corrupt-the-good-one", "BROKEN-ONLY-PREVBE" in o, o.strip())
+        self.sh("sync; reboot", timeout=15)
+        self.wait_exit(vm, 90)
+        outcomes = []
+        for i in range(1, 5):
+            out, vm2 = self.boot_installed(nvars, f"4-fallback-boot{i}")
+            outcomes.append(out)
+            if out != "panic":
+                vm = vm2
+                break
+        self.step("broken-environment-panicked-n-times-then-fell-back", outcomes == ["panic"] * 3 + ["up"], f"boot outcomes: {outcomes} (3 failed boots of prevbe, then GRUB returned to {run0})")
+        if outcomes[-1] != "up":
+            if vm2 is not None and vm2.alive():
+                vm2.p.kill()
+            return None
+        rc, o = self.sh("findmnt -no SOURCE /; zpool get -H -o value bootfs rpool; cat /usr/share/hx-be-probe/version")
+        self.step("fallback-booted-the-previous-environment", f"rpool/ROOT/{run0}" in o and o.split()[-1] == "3.0", o.strip().replace("\n", " | "))
+        d = self.be_wait_settled("after-fallback")
+        ev = [e["kind"] for e in d.get("events", [])]
+        envs = {e["name"]: e for e in d.get("environments", [])}
+        fb = d.get("fallback", {})
+        self.step("fallback-event-recorded-and-state-settled",
+                  "fallback" in ev and not fb.get("trial") and not fb.get("failed") and d.get("active") == run0 and envs.get("prevbe", {}).get("failed") is True,
+                  f"events={ev} fallback={fb} active={d.get('active')} prevbe.failed={envs.get('prevbe', {}).get('failed')}")
+        rc, o = self.sh("grep -c 'hx_trial' /boot/grub/grubenv; grep -q 'set default=\"be-" + run0 + "\"' /boot/grub/grub.cfg && echo DEFAULT-OK")
+        self.step("grub-default-follows-the-settled-environment", "DEFAULT-OK" in o, o.strip().replace("\n", " | "))
+        # a GOOD boot ends the trial: roll back again (the snapshot is intact), reboot, the health service closes it
+        rc, o = self.sh(f"horcrux-be rollback {snap} --name goodbe && cat /boot/grub/grubenv | tr '\\n' ' '", timeout=300)
+        self.step("second-rollback-armed-again", "hx_trial=goodbe" in o, o.strip().replace("\n", " | ")[-200:])
+        self.sh("sync; reboot", timeout=15)
+        self.wait_exit(vm, 90)
+        out, vm = self.boot_installed(nvars, "5-goodbe-boot")
+        self.step("good-environment-boots-after-trial", out == "up", out)
+        if out != "up":
+            if vm is not None and vm.alive():
+                vm.p.kill()
+            return None
+        rc, o = self.sh("findmnt -no SOURCE /; cat /usr/share/hx-be-probe/version")
+        self.step("good-environment-is-the-previous-version", "rpool/ROOT/goodbe" in o and o.split()[-1] == "1.0", o.strip().replace("\n", " | "))
+        d = self.be_wait_settled("after-good-boot")
+        ev = [e["kind"] for e in d.get("events", [])]
+        self.step("healthy-boot-closed-the-trial", "boot-ok" in ev and not d.get("fallback", {}).get("trial") and d.get("active") == "goodbe", f"events={ev} fallback={d.get('fallback')}")
+        # data guard after all of it: migrated VM disks are still there, still on their own dataset
+        bad = [p for p, want in self.VM_DATA.items() if self.sh(f"cat {p}")[1].strip() != want]
+        rc, o = self.sh("horcrux-be check; echo CHECK=$?; findmnt -no SOURCE -T /var/lib/horcrux/vms")
+        self.step("vm-data-intact-and-on-own-dataset-after-fallbacks", not bad and "CHECK=0" in o and "rpool/var/lib/horcrux/vms" in o, f"damaged={bad} " + o.strip().replace("\n", " | ")[-200:])
+        return vm
+
+    def be_phase2(self, nvars, vm):
+        """runs in the rolled-back environment of boot 2; returns the VM that is up at the end (or None)"""
+        self.be_phase2_services()
+        self.be_migrate_data_gate()
+        return self.be_auto_fallback_gate(nvars, vm)
+
+
     def change_and_rollback(self):
         if self.z.server:
             # headless server: the rolled-back BE must keep its serial console (the reboot is driven over the serial line); the desktop run proves a BE switch with
@@ -631,6 +789,11 @@ class ZRun(qt.Runner):
             rc, o = self.sh("zpool get -H -o value bootfs rpool; findmnt -no SOURCE /; test -e /root/marker-after-snapshot && echo MARKER || echo NOMARKER")
             self.step("rolled-back-to-previous-boot-environment", "rpool/ROOT/rolledback" in o and "NOMARKER" in o, o.strip().replace("\n", " | ")[:300])
             self.verify_after_rollback()
+            if not a.no_be_phase2:
+                vm2 = self.be_phase2(nvars, vm)
+                if vm2 is None:
+                    return
+                vm = vm2
             self.server_checks(first_boot=False)
             self.sh("poweroff", timeout=10)
             self.wait_exit(vm)
@@ -1053,6 +1216,7 @@ def main():
     ap.add_argument("--expect-t2-refusal", action="store_true", help="(with --fake-t2) the image has no T2 kernel: assert the installer refuses")
     ap.add_argument("--t2", default="no", help="answer file t2 = no|auto|yes (default no: the normal tests ignore a T2 device)")
     ap.add_argument("--rtc-base", default="2026-07-01T12:00:00", help="desktop runs: start EVERY boot with this (months-off) hardware clock; '' disables the clock gates")
+    ap.add_argument("--no-be-phase2", action="store_true", help="(--server) skip the boot-environment phase 2 gates (migrate-data, pre-upgrade snapshot, automatic fallback after panicking boots; ~10 extra minutes)")
     ap.add_argument("--mem", type=int, default=4096)
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"))
     ap.add_argument("--disk-gb", type=int, default=24)

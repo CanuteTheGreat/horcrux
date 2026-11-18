@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+# Boot-environment auto-fallback, OpenRC half: once this boot is healthy (pool online, horcrux-api answering when enabled), tell
+# horcrux-be so the trial of a freshly activated environment ends. Until then GRUB counts boots and returns to the previous environment
+# after FALLBACK_TRIES failed ones (/etc/horcrux/be.conf). The systemd twin is horcrux-be-health.service (same command).
+description="Marks this boot environment healthy (boot-environment auto-fallback)"
+depend() {
+	need localmount
+	after horcrux-api libvirtd sshd net
+}
+start() {
+	ebegin "Checking this boot environment's health in the background"
+	# --detach forks and returns at once: the checks may wait minutes for a slow service and must never delay the boot
+	/usr/bin/horcrux-be mark-good --wait --detach
+	eend $?
+}

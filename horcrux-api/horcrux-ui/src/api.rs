@@ -4632,6 +4632,9 @@ pub struct TaskRef {
     pub upid: String,
     #[serde(default)]
     pub pending: Option<usize>,
+    /// Boot-environment snapshot taken before an upgrade task (`BE@pre-upgrade-<stamp>`).
+    #[serde(default)]
+    pub snapshot: Option<String>,
 }
 
 /// Package names can contain `/` and `+` (`app-editors/vim`); keep them in one path segment.
@@ -7747,7 +7750,35 @@ pub struct BootEnv {
     pub kernel: String,
     #[serde(default)]
     pub pinned: bool,
+    /// The automatic fallback gave up on this environment (it did not come up healthy).
+    #[serde(default)]
+    pub failed: bool,
     pub created: i64,
+}
+
+/// Automatic fallback state: a freshly activated environment is "on trial" until a healthy boot
+/// closes it; after `tries_max` unhealthy boots GRUB boots the `good` one again by itself.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct BootFallback {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub tries_max: u32,
+    pub trial: Option<String>,
+    #[serde(default)]
+    pub tries: u32,
+    pub good: Option<String>,
+    pub failed: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct BootEvent {
+    pub ts: i64,
+    pub kind: String,
+    #[serde(default)]
+    pub be: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -7782,6 +7813,23 @@ pub struct BootEnvInfo {
     pub data: Vec<BootDataPath>,
     #[serde(default)]
     pub preserved: Vec<String>,
+    #[serde(default)]
+    pub fallback: BootFallback,
+    #[serde(default)]
+    pub events: Vec<BootEvent>,
+}
+
+impl BootEnvInfo {
+    /// The snapshot taken before the last upgrade of the RUNNING environment (newest automatic
+    /// `pre-upgrade-*` one). `None` when the system was rolled back since (the new running
+    /// environment has none of its own) or nothing was snapshotted.
+    pub fn last_upgrade_snapshot(&self) -> Option<&BootSnapshot> {
+        let run = self.running.as_deref()?;
+        self.snapshots
+            .iter()
+            .filter(|s| s.be == run && s.auto && s.name.starts_with("pre-upgrade-"))
+            .max_by_key(|s| s.created)
+    }
 }
 
 pub async fn get_boot_environments() -> Result<BootEnvInfo, ApiError> {

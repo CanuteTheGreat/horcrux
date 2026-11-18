@@ -195,6 +195,8 @@ def configure(inst, cmdline_extra="", kernel_glob="*"):
     # dracut already mounted /
     for svc in ("zfs-import", "zfs-mount", "zfs-zed"):
         initsys.enable(inst, svc, "boot" if svc != "zfs-zed" else "default")
+    # boot-environment auto-fallback: ends the trial of a newly activated environment once this boot is healthy (OpenRC script or systemd unit)
+    initsys.enable(inst, "horcrux-be-health", "default")
     if inst.c.get("zfs_encrypt") and inst.c.get("zfs_keymode") == "tpm":
         tpm_seal(inst)
     # /boot is its own ext4 partition: fstab (the installer wrote none)
