@@ -10,10 +10,10 @@
 //! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
     add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes,
-    get_cluster_power_status, get_local_nics, get_quorum_plan, get_vms, power_down_node,
-    power_node_note, put_qdevice, remove_cluster_node, set_node_caps, set_node_priority,
-    AddNodeRequest, ClusterArchitecture, ClusterNode, FindNodeRequest, NicView, NicsView, NodeCaps,
-    PowerStatus, QuorumPlanView,
+    get_cluster_power_status, get_cpu_groups, get_local_nics, get_quorum_plan, get_vms,
+    power_down_node, power_node_note, put_qdevice, remove_cluster_node, set_node_caps,
+    set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode, CpuGroupsView,
+    FindNodeRequest, NicView, NicsView, NodeCaps, PowerStatus, QuorumPlanView,
 };
 use horcrux_common::VmConfig;
 use leptos::*;
@@ -106,6 +106,24 @@ pub(crate) fn parse_caps_form(
     }))
 }
 
+/// One-line guidance under the CPU groups table: which CPU model to give guests
+/// that must live-migrate anywhere, or why none is safe.
+pub(crate) fn cpu_baseline_note(g: &CpuGroupsView) -> String {
+    match (&g.common_baseline, &g.recommended_cpu_model) {
+        (Some(b), Some(m)) => format!(
+            "Cluster baseline {b}: give guests that must live-migrate anywhere the CPU model {m}."
+        ),
+        (Some(b), None) => format!(
+            "Cluster baseline {b}: no QEMU model is defined for it, so guests keep the host CPU."
+        ),
+        (None, _) if g.mixed_vendors => {
+            "AMD and Intel nodes: no CPU model is safe across both, live migration stays inside one vendor."
+                .to_string()
+        }
+        (None, _) => "No node has reported a CPU group yet.".to_string(),
+    }
+}
+
 /// `VmArchitecture` -> the architecture string the find-node API expects
 /// ("x86_64", "aarch64", ...). Uses the type's own serde names.
 /// "25 GbE", "2.5 GbE", "100 Mb/s"; "link down / unknown" without a speed.
@@ -158,6 +176,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
     let (power_status, set_power_status) = create_signal(None::<PowerStatus>);
     let (quorum_plan, set_quorum_plan) = create_signal(None::<QuorumPlanView>);
     let (nics_view, set_nics_view) = create_signal(None::<NicsView>);
+    let (cpu_groups, set_cpu_groups) = create_signal(None::<CpuGroupsView>);
     let (qdev_host, set_qdev_host) = create_signal(String::new());
     let (qdev_algo, set_qdev_algo) = create_signal("ffsplit".to_string());
     let (loading, set_loading) = create_signal(false);
@@ -208,6 +227,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
             // Link report is informational: a failure must not raise the page error.
             if let Ok(n) = get_local_nics().await {
                 set_nics_view.set(Some(n));
+            }
+
+            // CPU groups are informational too.
+            if let Ok(g) = get_cpu_groups().await {
+                set_cpu_groups.set(Some(g));
             }
 
             match get_vms().await {
@@ -852,6 +876,38 @@ pub fn ClusterManagementPage() -> impl IntoView {
                 }
             })}
 
+            // CPU compatibility groups (area 1): per-node group and cluster baseline.
+            {move || cpu_groups.get().map(|g| {
+                let note = cpu_baseline_note(&g);
+                view! {
+                    <div id="cpu-group-panel" class="bg-white rounded-lg shadow overflow-hidden mt-6">
+                        <div class="px-6 py-4 border-b">
+                            <h2 class="text-lg font-semibold">"CPU compatibility groups"</h2>
+                            <p id="cpu-baseline" class="text-sm text-gray-600 mt-1">{note}</p>
+                        </div>
+                        <table class="min-w-full text-sm">
+                            <thead>
+                                <tr class="text-left text-gray-500">
+                                    <th class="px-6 py-2">"Node"</th>
+                                    <th class="px-6 py-2">"CPU group"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {g.nodes.iter().map(|(n, grp)| view! {
+                                    <tr class="cpu-group-row border-t">
+                                        <td class="px-6 py-2 font-medium">{n.clone()}</td>
+                                        <td class="px-6 py-2">{grp.clone()}</td>
+                                    </tr>
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                        <div class="px-6 py-3">
+                            {g.warnings.iter().map(|w| view! { <p class="cpu-group-warning text-sm text-yellow-700">{w.clone()}</p> }).collect_view()}
+                        </div>
+                    </div>
+                }
+            })}
+
             // Add Node Modal
             {move || show_add_node_modal.get().then(|| view! {
                 <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -1074,6 +1130,25 @@ mod tests {
             ..n
         };
         assert_eq!(nic_detail(&plain), "MTU 9000");
+    }
+
+    #[test]
+    fn cpu_baseline_note_covers_each_case() {
+        let mut g = CpuGroupsView {
+            nodes: vec![],
+            mixed_vendors: false,
+            common_baseline: Some("amd-v3".into()),
+            recommended_cpu_model: Some("x86-64-v3".into()),
+            warnings: vec![],
+        };
+        assert!(cpu_baseline_note(&g).contains("x86-64-v3"));
+        g.recommended_cpu_model = None;
+        assert!(cpu_baseline_note(&g).contains("host CPU"));
+        g.common_baseline = None;
+        g.mixed_vendors = true;
+        assert!(cpu_baseline_note(&g).contains("inside one vendor"));
+        g.mixed_vendors = false;
+        assert!(cpu_baseline_note(&g).contains("No node"));
     }
 
     #[test]

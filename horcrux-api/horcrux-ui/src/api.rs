@@ -774,6 +774,26 @@ pub async fn get_local_nics() -> Result<NicsView, ApiError> {
     fetch_json("/cluster/nics").await
 }
 
+/// `GET /api/cluster/cpu-groups` (area 1): each node's CPU compatibility
+/// group, the cluster baseline and the QEMU model safe on every node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CpuGroupsView {
+    #[serde(default)]
+    pub nodes: Vec<(String, String)>,
+    #[serde(default)]
+    pub mixed_vendors: bool,
+    #[serde(default)]
+    pub common_baseline: Option<String>,
+    #[serde(default)]
+    pub recommended_cpu_model: Option<String>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+pub async fn get_cpu_groups() -> Result<CpuGroupsView, ApiError> {
+    fetch_json("/cluster/cpu-groups").await
+}
+
 /// `PUT /api/cluster/quorum/qdevice`: persist (`Some((host, algorithm))`) or
 /// clear (`None`) the external quorum device. The server answers 422 on a bad
 /// host or algorithm.
