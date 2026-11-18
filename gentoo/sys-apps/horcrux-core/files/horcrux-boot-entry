@@ -1,0 +1,34 @@
+#!/bin/sh
+# sys-apps/horcrux-core: kernel install/remove hook (/etc/kernel/postinst.d and postrm.d; installkernel runs both).
+# Every installed or removed kernel must change the boot menu. On a ZFS boot-environment install the installer's own hook
+# (90-horcrux-be -> `horcrux-be sync`) owns grub.cfg, which is static there, and this hook does nothing. Every other install
+# (XFS/ext4, LVM, plain partitions) has no other hook: sys-kernel/installkernel is built without USE=grub (that flag would rewrite the
+# static BE grub.cfg), so a kernel update put vmlinuz/initramfs into /boot and the machine kept booting the old kernel forever.
+# Settings: /etc/conf.d/horcrux-boot-entry (BOOT_ENTRY=auto|off, GRUB_CFG, GRUB_MKCONFIG). Never fails the kernel install.
+[ -n "$1" ] || exit 0
+BOOT_ENTRY=auto
+GRUB_CFG=/boot/grub/grub.cfg
+GRUB_MKCONFIG=grub-mkconfig
+BE_CONF=/etc/horcrux/be.conf
+BE_HOOK=/etc/kernel/postinst.d/90-horcrux-be
+CONF=${HORCRUX_BOOT_ENTRY_CONF:-/etc/conf.d/horcrux-boot-entry}
+[ -r "$CONF" ] && . "$CONF"
+log() { echo "horcrux-boot-entry: $*" >&2; command -v logger >/dev/null 2>&1 && logger -t horcrux-boot-entry "$*"; return 0; }
+[ "$BOOT_ENTRY" = off ] && exit 0
+if [ -e "$BE_CONF" ] || [ -e "$BE_HOOK" ]; then
+	exit 0                                   # boot environments: horcrux-be owns the menu
+fi
+if ! command -v "$GRUB_MKCONFIG" >/dev/null 2>&1; then
+	exit 0                                   # not a GRUB install (UKI / systemd-boot set up by installkernel itself)
+fi
+if [ ! -e "$GRUB_CFG" ]; then
+	log "no $GRUB_CFG: not refreshing the boot menu (set GRUB_CFG in /etc/conf.d/horcrux-boot-entry)"
+	exit 0
+fi
+if "$GRUB_MKCONFIG" -o "$GRUB_CFG.new" >/dev/null 2>&1 && [ -s "$GRUB_CFG.new" ]; then
+	mv -f "$GRUB_CFG.new" "$GRUB_CFG" && log "boot menu refreshed for kernel $1 ($GRUB_CFG)"
+else
+	rm -f "$GRUB_CFG.new"
+	log "$GRUB_MKCONFIG failed: $GRUB_CFG left unchanged"
+fi
+exit 0

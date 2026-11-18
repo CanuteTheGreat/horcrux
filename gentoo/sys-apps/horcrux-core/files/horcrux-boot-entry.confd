@@ -1,0 +1,7 @@
+# sys-apps/horcrux-core: kernel install hook /etc/kernel/postinst.d/91-horcrux-boot-entry
+# auto: refresh the GRUB menu after every kernel install/removal unless this is a ZFS boot-environment install (horcrux-be owns it)
+# off:  never touch the boot menu (you run grub-mkconfig yourself)
+#BOOT_ENTRY=auto
+# the menu file grub-mkconfig writes (atomically: GRUB_CFG.new, then renamed)
+#GRUB_CFG=/boot/grub/grub.cfg
+#GRUB_MKCONFIG=grub-mkconfig

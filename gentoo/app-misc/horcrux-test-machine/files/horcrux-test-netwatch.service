@@ -1,8 +1,9 @@
 [Unit]
-Description=test machine: reload the Wi-Fi driver when the link is up but there is no connectivity for 5 minutes
-# NetworkManager connectivity watchdog (see /usr/libexec/horcrux-test-netwatch)
-Requires=NetworkManager.service
-After=NetworkManager.service
+Description=test machine: coldplug + restart NetworkManager when no link is up after boot, boot-health report, Wi-Fi driver reload on lost connectivity
+# network + boot-health watchdog (see /usr/libexec/horcrux-test-netwatch, settings /etc/conf.d/horcrux-test-netwatch)
+# Wants, not Requires: it must run exactly when NetworkManager failed
+Wants=NetworkManager.service
+After=NetworkManager.service systemd-udev-trigger.service
 
 [Service]
 Type=simple

@@ -18,7 +18,11 @@ KEYWORDS="~amd64"
 # +gnome / xfce (per-login xfconf power settings: the XFCE defaults file is owned by horcrux-surface-desktop).
 IUSE="+gnome +plain smallram xfce"
 
+# -r19: the kernel-install hook moved to sys-apps/horcrux-core-1-r7 (/etc/kernel/postinst.d/91-horcrux-boot-entry: every non-boot-environment Horcrux
+#   install needs it, not only test machines); netwatch also coldplugs + restarts NetworkManager when no link is up after boot and writes a boot-health
+#   report (/run/horcrux-test-boot-health, settings /etc/conf.d/horcrux-test-netwatch).
 RDEPEND="
+	>=sys-apps/horcrux-core-1-r7
 	plain? ( sys-kernel/horcrux-unlock[-encrypted] )
 	net-wireless/iw
 	sys-apps/ethtool
@@ -87,8 +91,7 @@ src_install() {
 	insinto /etc/conf.d
 	newins "${FILESDIR}"/horcrux-test-watchdog.conf horcrux-test-watchdog
 	newins "${FILESDIR}"/horcrux-test-klog.conf horcrux-test-klog
-	exeinto /etc/kernel/postinst.d
-	newexe "${FILESDIR}"/horcrux-test-kernel-hook 91-horcrux-test-kernel
+	newins "${FILESDIR}"/horcrux-test-netwatch.conf horcrux-test-netwatch
 	exeinto /usr/libexec
 	newinitd "${FILESDIR}"/horcrux-test-watchdog.initd horcrux-test-watchdog
 	newinitd "${FILESDIR}"/horcrux-test-power.initd horcrux-test-power

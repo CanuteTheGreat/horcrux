@@ -44,6 +44,12 @@ KEYWORDS="amd64 arm64"
 #   equery and eix work without sudo. The installers create the first administrator that way; pkg_postinst fixes existing installs on their next update, and
 #   /etc/portage/postsync.d/60-horcrux-admin-groups re-checks after every tree sync (daily via horcrux-autoupdate), so an admin added later by hand is
 #   covered too. gentoolkit (equery) and eix are part of core for the same reason; pkg_postinst builds the eix cache when it is missing.
+# /etc/rc.conf.d/horcrux-host.conf (-r7): rc_sys="" so OpenRC never decides a Horcrux host is a container. An empty /.dockerenv from the image build
+#   made OpenRC report "docker" and skip devfs, udev, udev-trigger, root (rw remount), localmount, fsck, hostname, modules: read-only root, no NIC driver,
+#   only `lo`. The images wrote rc_sys="" into /etc/rc.conf, which sys-apps/openrc owns; accepting the ._cfg0000_rc.conf of an OpenRC update dropped it
+#   (the diff `rc_sys=""` -> `#rc_sys=""` reads like a comment change). pkg_postinst also deletes a leftover container marker on a booted host.
+# /etc/kernel/postinst.d + postrm.d/91-horcrux-boot-entry (-r7): installs without boot environments (XFS/ext4/LVM) had no hook that refreshes grub.cfg
+#   (installkernel is built -grub because of the BE installs), so a kernel update was installed and never booted. BE installs keep 90-horcrux-be.
 RDEPEND="
 	acct-group/portage
 	app-portage/eix
@@ -71,6 +77,13 @@ src_install() {
 	newins "${FILESDIR}"/docker-daemon.json daemon.json
 	insinto /etc/rc.conf.d
 	newins "${FILESDIR}"/containerd-rc.conf horcrux-containerd.conf
+	newins "${FILESDIR}"/host-rc.conf horcrux-host.conf
+	exeinto /etc/kernel/postinst.d
+	newexe "${FILESDIR}"/horcrux-boot-entry 91-horcrux-boot-entry
+	exeinto /etc/kernel/postrm.d
+	newexe "${FILESDIR}"/horcrux-boot-entry 91-horcrux-boot-entry
+	insinto /etc/conf.d
+	newins "${FILESDIR}"/horcrux-boot-entry.confd horcrux-boot-entry
 	insinto /usr/lib/udev/rules.d
 	doins "${FILESDIR}"/80-horcrux-udisks-hide.rules
 	dosbin "${FILESDIR}"/horcrux-admin-groups
@@ -87,6 +100,21 @@ pkg_postinst() {
 	elog "Horcrux core installed. Check the clock rules: horcrux-time-config check; enable at boot: rc-update add chronyd default; rc-update add horcrux-timesync default;"
 	elog "rc-update add horcrux-firstboot default (the installer does all three)."
 	udev_reload
+	# a container marker on a BOOTED host is a leftover of the image build (`docker export` adds /.dockerenv); OpenRC and systemd both read it as "running in
+	# a container". PID 1 being a real init tells a booted machine from the image-build container (whose PID 1 is a shell), where nothing is removed.
+	if [[ -z ${ROOT} || ${ROOT} == / ]]; then
+		local pid1 m
+		pid1=$(readlink /proc/1/exe 2>/dev/null)
+		case ${pid1##*/} in
+			init|openrc-init|systemd)
+				for m in /.dockerenv /run/.containerenv; do
+					if [[ -f ${m} && ! -s ${m} ]]; then
+						rm -f "${m}" && elog "removed the leftover container marker ${m} (OpenRC/systemd read it as 'running in a container')"
+					fi
+				done
+				;;
+		esac
+	fi
 	# re-evaluate the already-present disks now (no reboot, no session restart) so udisks drops the system storage at once
 	if [[ -z ${ROOT} ]] && command -v udevadm >/dev/null 2>&1; then
 		udevadm trigger --subsystem-match=block --action=change || true
