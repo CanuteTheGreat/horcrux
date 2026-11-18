@@ -74,6 +74,8 @@ fn exact(path: &str) -> Option<&'static str> {
         "/system/packages" => "Packages",
         "/system/boot-environments" => "Boot Environments",
         "/system/diagnostics" => "Diagnostics",
+        "/system/about" => "About",
+        "/system/licenses" => "Open-source licenses",
         "/system/certificates" => "Certificates",
         "/audit" => "Audit Log",
         "/tasks" => "Tasks",

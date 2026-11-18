@@ -1,3 +1,4 @@
+pub mod about;
 pub mod boot_environments;
 pub mod configuration;
 pub mod diagnostics;
