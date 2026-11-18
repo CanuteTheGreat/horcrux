@@ -1,0 +1,21 @@
+{
+  "axe_script": "vendor/axe.min.js",
+  "tags": ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"],
+  "fail_impacts": ["serious", "critical"],
+  "list_impacts": ["moderate", "minor"],
+  "viewports": {"desktop": [1280, 900], "phone": [390, 844]},
+  "schemes": ["light", "dark"],
+  "allowlist": "a11y-allowlist.json",
+  "pages": [
+    {"name": "login", "path": "/login", "auth": false},
+    {"name": "dashboard", "path": "/"},
+    {"name": "vms", "path": "/vms"},
+    {"name": "vm-detail", "path": "/vms/{vm_id}"},
+    {"name": "containers", "path": "/containers"},
+    {"name": "storage", "path": "/storage"},
+    {"name": "network", "path": "/network"},
+    {"name": "users-rbac", "path": "/auth/users"},
+    {"name": "backups", "path": "/backup"},
+    {"name": "settings", "path": "/system/config"}
+  ]
+}
