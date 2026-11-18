@@ -774,7 +774,10 @@ class ZRun(qt.Runner):
             self.resume_postmortem(nvars)
 
     POSTMORTEM_CMD = ("echo BOOTS; uptime; last -x 2>/dev/null | head -8; echo ---SYSLOG; "
-                      "for f in /var/log/messages /var/log/syslog; do test -s $f && { tail -n 80 $f; break; }; done; "
+                      "for f in /var/log/messages /var/log/syslog; do test -s $f && { tail -n 30 $f; "
+                      "echo ---SYSLOG-BEFORE-LAST-BOOT; n=$(grep -n 'Linux version' $f | tail -n 1 | cut -d: -f1); "
+                      "test -n \"$n\" && head -n $((n-1)) $f | tail -n 90; "
+                      "echo ---SYSLOG-POWER; grep -aiE 'PM:|hibernat|resume|panic|oops|BUG:|shut" "down|power.?off|segfault|killed process|out of memory' $f | tail -n 40; break; }; done; "
                       "echo ---JOURNAL; command -v journalctl >/dev/null && journalctl -b -1 -n 80 --no-pager 2>&1; "
                       "echo ---PSTORE; ls /sys/fs/pstore 2>&1; cat /sys/fs/pstore/dmesg* 2>/dev/null | tail -40; "
                       "echo ---RC; rc-status -a 2>/dev/null | grep -vE 'started|stopped|^ *$' | head -20; "
@@ -795,7 +798,7 @@ class ZRun(qt.Runner):
                 rc, o = self.sh(self.POSTMORTEM_CMD, timeout=120)
                 self.res["resume_postmortem"] = o
                 open(f"{a.out}/resume-postmortem.txt", "w").write(o)
-                print("[DIAG] resume-postmortem (what the guest logged before it died after the resume):\n" + o[-6000:], flush=True)
+                print("[DIAG] resume-postmortem (what the guest logged before it died after the resume):\n" + o[-14000:], flush=True)
                 self.sh("poweroff", timeout=10)
                 self.wait_exit(vm)
             finally:
