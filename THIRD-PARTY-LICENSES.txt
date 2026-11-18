@@ -347,7 +347,7 @@ either 1.18.0
 elliptic-curve 0.13.8
     license: Apache-2.0 OR MIT
     source:  https://github.com/RustCrypto/traits/tree/master/elliptic-curve
-email-encoding 0.4.2
+email-encoding 0.4.3
     license: MIT OR Apache-2.0
     source:  https://github.com/lettre/email-encoding
 email_address 0.2.9
@@ -758,7 +758,7 @@ leptos_router 0.6.15
 leptos_server 0.6.15
     license: MIT
     source:  https://github.com/leptos-rs/leptos
-lettre 0.11.23
+lettre 0.11.24
     license: MIT
     source:  https://github.com/lettre/lettre
 libc 0.2.189
@@ -4905,7 +4905,7 @@ limitations under the License.
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-[49] used by: ciborium 0.2.2, ciborium-io 0.2.2, ciborium-ll 0.2.2, derive-where 1.7.0, email-encoding 0.4.2, encode_unicode 1.0.0, flume 0.11.1, instant-acme 0.8.5, lru-slab 0.1.3, qrcode 0.14.1, quinn 0.11.12, quinn-proto 0.11.19, quinn-udp 0.5.16, rustls-platform-verifier 0.7.1, self_cell 1.3.0, tinyvec 1.13.3, utf8_iter 1.0.4, zeroize 1.9.0
+[49] used by: ciborium 0.2.2, ciborium-io 0.2.2, ciborium-ll 0.2.2, derive-where 1.7.0, email-encoding 0.4.3, encode_unicode 1.0.0, flume 0.11.1, instant-acme 0.8.5, lru-slab 0.1.3, qrcode 0.14.1, quinn 0.11.12, quinn-proto 0.11.19, quinn-udp 0.5.16, rustls-platform-verifier 0.7.1, self_cell 1.3.0, tinyvec 1.13.3, utf8_iter 1.0.4, zeroize 1.9.0
 
 Apache License
                            Version 2.0, January 2004
@@ -8277,11 +8277,11 @@ DEALINGS IN THE SOFTWARE.
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-[90] used by: email-encoding 0.4.2
+[90] used by: email-encoding 0.4.3
 
 MIT License
 
-Copyright (c) 2021-2024 Paolo Barbolini <paolo@paolo565.org>
+Copyright (c) 2021-2026 Paolo Barbolini <paolo@paolobarbolini.it>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -11322,7 +11322,7 @@ SOFTWARE.
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-[149] used by: lettre 0.11.23
+[149] used by: lettre 0.11.24
 
 Copyright (c) 2014-2024 Alexis Mousset <contact@amousset.me>
 Copyright (c) 2019-2025 Paolo Barbolini <paolo@paolo565.org>
