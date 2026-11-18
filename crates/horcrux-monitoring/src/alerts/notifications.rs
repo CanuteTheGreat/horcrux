@@ -140,6 +140,40 @@ Horcrux Alert System
             .unwrap_or_else(|| "Unknown".to_string())
     );
 
+    // One transport per notification: lettre pools connections, so every
+    // recipient reuses one TCP/TLS/auth session instead of opening a new one.
+    let mailer = if config.use_tls {
+        // Use TLS connection
+        let mut transport = SmtpTransport::relay(&config.smtp_server)
+            .map_err(|e| {
+                horcrux_common::Error::System(format!(
+                    "Failed to connect to SMTP server: {}",
+                    e
+                ))
+            })?
+            .port(config.smtp_port);
+
+        // Add authentication if provided
+        if let (Some(username), Some(password)) = (&config.username, &config.password) {
+            transport =
+                transport.credentials(Credentials::new(username.clone(), password.clone()));
+        }
+
+        transport.build()
+    } else {
+        // Use plain SMTP (no TLS)
+        let mut transport =
+            SmtpTransport::builder_dangerous(&config.smtp_server).port(config.smtp_port);
+
+        // Add authentication if provided
+        if let (Some(username), Some(password)) = (&config.username, &config.password) {
+            transport =
+                transport.credentials(Credentials::new(username.clone(), password.clone()));
+        }
+
+        transport.build()
+    };
+
     // Build email for each recipient
     for to_address in &config.to_addresses {
         // Create email message
@@ -158,40 +192,8 @@ Horcrux Alert System
             .body(body.clone())
             .map_err(|e| horcrux_common::Error::System(format!("Failed to build email: {}", e)))?;
 
-        // Create SMTP transport
-        let mailer = if config.use_tls {
-            // Use TLS connection
-            let mut transport = SmtpTransport::relay(&config.smtp_server)
-                .map_err(|e| {
-                    horcrux_common::Error::System(format!(
-                        "Failed to connect to SMTP server: {}",
-                        e
-                    ))
-                })?
-                .port(config.smtp_port);
-
-            // Add authentication if provided
-            if let (Some(username), Some(password)) = (&config.username, &config.password) {
-                transport =
-                    transport.credentials(Credentials::new(username.clone(), password.clone()));
-            }
-
-            transport.build()
-        } else {
-            // Use plain SMTP (no TLS)
-            let mut transport =
-                SmtpTransport::builder_dangerous(&config.smtp_server).port(config.smtp_port);
-
-            // Add authentication if provided
-            if let (Some(username), Some(password)) = (&config.username, &config.password) {
-                transport =
-                    transport.credentials(Credentials::new(username.clone(), password.clone()));
-            }
-
-            transport.build()
-        };
-
         // Send email
+        let mailer = mailer.clone();
         tokio::task::spawn_blocking(move || mailer.send(&email))
             .await
             .map_err(|e| {
