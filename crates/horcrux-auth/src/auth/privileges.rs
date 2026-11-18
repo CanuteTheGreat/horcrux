@@ -643,6 +643,46 @@ mod tests {
     }
 
     #[test]
+    fn declarative_routes_split_reading_changing_and_the_signed_webhook() {
+        let audit = (P::SysAudit, "/".to_string());
+        let modify = (P::SysModify, "/".to_string());
+        for (m, p) in [
+            ("GET", "/api/declarative/desired"),
+            ("GET", "/api/declarative/drift"),
+            ("GET", "/api/declarative/drift/diff"),
+            ("GET", "/api/declarative/history"),
+            ("GET", "/api/declarative/history/123"),
+            ("GET", "/api/declarative/gitops/status"),
+            ("GET", "/api/declarative/gitops/config"),
+            ("POST", "/api/declarative/plan"),
+            ("POST", "/api/declarative/desired/validate"),
+            ("POST", "/api/declarative/drift/check"),
+        ] {
+            assert_eq!(priv_of(requirement(m, p)), audit, "{m} {p}");
+        }
+        for (m, p) in [
+            ("PUT", "/api/declarative/desired"),
+            ("DELETE", "/api/declarative/desired"),
+            ("POST", "/api/declarative/apply"),
+            ("POST", "/api/declarative/desired/apply"),
+            ("PUT", "/api/declarative/settings"),
+            ("PUT", "/api/declarative/gitops/config"),
+            ("DELETE", "/api/declarative/gitops/config"),
+            ("POST", "/api/declarative/gitops/sync"),
+            ("POST", "/api/declarative/gitops/approve/abc"),
+            ("POST", "/api/declarative/gitops/reject/abc"),
+            ("POST", "/api/declarative/history/123/rollback"),
+        ] {
+            assert_eq!(priv_of(requirement(m, p)), modify, "{m} {p}");
+        }
+        // authenticated by the HMAC signature of the body, not by a login
+        assert_eq!(
+            requirement("POST", "/api/declarative/gitops/webhook"),
+            Requirement::Public
+        );
+    }
+
+    #[test]
     fn self_service_routes() {
         assert_eq!(
             requirement("POST", "/api/auth/logout"),

@@ -103,12 +103,20 @@ class Repo:
 def define(args):
     nodes = []
     keys = []
+    # development speed-up: --arg save_installed=DIR keeps the installed disks and ssh keys of a run, --arg installed_dir=DIR boots
+    # those instead of installing again (the install takes ~7 min per node). CI always installs from the ISO.
+    cache = args.get("installed_dir")
+    cached = bool(cache) and all(os.path.exists(os.path.join(cache, f"{n}.qcow2")) for n in ("n1", "n2"))
     for name in ("n1", "n2"):
+        nic = [Nic("user", forwards={"ssh": 22, "web": P["port"]})]
+        if cached:
+            nodes.append(NodeSpec(name=name, mem=int(args.get("mem", 3072)), cpus=2, firmware="uefi", disks=[Disk(path=os.path.join(cache, f"{name}.qcow2"))],
+                                  nics=nic, ssh_key=os.path.join(cache, f"{name}.key"), console="none", boot_timeout=420))
+            continue
         answers, key = make_answers("horcrux")
         keys.append(key)
         nodes.append(NodeSpec(name=name, mem=int(args.get("mem", 3072)), cpus=2, iso=args["iso"], iso_media="usb", firmware="uefi",
-                              disks=[Disk("24G")], extra_drives=[(answers, "usb")], nics=[Nic("user", forwards={"ssh": 22, "web": P["port"]})],
-                              ssh_key=key, console="none", boot_timeout=420))
+                              disks=[Disk("24G")], extra_drives=[(answers, "usb")], nics=nic, ssh_key=key, console="none", boot_timeout=420))
 
     def run(m):
         root = tempfile.mkdtemp(prefix="vmt-gitops-")
@@ -140,8 +148,16 @@ def define(args):
             return next((v["memory"] for v in vms if v["name"] == VM), None) if sc == 200 else None
 
         m.phase("install both nodes from the ISO and boot them")
-        for n in (n1, n2):
-            unattended_install(m, n)
+        if cached:
+            m.note("installed-disks", True, f"booting the saved installs from {cache} (development speed-up, not an ISO test)")
+        else:
+            for n in (n1, n2):
+                unattended_install(m, n)
+            if args.get("save_installed"):
+                os.makedirs(args["save_installed"], exist_ok=True)
+                for n in (n1, n2):
+                    shutil.copy(n.disks[0], os.path.join(args["save_installed"], f"{n.name}.qcow2"))
+                    shutil.copy(n.spec.ssh_key, os.path.join(args["save_installed"], f"{n.name}.key"))
         for n in (n1, n2):
             n.start()
         for n in (n1, n2):
@@ -160,9 +176,9 @@ def define(args):
                 path = n.succeed("command -v horcrux-api").strip()
                 n.succeed(f"curl -fsS -o /tmp/horcrux-api.new http://{HOST}:{repo.http_port}/{os.path.basename(args['api_bin'])} && chmod 755 /tmp/horcrux-api.new",
                           timeout=int(n.T(900)))
-                n.stop_unit(P["svc"])
-                n.succeed(f"cp /tmp/horcrux-api.new {path}")
-                n.start_unit(P["svc"])
+                # rename over the running binary (cp onto it is "Text file busy"), then restart the unit
+                n.succeed(f"cp /tmp/horcrux-api.new {path}.dev && mv -f {path}.dev {path}")
+                n.restart_unit(P["svc"])
                 n.wait_for_unit(P["svc"], 120)
                 n.wait_until(lambda n=n: n.http("web", P["health"])[0] == 200, 300, 5, "web health after the binary override")
                 sc, b = n.http("web", "/api/auth/login", "POST", {"username": P["web_user"], "password": PW})
