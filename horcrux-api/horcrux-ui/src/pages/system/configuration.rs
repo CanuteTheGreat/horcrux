@@ -386,11 +386,11 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                         <SearchSelect id="cfg-timezone" label="Timezone"
                                             choices=Signal::derive(move || tz_choices.get())
                                             value=form_timezone set_value=set_form_timezone
-                                            placeholder="Search time zones (e.g. Chicago, Etc/UTC)"/>
+                                            placeholder="Search time zones"/>
                                         <SearchSelect id="cfg-locale" label="Locale"
                                             choices=Signal::derive(move || locale_choices.get())
                                             value=form_locale set_value=set_form_locale
-                                            placeholder="Search locales (e.g. en_US, de_DE)"/>
+                                            placeholder="Search locales"/>
                                     </div>
 
                                     <div class="form-actions">
@@ -547,7 +547,7 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                                     <SearchSelect id="ntp-timezone" label="Timezone"
                                         choices=Signal::derive(move || tz_choices.get())
                                         value=form_ntp_timezone set_value=set_form_ntp_timezone
-                                        placeholder="Search time zones (e.g. Chicago, Etc/UTC)"/>
+                                        placeholder="Search time zones"/>
 
                                     <div class="form-actions">
                                         <button

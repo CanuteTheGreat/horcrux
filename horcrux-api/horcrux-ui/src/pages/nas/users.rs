@@ -208,20 +208,20 @@ pub fn UsersPage() -> impl IntoView {
                                 <h2>"Create NAS User"</h2>
                                 <form>
                                     <div class="form-group">
-                                        <label>"Username"</label>
-                                        <input type="text" name="username" required />
+                                        <label for="nas-user-username">"Username"</label>
+                                        <input id="nas-user-username" type="text" name="username" required />
                                     </div>
                                     <div class="form-group">
-                                        <label>"Password"</label>
-                                        <input type="password" name="password" required />
+                                        <label for="nas-user-password">"Password"</label>
+                                        <input id="nas-user-password" type="password" name="password" required />
                                     </div>
                                     <div class="form-group">
-                                        <label>"Primary Group"</label>
-                                        <input type="text" name="primary_group" value="users" />
+                                        <label for="nas-user-primary-group">"Primary Group"</label>
+                                        <input id="nas-user-primary-group" type="text" name="primary_group" value="users" />
                                     </div>
                                     <div class="form-group">
-                                        <label>"Home Directory"</label>
-                                        <input type="text" name="home_directory" placeholder="/home/username" />
+                                        <label for="nas-user-home-directory">"Home Directory"</label>
+                                        <input id="nas-user-home-directory" type="text" name="home_directory" placeholder="/home/username" />
                                     </div>
                                     <div class="form-check">
                                         <input type="checkbox" name="smb_enabled" checked />

@@ -413,6 +413,7 @@ pub fn SchedulerPage() -> impl IntoView {
                         <div class="tab-content">
                             <div class="tab-header">
                                 <select
+                                    aria-label="Job"
                                     on:change=move |e| {
                                         let value = event_target_value(&e);
                                         if value.is_empty() {
@@ -511,8 +512,8 @@ pub fn SchedulerPage() -> impl IntoView {
                                 }>
                                     <div class="form-row">
                                         <div class="form-group">
-                                            <label>"Job Name"</label>
-                                            <input
+                                            <label for="nas-job-job-name">"Job Name"</label>
+                                            <input id="nas-job-job-name"
                                                 type="text"
                                                 placeholder="Daily Snapshot"
                                                 required
@@ -520,8 +521,8 @@ pub fn SchedulerPage() -> impl IntoView {
                                             />
                                         </div>
                                         <div class="form-group">
-                                            <label>"Job Type"</label>
-                                            <select on:change=move |e| set_new_job_type.set(event_target_value(&e))>
+                                            <label for="nas-job-job-type">"Job Type"</label>
+                                            <select id="nas-job-job-type" on:change=move |e| set_new_job_type.set(event_target_value(&e))>
                                                 <option value="snapshot">"Snapshot"</option>
                                                 <option value="retention">"Retention Cleanup"</option>
                                                 <option value="replication">"Replication"</option>
@@ -534,8 +535,8 @@ pub fn SchedulerPage() -> impl IntoView {
                                     </div>
 
                                     <div class="form-group">
-                                        <label>"Schedule (Cron Expression)"</label>
-                                        <input
+                                        <label for="nas-job-schedule-cron-expression">"Schedule (Cron Expression)"</label>
+                                        <input id="nas-job-schedule-cron-expression"
                                             type="text"
                                             placeholder="0 0 * * *"
                                             value=new_job_schedule.get()
@@ -555,8 +556,8 @@ pub fn SchedulerPage() -> impl IntoView {
                                     {match current_job_type.as_str() {
                                         "snapshot" | "retention" => view! {
                                             <div class="form-group">
-                                                <label>"Dataset"</label>
-                                                <input
+                                                <label for="nas-job-dataset">"Dataset"</label>
+                                                <input id="nas-job-dataset"
                                                     type="text"
                                                     placeholder="tank/data"
                                                     required
@@ -566,8 +567,8 @@ pub fn SchedulerPage() -> impl IntoView {
                                         }.into_view(),
                                         "scrub" => view! {
                                             <div class="form-group">
-                                                <label>"Pool"</label>
-                                                <input
+                                                <label for="nas-job-pool">"Pool"</label>
+                                                <input id="nas-job-pool"
                                                     type="text"
                                                     placeholder="tank"
                                                     required
@@ -577,8 +578,8 @@ pub fn SchedulerPage() -> impl IntoView {
                                         }.into_view(),
                                         "replication" => view! {
                                             <div class="form-group">
-                                                <label>"Replication Task ID"</label>
-                                                <input
+                                                <label for="nas-job-replication-task-id">"Replication Task ID"</label>
+                                                <input id="nas-job-replication-task-id"
                                                     type="text"
                                                     placeholder="task-uuid"
                                                     required

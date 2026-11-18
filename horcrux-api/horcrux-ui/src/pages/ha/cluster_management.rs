@@ -528,7 +528,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                         <input
                             id="node-search"
                             type="text"
-                            placeholder="Name, address or arch"
+                            placeholder="Search nodes"
                             on:input=move |ev| set_search_query.set(event_target_value(&ev))
                             class="w-full px-3 py-2 border border-gray-300 rounded-lg"
                         />
