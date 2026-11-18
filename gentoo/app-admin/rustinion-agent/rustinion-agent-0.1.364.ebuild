@@ -10,6 +10,7 @@ HOMEPAGE="https://rustinion.com"
 SRC_URI="
 	amd64? ( https://rustinion.com/downloads/rustinion-linux-x86_64-${PV} )
 	arm64? ( https://rustinion.com/downloads/rustinion-linux-arm64-${PV} )
+	https://rustinion.com/downloads/repo/licenses/THIRD-PARTY-LICENSES-${PV}.txt
 "
 S="${WORKDIR}"
 
@@ -35,6 +36,7 @@ src_install() {
 	use amd64 && bin="rustinion-linux-x86_64-${PV}"
 	use arm64 && bin="rustinion-linux-arm64-${PV}"
 	newbin "${DISTDIR}/${bin}" rustinion
+	dodoc "${DISTDIR}/THIRD-PARTY-LICENSES-${PV}.txt"
 
 	newinitd "${FILESDIR}/rustinion.initd" rustinion
 	systemd_dounit "${FILESDIR}/rustinion.service"
