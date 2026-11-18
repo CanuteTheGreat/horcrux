@@ -60,6 +60,14 @@ class Repo:
         self.rogue = os.path.join(root, "rogue")
         subprocess.check_call(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "rogue", "-f", self.rogue])
         self.allowed = "ci@example.test " + open(self.key + ".pub").read().strip()
+        self.http = None
+        self.http_port = None
+
+    def serve_dir(self, directory):
+        """Development only: serve a directory over HTTP (the guests fetch a locally built binary from it)."""
+        self.http_port = free_port()
+        self.http = subprocess.Popen(["python3", "-m", "http.server", str(self.http_port), "--bind", "0.0.0.0", "--directory", directory],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     @staticmethod
     def git(*args, cwd):
@@ -82,11 +90,14 @@ class Repo:
         return sha
 
     def stop(self):
-        self.daemon.terminate()
-        try:
-            self.daemon.wait(10)
-        except subprocess.TimeoutExpired:
-            self.daemon.kill()
+        for p in (self.daemon, self.http):
+            if p is None:
+                continue
+            p.terminate()
+            try:
+                p.wait(10)
+            except subprocess.TimeoutExpired:
+                p.kill()
 
 
 def define(args):
@@ -102,6 +113,8 @@ def define(args):
     def run(m):
         root = tempfile.mkdtemp(prefix="vmt-gitops-")
         repo = Repo(root)
+        if args.get("api_bin"):
+            repo.serve_dir(os.path.dirname(os.path.abspath(args["api_bin"])))
         try:
             body(m, repo)
         finally:
@@ -142,11 +155,14 @@ def define(args):
             tok[n.name] = data.get("ticket") or data.get("token")
             m.check(f"{n.name}:admin-login", bool(tok[n.name]), f"{sc}")
             if args.get("api_bin"):
-                # development only: put a locally built API binary on the guest (CI always tests the ISO's own)
+                # development only: put a locally built API binary on the guest (CI always tests the ISO's own).
+                # Served over HTTP from the host: put_file goes through the shell channel, too slow for a 190 MB binary.
                 path = n.succeed("command -v horcrux-api").strip()
-                n.put_file(args["api_bin"], "/tmp/horcrux-api.new", "755")
+                n.succeed(f"curl -fsS -o /tmp/horcrux-api.new http://{HOST}:{repo.http_port}/{os.path.basename(args['api_bin'])} && chmod 755 /tmp/horcrux-api.new",
+                          timeout=int(n.T(900)))
+                n.stop_unit(P["svc"])
                 n.succeed(f"cp /tmp/horcrux-api.new {path}")
-                n.restart_unit(P["svc"])
+                n.start_unit(P["svc"])
                 n.wait_for_unit(P["svc"], 120)
                 n.wait_until(lambda n=n: n.http("web", P["health"])[0] == 200, 300, 5, "web health after the binary override")
                 sc, b = n.http("web", "/api/auth/login", "POST", {"username": P["web_user"], "password": PW})
