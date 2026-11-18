@@ -211,8 +211,64 @@ Horcrux Alert System
     Ok(())
 }
 
-/// Send webhook notification using HTTP client
+/// Attempts per alert webhook (first try + 2 retries).
+const WEBHOOK_ATTEMPTS: u32 = 3;
+
+/// One HTTP client for every alert webhook: connections are reused, and no
+/// receiver can hold the alert pipeline forever (the default client has no
+/// timeout at all).
+fn webhook_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+/// Whether a webhook response status is worth another try: server errors,
+/// rate limiting and request timeouts are; other 4xx (bad URL, bad token) are
+/// not.
+fn webhook_status_retryable(status: u16) -> bool {
+    status >= 500 || status == 429 || status == 408
+}
+
+/// Wait before retry number `retry` (1-based): 1 s, 2 s, 4 s, ...
+fn webhook_retry_delay(retry: u32) -> std::time::Duration {
+    std::time::Duration::from_secs(1u64 << retry.saturating_sub(1).min(4))
+}
+
+/// Send webhook notification, retrying transient failures with backoff.
 async fn send_webhook(config: &WebhookConfig, alert: &Alert) -> Result<()> {
+    let mut attempt = 1;
+    loop {
+        match send_webhook_once(config, alert).await {
+            Ok(()) => return Ok(()),
+            Err((retryable, err)) => {
+                if !retryable || attempt >= WEBHOOK_ATTEMPTS {
+                    return Err(err);
+                }
+                tracing::warn!(
+                    "Webhook to {} failed (attempt {}/{}): {}; retrying",
+                    config.url,
+                    attempt,
+                    WEBHOOK_ATTEMPTS,
+                    err
+                );
+                tokio::time::sleep(webhook_retry_delay(attempt)).await;
+                attempt += 1;
+            }
+        }
+    }
+}
+
+/// One webhook attempt. The error carries whether a retry could help.
+async fn send_webhook_once(
+    config: &WebhookConfig,
+    alert: &Alert,
+) -> std::result::Result<(), (bool, horcrux_common::Error)> {
     // Build JSON payload
     let payload = serde_json::json!({
         "alert_id": alert.id,
@@ -227,8 +283,7 @@ async fn send_webhook(config: &WebhookConfig, alert: &Alert) -> Result<()> {
         "fired_at": alert.fired_at,
     });
 
-    // Create HTTP client
-    let client = reqwest::Client::new();
+    let client = webhook_client();
 
     // Build request based on method
     let mut request = match config.method.to_uppercase().as_str() {
@@ -238,10 +293,13 @@ async fn send_webhook(config: &WebhookConfig, alert: &Alert) -> Result<()> {
         "PATCH" => client.patch(&config.url),
         "DELETE" => client.delete(&config.url),
         _ => {
-            return Err(horcrux_common::Error::InvalidConfig(format!(
-                "Unsupported HTTP method: {}",
-                config.method
-            )));
+            return Err((
+                false,
+                horcrux_common::Error::InvalidConfig(format!(
+                    "Unsupported HTTP method: {}",
+                    config.method
+                )),
+            ));
         }
     };
 
@@ -261,20 +319,25 @@ async fn send_webhook(config: &WebhookConfig, alert: &Alert) -> Result<()> {
     // Add JSON payload
     request = request.json(&payload);
 
-    // Send request
-    let response = request
-        .send()
-        .await
-        .map_err(|e| horcrux_common::Error::System(format!("Failed to send webhook: {}", e)))?;
+    // Send request: a transport error (refused, timed out) is transient
+    let response = request.send().await.map_err(|e| {
+        (
+            true,
+            horcrux_common::Error::System(format!("Failed to send webhook: {}", e)),
+        )
+    })?;
 
     // Check response status
     if !response.status().is_success() {
         let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
-        return Err(horcrux_common::Error::System(format!(
-            "Webhook request failed with status {}: {}",
-            status, error_text
-        )));
+        return Err((
+            webhook_status_retryable(status.as_u16()),
+            horcrux_common::Error::System(format!(
+                "Webhook request failed with status {}: {}",
+                status, error_text
+            )),
+        ));
     }
 
     tracing::info!(
@@ -315,6 +378,22 @@ async fn send_syslog(alert: &Alert) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webhook_retries_only_transient_statuses() {
+        for s in [500u16, 502, 503, 504, 429, 408] {
+            assert!(webhook_status_retryable(s), "{s}");
+        }
+        for s in [200u16, 301, 400, 401, 403, 404, 410, 422] {
+            assert!(!webhook_status_retryable(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn webhook_backoff_doubles_and_is_capped() {
+        let secs: Vec<u64> = (1..=7).map(|r| webhook_retry_delay(r).as_secs()).collect();
+        assert_eq!(secs, vec![1, 2, 4, 8, 16, 16, 16]);
+    }
 
     #[test]
     fn test_notification_channel_serialization() {
