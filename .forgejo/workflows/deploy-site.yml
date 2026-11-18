@@ -16,6 +16,7 @@ on:
       - 'branding/**'
       - 'keys/**'
       - 'SECURITY.md'
+      - 'THIRD-PARTY-LICENSES.txt'
       - '.forgejo/workflows/deploy-site.yml'
   # Daily rebuild: picks up systemd ISOs that were published since the last deploy (the build lists a systemd
   # download only once its asset exists on the GitHub daily release). 18:30 UTC is after the nightly ISO slots.

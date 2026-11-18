@@ -74,6 +74,7 @@ def page(page_dir, title, body, active="", desc=None):
     r = lambda to: rel(page_dir, to)
     items = [("download", (r("") .rstrip("/") + "/#download") if page_dir else "#download", "Download"),
              ("docs", r("docs/"), "Docs"), ("roadmap", r("roadmap/"), "Roadmap"),
+             ("updates", r("docs/update-policy/"), "Updates"),
              ("source", SRC, "Source")]
     cur = ' aria-current="page"'
     nav = "".join(f'<a href="{h}"{cur if k == active else ""}>{t}</a>' for k, h, t in items)
@@ -96,7 +97,8 @@ def page(page_dir, title, body, active="", desc=None):
 <footer><div class="wrap foot">
 <p>{CFG['name']} is a free, GPL-3.0 project by <a href="https://errant.solutions/">Errant Solutions</a>.
 Source: <a href="{SRC}">GitHub</a>.</p>
-<p>Commercial support: planned after 1.0. Nothing is for sale today.</p></div></footer>
+<p>Commercial support: planned after 1.0. Nothing is for sale today.</p>
+<p class="policies"><a href="{r('docs/privacy/')}">Privacy</a> &middot; <a href="{r('docs/update-policy/')}">Updates and support policy</a> &middot; <a href="{r('licenses/THIRD-PARTY-LICENSES.txt')}">Open-source licenses</a></p></div></footer>
 </body></html>
 """
 
@@ -145,10 +147,13 @@ def main():
         shutil.copy(os.path.join(br, src), os.path.join(A, dst))
     shutil.copy(os.path.join(HERE, "style.css"), os.path.join(A, "style.css"))
     shutil.copytree(os.path.join(ROOT, "docs", "images"), os.path.join(DIST, "docs", "images"))
+    # license inventory of the third-party crates (ci/third-party-licenses.py), linked from every footer
+    os.makedirs(os.path.join(DIST, "licenses"))
+    shutil.copy(os.path.join(ROOT, "THIRD-PARTY-LICENSES.txt"), os.path.join(DIST, "licenses", "THIRD-PARTY-LICENSES.txt"))
 
     for name in PAGES:
         if os.path.exists(os.path.join(ROOT, "docs", name)):
-            doc_page(name, "roadmap" if name == "ROADMAP.md" else ("docs" if name != "stable-channel.md" else ""))
+            doc_page(name, "roadmap" if name == "ROADMAP.md" else "updates" if name == "UPDATE-POLICY.md" else ("docs" if name != "stable-channel.md" else ""))
         else:
             print("missing doc", name, file=sys.stderr); sys.exit(1)
 

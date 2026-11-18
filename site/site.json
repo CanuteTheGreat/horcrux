@@ -120,9 +120,27 @@
   [
    "T2-MACS.md",
    "T2 Macs"
+  ],
+  [
+   "UPDATE-POLICY.md",
+   "Updates, supported versions and rollback"
+  ],
+  [
+   "PRIVACY.md",
+   "Privacy"
   ]
  ],
  "docs_index": [
+  [
+   "UPDATE-POLICY.md",
+   "Updates and support policy",
+   "Versions, security-fix window, how nodes update, rollback"
+  ],
+  [
+   "PRIVACY.md",
+   "Privacy",
+   "What Horcrux sends off the machine"
+  ],
   [
    "ISO-INSTALL.md",
    "Installing from the ISO",

@@ -36,6 +36,8 @@ if [ -z "$id" ]; then
     {
         echo
         echo "Update and rollback: https://github.com/CanuteTheGreat/horcrux/blob/main/docs/UPDATE-POLICY.md"
+        echo "Privacy (what Horcrux sends off the machine): https://github.com/CanuteTheGreat/horcrux/blob/main/docs/PRIVACY.md"
+        echo "Third-party licenses: the horcrux-$tag-THIRD-PARTY-LICENSES.txt asset of this release."
     } >>/tmp/release-notes.md
     case "$tag" in *alpha* | *beta* | *rc*) pre=true ;; *) pre=false ;; esac
     body="$(python3 -c 'import json,sys; print(json.dumps({"tag_name": sys.argv[1], "name": sys.argv[1], "body": open("/tmp/release-notes.md").read(), "prerelease": sys.argv[2] == "true"}))' "$tag" "$pre")"
