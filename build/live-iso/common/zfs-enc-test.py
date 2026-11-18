@@ -770,6 +770,39 @@ class ZRun(qt.Runner):
         finally:
             if vm.alive():
                 vm.p.kill()
+        if self.res.get("vm_died_during_command"):
+            self.resume_postmortem(nvars)
+
+    POSTMORTEM_CMD = ("echo BOOTS; uptime; last -x 2>/dev/null | head -8; echo ---SYSLOG; "
+                      "for f in /var/log/messages /var/log/syslog; do test -s $f && { tail -n 80 $f; break; }; done; "
+                      "echo ---JOURNAL; command -v journalctl >/dev/null && journalctl -b -1 -n 80 --no-pager 2>&1; "
+                      "echo ---PSTORE; ls /sys/fs/pstore 2>&1; cat /sys/fs/pstore/dmesg* 2>/dev/null | tail -40; "
+                      "echo ---RC; rc-status -a 2>/dev/null | grep -vE 'started|stopped|^ *$' | head -20; "
+                      "echo ---ZPOOL; zpool history -il rpool 2>&1 | tail -12")
+
+    def resume_postmortem(self, nvars):
+        """The resumed guest vanished seconds after the resume (QEMU exit 0 under -no-reboot: a guest reset or poweroff, runs 3087/3150/3168/18193/19058)\n        and its serial console says nothing (quiet kernel, the only text is the bootloader countdown from before the resume). Boot the same disk once more\n        and print what the guest itself logged before it died, so the next run names the cause. Diagnostics only: never changes a verdict."""
+        a = self.z
+        try:
+            time.sleep(3)
+            qt.pflash_vars(nvars)
+            vm = qt.VM("6-postmortem", self.qemu_args(None, True, nvars), a.out)
+            try:
+                _ok, up = self.type_passphrase_usb(vm, "passphrase-prompt-postmortem")
+                if not up:
+                    print("[DIAG] resume-postmortem: the disk did not come back after one passphrase", flush=True)
+                    return
+                rc, o = self.sh(self.POSTMORTEM_CMD, timeout=120)
+                self.res["resume_postmortem"] = o
+                open(f"{a.out}/resume-postmortem.txt", "w").write(o)
+                print("[DIAG] resume-postmortem (what the guest logged before it died after the resume):\n" + o[-6000:], flush=True)
+                self.sh("poweroff", timeout=10)
+                self.wait_exit(vm)
+            finally:
+                if vm.alive():
+                    vm.p.kill()
+        except BaseException as e:        # diagnostics must never mask the failure
+            print(f"[DIAG] resume-postmortem failed: {e!r}", flush=True)
 
     def session_audio_autostart_pre(self, user):
         """before the first GNOME login: an XDG autostart entry for this user and a system-wide one, each leaving a marker when gnome-session-openrc runs it"""
