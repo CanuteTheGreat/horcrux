@@ -1907,6 +1907,13 @@ class Runner:
         vm.shot("console-menu")
         want = ["console menu", "Assign interfaces", "Reset a user password" if P.get("web_user") else "Reset the admin password", "Web UI:"]   # web_auth=pam products reword option 3
         missing = [w for w in want if w not in scr]
+        if missing:
+            # a kernel message (clocksource watchdog on a loaded host) printed under the menu scrolls its header off the 25-line screen:
+            # an empty Enter makes the menu redraw from the top, so look once more before calling it missing
+            vm.send("\r")
+            vm.expect_screen(r"console menu", 10)
+            scr = vm.screen()
+            missing = [w for w in want if w not in scr]
         self.step("console-menu-shown", not missing,
                   "header, interface list, web URL and the numbered options are on the serial console"
                   + (f" [missing {missing!r}; screen tail: {re.sub(chr(10), ' | ', scr.strip())[-300:]!r}]" if missing else ""))
