@@ -175,6 +175,7 @@ pub fn ApiKeysPage() -> impl IntoView {
                 <div class="header-actions">
                     <select
                         class="user-selector"
+                        aria-label="User whose API tokens are shown"
                         on:change=move |ev| {
                             let value = event_target_value(&ev);
                             if value.is_empty() {

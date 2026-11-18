@@ -122,13 +122,13 @@ pub fn PermissionsPage() -> impl IntoView {
                     </tbody>
                 </table>
                 <form class="inline-form" id="acl-add" on:submit=add_grant>
-                    <input type="text" id="acl-path" placeholder="/vms/<id>" required
+                    <input type="text" id="acl-path" aria-label="ACL path" placeholder="/vms/<id>" required
                         on:input=move |ev| set_path.set(event_target_value(&ev)) prop:value=path/>
-                    <select id="acl-subject-type" on:change=move |ev| { set_subject_type.set(event_target_value(&ev)); set_subject.set(String::new()); }>
+                    <select id="acl-subject-type" aria-label="Grant to a user or a group" on:change=move |ev| { set_subject_type.set(event_target_value(&ev)); set_subject.set(String::new()); }>
                         <option value="user">"User"</option>
                         <option value="group">"Group"</option>
                     </select>
-                    <select id="acl-subject" on:change=move |ev| set_subject.set(event_target_value(&ev))>
+                    <select id="acl-subject" aria-label="User or group" on:change=move |ev| set_subject.set(event_target_value(&ev))>
                         <option value="">"-- choose --"</option>
                         {move || if subject_type.get() == "user" {
                             users.get().into_iter().map(|u| view! { <option value=u.username.clone()>{u.username.clone()}</option> }).collect_view()
@@ -136,7 +136,7 @@ pub fn PermissionsPage() -> impl IntoView {
                             groups.get().into_iter().map(|g| view! { <option value=g.name.clone()>{g.name.clone()}</option> }).collect_view()
                         }}
                     </select>
-                    <select id="acl-role" on:change=move |ev| set_role.set(event_target_value(&ev))>
+                    <select id="acl-role" aria-label="Role" on:change=move |ev| set_role.set(event_target_value(&ev))>
                         {move || roles.get().into_iter().map(|r| {
                             let sel = r.name == role.get_untracked();
                             view! { <option value=r.name.clone() selected=sel>{r.name.clone()}</option> }
@@ -176,9 +176,9 @@ pub fn PermissionsPage() -> impl IntoView {
                     </tbody>
                 </table>
                 <form class="inline-form" id="group-add" on:submit=add_group>
-                    <input type="text" id="group-name" placeholder="group name" required
+                    <input type="text" id="group-name" aria-label="Group name" placeholder="group name" required
                         on:input=move |ev| set_gname.set(event_target_value(&ev)) prop:value=gname/>
-                    <input type="text" id="group-members" placeholder="members: alice, bob"
+                    <input type="text" id="group-members" aria-label="Group members" placeholder="alice, bob"
                         on:input=move |ev| set_gmembers.set(event_target_value(&ev)) prop:value=gmembers/>
                     <button type="submit" class="btn btn-primary" id="group-submit">"Create group"</button>
                 </form>
@@ -348,20 +348,20 @@ pub fn RealmsPage() -> impl IntoView {
                 </tbody>
             </table>
             <div class="inline-form">
-                <label>"Test login (optional): "</label>
-                <input type="text" placeholder="user" id="realm-test-user" on:input=move |ev| set_test_user.set(event_target_value(&ev))/>
-                <input type="password" placeholder="password" id="realm-test-password" on:input=move |ev| set_test_pw.set(event_target_value(&ev))/>
+                <label for="realm-test-user">"Test login (optional): "</label>
+                <input type="text" aria-label="Test login user" placeholder="user" id="realm-test-user" on:input=move |ev| set_test_user.set(event_target_value(&ev))/>
+                <input type="password" aria-label="Test login password" placeholder="password" id="realm-test-password" on:input=move |ev| set_test_pw.set(event_target_value(&ev))/>
             </div>
 
             <section class="card">
                 <h2>"Add realm"</h2>
                 <form id="realm-add" on:submit=create>
                     <div class="form-group">
-                        <label>"Name"</label>
+                        <label for="realm-name">"Name"</label>
                         <input type="text" id="realm-name" required on:input=move |ev| set_name.set(event_target_value(&ev)) prop:value=name/>
                     </div>
                     <div class="form-group">
-                        <label>"Type"</label>
+                        <label for="realm-type">"Type"</label>
                         <select id="realm-type" on:change=move |ev| {
                             let t = event_target_value(&ev);
                             set_config.set(realm_template(&t));
@@ -374,15 +374,15 @@ pub fn RealmsPage() -> impl IntoView {
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>"Settings (JSON)"</label>
+                        <label for="realm-config">"Settings (JSON)"</label>
                         <textarea id="realm-config" rows="10" on:input=move |ev| set_config.set(event_target_value(&ev)) prop:value=config></textarea>
                     </div>
                     <div class="form-group">
-                        <label>"Comment (shown on the login page)"</label>
+                        <label for="realm-comment">"Comment (shown on the login page)"</label>
                         <input type="text" id="realm-comment" on:input=move |ev| set_comment.set(event_target_value(&ev)) prop:value=comment/>
                     </div>
                     <div class="form-group">
-                        <label>"Default group for new users"</label>
+                        <label for="realm-default-group">"Default group for new users"</label>
                         <input type="text" id="realm-default-group" on:input=move |ev| set_default_group.set(event_target_value(&ev)) prop:value=default_group/>
                     </div>
                     <label class="checkbox">

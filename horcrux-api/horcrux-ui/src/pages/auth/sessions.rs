@@ -248,7 +248,7 @@ pub fn SessionsPage() -> impl IntoView {
                 <div class="search-filter">
                     <input
                         type="text"
-                        placeholder="Filter by username..."
+                        aria-label="Filter by username" placeholder="Filter by username..."
                         prop:value=move || filter_user.get()
                         on:input=move |ev| set_filter_user.set(event_target_value(&ev))
                         class="search-input"
@@ -260,6 +260,7 @@ pub fn SessionsPage() -> impl IntoView {
                     <select
                         on:change=move |ev| set_filter_realm.set(event_target_value(&ev))
                         class="filter-select"
+                        aria-label="Filter by realm"
                     >
                         <option value="">"All Realms"</option>
                         {move || available_realms().into_iter().map(|realm| {

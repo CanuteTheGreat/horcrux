@@ -368,6 +368,7 @@ pub fn UsersPage() -> impl IntoView {
                     <select
                         on:change=move |ev| set_realm_filter.set(event_target_value(&ev))
                         class="filter-select"
+                        aria-label="Filter by realm"
                     >
                         <option value="">"All Realms"</option>
                         {move || available_realms().into_iter().map(|realm| {
@@ -380,6 +381,7 @@ pub fn UsersPage() -> impl IntoView {
                     <select
                         on:change=move |ev| set_role_filter.set(event_target_value(&ev))
                         class="filter-select"
+                        aria-label="Filter by role"
                     >
                         <option value="">"All Roles"</option>
                         {move || available_roles().into_iter().map(|role| {
@@ -392,6 +394,7 @@ pub fn UsersPage() -> impl IntoView {
                     <select
                         on:change=move |ev| set_status_filter.set(event_target_value(&ev))
                         class="filter-select"
+                        aria-label="Filter by status"
                     >
                         <option value="">"All Status"</option>
                         <option value="enabled">"Enabled"</option>
@@ -509,8 +512,14 @@ pub fn UsersPage() -> impl IntoView {
                                                     <td>
                                                         <div class="user-info">
                                                             <strong>{&user.username}</strong>
-                                                            {user.comment.as_ref().map(|comment| view! {
-                                                                <small>{comment}</small>
+                                                            {user.comment.as_ref().map(|comment| {
+                                                                // A system-created account says so in a badge; the
+                                                                // full note is the tooltip, never raw text next to the name.
+                                                                if comment.to_lowercase().contains("deprecated") {
+                                                                    view! { <span class="badge badge-warning" title=comment.clone()>"Test account (deprecated)"</span> }.into_view()
+                                                                } else {
+                                                                    view! { <small class="user-comment" title=comment.clone()>{comment.clone()}</small> }.into_view()
+                                                                }
                                                             })}
                                                         </div>
                                                     </td>

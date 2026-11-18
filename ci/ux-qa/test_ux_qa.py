@@ -140,5 +140,52 @@ class OwnerFindings(unittest.TestCase):
             self.assertIn("made-up", probs[0])
 
 
+class UnstyledControls(unittest.TestCase):
+    """The bare-control / bare-table / jammed-label / placeholder-only rules, run in a real browser on a fixture page."""
+
+    CSS = os.path.join(HERE, "..", "..", "horcrux-api", "horcrux-ui", "style", "main.css")
+    BAD = ('<main class="container"><label>Status Filter:</label><select><option>All</option></select>'
+           '<input type="text" placeholder="DNS servers for clients (default: this server)">'
+           '<button>Go</button><table><tr><th>A</th></tr><tr><td>1</td></tr></table></main>')
+    GOOD = ('<main class="container"><div class="filter-controls"><label for="f">Status filter</label><select id="f"><option>All</option></select></div>'
+            '<div class="form-group"><label for="d">DNS servers</label><input id="d" type="text" placeholder="1.1.1.1"></div>'
+            '<button class="btn btn-primary">Go</button><table class="table"><tr><th>A</th></tr><tr><td>1</td></tr></table></main>')
+
+    def facts(self, body, bare_css):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("playwright not installed")
+        css = "" if bare_css else open(self.CSS).read()
+        with sync_playwright() as p:
+            try:
+                b = p.firefox.launch()
+            except Exception as e:  # noqa: BLE001
+                self.skipTest(f"no firefox: {e}")
+            pg = b.new_page(viewport={"width": 1280, "height": 800})
+            pg.set_content(f"<style>{css}</style>{body}")
+            f = pg.evaluate(uc.FACTS_JS)
+            b.close()
+        return f
+
+    def test_browser_default_controls_are_caught(self):
+        f = self.facts(self.BAD, bare_css=True)
+        self.assertTrue(f["bareControls"], f)
+        self.assertTrue(f["bareTables"], f)
+        self.assertTrue(f["jammedLabels"], f)
+        self.assertTrue(f["placeholderOnly"], f)
+
+    def test_shared_classes_pass(self):
+        f = self.facts(self.GOOD, bare_css=False)
+        for k in ("bareControls", "bareTables", "jammedLabels", "placeholderOnly", "truncPlaceholder"):
+            self.assertEqual(f[k], [], (k, f[k]))
+
+    def test_the_shared_stylesheet_also_rescues_bare_markup(self):
+        """main.css styles unclassed controls and tables itself, so a page that forgets the classes still renders properly."""
+        f = self.facts(self.BAD, bare_css=False)
+        self.assertEqual(f["bareControls"], [], f)
+        self.assertEqual(f["bareTables"], [], f)
+
+
 if __name__ == "__main__":
     unittest.main()

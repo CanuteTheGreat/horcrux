@@ -115,7 +115,6 @@ pub fn SystemHealthPage() -> impl IntoView {
                         // System Overview Cards
                         <div class="health-cards">
                             <div class="health-card">
-                                <div class="card-icon system-icon">"🖥️"</div>
                                 <div class="card-content">
                                     <h3>"System Info"</h3>
                                     <div class="info-details">
@@ -140,7 +139,6 @@ pub fn SystemHealthPage() -> impl IntoView {
                             </div>
 
                             <div class="health-card">
-                                <div class="card-icon cpu-icon">"⚡"</div>
                                 <div class="card-content">
                                     <h3>"CPU"</h3>
                                     <div class="info-details">
@@ -166,7 +164,6 @@ pub fn SystemHealthPage() -> impl IntoView {
                             </div>
 
                             <div class="health-card">
-                                <div class="card-icon memory-icon">"💾"</div>
                                 <div class="card-content">
                                     <h3>"Memory"</h3>
                                     <div class="info-details">
@@ -199,7 +196,6 @@ pub fn SystemHealthPage() -> impl IntoView {
                             </div>
 
                             <div class="health-card">
-                                <div class="card-icon network-icon">"🌐"</div>
                                 <div class="card-content">
                                     <h3>"Network"</h3>
                                     <div class="network-interfaces">

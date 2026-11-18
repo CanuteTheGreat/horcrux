@@ -207,7 +207,7 @@ pub fn MfaPage() -> impl IntoView {
                 })}
                 {move || removing.get().map(|_| view! {
                     <form class="inline-form" on:submit=confirm_remove>
-                        <label>"Confirm with a current code or your password"</label>
+                        <label for="mfa-remove-proof">"Confirm with a current code or your password"</label>
                         <input type="password" id="mfa-remove-proof" required
                             on:input=move |ev| set_proof.set(event_target_value(&ev)) prop:value=proof/>
                         <button type="submit" class="btn btn-danger">"Remove"</button>
@@ -216,7 +216,7 @@ pub fn MfaPage() -> impl IntoView {
                 })}
 
                 <div class="form-group">
-                    <label>"Name for the new factor"</label>
+                    <label for="mfa-factor-name">"Name for the new factor"</label>
                     <input type="text" id="mfa-factor-name" placeholder="e.g. Phone, YubiKey"
                         on:input=move |ev| set_factor_name.set(event_target_value(&ev)) prop:value=factor_name/>
                 </div>
@@ -248,12 +248,12 @@ pub fn MfaPage() -> impl IntoView {
                     <h2>"Password"</h2>
                     <form on:submit=change_password>
                         <div class="form-group">
-                            <label>"Current password"</label>
+                            <label for="pw-old">"Current password"</label>
                             <input type="password" id="pw-old" required autocomplete="current-password"
                                 on:input=move |ev| set_old_pw.set(event_target_value(&ev)) prop:value=old_pw/>
                         </div>
                         <div class="form-group">
-                            <label>"New password (at least 8 characters)"</label>
+                            <label for="pw-new">"New password (at least 8 characters)"</label>
                             <input type="password" id="pw-new" required minlength="8" autocomplete="new-password"
                                 on:input=move |ev| set_new_pw.set(event_target_value(&ev)) prop:value=new_pw/>
                         </div>

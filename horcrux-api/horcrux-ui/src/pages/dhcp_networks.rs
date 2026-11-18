@@ -145,34 +145,45 @@ pub fn DhcpNetworksPage() -> impl IntoView {
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="dhcp-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="dhcp-error">{e}</div> })}
 
-            <form id="dhcp-create-form" class="form-row" on:submit=create>
-                <input id="dhcp-bridge" type="text" required placeholder="bridge / VNet, e.g. vmbr1"
-                    prop:value=bridge on:input=move |ev| bridge.set(event_target_value(&ev))/>
-                <input id="dhcp-vlan" type="text" placeholder="VLAN (optional)" size="10"
-                    prop:value=vlan on:input=move |ev| vlan.set(event_target_value(&ev))/>
-                <input id="dhcp-address" type="text" required placeholder="server address, e.g. 192.168.20.1/24"
-                    prop:value=address on:input=move |ev| address.set(event_target_value(&ev))/>
-                <input id="dhcp-range-start" type="text" required placeholder="range start"
-                    prop:value=range_start on:input=move |ev| range_start.set(event_target_value(&ev))/>
-                <input id="dhcp-range-end" type="text" required placeholder="range end"
-                    prop:value=range_end on:input=move |ev| range_end.set(event_target_value(&ev))/>
-                <input id="dhcp-gateway" type="text" placeholder="gateway (optional)"
-                    prop:value=gateway on:input=move |ev| gateway.set(event_target_value(&ev))/>
-                <input id="dhcp-dns" type="text" placeholder="DNS servers for clients (default: this server)"
-                    prop:value=dns on:input=move |ev| dns.set(event_target_value(&ev))/>
-                <input id="dhcp-upstream" type="text" placeholder="upstream resolvers (default: the host's)"
-                    prop:value=upstream on:input=move |ev| upstream.set(event_target_value(&ev))/>
-                <input id="dhcp-domain" type="text" placeholder="domain, e.g. lab.example"
-                    prop:value=domain on:input=move |ev| domain.set(event_target_value(&ev))/>
-                <input id="dhcp-lease-time" type="text" placeholder="lease time" size="8"
-                    prop:value=lease_time on:input=move |ev| lease_time.set(event_target_value(&ev))/>
-                <input id="dhcp-serve-node" type="text" placeholder="serving node (default: this one)"
-                    prop:value=serve_node on:input=move |ev| serve_node.set(event_target_value(&ev))/>
-                <label>
+            <form id="dhcp-create-form" class="form-row fields" on:submit=create>
+                <div class="form-group"><label for="dhcp-bridge">"Bridge or VNet"</label>
+                    <input id="dhcp-bridge" type="text" required placeholder="vmbr1"
+                    prop:value=bridge on:input=move |ev| bridge.set(event_target_value(&ev))/></div>
+                <div class="form-group narrow"><label for="dhcp-vlan">"VLAN (optional)"</label>
+                    <input id="dhcp-vlan" type="text"
+                    prop:value=vlan on:input=move |ev| vlan.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="dhcp-address">"Server address"</label>
+                    <input id="dhcp-address" type="text" required placeholder="192.168.20.1/24"
+                    prop:value=address on:input=move |ev| address.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="dhcp-range-start">"Range start"</label>
+                    <input id="dhcp-range-start" type="text" required placeholder="192.168.20.100"
+                    prop:value=range_start on:input=move |ev| range_start.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="dhcp-range-end">"Range end"</label>
+                    <input id="dhcp-range-end" type="text" required placeholder="192.168.20.200"
+                    prop:value=range_end on:input=move |ev| range_end.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="dhcp-gateway">"Gateway (optional)"</label>
+                    <input id="dhcp-gateway" type="text" placeholder="192.168.20.1"
+                    prop:value=gateway on:input=move |ev| gateway.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="dhcp-dns">"DNS servers for clients"</label>
+                    <input id="dhcp-dns" type="text" placeholder="this server"
+                    prop:value=dns on:input=move |ev| dns.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="dhcp-upstream">"Upstream resolvers"</label>
+                    <input id="dhcp-upstream" type="text" placeholder="the host's"
+                    prop:value=upstream on:input=move |ev| upstream.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="dhcp-domain">"Domain"</label>
+                    <input id="dhcp-domain" type="text" placeholder="lab.example"
+                    prop:value=domain on:input=move |ev| domain.set(event_target_value(&ev))/></div>
+                <div class="form-group narrow"><label for="dhcp-lease-time">"Lease time"</label>
+                    <input id="dhcp-lease-time" type="text" placeholder="12h"
+                    prop:value=lease_time on:input=move |ev| lease_time.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="dhcp-serve-node">"Serving node"</label>
+                    <input id="dhcp-serve-node" type="text" placeholder="this node"
+                    prop:value=serve_node on:input=move |ev| serve_node.set(event_target_value(&ev))/></div>
+                <div class="form-group check"><label class="checkbox" for="dhcp-dns-enabled">
                     <input id="dhcp-dns-enabled" type="checkbox" prop:checked=dns_enabled
                         on:change=move |ev| dns_enabled.set(event_target_checked(&ev))/>
-                    " DNS"
-                </label>
+                    " Serve DNS"
+                </label></div>
                 <button id="dhcp-create" type="submit" class="btn btn-primary">"Create network"</button>
             </form>
 
@@ -224,17 +235,21 @@ pub fn DhcpNetworksPage() -> impl IntoView {
                 </tbody>
             </table>
 
-            <form id="dhcp-static-form" class="form-row" on:submit=add_static>
+            <form id="dhcp-static-form" class="form-row fields" on:submit=add_static>
+                <div class="form-group narrow"><label for="dhcp-static-net">"Network"</label>
                 <select id="dhcp-static-net" required on:change=move |ev| sl_net.set(event_target_value(&ev))>
-                    <option value="">"network..."</option>
+                    <option value="">"Select..."</option>
                     {move || nets.get().into_iter().map(|n| view! { <option value=n.id.clone()>{n.id.clone()}</option> }).collect_view()}
-                </select>
-                <input id="dhcp-static-mac" type="text" required placeholder="MAC aa:bb:cc:dd:ee:ff"
-                    prop:value=sl_mac on:input=move |ev| sl_mac.set(event_target_value(&ev))/>
-                <input id="dhcp-static-ip" type="text" required placeholder="IP address"
-                    prop:value=sl_ip on:input=move |ev| sl_ip.set(event_target_value(&ev))/>
-                <input id="dhcp-static-host" type="text" placeholder="hostname (optional)"
-                    prop:value=sl_host on:input=move |ev| sl_host.set(event_target_value(&ev))/>
+                </select></div>
+                <div class="form-group"><label for="dhcp-static-mac">"MAC address"</label>
+                    <input id="dhcp-static-mac" type="text" required placeholder="aa:bb:cc:dd:ee:ff"
+                    prop:value=sl_mac on:input=move |ev| sl_mac.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="dhcp-static-ip">"IP address"</label>
+                    <input id="dhcp-static-ip" type="text" required placeholder="192.168.20.50"
+                    prop:value=sl_ip on:input=move |ev| sl_ip.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="dhcp-static-host">"Hostname (optional)"</label>
+                    <input id="dhcp-static-host" type="text" placeholder="printer"
+                    prop:value=sl_host on:input=move |ev| sl_host.set(event_target_value(&ev))/></div>
                 <button id="dhcp-static-add" type="submit" class="btn btn-primary">"Add static lease"</button>
             </form>
 

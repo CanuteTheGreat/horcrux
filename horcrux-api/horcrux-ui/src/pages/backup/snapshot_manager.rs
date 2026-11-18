@@ -376,9 +376,12 @@ pub fn SnapshotManagerPage() -> impl IntoView {
     };
 
     view! {
-        <div class="p-6">
-            <div class="flex justify-between items-center mb-6">
-                <h1 class="text-2xl font-bold">Snapshot Management</h1>
+        <div class="ha-page snapshot-manager-page">
+            <div class="page-header">
+                <div class="header-content">
+                    <h1>"Snapshot Schedules and Quotas"</h1>
+                    <p class="help">"Automatic snapshot schedules, per-VM quotas and the snapshot hierarchy. Every VM's snapshots are listed on "<a href="/snapshots">"VM Snapshots"</a>"."</p>
+                </div>
                 <div class="flex space-x-3">
                     <button
                         on:click=move |_| load_all_data()
@@ -399,10 +402,11 @@ pub fn SnapshotManagerPage() -> impl IntoView {
 
             // VM Selection
             <div class="bg-white rounded-lg shadow p-4 mb-6">
-                <label class="block text-sm font-medium text-gray-700 mb-2">
+                <label for="snapshot-manager-vm" class="block text-sm font-medium text-gray-700 mb-2">
                     "Select Virtual Machine"
                 </label>
                 <select
+                    id="snapshot-manager-vm"
                     on:change=move |ev| {
                         let value = event_target_value(&ev);
                         if value.is_empty() {
@@ -469,7 +473,7 @@ pub fn SnapshotManagerPage() -> impl IntoView {
                         "snapshots" => view! {
                             <div>
                                 <div class="flex justify-between items-center mb-4">
-                                    <h2 class="text-lg font-semibold">VM Snapshots</h2>
+                                    <h2 class="text-lg font-semibold">"Snapshots of the selected VM"</h2>
                                     <div class="flex space-x-2">
                                         {move || if selected_vm_id.get().is_some() {
                                             view! {

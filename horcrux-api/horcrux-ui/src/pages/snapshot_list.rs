@@ -211,7 +211,8 @@ pub fn SnapshotList() -> impl IntoView {
             {move || notice.get().map(|n| view! { <div class="alert alert-success" id="snapshot-notice">{n}</div> })}
             <div class="page-header">
                 <h1>"VM Snapshots"</h1>
-                <div class="header-actions">
+                <div class="header-actions actions">
+                    <a class="btn btn-secondary" id="snapshot-schedules-link" href="/backup/snapshots">"Schedules and quotas"</a>
                     <button
                         id="snapshot-create-btn"
                         class="btn btn-primary"
@@ -287,7 +288,7 @@ pub fn SnapshotList() -> impl IntoView {
                                     view! {
                                         <tr data-snapshot-name=snapshot.name.clone() data-vm-id=snapshot.vm_id.clone()>
                                             <td><a href=vm_href>{vm_label}</a></td>
-                                            <td><strong>{&snapshot.name}</strong>" "<code class="snapshot-id">{&snapshot.id}</code></td>
+                                            <td title=snapshot.id.clone()><strong>{&snapshot.name}</strong></td>
                                             <td>
                                                 {snapshot.description.as_ref().map(|d| d.to_string()).unwrap_or_else(|| "-".to_string())}
                                             </td>

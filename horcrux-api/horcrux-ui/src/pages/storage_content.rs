@@ -116,18 +116,21 @@ pub fn StorageContentPage() -> impl IntoView {
             </p>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="content-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="content-error">{e}</div> })}
-            <div class="form-row">
+            <div class="form-row fields">
+                <div class="form-group"><label for="content-pool">"Storage pool"</label>
                 <select id="content-pool" on:change=move |ev| set_pool.set(event_target_value(&ev))>
                     {move || pools.get().into_iter().map(|(id, name)| view! { <option value=id.clone()>{name}</option> }).collect_view()}
-                </select>
+                </select></div>
+                <div class="form-group"><label for="content-type">"Content type"</label>
                 <select id="content-type" on:change=move |ev| set_ctype.set(event_target_value(&ev))>
                     {move || types.get().into_iter().map(|t| {
                         let sel = t.id == "iso";
                         view! { <option value=t.id.clone() selected=sel>{t.label.clone()}</option> }
                     }).collect_view()}
-                </select>
+                </select></div>
             </div>
-            <div class="form-row" style:display=move || if uploadable() { "flex" } else { "none" }>
+            <div class="upload-row" style:display=move || if uploadable() { "flex" } else { "none" }>
+                <label for="content-file">"File to upload"</label>
                 <input id="content-file" type="file"/>
                 <button id="content-upload" class="btn btn-primary" disabled=move || busy.get() on:click=upload>
                     {move || if busy.get() { "Uploading..." } else { "Upload" }}

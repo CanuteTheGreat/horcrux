@@ -212,18 +212,13 @@ pub fn PackageManagerPage() -> impl IntoView {
 
     // Helper functions
     let get_status_color = |status: &str| match status {
-        "installed" => "text-green-600 bg-green-50",
-        "upgradeable" => "text-blue-600 bg-blue-50",
-        "not-installed" => "text-gray-600 bg-gray-50",
-        _ => "text-yellow-600 bg-yellow-50",
+        "installed" => "badge-success",
+        "upgradeable" => "badge-warning",
+        "not-installed" => "badge-secondary",
+        _ => "badge-secondary",
     };
 
-    let get_status_icon = |status: &str| match status {
-        "installed" => "[OK]",
-        "upgradeable" => "[UP]",
-        "not-installed" => "[ ]",
-        _ => "[?]",
-    };
+    let get_status_icon = |_status: &str| "";
 
     let format_size = |size_bytes: Option<u64>| -> String {
         match size_bytes {
@@ -339,8 +334,8 @@ pub fn PackageManagerPage() -> impl IntoView {
                     </div>
 
                     <div class="filter-controls">
-                        <label>"Status Filter:"</label>
-                        <select
+                        <label for="package-status-filter">"Status filter"</label>
+                        <select id="package-status-filter"
                             prop:value=package_filter
                             on:change=move |ev| set_package_filter.set(event_target_value(&ev))
                         >
@@ -455,8 +450,8 @@ pub fn PackageManagerPage() -> impl IntoView {
                                                     <strong>{package_name}</strong>
                                                 </td>
                                                 <td class="package-status">
-                                                    <span class={format!("status-badge {}", status_class)}>
-                                                        {status_icon}" "{status.clone()}
+                                                    <span class={format!("badge {}", status_class)}>
+                                                        {status_icon}{status.clone()}
                                                     </span>
                                                 </td>
                                                 <td class="package-version-installed">

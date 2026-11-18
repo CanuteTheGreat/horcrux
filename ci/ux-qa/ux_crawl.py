@@ -16,6 +16,11 @@ One deterministic, no-LLM check for the classes of defect the owner kept finding
   empty-no-action   an empty state ("No X found") with no button or link to do something about it
   same-title        one document.title shared by >= 3 routes (each page needs its own title)
   nav-broken        at 1280 and 1440px a nav item is wrapped onto two lines, clipped off the right edge, or the bar overflows
+  bare-control      an input/select/textarea/button in <main> still has the browser's default look (no shared class styles it)
+  bare-table        a table whose cells have no padding (no .table / .data-table / .vm-table style reaches it)
+  jammed-label      a <label> sits against its control on the same row with no gap
+  placeholder-only  a text field/select with a placeholder but no <label>/aria-label/title (search boxes excepted)
+  truncated-placeholder  a placeholder wider than its field
   zero-red          a stat card showing 0 / none is painted red: red is only for > 0 (owner rule)
 
 Usage:
@@ -145,8 +150,47 @@ FACTS_JS = r"""() => {
     const action = [...scope.querySelectorAll('button, a[href], input[type=submit]')].filter(vis).filter(b => !b.closest('nav, aside, header, .sidebar'));
     if (!action.length) empty.push(t.slice(0, 70));
   }
+
+  // form controls / tables / label rows that fell back to the browser's default look (no shared UI class styles them)
+  const desc = el => el.tagName.toLowerCase() + (el.type && el.tagName === 'INPUT' ? '[' + el.type + ']' : '') + (el.id ? '#' + el.id : '') + (el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/)[0] : '') + ' "' + ((el.innerText || el.value || el.getAttribute('placeholder') || '').trim().slice(0, 28)) + '"';
+  const bareControls = [], bareTables = [], jammedLabels = [], placeholderOnly = [], truncPlaceholder = [];
+  const fieldTypes = ['checkbox', 'radio', 'hidden', 'file', 'range', 'color', 'submit', 'button', 'image', 'reset'];
+  const mainEl = document.querySelector('main') || document.body;
+  const cv = document.createElement('canvas').getContext('2d');
+  for (const el of mainEl.querySelectorAll('input, select, textarea, button')) {
+    if (!vis(el) || el.closest('nav, .navbar, .modal-close') || (el.tagName === 'INPUT' && fieldTypes.includes(el.type) && !['submit', 'button'].includes(el.type))) continue;
+    const cs = getComputedStyle(el);
+    const defaultBorder = ['outset', 'inset', 'groove', 'ridge'].includes(cs.borderTopStyle) && parseFloat(cs.borderTopWidth) >= 1;
+    const tinyPad = parseFloat(cs.paddingLeft) < 4 && parseFloat(cs.paddingTop) < 3;
+    const isField = el.tagName !== 'BUTTON' && !(el.tagName === 'INPUT' && ['submit', 'button'].includes(el.type));
+    if (defaultBorder || (isField && tinyPad)) bareControls.push(desc(el));
+    if (isField) {
+      const named = (el.labels && el.labels.length) || el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.title || el.closest('label');
+      const ph = el.getAttribute('placeholder') || '';
+      if (!named && !/^search/i.test(ph) && el.type !== 'search') placeholderOnly.push(desc(el));
+      if (ph && el.clientWidth > 0) {
+        cv.font = cs.fontSize + ' ' + cs.fontFamily;
+        const room = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+        if (cv.measureText(ph).width > room + 1) truncPlaceholder.push(desc(el) + ' placeholder "' + ph.slice(0, 40) + '"');
+      }
+    }
+  }
+  for (const t of mainEl.querySelectorAll('table')) {
+    if (!vis(t)) continue;
+    const cell = [...t.querySelectorAll('th, td')].find(vis);
+    if (cell && parseFloat(getComputedStyle(cell).paddingLeft) < 4) bareTables.push('table' + (t.id ? '#' + t.id : '') + (t.className ? '.' + String(t.className).trim().split(/\s+/)[0] : ''));
+  }
+  for (const l of mainEl.querySelectorAll('label')) {
+    if (!vis(l) || l.closest('nav, .navbar')) continue;
+    const c = l.control;
+    if (!c || !vis(c) || l.contains(c)) continue;
+    const a = l.getBoundingClientRect(), b = c.getBoundingClientRect();
+    const sameRow = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 4;
+    if (sameRow && b.left >= a.right - 1 && b.left - a.right < 4) jammedLabels.push('"' + l.innerText.trim().slice(0, 30) + '" touches ' + desc(c));
+  }
   const root = document.documentElement;
   return {
+    bareControls: bareControls.slice(0, 4), bareTables: bareTables.slice(0, 3), jammedLabels: jammedLabels.slice(0, 4), placeholderOnly: placeholderOnly.slice(0, 4), truncPlaceholder: truncPlaceholder.slice(0, 4),
     textLen: text.trim().length, text: text.slice(0, 60000), ownText: ownText.slice(0, 60000), title: document.title,
     overflowX: root.scrollWidth - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), zeroRed, navProblems, empty: empty.slice(0, 3),
     h1: ((document.querySelector('main h1, h1, main h2, h2') || {}).innerText || '').trim().slice(0, 60),
@@ -334,6 +378,16 @@ def main():
                         add("unlinked-summary", "fail", route, vp, scheme, u)
                     for e in f["empty"]:
                         add("empty-no-action", "fail", route, vp, scheme, e)
+                    for d in f["bareControls"]:
+                        add("bare-control", "fail", route, vp, scheme, f"{d} has no shared UI styling (browser default look)")
+                    for d in f["bareTables"]:
+                        add("bare-table", "fail", route, vp, scheme, f"{d} has unstyled cells (use .table / .data-table / .vm-table)")
+                    for d in f["jammedLabels"]:
+                        add("jammed-label", "fail", route, vp, scheme, f"label {d} with no gap")
+                    for d in f["placeholderOnly"]:
+                        add("placeholder-only", "fail", route, vp, scheme, f"{d} has no label (placeholder is not a label)")
+                    for d in f["truncPlaceholder"]:
+                        add("truncated-placeholder", "fail", route, vp, scheme, f"{d} is cut off by the field width")
                     for color, val, label in f["zeroRed"]:
                         if is_zero(val) and is_red(color):
                             add("zero-red", "fail", route, vp, scheme, f"'{label}' shows {val} in red {color}")

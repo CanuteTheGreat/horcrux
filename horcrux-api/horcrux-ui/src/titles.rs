@@ -111,7 +111,7 @@ fn exact(path: &str) -> Option<&'static str> {
         "/backup/jobs" => "Backup Jobs",
         "/backup/retention" => "Retention",
         "/backup/verify" => "Verify Backups",
-        "/backup/snapshots" => "Backup Snapshots",
+        "/backup/snapshots" => "Snapshot Schedules",
         "/backup/templates" => "Backup Templates",
         "/ha" => "High Availability",
         "/ha/cluster" => "Cluster",
