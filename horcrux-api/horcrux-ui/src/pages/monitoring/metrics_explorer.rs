@@ -282,8 +282,9 @@ pub fn MetricsExplorerPage() -> impl IntoView {
                     </div>
 
                     <div class="time-controls">
-                        <label>"Time Range:"</label>
+                        <label for="metrics-time-range">"Time range"</label>
                         <select
+                            id="metrics-time-range"
                             prop:value=time_range
                             on:change=move |ev| set_time_range.set(event_target_value(&ev))
                         >

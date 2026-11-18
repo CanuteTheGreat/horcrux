@@ -182,7 +182,8 @@ FACTS_JS = r"""() => {
   }
   for (const l of mainEl.querySelectorAll('label')) {
     if (!vis(l) || l.closest('nav, .navbar')) continue;
-    const c = l.control;
+    const nx = l.nextElementSibling;
+    const c = l.control || (nx && nx.matches('input, select, textarea') ? nx : null);
     if (!c || !vis(c) || l.contains(c)) continue;
     const a = l.getBoundingClientRect(), b = c.getBoundingClientRect();
     const sameRow = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 4;
@@ -413,7 +414,7 @@ def main():
 
     new_fail = [x for x in findings if x["sev"] == "fail" and x["id"] not in baseline]
     known = sorted({x["id"] for x in findings if x["sev"] == "fail" and x["id"] in baseline})
-    stale = sorted(set(baseline) - {x["id"] for x in findings})
+    stale = sorted(k for k in set(baseline) - {x["id"] for x in findings} if not k.startswith("_"))
     report = {"base": base, "routes": len(routes or []), "pages_checked": len(pages), "seconds": int(time.time() - t0),
               "new_fail": len({x["id"] for x in new_fail}), "baseline_hit": known, "baseline_stale": stale, "findings": findings}
     if a.report:

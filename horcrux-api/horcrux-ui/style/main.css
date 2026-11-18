@@ -1275,3 +1275,5 @@ td .actions { flex-wrap: nowrap; }
 /* every table cell gets padding even when the page's table carries only its own class (bare-table rule) */
 :where(main.container) :where(th, td) { padding: .6rem .75rem; text-align: left; vertical-align: top; }
 .form-row.fields :where(input:not([type=checkbox]), select) { min-height: 2.5rem; }
+.time-controls { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+.time-controls label { font-weight: 600; color: var(--secondary); font-size: .9rem; }
