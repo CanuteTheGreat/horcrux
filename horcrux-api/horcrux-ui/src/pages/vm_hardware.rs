@@ -286,6 +286,14 @@ pub fn SystemFields(
     let swtpm = move || options.get().map(|o| o.swtpm).unwrap_or(true);
     let cpu_value = move || hardware.get().cpu_type.unwrap_or_default();
     let is_listed = move || CPU_TYPES.iter().any(|(v, _)| *v == cpu_value());
+    // Safe CPU model for live migration across the whole cluster (None on a
+    // single node or when the cluster has no common baseline).
+    let (baseline, set_baseline) = create_signal(None::<String>);
+    spawn_local(async move {
+        if let Ok(g) = api::get_cpu_groups().await {
+            set_baseline.set(g.recommended_cpu_model.filter(|_| g.nodes.len() > 1));
+        }
+    });
     view! {
         <fieldset class="vm-hardware" id="vm-system">
             <legend>"System"</legend>
@@ -322,6 +330,17 @@ pub fn SystemFields(
                                 hardware.update(|h| h.cpu_type = (!v.is_empty()).then_some(v));
                             }/>
                     </Show>
+                    {move || baseline.get().filter(|b| cpu_value() != *b).map(|b| {
+                        let label = format!("Use the cluster baseline ({b}) so this VM can live-migrate to every node");
+                        let b2 = b.clone();
+                        view! {
+                            <button type="button" class="btn btn-sm" id="vm-cpu-baseline"
+                                disabled={move || running.get()}
+                                on:click=move |_| hardware.update(|h| h.cpu_type = Some(b2.clone()))>
+                                {label}
+                            </button>
+                        }
+                    })}
                 </div>
                 <div class="form-group">
                     <label for="vm-sockets">"Sockets"</label>
