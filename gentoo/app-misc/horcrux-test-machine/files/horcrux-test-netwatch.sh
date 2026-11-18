@@ -39,7 +39,7 @@ not_started() { # OpenRC: services of the sysinit/boot/default runlevels that ar
 	else
 		local lvl
 		for lvl in sysinit boot default; do
-			rc-status -C "$lvl" 2>/dev/null | awk '!/^Runlevel/ && !/\[ *started/ && NF {print $1}'
+			rc-status -C "$lvl" 2>/dev/null | awk '!/^Runlevel/ && !/\[ *started/ && NF && $1 != "*" {print $1}'
 		done | sort -u | tr '\n' ' '
 	fi
 }
