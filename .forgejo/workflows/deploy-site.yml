@@ -146,3 +146,50 @@ jobs:
         run: |
           command -v curl >/dev/null || { apt-get update -qq && apt-get install -y -qq curl; }
           bash .forgejo/scripts/indexnow.sh horcrux.errant.solutions 5bd2340b776c5d0b43933a1f02f4281e
+
+  # Standby twin: the same image built for linux/amd64 on an x86 runner and
+  # published, signed (namespace ctg-standby), to the standby image store as horcrux/horcrux-site/<tag>.tar.zst, so the
+  # standby host can run this app if the arm64 production host is gone. Runs only after the deploy above; never touches the
+  # deploy target. ci/standby-image.py is a verbatim copy of the standby tooling's client.
+  standby-amd64:
+    needs: deploy-site
+    if: github.ref == 'refs/heads/main'
+    runs-on: colo-light-x86_64
+    timeout-minutes: 30
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq zstd openssh-client python3 python3-markdown gnupg >/dev/null
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Already published?
+        id: have
+        env:
+          STANDBY_S3_URL: ${{ secrets.STANDBY_S3_URL }}
+          STANDBY_S3_KEY_ID: ${{ secrets.STANDBY_S3_KEY_ID }}
+          STANDBY_S3_KEY: ${{ secrets.STANDBY_S3_KEY }}
+        run: |
+          if python3 ci/standby-image.py exists "horcrux/horcrux-site" "${{ github.sha }}"; then echo "skip=1" >> "$GITHUB_OUTPUT"; echo "already stored"; else echo "skip=0" >> "$GITHUB_OUTPUT"; fi
+      - name: Build the site (same as the deploy job)
+        if: steps.have.outputs.skip != '1'
+        run: |
+          set -e
+          python3 site/build.py
+          echo "${{ github.sha }}" > site/dist/version.txt
+      - name: Build linux/amd64 image
+        if: steps.have.outputs.skip != '1'
+        run: |
+          set -e
+          docker build --platform linux/amd64 -t "horcrux-site:${{ github.sha }}-amd64" site
+          test "$(docker image inspect -f '{{.Architecture}}' "horcrux-site:${{ github.sha }}-amd64")" = amd64
+      - name: Publish to the standby image store
+        if: steps.have.outputs.skip != '1'
+        env:
+          STANDBY_S3_URL: ${{ secrets.STANDBY_S3_URL }}
+          STANDBY_S3_KEY_ID: ${{ secrets.STANDBY_S3_KEY_ID }}
+          STANDBY_S3_KEY: ${{ secrets.STANDBY_S3_KEY }}
+          STANDBY_SIGNING_KEY: ${{ secrets.DEPLOY_SIGNING_KEY }}
+        run: python3 ci/standby-image.py publish "horcrux-site:${{ github.sha }}-amd64" "horcrux/horcrux-site" "${{ github.sha }}"
+      - name: Remove this run's image
+        if: always()
+        run: docker image rm "horcrux-site:${{ github.sha }}-amd64" >/dev/null 2>&1 || true
