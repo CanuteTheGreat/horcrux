@@ -133,6 +133,66 @@ pub fn common_baseline(groups: &[CpuGroup]) -> Option<CpuGroup> {
     })
 }
 
+/// QEMU CPU model a guest should use so it can live-migrate to every node of a
+/// group whose lowest level is `level` (the cluster-wide baseline).
+/// None for an unknown level (0).
+pub fn qemu_cpu_model(level: u8) -> Option<&'static str> {
+    match level {
+        1 => Some("qemu64"),
+        2 => Some("x86-64-v2-AES"),
+        3 => Some("x86-64-v3"),
+        4 => Some("x86-64-v4"),
+        _ => None,
+    }
+}
+
+/// Cluster-wide view for the CPU compatibility page: each node's group, the
+/// common baseline (per vendor; None across mixed vendors) and the QEMU model
+/// that is safe on every node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterCpuSummary {
+    pub nodes: Vec<(String, String)>,
+    pub mixed_vendors: bool,
+    pub common_baseline: Option<String>,
+    pub recommended_cpu_model: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Summarise `nodes` (name, group). Nodes with an unknown level (0) or vendor
+/// are listed but excluded from the baseline, with a warning.
+pub fn cluster_summary(nodes: &[(String, CpuGroup)]) -> ClusterCpuSummary {
+    let mut warnings = Vec::new();
+    let known: Vec<CpuGroup> = nodes
+        .iter()
+        .filter_map(|(n, g)| {
+            if g.level == 0 || g.vendor.is_empty() {
+                warnings.push(format!("{n}: CPU group unknown, left out of the baseline"));
+                None
+            } else {
+                Some(g.clone())
+            }
+        })
+        .collect();
+    let mixed_vendors = known.iter().any(|g| g.vendor != known[0].vendor);
+    let base = common_baseline(&known);
+    if mixed_vendors {
+        warnings.push(
+            "AMD and Intel nodes in one cluster: running guests can only move within one vendor (cold migrate across)"
+                .to_string(),
+        );
+    }
+    ClusterCpuSummary {
+        nodes: nodes.iter().map(|(n, g)| (n.clone(), g.name())).collect(),
+        mixed_vendors,
+        recommended_cpu_model: base
+            .as_ref()
+            .and_then(|b| qemu_cpu_model(b.level))
+            .map(str::to_string),
+        common_baseline: base.map(|b| b.name()),
+        warnings,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +305,32 @@ mod tests {
         };
         assert!(common_baseline(&[a, c]).is_none());
         assert!(common_baseline(&[]).is_none());
+    }
+
+    #[test]
+    fn cluster_summary_baseline_and_mixed() {
+        let g = |v: &str, l| CpuGroup {
+            vendor: v.into(),
+            level: l,
+        };
+        let same = vec![
+            ("a".to_string(), g("amd", 3)),
+            ("b".to_string(), g("amd", 2)),
+            ("c".to_string(), g("", 0)),
+        ];
+        let s = cluster_summary(&same);
+        assert!(!s.mixed_vendors);
+        assert_eq!(s.common_baseline.as_deref(), Some("amd-v2"));
+        assert_eq!(s.recommended_cpu_model.as_deref(), Some("x86-64-v2-AES"));
+        assert_eq!(s.warnings.len(), 1);
+        let mixed = vec![
+            ("a".to_string(), g("amd", 3)),
+            ("b".to_string(), g("intel", 3)),
+        ];
+        let m = cluster_summary(&mixed);
+        assert!(m.mixed_vendors);
+        assert_eq!(m.common_baseline, None);
+        assert_eq!(m.recommended_cpu_model, None);
+        assert_eq!(qemu_cpu_model(0), None);
     }
 }

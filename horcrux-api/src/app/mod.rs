@@ -1096,6 +1096,7 @@ fn cluster_routes() -> Router<Arc<AppState>> {
             get(get_migration_targets),
         )
         .route("/api/cluster/nics", get(get_local_nics))
+        .route("/api/cluster/cpu-groups", get(get_cpu_groups))
         .route("/api/cluster/power/plan", post(plan_cluster_power))
         .route("/api/cluster/power/status", get(get_cluster_power_status))
         .route("/api/cluster/power/wake", post(wake_cluster_node))
@@ -4602,6 +4603,30 @@ struct NicsQuery {
     min_mbps: Option<u64>,
     /// Percent of the best link that migration/Ceph recovery may use (default 70).
     percent: Option<u64>,
+}
+
+/// `GET /api/cluster/cpu-groups` -- every node's CPU compatibility group
+/// (`<vendor>-v1..v4`), the cluster-wide baseline and the QEMU CPU model that
+/// is safe to give guests that must live-migrate anywhere in the cluster.
+/// Read-only.
+async fn get_cpu_groups(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    use crate::cluster::cpu_groups::{cluster_summary, CpuGroup};
+    let nodes: Vec<(String, CpuGroup)> = state
+        .cluster_manager
+        .list_nodes_with_local()
+        .await
+        .into_iter()
+        .map(|n| {
+            (
+                n.name.clone(),
+                CpuGroup {
+                    vendor: n.cpu_vendor.clone(),
+                    level: n.cpu_level,
+                },
+            )
+        })
+        .collect();
+    Json(serde_json::to_value(cluster_summary(&nodes)).unwrap_or_default())
 }
 
 /// `GET /api/cluster/nics` -- local NICs/bonds (1-100 GbE), per-NIC warnings
