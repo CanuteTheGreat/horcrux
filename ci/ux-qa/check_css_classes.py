@@ -5,7 +5,8 @@ Owner-findings rows 25, 28, 31 and 34: pages rendered as run-together stacked te
 were never defined. This is the deterministic check for that class of bug: it lists class names used in
 horcrux-api/horcrux-ui/src/**/*.rs (class="a b", class=format!("a-{}"), class:name=) that no selector in main.css matches.
 
-  * `.ha-page .x` rules only count for source files that mention `ha-page` (they apply nowhere else).
+  * A rule scoped under an ancestor (`.card .label`, `.ha-page .flex`) only counts for source files that also use one of
+    those ancestor classes: `.connection-status .badge` does not make `badge` styled on the VM list.
   * A dynamic class (`format!("usage-{}", c)`) needs at least one rule starting with `usage-`.
   * css-class-allowlist.txt: `name reason` or `prefix* reason` (hook classes that deliberately carry no style).
   * css-class-baseline.txt: `file class` pairs of known debt on pages not yet styled. The check fails on any pair
@@ -22,7 +23,6 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 UI = "horcrux-api/horcrux-ui"
 ALLOW = os.path.join(HERE, "css-class-allowlist.txt")
 BASELINE = os.path.join(HERE, "css-class-baseline.txt")
-SCOPE_ROOT = "ha-page"
 
 CLASS_ATTR = re.compile(r'\bclass\s*=\s*"([^"]*)"')
 FORMAT_CLASS = re.compile(r'\bclass\s*=\s*\{?\s*(?:move\s*\|\|\s*)?format!\(\s*"([^"]*)"')
@@ -32,28 +32,64 @@ UTIL_LITERAL = re.compile(r"\b((?:text|bg)-(?:red|orange|yellow|green|blue|purpl
 TOKEN = re.compile(r"^-?[A-Za-z_][\w:/.-]*$")
 
 
-def css_classes(css):
-    """(global names, names only defined under .ha-page) from main.css selectors."""
+def _top_level_split(sel, seps):
+    """Split on any char of `seps` that sits outside (), [] and quotes."""
+    parts, cur, depth, q = [], "", 0, ""
+    for ch in sel:
+        if q:
+            cur += ch
+            q = "" if ch == q else q
+        elif ch in "\"'":
+            q = ch
+            cur += ch
+        elif ch in "([":
+            depth += 1
+            cur += ch
+        elif ch in ")]":
+            depth -= 1
+            cur += ch
+        elif depth == 0 and ch in seps:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur)
+    return [x for x in parts if x.strip()]
+
+
+def _names(text):
+    return {re.sub(r"\\(.)", r"\1", n) for n in CSS_CLASS.findall(re.sub(r'\[[^\]]*\]|"[^"]*"|\'[^\']*\'', "", text))}
+
+
+def css_rules(css):
+    """(global, conditional): `global` = classes some rule styles with no ancestor condition (or that only appear as an
+    ancestor, i.e. are referenced by the stylesheet); `conditional` = {class: [set of ancestor class names, ...]} for
+    rules like `.card .label` / `:is(.a, .b) .label`, usable only on a page that also uses one of those ancestors."""
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
-    glob, scoped = set(), set()
+    glob, cond = set(), {}
     for sels in re.findall(r"([^{}]+)\{", css):
         if sels.strip().startswith("@"):
             continue
-        for sel in sels.split(","):
-            sel = sel.strip()
-            sel = re.sub(r'"[^"]*"|\'[^\']*\'|\[[^\]]*\]', "", sel)
-            names = [re.sub(r"\\(.)", r"\1", n) for n in CSS_CLASS.findall(sel)]
-            if names and names[0] == SCOPE_ROOT:
-                scoped.update(names[1:])
+        for sel in _top_level_split(sels, ","):
+            compounds = _top_level_split(sel.strip(), " >+~")
+            if not compounds:
+                continue
+            subject = _names(compounds[-1])
+            anc = [_names(c) for c in compounds[:-1]]
+            for names in anc:
+                glob.update(names)  # an ancestor is referenced by the stylesheet
+            if not anc or not any(anc):
+                glob.update(subject)
             else:
-                glob.update(names)
-    return glob, scoped
+                for n in subject:
+                    cond.setdefault(n, []).append(set().union(*anc))
+    return glob, cond
 
 
 def used_classes(src_dir):
     """({(file, class): first line}, files mentioning ha-page). Holes in a plain class string are dropped; format! holes make `prefix*`."""
     used = {}
-    scoped_files = set()
+    file_tokens = {}
     for dp, _, fns in os.walk(src_dir):
         for fn in sorted(fns):
             if not fn.endswith(".rs"):
@@ -61,10 +97,10 @@ def used_classes(src_dir):
             path = os.path.join(dp, fn)
             rel = os.path.relpath(path, src_dir)
             text = open(path, encoding="utf-8", errors="replace").read()
-            if SCOPE_ROOT in text:
-                scoped_files.add(rel)
+            file_tokens[rel] = set()
 
             def add(tok, pos):
+                file_tokens[rel].add(tok.rstrip("*"))
                 used.setdefault((rel, tok), text.count("\n", 0, pos) + 1)
 
             for m in CLASS_ATTR.finditer(text):
@@ -84,7 +120,7 @@ def used_classes(src_dir):
             # colour classes returned from helper closures (`"text-red-600 bg-red-50"`) never sit in a class= attribute
             for m in UTIL_LITERAL.finditer(text):
                 add(m.group(1), m.start())
-    return used, scoped_files
+    return used, file_tokens
 
 
 def load_allow(path=ALLOW):
@@ -115,17 +151,22 @@ def load_baseline(path=BASELINE):
 def undefined(root=ROOT):
     """Sorted [(file, class, line)] used in markup, defined nowhere, not allow-listed."""
     css = open(os.path.join(root, UI, "style/main.css"), encoding="utf-8").read()
-    glob, scoped = css_classes(css)
-    glob.add(SCOPE_ROOT)  # the scope marker itself (rules exist as `.ha-page ...`)
+    glob, cond = css_rules(css)
     exact, prefixes = load_allow()
-    used, scoped_files = used_classes(os.path.join(root, UI, "src"))
+    used, file_tokens = used_classes(os.path.join(root, UI, "src"))
     out = []
     for (f, c), line in used.items():
-        visible = glob | (scoped if f in scoped_files else set())
+        toks = file_tokens[f]
+
+        def styled(name):
+            if name in glob:
+                return True
+            return any(alt & toks for alt in cond.get(name, []))
+
         if c.endswith("*"):
-            ok = any(n.startswith(c[:-1]) for n in visible) or c[:-1] in prefixes
+            ok = any(n.startswith(c[:-1]) and styled(n) for n in glob | set(cond)) or c[:-1] in prefixes
         else:
-            ok = c in visible or c in exact or any(c.startswith(p) for p in prefixes)
+            ok = styled(c) or c in exact or any(c.startswith(p) for p in prefixes)
         if not ok:
             out.append((f, c, line))
     return sorted(out)

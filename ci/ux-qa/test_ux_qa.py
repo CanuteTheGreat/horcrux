@@ -168,6 +168,13 @@ class UnstyledLayoutRule(unittest.TestCase):
                              "<tr><td>1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></table>"
                              "<form><label style='display:block'>Cert</label><textarea></textarea></form>")
             self.assertEqual(page.evaluate(uc.FACTS_JS)["unstyled"], [])
+            # a wide table in an overflow-hidden box on a phone: no sideways scrollbar, but the right columns are unreachable
+            page.set_viewport_size({"width": 390, "height": 800})
+            wide = "<div style='overflow:hidden'><table style='width:900px'><tr><td style='width:600px'>a</td><td>far right</td></tr></table></div>"
+            page.set_content(wide)
+            self.assertTrue(any("clipped" in u for u in page.evaluate(uc.FACTS_JS)["unstyled"]))
+            page.set_content(wide.replace("overflow:hidden", "overflow-x:auto"))
+            self.assertEqual(page.evaluate(uc.FACTS_JS)["unstyled"], [])
         finally:
             browser.close()
             pw.stop()

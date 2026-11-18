@@ -1381,8 +1381,57 @@ label.checkbox, .checkbox-label { display: flex; align-items: center; gap: .5rem
 .resource-grid:empty { display: none; }
 
 /* generic tables (MFA, permissions, realms, tasks, LXC catalog, sessions, API keys): cells need padding or the columns run together */
-.table, .container-table, .sessions-management-page table, .api-keys-management-page table { width: 100%; border-collapse: collapse; background: var(--surface); }
-:is(.table, .container-table, .sessions-management-page table, .api-keys-management-page table) :is(th, td) {
+.table, .container-table, .packages-table, .sessions-management-page table, .api-keys-management-page table { width: 100%; border-collapse: collapse; background: var(--surface); }
+:is(.table, .container-table, .packages-table, .sessions-management-page table, .api-keys-management-page table) :is(th, td) {
     padding: .6rem .75rem; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
-:is(.table, .container-table, .sessions-management-page table, .api-keys-management-page table) th {
+:is(.table, .container-table, .packages-table, .sessions-management-page table, .api-keys-management-page table) th {
     font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary); background: var(--light); }
+.sessions-table, .tokens-table { overflow-x: auto; max-width: 100%; }
+@media (max-width: 800px) {
+    .table, .container-table, .packages-table, .sessions-management-page table, .api-keys-management-page table { display: block; overflow-x: auto; max-width: 100%; }
+}
+@media (max-width: 800px) { .resources .vm-table { display: block; overflow-x: auto; max-width: 100%; } }
+/* `html, body { overflow-x: hidden }` (phone block above) hides a wide table instead of fixing it: its right-hand columns
+   became unreachable (Audit, Resources, Bridges, DHCP, SDN, ISOs, Ceph ... at 390px). Tables scroll inside the page instead. */
+@media (max-width: 900px) {
+    .container table { display: block; overflow-x: auto; max-width: 100%; }
+}
+/* a fieldset's default min-width is its content's width: Create VM's disk rows pushed the page wider than a phone */
+fieldset { min-width: 0; }
+
+/* System Monitoring (/monitoring): its metric cards had no rules, so "1 min" ran into "13.16" */
+.monitoring-page { min-width: 0; }
+.monitoring-page .metrics-section { margin-bottom: 1.5rem; }
+.monitoring-page .metrics-section h2 { margin: 1.25rem 0 .75rem; font-size: 1.25rem; }
+.node-metrics-grid, .vm-metrics-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 1rem; }
+.node-metrics-grid .metric-details { grid-column: 1 / -1; color: var(--secondary); font-size: .85rem; }
+.node-metrics-grid .metric-details p { margin: 0; }
+.metric-card, .vm-metric-card { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; min-width: 0; }
+.metric-header, .vm-metric-header { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; }
+.vm-metric-header { justify-content: space-between; flex-wrap: wrap; }
+.metric-header h3, .vm-metric-header h4 { margin: 0; font-size: 1rem; }
+.metric-value-large { font-size: 1.75rem; font-weight: 700; }
+.metric-bar-container, .mini-bar { height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; margin: .5rem 0; }
+.metric-bar-fill, .mini-bar-fill { display: block; height: 100%; background: var(--success-solid); }
+.metric-card.warning .metric-bar-fill { background: var(--warning); }
+.metric-card.critical .metric-bar-fill, .metric-card.danger .metric-bar-fill { background: var(--danger-solid); }
+.metric-card.warning .metric-value-large { color: var(--warning-text); }
+.metric-card.critical .metric-value-large, .metric-card.danger .metric-value-large { color: var(--danger); }
+.metric-status { color: var(--secondary); font-size: .85rem; }
+.load-values { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+.load-item { display: flex; flex-direction: column; gap: .15rem; }
+.load-label { color: var(--secondary); font-size: .8rem; }
+.load-value { font-size: 1.35rem; font-weight: 700; }
+.vm-metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: .6rem 1rem; }
+.vm-metric-item { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.monitoring-page .metric-label { color: var(--secondary); font-size: .8rem; }
+.monitoring-page .metric-value { font-weight: 600; }
+.vm-metric-card .timestamp { color: var(--secondary); font-size: .8rem; }
+.connection-status .badge { display: inline-block; font-size: .8rem; padding: .15rem .6rem; border-radius: 999px; border: 1px solid var(--border); }
+.connection-status .badge-success { background: var(--ok-bg); color: var(--success); }
+.connection-status .badge-danger { background: var(--bad-bg); color: var(--danger); }
+.metric-icon { font-size: 1.25rem; line-height: 1; }
+.smart-monitoring-page .status-badge { display: inline-block; font-size: .75rem; padding: .1rem .55rem; border-radius: 999px; background: var(--light); border: 1px solid var(--border); text-transform: capitalize; }
+.smart-monitoring-page .status-badge.status-ok, .smart-monitoring-page .status-badge.status-healthy, .smart-monitoring-page .status-badge.status-passed { background: var(--ok-bg); color: var(--success); }
+.smart-monitoring-page .status-badge.status-warning { background: var(--warn-bg); color: var(--warning-text); }
+.smart-monitoring-page .status-badge.status-critical, .smart-monitoring-page .status-badge.status-failing, .smart-monitoring-page .status-badge.status-fail { background: var(--bad-bg); color: var(--danger); }

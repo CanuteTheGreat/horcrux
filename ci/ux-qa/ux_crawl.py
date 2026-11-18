@@ -181,6 +181,22 @@ FACTS_JS = r"""() => {
     const lr = l.getBoundingClientRect(), fr = f.getBoundingClientRect();
     if (lr.top < fr.bottom - 1 && lr.bottom > fr.top + 1 && lr.right <= fr.left + 2) unstyled.push("label '" + (l.innerText || '').trim().slice(0, 30) + "' shares a line with its textarea");
   }
+  // text pushed past the right edge where the page cannot scroll to it (a wide table inside an overflow-hidden box, as on
+  // Active Sessions at 390px): no sideways scrollbar, so the overflow check stays quiet, yet the columns are unreachable.
+  if (document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1) {
+    const reach = e => { for (let a = e.parentElement; a && a !== document.documentElement; a = a.parentElement) {
+      const o = getComputedStyle(a).overflowX; if (o === 'auto' || o === 'scroll') return true;
+      if (getComputedStyle(a).position === 'fixed') return true; } return false; };
+    for (const e of document.querySelectorAll('body td, body th, body p, body h1, body h2, body h3, body label, body button, body span, body a')) {
+      if (unstyled.length > 12) break;
+      if (![...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) continue;
+      const r = e.getBoundingClientRect();
+      if (r.width < 1 || r.left >= window.innerWidth - 1 || r.right <= window.innerWidth + 8 || !vis(e) || reach(e)) continue;
+      if (r.left > window.innerWidth) continue;
+      unstyled.push("clipped: '" + (e.innerText || '').trim().slice(0, 24) + "' (" + short(e) + ") ends at " + Math.round(r.right) + 'px in a ' + window.innerWidth + 'px page with no way to scroll to it');
+      break;
+    }
+  }
   const root = document.documentElement;
   return {
     unstyled: unstyled.slice(0, 6),

@@ -41,3 +41,6 @@ quota-usage button hook for the e2e tests
 quota-usage-text text hook for the e2e tests
 attr-value cell text hook (inherits)
 total stat-card variant hook (neutral colour is the default)
+load-average hook on a .metric-card (the card carries the style)
+metric-hostname text hook, styled by `.node-metrics-grid .metric-details p`
+metric-timestamp text hook, styled by `.node-metrics-grid .metric-details p`
