@@ -2,8 +2,9 @@
 # app-misc/horcrux-test-machine: persistent kernel log (sysklogd here logs no kernel messages: /var/log/kern.log stays empty, so a
 # Wi-Fi/driver failure leaves no trace after a reboot). Rotated by /etc/logrotate.d/horcrux-test-machine.
 description="test machine: follow the kernel ring buffer into /var/log/kernel-test.log"
-command=/bin/dmesg
-command_args="--follow --time-format iso --kernel"
+# stdbuf -oL: dmesg writing to a file is block-buffered, so without it a kernel message reaches the log 10-30 s late (or only at 4 KiB)
+command=/usr/bin/stdbuf
+command_args="-oL /bin/dmesg --follow --time-format iso --kernel"
 command_background=true
 pidfile=/run/horcrux-test-klog.pid
 output_log=/var/log/kernel-test.log

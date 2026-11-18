@@ -2,7 +2,7 @@
 gnome-base/gdm wayland
 gnome-base/gnome-light wayland
 net-misc/networkmanager iwd wifi bluetooth modemmanager -wpa_supplicant -ppp
-media-video/pipewire sound-server pipewire-alsa -jack-sdk
+media-video/pipewire sound-server pipewire-alsa extra -jack-sdk
 net-misc/spice-gtk usbredir gtk3
 app-emulation/virt-manager -gui
 net-wireless/bluez cups
