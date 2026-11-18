@@ -1,0 +1,57 @@
+# cargo-deny policy: licenses, bans and sources (run in CI by the "License inventory" job).
+# Advisories are checked by the Security Audit job (cargo audit), which carries the reviewed
+# ignore list, so they are not duplicated here.
+#
+#   cargo deny check licenses bans sources
+#
+# The license allowlist was derived from `cargo deny list` over the real dependency graph and
+# reviewed: only permissive licenses, plus the weak-copyleft ones named below. Adding a license
+# here is a deliberate decision: say why in a comment.
+
+[graph]
+# dev-only crates are not shipped
+exclude-dev = true
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    # webpki-roots: the CA bundle data
+    "CDLA-Permissive-2.0",
+    # MPL-2.0 is file-level copyleft; colored is used unmodified as a library
+    "MPL-2.0",
+    # our own crates
+    "GPL-3.0",
+]
+# Dual-licensed crates (r-efi, self_cell) are accepted through their permissive alternative.
+
+# The libvirt bindings are LGPL-2.1: dynamically linked library use, unmodified.
+exceptions = [
+    { allow = ["LGPL-2.1"], crate = "virt" },
+    { allow = ["LGPL-2.1"], crate = "virt-sys" },
+]
+
+[bans]
+# Duplicate versions are a size/audit smell, not a policy violation: surfaced as warnings only.
+multiple-versions = "warn"
+# the workspace crates reference each other by path and are not published (no `publish = false`),
+# which cargo-deny reads as wildcard dependencies on public crates
+wildcards = "allow"
+highlight = "all"
+
+[sources]
+# Everything comes from crates.io; a git or alternative-registry dependency needs a review.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

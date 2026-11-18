@@ -94,12 +94,48 @@ reinstall it, and remove the mask once a fixed version is out.
 Without ZFS there are no boot environments. Back up `/etc/horcrux` and `/var/lib/horcrux` (minus
 VM disks) before updating, and roll back by package as above.
 
-## Support
+## Supported versions and the security-fix window
 
-Only the newest release and the current daily get fixes; there are no long-term support branches
-before 1.0. Security fixes are released as a patch release as soon as they are ready, and reach
-nodes through the daily channel and unattended updates within a day. Report vulnerabilities as
-described in [SECURITY.md](../SECURITY.md).
+Horcrux is a one-person project: there is no service-level agreement, and fixes are made on a best
+effort basis. What is stated here is what the project commits to do.
+
+| Version | Bug fixes | Security fixes |
+|---|---|---|
+| Latest minor release (`0.x.y`, today the newest tag) | yes, as patch releases | yes, as patch releases |
+| Previous minor release | no | for 90 days after the first release of the next minor, when the fix applies without redesign |
+| Anything older | no | no: update to a supported version |
+| Daily channel and `horcrux-9999` | the current build only | the current build only |
+
+From 1.0 on the same shape holds per major version: the latest minor of the current major gets all
+fixes, the previous minor gets security fixes for 90 days after the next minor, and the previous
+major gets security fixes for 12 months after the next major's first release.
+
+Before 1.0 the honest limits are:
+
+- there are no long-term support branches; compatibility between minors is not promised (see the
+  version table above), so the previous-minor window may need a node to take a manual step, which
+  the CHANGELOG describes;
+- nodes with unattended updates enabled (the default) move to the newest build on their own within
+  a day, so in practice they are always on the latest minor;
+- "latest" means the newest tag in [CHANGELOG.md](../CHANGELOG.md), not an old daily build.
+
+How a security fix reaches you: a patch release is cut as soon as the fix is ready and tested; it
+reaches nodes through the daily channel and unattended updates within a day, and appears in the
+CHANGELOG under the release. Report vulnerabilities as described in
+[SECURITY.md](../SECURITY.md).
+
+### Rolling back inside the supported window
+
+A rollback by [boot environment or by package](#rolling-back) lands on a version that was supported
+when you took it. If the version you roll back to has meanwhile left the table above, it receives
+no further security fixes: roll back only to look for the cause, and update again as soon as a fixed
+version is out.
+
+### Related
+
+- What a node sends over the network, and what it never sends: [PRIVACY.md](PRIVACY.md).
+- Licenses of the software Horcrux is built from: `THIRD-PARTY-LICENSES.txt` (attached to every
+  release, served by the web UI under System > About > Open-source licenses).
 
 ## Cutting a release (maintainers)
 
