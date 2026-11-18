@@ -412,7 +412,7 @@ pub fn SchedulerPage() -> impl IntoView {
                     view! {
                         <div class="tab-content">
                             <div class="tab-header">
-                                <select
+                                <select aria-label="Filter history by job"
                                     on:change=move |e| {
                                         let value = event_target_value(&e);
                                         if value.is_empty() {

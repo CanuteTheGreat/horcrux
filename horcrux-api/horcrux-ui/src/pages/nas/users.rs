@@ -119,7 +119,7 @@ pub fn UsersPage() -> impl IntoView {
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="nas-user-notice">{n}</div> })}
             {move || pw_user.get().map(|(_, name)| view! {
                 <form class="form-row" id="nas-password-form" on:submit=save_password>
-                    <label>"New password for " <strong>{name}</strong></label>
+                    <label for="nas-password">"New password for " <strong>{name}</strong></label>
                     <input id="nas-password" type="password" required minlength="8" autocomplete="new-password"
                         prop:value=pw_value on:input=move |ev| set_pw_value.set(event_target_value(&ev))/>
                     <button type="submit" class="btn btn-primary">"Set password"</button>
@@ -208,20 +208,20 @@ pub fn UsersPage() -> impl IntoView {
                                 <h2>"Create NAS User"</h2>
                                 <form>
                                     <div class="form-group">
-                                        <label>"Username"</label>
-                                        <input type="text" name="username" required />
+                                        <label for="nas-user-name">"Username"</label>
+                                        <input id="nas-user-name" type="text" name="username" required />
                                     </div>
                                     <div class="form-group">
-                                        <label>"Password"</label>
-                                        <input type="password" name="password" required />
+                                        <label for="nas-user-password">"Password"</label>
+                                        <input id="nas-user-password" type="password" name="password" required />
                                     </div>
                                     <div class="form-group">
-                                        <label>"Primary Group"</label>
-                                        <input type="text" name="primary_group" value="users" />
+                                        <label for="nas-user-group">"Primary Group"</label>
+                                        <input id="nas-user-group" type="text" name="primary_group" value="users" />
                                     </div>
                                     <div class="form-group">
-                                        <label>"Home Directory"</label>
-                                        <input type="text" name="home_directory" placeholder="/home/username" />
+                                        <label for="nas-user-home">"Home Directory"</label>
+                                        <input id="nas-user-home" type="text" name="home_directory" placeholder="/home/username" />
                                     </div>
                                     <div class="form-check">
                                         <input type="checkbox" name="smb_enabled" checked />
