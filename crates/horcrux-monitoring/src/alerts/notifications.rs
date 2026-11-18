@@ -146,17 +146,13 @@ Horcrux Alert System
         // Use TLS connection
         let mut transport = SmtpTransport::relay(&config.smtp_server)
             .map_err(|e| {
-                horcrux_common::Error::System(format!(
-                    "Failed to connect to SMTP server: {}",
-                    e
-                ))
+                horcrux_common::Error::System(format!("Failed to connect to SMTP server: {}", e))
             })?
             .port(config.smtp_port);
 
         // Add authentication if provided
         if let (Some(username), Some(password)) = (&config.username, &config.password) {
-            transport =
-                transport.credentials(Credentials::new(username.clone(), password.clone()));
+            transport = transport.credentials(Credentials::new(username.clone(), password.clone()));
         }
 
         transport.build()
@@ -167,8 +163,7 @@ Horcrux Alert System
 
         // Add authentication if provided
         if let (Some(username), Some(password)) = (&config.username, &config.password) {
-            transport =
-                transport.credentials(Credentials::new(username.clone(), password.clone()));
+            transport = transport.credentials(Credentials::new(username.clone(), password.clone()));
         }
 
         transport.build()
