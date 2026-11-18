@@ -340,8 +340,9 @@ pub fn MetricsExplorerPage() -> impl IntoView {
                             <div class="builder-section">
                                 <h3>"Metric Selection"</h3>
                                 <div class="metric-selector">
-                                    <label>"Metric:"</label>
+                                    <label for="metrics-metric">"Metric"</label>
                                     <select
+                                        id="metrics-metric"
                                         prop:value=selected_metric
                                         on:change=move |ev| set_selected_metric.set(event_target_value(&ev))
                                     >
@@ -456,8 +457,9 @@ pub fn MetricsExplorerPage() -> impl IntoView {
                             <div class="builder-section">
                                 <h3>"Aggregation"</h3>
                                 <div class="aggregation-controls">
-                                    <label>"Function:"</label>
+                                    <label for="metrics-function">"Function"</label>
                                     <select
+                                        id="metrics-function"
                                         prop:value=aggregation_function
                                         on:change=move |ev| set_aggregation_function.set(event_target_value(&ev))
                                     >

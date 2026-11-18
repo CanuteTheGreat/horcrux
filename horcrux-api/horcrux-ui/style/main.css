@@ -1277,3 +1277,5 @@ td .actions { flex-wrap: nowrap; }
 .form-row.fields :where(input:not([type=checkbox]), select) { min-height: 2.5rem; }
 .time-controls { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
 .time-controls label { font-weight: 600; color: var(--secondary); font-size: .9rem; }
+/* a label directly followed by its control, outside a stacked .form-group: keep a gap (jammed-label rule) */
+:where(main.container) :where(*:not(.form-group):not(.stack-form)) > label:not(.checkbox) + :is(select, input:not([type=checkbox]):not([type=radio]), textarea) { margin-inline-start: .5rem; }
