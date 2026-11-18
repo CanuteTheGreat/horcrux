@@ -44,6 +44,28 @@ for dp, _, fs in os.walk(D):
                 tgt = os.path.join(tgt, "index.html")
             if not os.path.exists(tgt):
                 bad.append((p, u, "missing target"))
+# --- compliance pages: every page's footer links the privacy page, the support policy and the licenses ---
+for need in ("docs/privacy/index.html", "docs/update-policy/index.html", "licenses/THIRD-PARTY-LICENSES.txt"):
+    if not os.path.exists(os.path.join(D, need)):
+        bad.append((need, "", "compliance page missing"))
+for dp, _, fs in os.walk(D):
+    for f in fs:
+        if not f.endswith(".html"):
+            continue
+        p = os.path.join(dp, f); t = open(p, encoding="utf-8").read()
+        if f == "404.html":
+            continue
+        for tail in ("privacy/", "update-policy/", "licenses/THIRD-PARTY-LICENSES.txt"):   # links are relative, so match the tail
+            if tail in p.replace(os.sep, "/"):
+                continue   # the page itself: its footer link is "./"
+            if not re.search(r'<footer>.*href="[^"]*' + re.escape(tail) + '"', t, re.S):
+                bad.append((p, tail, "footer link missing"))
+_pv = open(os.path.join(D, "docs/privacy/index.html"), encoding="utf-8").read() if os.path.exists(os.path.join(D, "docs/privacy/index.html")) else ""
+if "<title>Privacy" not in _pv or "<script" in _pv:
+    bad.append(("docs/privacy/index.html", "", "privacy page needs its own title and no script"))
+_lic = os.path.join(D, "licenses/THIRD-PARTY-LICENSES.txt")
+if os.path.exists(_lic) and os.path.getsize(_lic) < 10000:
+    bad.append((_lic, "", "license inventory suspiciously small"))
 for b in bad:
     print("BROKEN", *b, file=sys.stderr)
 print(f"checked {pages} pages, {len(bad)} problems")

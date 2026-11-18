@@ -1038,6 +1038,30 @@ jobs:
         if: always()
         run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" report
 
+  license-inventory:
+    name: License inventory
+    # cargo-deny licenses/bans/sources against deny.toml (allowlist derived from the real dependency graph) and
+    # the generated THIRD-PARTY-LICENSES.txt (ci/third-party-licenses.py) must match Cargo.lock: after a
+    # dependency change run `python3 ci/third-party-licenses.py` and commit the result.
+    # linux-any like Security Audit; cargo metadata needs the crate sources but compiles nothing.
+    runs-on: linux-any
+    timeout-minutes: 20  # a hung job must fail, not hold the serialized main queue
+    container: catthehacker/ubuntu:act-26.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny (pinned, checksum-verified)
+        run: bash ci/install-cargo-deny.sh
+
+      - name: cargo deny check licenses bans sources
+        run: cargo deny --locked check licenses bans sources
+
+      - name: THIRD-PARTY-LICENSES.txt is up to date
+        run: python3 ci/third-party-licenses.py --check
+
   gentoo-docker-build:
     name: Gentoo Docker Build
     runs-on: linux-cross-x86_64
