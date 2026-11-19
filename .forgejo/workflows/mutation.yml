@@ -52,7 +52,7 @@ env:
 
 jobs:
   mutants:
-    name: cargo-mutants (${{ matrix.group }})
+    name: cargo-mutants (${{ matrix.group }}${{ matrix.shards > 1 && format(' shard {0}', matrix.shard) || '' }})
     strategy:
       fail-fast: false
       matrix:
@@ -60,10 +60,17 @@ jobs:
         # (mutants_floor.py fails on a group with no mutants tested).
         # full_dow: ISO weekday (UTC) of the group's weekly full run, one group per day.
         include:
-          - { group: vm-snapshot, full_dow: 1 }
-          - { group: vm-runtime, full_dow: 4 }
-          - { group: backup, full_dow: 5 }
-          - { group: storage, full_dow: 6 }
+          # shards: a full pass of vm-runtime is 232 mutants x ~230 s / 2 jobs = ~7 h, past the runner's 3 h maximum run time (run 3967 was
+          # cancelled by it at 08:24Z). A group with shards > 1 runs its FULL pass as `cargo mutants --shard i/N` in N parallel jobs
+          # (each ~1/N of the time, same mutants, nothing skipped) and the `mutation-score` job merges the shards and applies the floor and the
+          # baseline gate to the whole. Incremental runs (changed lines only) stay in shard 0.
+          - { group: vm-snapshot, full_dow: 1, shard: 0, shards: 1 }
+          - { group: vm-runtime, full_dow: 4, shard: 0, shards: 4 }
+          - { group: vm-runtime, full_dow: 4, shard: 1, shards: 4 }
+          - { group: vm-runtime, full_dow: 4, shard: 2, shards: 4 }
+          - { group: vm-runtime, full_dow: 4, shard: 3, shards: 4 }
+          - { group: backup, full_dow: 5, shard: 0, shards: 1 }
+          - { group: storage, full_dow: 6, shard: 0, shards: 1 }
     # shared mutation/chaos lane (x86 slots on rw-man-01..05 since 2026-10-18,
     # ctg-infrastructure ci-runners/README.md); jobs that must stay on colo set CI_COLO_ONLY=1.
     runs-on: mutation-x86_64
@@ -84,7 +91,7 @@ jobs:
         with:
           path: .mutation-baseline
           # saved only when the job succeeds; restore-keys picks the newest green baseline
-          key: mutation-baseline-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: mutation-baseline-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           restore-keys: mutation-baseline-${{ matrix.group }}-
 
       - name: Full or incremental?
@@ -92,6 +99,10 @@ jobs:
           files=$(python3 -c 'import json,sys; print(" ".join(json.load(open("ci/mutants-floors.json"))[sys.argv[1]]["files"]))' "${{ matrix.group }}")
           python3 ci/mutation-incremental.py plan --id "${{ matrix.group }}" --full-dow "${{ matrix.full_dow }}" \
             --mode "${{ github.event.inputs.mode }}" -- $files
+
+      - name: Shards other than 0 only take part in a full pass
+        if: env.MUT_MODE != 'full' && matrix.shard != 0
+        run: echo "MUT_MODE=skip" >> "$GITHUB_ENV"
 
       - name: Ensure Node.js is present (self-heal)
         if: env.MUT_MODE != 'skip'
@@ -137,6 +148,8 @@ jobs:
           files=$(python3 -c "$spec; print(' '.join('--file '+f for f in g['files']))" "${{ matrix.group }}")
           diff=""
           [ "$MUT_MODE" = incremental ] && diff="--in-diff $MUT_DIFF"
+          shard=""
+          [ "$MUT_MODE" = full ] && [ "${{ matrix.shards }}" -gt 1 ] && shard="--shard ${{ matrix.shard }}/${{ matrix.shards }}"
           echo "mutating ($pkg, $MUT_MODE): $files"
           # Library unit tests are the oracle (the HTTP/QEMU suites need a
           # live server). The modules live in workspace crates now (see
@@ -146,7 +159,7 @@ jobs:
           # dependents are rebuilt. --no-shuffle keeps runs comparable
           # week to week.
           set +e
-          cargo mutants -p "$pkg" --test-workspace=true --all-features $files $diff --jobs 2 --no-shuffle \
+          cargo mutants -p "$pkg" --test-workspace=true --all-features $files $diff $shard --jobs 2 --no-shuffle \
             --cargo-arg=--lib --timeout-multiplier 3 --minimum-test-timeout 90 --output /tmp/mutants
           rc=$?
           set -e
@@ -159,14 +172,106 @@ jobs:
             exit 1
           fi
 
+      - name: Keep this shard's outcomes for the mutation-score job
+        if: env.MUT_MODE == 'full' && matrix.shards > 1
+        run: mkdir -p .mutshard/${{ matrix.shard }} && cp /tmp/mutants/mutants.out/outcomes.json .mutshard/${{ matrix.shard }}/outcomes.json && { cat /tmp/mutants/mutants.out/missed.txt > .mutshard/${{ matrix.shard }}/missed.txt 2>/dev/null || true; }
+
+      - name: Shard outcomes (saved when the job succeeds)
+        if: env.MUT_MODE == 'full' && matrix.shards > 1
+        uses: actions/cache/save@v4
+        with:
+          path: .mutshard/${{ matrix.shard }}
+          key: mutshard-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+
       - name: Enforce mutation score floor
-        if: env.MUT_MODE == 'full'
+        if: env.MUT_MODE == 'full' && matrix.shards == 1
         run: python3 ci/mutants_floor.py /tmp/mutants/mutants.out ci/mutants-floors.json "${{ matrix.group }}"
 
       - name: New survivors in the changed code / record the baseline
-        if: env.MUT_MODE != 'skip'
+        if: env.MUT_MODE != 'skip' && (matrix.shards == 1 || env.MUT_MODE == 'incremental')
         run: python3 ci/mutation-incremental.py gate --id "${{ matrix.group }}" --kind cargo --mode "$MUT_MODE" --allow-empty -- /tmp/mutants/mutants.out
 
       - name: Missed mutants
         if: always()
         run: cat /tmp/mutants/mutants.out/missed.txt 2>/dev/null || true
+
+  # Whole-group score for a sharded full pass: merge the shards' outcomes, apply the floor (never lowered) and record the baseline survivors.
+  mutation-score:
+    name: mutation score (${{ matrix.group }}, merged shards)
+    needs: [mutants]
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { group: vm-runtime, full_dow: 4, shards: 4 }
+    runs-on: mutation-x86_64
+    container: catthehacker/ubuntu:act-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mutation baseline (last green run)
+        uses: actions/cache@v4
+        with:
+          path: .mutation-baseline
+          key: mutation-baseline-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}-score
+          restore-keys: mutation-baseline-${{ matrix.group }}-
+
+      # Whether this run was a full pass is decided by the shards (shard 0 saves its outcomes only in a full pass), not re-planned here: a pass that
+      # starts before midnight UTC and ends after it must not turn into an "incremental" verdict and skip the floor.
+      - name: Shard 0 outcomes (present only after a full pass)
+        id: s0
+        uses: actions/cache/restore@v4
+        with:
+          path: .mutshard/0
+          key: mutshard-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}-0
+
+      - name: Load the baseline state
+        if: steps.s0.outputs.cache-hit == 'true'
+        run: |
+          files=$(python3 -c 'import json,sys; print(" ".join(json.load(open("ci/mutants-floors.json"))[sys.argv[1]]["files"]))' "${{ matrix.group }}")
+          python3 ci/mutation-incremental.py plan --id "${{ matrix.group }}" --full-dow "${{ matrix.full_dow }}" --mode full -- $files
+
+      - name: Shard 1 outcomes
+        if: steps.s0.outputs.cache-hit == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .mutshard/1
+          key: mutshard-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}-1
+          fail-on-cache-miss: true
+
+      - name: Shard 2 outcomes
+        if: steps.s0.outputs.cache-hit == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .mutshard/2
+          key: mutshard-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}-2
+          fail-on-cache-miss: true
+
+      - name: Shard 3 outcomes
+        if: steps.s0.outputs.cache-hit == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .mutshard/3
+          key: mutshard-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}-3
+          fail-on-cache-miss: true
+
+      - name: Merge the shards
+        if: steps.s0.outputs.cache-hit == 'true'
+        run: python3 ci/mutants_merge.py .mutshard /tmp/mutants/mutants.out ${{ matrix.shards }}
+
+      - name: Enforce mutation score floor
+        if: steps.s0.outputs.cache-hit == 'true'
+        run: python3 ci/mutants_floor.py /tmp/mutants/mutants.out ci/mutants-floors.json "${{ matrix.group }}"
+
+      - name: Record the baseline
+        if: steps.s0.outputs.cache-hit == 'true'
+        run: python3 ci/mutation-incremental.py gate --id "${{ matrix.group }}" --kind cargo --mode full --allow-empty -- /tmp/mutants/mutants.out
+
+      - name: Missed mutants
+        if: always() && steps.s0.outputs.cache-hit == 'true'
+        run: cat /tmp/mutants/mutants.out/missed.txt 2>/dev/null || true
+
