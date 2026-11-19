@@ -13,6 +13,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import tempfile
 import threading
 import time
 import zlib
@@ -78,11 +79,23 @@ def qcodes(ch):
     raise ValueError(ch)
 
 
+SUN_PATH_MAX = 100
+
+
 class Qemu:
     def __init__(self, name: str, argv: list[str], out: str):
         self.name, self.out, self.argv = name, out, argv
         self.qmp_path = os.path.join(out, f"{name}.qmp")
         self.ser_path = os.path.join(out, f"{name}.serial")
+        # AF_UNIX paths are limited to 107 bytes (sun_path): a deep CI evidence dir (the per-job
+        # iso-out-<image>-<arch>/evidence/<scenario>/<node>/ tree) broke every VM start
+        # ("UNIX socket path ... is too long"). Fall back to a short private dir.
+        self.sock_dir = None
+        if max(len(self.qmp_path), len(self.ser_path)) > SUN_PATH_MAX:
+            self.sock_dir = tempfile.mkdtemp(prefix="vmq-")
+            tag = re.sub(r"[^A-Za-z0-9]", "", name)[:20] or "vm"
+            self.qmp_path = os.path.join(self.sock_dir, f"{tag}.q")
+            self.ser_path = os.path.join(self.sock_dir, f"{tag}.s")
         self.log_path = os.path.join(out, f"{name}-serial.log")
         self.err_path = os.path.join(out, f"{name}-qemu.err")
         self.buf = b""
@@ -96,6 +109,8 @@ class Qemu:
     # ---- lifecycle -----------------------------------------------------------------
     def start(self):
         os.makedirs(self.out, exist_ok=True)
+        if self.sock_dir:
+            os.makedirs(self.sock_dir, mode=0o700, exist_ok=True)
         full = self.argv + ["-qmp", f"unix:{self.qmp_path},server,nowait",
                             "-chardev", f"socket,id=ser0,path={self.ser_path},server=on,wait=off", "-serial", "chardev:ser0",
                             "-display", "none", "-name", self.name]
@@ -155,6 +170,8 @@ class Qemu:
                 pass
         if self in LIVE:
             LIVE.remove(self)
+        if self.sock_dir:
+            shutil.rmtree(self.sock_dir, ignore_errors=True)
 
     def wait_exit(self, timeout):
         try:

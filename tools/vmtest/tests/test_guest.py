@@ -90,5 +90,27 @@ class NoInitCallsInScenarios(unittest.TestCase):
                 self.assertFalse(self.PAT.search(line), f"{f}:{n} names an init system: {line.strip()}")
 
 
+class SocketPath(unittest.TestCase):
+    """A deep evidence dir must not push the QEMU unix sockets over sun_path (107 bytes)."""
+
+    def test_deep_out_dir_gets_short_socket_paths(self):
+        from vmtest.qemu import Qemu
+        deep = "/workspace/CanuteTheGreat/patronus/iso-out-server-openrc-x86_64/evidence/installed-firstrun/fw"
+        q = Qemu("fw-boot0", ["true"], deep)
+        try:
+            for p in (q.qmp_path, q.ser_path):
+                self.assertLess(len(p), 108, p)
+        finally:
+            if q.sock_dir:
+                import shutil
+                shutil.rmtree(q.sock_dir, ignore_errors=True)
+
+    def test_short_out_dir_is_unchanged(self):
+        from vmtest.qemu import Qemu
+        q = Qemu("n1", ["true"], "/tmp/o")
+        self.assertEqual(q.ser_path, "/tmp/o/n1.serial")
+        self.assertIsNone(q.sock_dir)
+
+
 if __name__ == "__main__":
     unittest.main()
