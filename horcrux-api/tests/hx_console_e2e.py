@@ -427,7 +427,10 @@ with sync_playwright() as pw:
         # one guest at a time: the CI job container has a 6 GiB cap
         call("POST", f"/vms/{VM}/stop", token=ADMIN, ok=None)
         WVM = "hxc-windows"
-        make_vm(WVM, WIN_ISO, int(os.environ.get("HXC_WIN_MEM_MB", "3072")), cpus=2)
+        # Windows 11 24H2 needs SSE4.2/POPCNT: QEMU's bare default model
+        # (qemu64) hangs at the boot logo, so pass the host CPU through.
+        make_vm(WVM, WIN_ISO, int(os.environ.get("HXC_WIN_MEM_MB", "3072")), cpus=2,
+                extra_hw={"cpu_type": os.environ.get("HXC_WIN_CPU", "host")})
         wpage = open_console(admin, WVM, "windows")
         # Windows Setup takes a while to draw its first window. The boot
         # logo is static too (black, small logo), so wait for the Setup

@@ -171,6 +171,34 @@ Measured numbers per path go into this table and into the GeForce NOW
 comparison in docs/design/gaming-vm.md section 14 as phases land. Tests measure
 with a colour-flip probe in the guest and the client's frame timestamps.
 
+### Measured in C1 (no guest tools, software x264, headless Chromium client)
+
+Source: `horcrux-api/tests/hx_console_e2e.sh` (CI workflow `hx-console-e2e.yml`)
+and `crates/horcrux-vm/tests/hxc_dbus_e2e.rs`, single standalone node, QEMU 10.2
+with KVM, client and node on the same host (loopback ICE). Input-to-picture is
+the time from the client sending an input event until a decoded frame whose
+pixels changed (more than 3 pixels moved by more than 64 levels, so lossy
+re-encoding does not count) reaches the page; pointer and click samples watch
+the whole picture at full resolution.
+
+| Measurement | Result | Conditions |
+|---|---|---|
+| Data-channel round trip | 2-7 ms | every run |
+| Server encode, 1024x768 / 1280x800 software x264 (`ultrafast`, `zerolatency`, no B-frames) | median 14-31 ms on a lightly loaded host; 108 ms when the 8-core host ran at load 22-30 | `encode_ms_avg`, last 60 frames |
+| Standalone FFmpeg probe, same settings, 1024x768 | median 15.3 ms | same host, idle-ish |
+| Keystroke to picture, boot loader (pre-OS, 640x480) | median 104-168 ms (min 75 ms) | shared CI host, load 12-30 on 8 cores |
+| Keystroke to picture, Linux console (1280x800) | median 73-147 ms (min 66 ms) | same |
+| Pointer move / click to picture | median 141-500 ms; seconds when the host was saturated | same; includes the guest kernel and `od` printing the event |
+| Keyframe/noise false positives | 0 (view-only user's input: 0 picture changes, server counters `keys_in = pointer_in = 0`) | after the pixel-delta detector |
+
+Reading: the transport (2-7 ms) is not the problem; the measured totals on the
+shared CI host are dominated by host CPU contention (software encode and
+headless software decode compete with other CI jobs). The desktop-profile LAN
+target (< 50 ms) is NOT yet shown: it needs a run on an unloaded node and
+hardware encode (VA-API/NVENC, code paths present, untested without a GPU
+runner). These rows are rewritten when the C2 latency run on dedicated
+hardware lands.
+
 ## 7. Standalone machine
 
 One box runs everything: the guest, the broker, the encoder and, if WAN access
@@ -224,3 +252,36 @@ GPL-incompatible, so its sample code is not copied into GPL-3.0 guest tools.
 
 Mapping to the gaming plan: gaming phase 3 = C1 + C2, gaming phase 4 = C3,
 gaming phase 5 includes C4.
+
+### C1 status
+
+Done (on main with this phase): console broker in horcrux-api (60 s tickets
+bound to the user and the signalling WebSocket connection, single use;
+privileges VM.Console, VM.Console.Input, VM.Console.Clipboard,
+VM.Console.Audio.Mic; audit events for session start/end and refused tickets);
+signalling on the API WebSocket, which any authenticated user may open while
+its broadcast event topics need Sys.Audit on `/`; QEMU D-Bus display source
+(`-display dbus,p2p=yes` on every VM, VNC kept alongside); FFmpeg child-process
+encoder (VA-API, NVENC, software; H.264 and VP8); str0m WebRTC transport with
+the `ctl`, `keys`, `input` and `cursor` channels; web client page and the
+"Horcrux Console" choice on the VM console page (`?classic=1` opens the classic
+console); `[console]` settings with defaults in config.toml, the API, the
+declarative config and System > Horcrux Console in the UI; `desktop` and
+`console` profiles; ffmpeg in the ebuilds and package sets (OpenRC and systemd
+images alike).
+
+Proven in CI (`hx-console-e2e.yml`, kvm-x86_64 runner, standalone node): first
+frame before any OS runs, keyboard at the boot loader, keyboard, pointer moves
+and all three mouse buttons reaching a Linux guest kernel without guest tools,
+Windows Setup rendering and answering keyboard and absolute pointer input
+without tools, ticket binding (wrong connection refused, single use),
+view-only user (picture yes, input refused server-side and nothing changes in
+the guest), user without VM.Console (403), audit entries, classic noVNC page
+next to a live session, settings API and UI. `hxc_dbus_e2e.rs` proves the D-Bus
+source alone (frames, keyboard, absolute pointer through vmmouse or USB
+tablet, buttons).
+
+Moved to C2: native viewer window on a Horcrux desktop (Wayland), audio
+forwarding to the client (QEMU audio is received but not sent), the `clip` and
+`console` data channels, and a latency run on an unloaded node. Needs real GPU
+hardware: VA-API and NVENC encode (code paths present, only software x264 ran).
