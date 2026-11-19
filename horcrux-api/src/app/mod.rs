@@ -51,7 +51,7 @@ use horcrux_common::VmConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Start the Horcrux API server (the `horcrux-api` binary just calls this).
 pub async fn run() -> anyhow::Result<()> {
@@ -2014,6 +2014,33 @@ async fn create_vm_snapshot(
 
     let mut snapshot_manager = state.snapshot_manager.write().await;
 
+    // Snapshot quotas: count what really exists, refuse (409) when a quota
+    // would be exceeded, or prune per the quota's cleanup policy when it has
+    // auto-cleanup on.
+    refresh_quota_usage(&state, &snapshot_manager).await;
+    let check = state
+        .snapshot_quota_manager
+        .check_quota(&vm_id, None, 0)
+        .await
+        .map_err(ApiError::from)?;
+    if !check.can_create {
+        return Err(ApiError::Conflict(format!(
+            "Snapshot quota exceeded for VM {}: {}",
+            vm_id,
+            check.reason.unwrap_or_else(|| "quota exceeded".to_string())
+        )));
+    }
+    for old_id in &check.suggested_cleanup {
+        info!(
+            "Snapshot quota auto-cleanup: deleting snapshot {} to make room",
+            old_id
+        );
+        snapshot_manager
+            .delete_snapshot(old_id)
+            .await
+            .map_err(ApiError::from)?;
+    }
+
     let snapshot = snapshot_manager
         .create_snapshot(
             &vm_config,
@@ -2025,6 +2052,45 @@ async fn create_vm_snapshot(
         .map_err(ApiError::from)?;
 
     Ok(Json(snapshot))
+}
+
+/// Recompute every per-VM and global snapshot quota's usage from the real
+/// snapshots (the quota manager only keeps a cache; nothing else fills it).
+async fn refresh_quota_usage(
+    state: &AppState,
+    snapshot_manager: &vm::snapshot::VmSnapshotManager,
+) {
+    use vm::snapshot_quota::{QuotaType, SnapshotUsageInfo};
+    let all = snapshot_manager.all_snapshots();
+    for quota in state.snapshot_quota_manager.list_quotas().await {
+        let infos: Vec<SnapshotUsageInfo> = all
+            .iter()
+            .filter(|s| match quota.quota_type {
+                QuotaType::PerVm => s.vm_id == quota.target_id,
+                QuotaType::Global => true,
+                // Pool membership of a snapshot is not tracked.
+                QuotaType::PerPool => false,
+            })
+            .map(|s| SnapshotUsageInfo {
+                snapshot_id: s.id.clone(),
+                vm_id: s.vm_id.clone(),
+                name: s.name.clone(),
+                size_bytes: s.disk_snapshots.iter().map(|d| d.size_bytes).sum(),
+                created_at: s.created_at,
+                last_accessed_at: None,
+            })
+            .collect();
+        if quota.quota_type == QuotaType::PerPool {
+            continue;
+        }
+        if let Err(e) = state
+            .snapshot_quota_manager
+            .update_usage_cache(&quota.id, infos)
+            .await
+        {
+            warn!("Could not refresh usage of snapshot quota {}: {}", quota.id, e);
+        }
+    }
 }
 
 async fn get_vm_snapshot(
@@ -2768,6 +2834,10 @@ async fn get_snapshot_quota_usage(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<vm::snapshot_quota::QuotaUsage>, ApiError> {
+    {
+        let snapshot_manager = state.snapshot_manager.read().await;
+        refresh_quota_usage(&state, &snapshot_manager).await;
+    }
     let usage = state.snapshot_quota_manager.get_usage(&id).await?;
     Ok(Json(usage))
 }
@@ -2775,6 +2845,10 @@ async fn get_snapshot_quota_usage(
 async fn get_snapshot_quota_summary(
     State(state): State<Arc<AppState>>,
 ) -> Json<vm::snapshot_quota::QuotaSummary> {
+    {
+        let snapshot_manager = state.snapshot_manager.read().await;
+        refresh_quota_usage(&state, &snapshot_manager).await;
+    }
     let summary = state.snapshot_quota_manager.get_quota_summary().await;
     Json(summary)
 }

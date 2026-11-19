@@ -109,5 +109,31 @@ call("DELETE", f"/snapshot-schedules/{sid}")
 st, _ = call("GET", f"/snapshot-schedules/{sid}", ok=None)
 check(st == 404, "a deleted schedule is gone (404)")
 check(all(x["id"] != sid for x in call("GET", "/snapshot-schedules")[1]), "and not in the list")
+
+# Snapshot quotas: a per-VM count quota is enforced on real snapshot creation.
+have = len(api_snaps())
+_, q = call("POST", "/snapshot-quotas", {"name": "e2e-count", "quota_type": "per_vm", "target_id": VM,
+                                         "max_size_bytes": 10**12, "max_count": have,
+                                         "auto_cleanup_enabled": False, "cleanup_policy": "oldest_first"})
+qid = q["id"]
+_, u = call("GET", f"/snapshot-quotas/{qid}/usage")
+check(u["current_count"] == have and not u["is_exceeded"], f"quota usage counts the VM's {have} real snapshots")
+st, body = call("POST", f"/vms/{VM}/snapshots", {"name": "over-quota", "include_memory": False}, ok=None)
+check(st == 409 and "quota" in json.dumps(body).lower(), f"a snapshot over the count quota is refused with 409 ({st})")
+check(len(api_snaps()) == have and not any(n.startswith("over-quota") for n in disk_snapshots(disk)),
+      "the refused snapshot was not made in the image")
+call("PUT", f"/snapshot-quotas/{qid}", {"max_count": have + 1})
+call("POST", f"/vms/{VM}/snapshots", {"name": "within-quota", "include_memory": False})
+check(len(api_snaps()) == have + 1, "raising the quota by one lets exactly one more snapshot in")
+st, _ = call("POST", f"/vms/{VM}/snapshots", {"name": "over-again", "include_memory": False}, ok=None)
+check(st == 409, f"and the next one is refused again ({st})")
+call("PUT", f"/snapshot-quotas/{qid}", {"auto_cleanup_enabled": True, "cleanup_policy": "oldest_first"})
+call("POST", f"/vms/{VM}/snapshots", {"name": "after-cleanup", "include_memory": False})
+names = api_snaps()
+check(len(names) == have + 1 and "after-cleanup" in names, f"with auto-cleanup the new snapshot lands and the count holds ({names})")
+check("nightly-before-upgrade" not in names, "auto-cleanup pruned the oldest snapshot (oldest_first)")
+call("DELETE", f"/snapshot-quotas/{qid}")
+call("POST", f"/vms/{VM}/snapshots", {"name": "no-quota", "include_memory": False})
+check("no-quota" in api_snaps(), "with the quota deleted snapshots are unrestricted again")
 call("DELETE", f"/vms/{VM}", ok=None)
 print("snapshot schedule e2e: all checks passed")

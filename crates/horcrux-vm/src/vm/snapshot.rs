@@ -392,6 +392,11 @@ impl VmSnapshotManager {
             .collect()
     }
 
+    /// Every snapshot of every VM (snapshot quotas count across VMs).
+    pub fn all_snapshots(&self) -> Vec<VmSnapshot> {
+        self.snapshots.values().cloned().collect()
+    }
+
     /// Get a specific snapshot
     pub fn get_snapshot(&self, snapshot_id: &str) -> Option<&VmSnapshot> {
         self.snapshots.get(snapshot_id)
