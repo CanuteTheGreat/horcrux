@@ -222,9 +222,25 @@ RUN chmod -R a+rX /var/cache/distfiles/horcrux-vendor
 # GitHub main instead of the commit under test. git-r3 fetches as the
 # portage user, so the root-owned checkout must be a safe.directory.
 ENV EGIT_OVERRIDE_REPO_CANUTETHEGREAT_HORCRUX=/usr/src/horcrux
-RUN git config --system --add safe.directory /usr/src/horcrux && \
-    git config --system --add safe.directory /usr/src/horcrux/.git && \
-    git -C /usr/src/horcrux rev-parse HEAD > /usr/src/horcrux.HEAD && cat /usr/src/horcrux.HEAD
+# CI checks out with depth 1, and git refuses to fetch from a shallow
+# repository ("shallow roots are not allowed to be updated", git-r3 then dies
+# with "Referencing HEAD failed"). Re-point HEAD at a parentless commit with
+# exactly the checked-out tree and drop the shallow boundary, so git-r3 builds
+# the commit under test.
+RUN set -e; cd /usr/src/horcrux; \
+    git config --system --add safe.directory /usr/src/horcrux; \
+    git config --system --add safe.directory /usr/src/horcrux/.git; \
+    head=$(git rev-parse HEAD); echo "building $head"; \
+    if [ "$(git rev-parse --is-shallow-repository)" = true ]; then \
+      snap=$(git -c user.name=ci -c user.email=ci@localhost commit-tree "$head^{tree}" -m "snapshot of $head"); \
+      git for-each-ref --format='%(refname)' | xargs -r -n1 git update-ref -d; \
+      git update-ref refs/heads/ci-snapshot "$snap"; \
+      git symbolic-ref HEAD refs/heads/ci-snapshot; \
+      rm -f .git/shallow; \
+      git reflog expire --expire=now --all; \
+      test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse "$head^{tree}" 2>/dev/null || git cat-file -p "$snap" | sed -n 's/^tree //p')"; \
+    fi; \
+    git fsck --connectivity-only --no-dangling HEAD
 
 # Generate a real Manifest for the ebuild (thin-manifests only needs
 # Manifest.gz-style DIST entries when SRC_URI points at real distfiles;
