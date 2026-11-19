@@ -149,7 +149,7 @@ def run(base, pf):
             expect(xe.locator(".gpu-mode[data-mode='sriov']")).to_contain_text("VRAM and scheduling per VF")
             expect(xe.locator(".gpu-mode[data-mode='passthrough']")).to_contain_text("available")
             expect(xe.locator(".vf-row")).to_have_count(2)
-            expect(xe.locator(".vf-row").first).to_contain_text("4096 MiB")
+            expect(xe.locator(".vf-row").first).to_contain_text("4096 MiB" if label == "desktop" else "2048 MiB")  # desktop runs first; its apply/rollback leaves 2048
             expect(xe.locator(".vf-save").first).to_contain_text("unknown")
             nv = page.locator(".gpu-cap[data-addr='0000:01:00.0']")
             expect(nv.locator(".gpu-why").first).to_contain_text("passthrough only")

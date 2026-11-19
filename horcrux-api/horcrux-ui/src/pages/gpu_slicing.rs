@@ -6,16 +6,21 @@
 use crate::api::passthrough as pt;
 use leptos::*;
 
-fn pf_entry(cfg: &mut pt::SriovConfig, addr: &str) -> usize {
+/// The PF's entry in the config; a PF that has none starts from what the
+/// hardware has now (`init` = VF count and an equal VRAM quota, if any).
+fn pf_entry(cfg: &mut pt::SriovConfig, addr: &str, init: (u32, Option<u64>)) -> usize {
     if let Some(i) = cfg.pfs.iter().position(|p| p.pf == addr) {
         return i;
     }
     cfg.pfs.push(pt::PfSpec {
         pf: addr.to_string(),
-        num_vfs: 0,
+        num_vfs: init.0,
         vf_driver: "auto".into(),
         autoprobe: false,
-        all: pt::VfSpec::default(),
+        all: pt::VfSpec {
+            vram_quota_mib: init.1,
+            ..Default::default()
+        },
         vfs: Default::default(),
     });
     cfg.pfs.len() - 1
@@ -53,10 +58,10 @@ pub fn GpuSlicing() -> impl IntoView {
             .and_then(|c| c.pfs.into_iter().find(|p| p.pf == a))
     };
 
-    let edit = move |addr: String, f: Box<dyn Fn(&mut pt::PfSpec)>| {
+    let edit = move |addr: String, init: (u32, Option<u64>), f: Box<dyn Fn(&mut pt::PfSpec)>| {
         cfg.update(|c| {
             if let Some(c) = c.as_mut() {
-                let i = pf_entry(c, &addr);
+                let i = pf_entry(c, &addr, init);
                 f(&mut c.pfs[i]);
             }
         });
@@ -114,7 +119,10 @@ pub fn GpuSlicing() -> impl IntoView {
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="gpu-slicing-error">{e}</div> })}
             {move || (!loaded.get()).then(|| view! { <p>"Reading GPU capabilities..."</p> })}
             {move || (loaded.get() && caps.get().is_empty()).then(|| view! {
-                <p id="gpu-caps-none" class="form-help">"No GPU found on this node."</p>
+                <p id="gpu-caps-none" class="form-help">
+                    "No GPU found on this node. "
+                    <button class="btn btn-sm" id="gpu-caps-rescan" on:click=move |_| reload()>"Scan again"</button>
+                </p>
             })}
             <div id="gpu-caps">
                 {move || caps.get().into_iter().map(|g| {
@@ -126,6 +134,13 @@ pub fn GpuSlicing() -> impl IntoView {
                     let pf_addr3 = addr.clone();
                     let pf_addr4 = addr.clone();
                     let max = sriov.as_ref().map(|s| s.total_vfs).unwrap_or(0);
+                    let cur_vfs = sriov.as_ref().map(|s| s.current_vfs).unwrap_or(0);
+                    // an equal VRAM share on every VF is the form's starting value
+                    let init_vram = sriov.as_ref().and_then(|s| {
+                        let first = s.vfs.first()?.vram_mib?;
+                        s.vfs.iter().all(|v| v.vram_mib == Some(first)).then_some(first)
+                    });
+                    let init = (cur_vfs, init_vram);
                     let drivers = sriov.as_ref().map(|s| s.vf_drivers.clone()).unwrap_or_default();
                     let per_vf = sriov.as_ref().map(|s| s.per_vf_resources).unwrap_or(false);
                     view! {
@@ -195,19 +210,19 @@ pub fn GpuSlicing() -> impl IntoView {
                                     <div class="form-row">
                                         <label>"VFs (0-" {max} ")"
                                             <input type="number" class="sriov-num-vfs" min="0" max=max.to_string()
-                                                prop:value=move || spec_of(&q1).map(|p| p.num_vfs).unwrap_or(0).to_string()
+                                                prop:value=move || spec_of(&q1).map(|p| p.num_vfs).unwrap_or(cur_vfs).to_string()
                                                 on:input=move |ev| {
                                                     let n = event_target_value(&ev).parse::<u32>().unwrap_or(0);
-                                                    edit(pf_addr2.clone(), Box::new(move |p| p.num_vfs = n));
+                                                    edit(pf_addr2.clone(), init, Box::new(move |p| p.num_vfs = n));
                                                 }/>
                                         </label>
                                         {per_vf.then(|| view! {
                                             <label>"VRAM per VF (MiB, empty = equal share)"
                                                 <input type="number" class="sriov-vram" min="1"
-                                                    prop:value=move || spec_of(&q2).and_then(|p| p.all.vram_quota_mib).map(|m| m.to_string()).unwrap_or_default()
+                                                    prop:value=move || spec_of(&q2).map(|p| p.all.vram_quota_mib).unwrap_or(init_vram).map(|m| m.to_string()).unwrap_or_default()
                                                     on:input=move |ev| {
                                                         let v = event_target_value(&ev).parse::<u64>().ok().filter(|m| *m > 0);
-                                                        edit(pf_addr3.clone(), Box::new(move |p| p.all.vram_quota_mib = v));
+                                                        edit(pf_addr3.clone(), init, Box::new(move |p| p.all.vram_quota_mib = v));
                                                     }/>
                                             </label>
                                         })}
@@ -216,7 +231,7 @@ pub fn GpuSlicing() -> impl IntoView {
                                                 prop:value=move || spec_of(&q3).map(|p| p.vf_driver).unwrap_or_else(|| "auto".into())
                                                 on:change=move |ev| {
                                                     let v = event_target_value(&ev);
-                                                    edit(pf_addr4.clone(), Box::new(move |p| p.vf_driver = v.clone()));
+                                                    edit(pf_addr4.clone(), init, Box::new(move |p| p.vf_driver = v.clone()));
                                                 }>
                                                 <option value="auto">"automatic (vendor VFIO driver when loaded)"</option>
                                                 {drivers.iter().map(|d| view! { <option value=d.clone()>{d.clone()}</option> }).collect_view()}
