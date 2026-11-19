@@ -452,7 +452,8 @@ with sync_playwright() as pw:
         wpage.screenshot(path=f"{OUT}/windows-setup.png")
         wins = []
         for i in range(6):
-            wins.append(trial(wpage, key("Tab")))
+            # full resolution: the moved focus is a 1-pixel dotted outline
+            wins.append(region_trial(wpage, None, None, key("Tab")))
             time.sleep(0.8)
         check(len([x for x in wins if x is not None]) >= 3,
               f"keyboard input reaches Windows Setup ({len([x for x in wins if x is not None])}/6 Tab presses moved the focus)")
