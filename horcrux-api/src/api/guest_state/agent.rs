@@ -249,6 +249,38 @@ mod tests {
         );
     }
 
+    /// Stopping or restarting the manager (package upgrade, autoupdate) must
+    /// not kill the VMs: they are processes in its cgroup, so the shipped
+    /// manager units must not use the default `KillMode=control-group`.
+    #[test]
+    fn manager_units_leave_the_guests_running() {
+        for (name, unit) in [
+            (
+                "deploy horcrux.service",
+                include_str!("../../../../deploy/systemd/horcrux.service"),
+            ),
+            (
+                "deploy horcrux-api.service",
+                include_str!("../../../../deploy/systemd/horcrux-api.service"),
+            ),
+            (
+                "horcrux-bin horcrux-api.service",
+                include_str!(
+                    "../../../../gentoo/app-emulation/horcrux-bin/files/horcrux-api.service"
+                ),
+            ),
+            (
+                "horcrux horcrux-api.service",
+                include_str!("../../../../gentoo/app-emulation/horcrux/files/horcrux-api.service"),
+            ),
+        ] {
+            assert!(
+                unit.lines().any(|l| l.trim() == "KillMode=process"),
+                "{name} must set KillMode=process"
+            );
+        }
+    }
+
     #[test]
     fn openrc_service_needs_the_api_and_storage() {
         let rc = include_str!("../../../../deploy/openrc/horcrux-guests");
