@@ -371,6 +371,11 @@ slower-paced games at best, not FPS; prototyped only if measurements justify it.
 
 Sources: NVIDIA GeForce NOW system requirements and premium membership pages,
 NVIDIA support answer 5223. Measured Horcrux numbers are added as phases land.
+Horcrux Console C1 (no guest tools, software x264, headless browser client on
+a shared CI host): data-channel RTT 2-7 ms, server encode 14-31 ms at
+1280x800, keystroke-to-picture median 73-168 ms; host CPU contention dominates
+and no gaming-path number exists yet (needs guest tools + GPU encode, C2).
+Details: docs/design/horcrux-console.md section 6.
 
 ## 15. Phases
 

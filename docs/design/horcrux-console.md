@@ -188,7 +188,8 @@ the whole picture at full resolution.
 | Standalone FFmpeg probe, same settings, 1024x768 | median 15.3 ms | same host, idle-ish |
 | Keystroke to picture, boot loader (pre-OS, 640x480) | median 104-168 ms (min 75 ms) | shared CI host, load 12-30 on 8 cores |
 | Keystroke to picture, Linux console (1280x800) | median 73-147 ms (min 66 ms) | same |
-| Pointer move / click to picture | median 141-500 ms; seconds when the host was saturated | same; includes the guest kernel and `od` printing the event |
+| Pointer move / click to picture, Linux | median 85-375 ms (min 51 ms); seconds when the host was saturated | same; includes the guest kernel and `od` printing the event |
+| Keystroke / absolute pointer to picture, Windows Setup (1024x768, no tools) | median 571 / 259 ms | same host at load 17-20 while Windows Setup itself was busy |
 | Keyframe/noise false positives | 0 (view-only user's input: 0 picture changes, server counters `keys_in = pointer_in = 0`) | after the pixel-delta detector |
 
 Reading: the transport (2-7 ms) is not the problem; the measured totals on the
