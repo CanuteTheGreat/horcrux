@@ -357,6 +357,7 @@ async fn input_task(
     // absolute move becomes the difference to it. QEMU switches between
     // the two at run time, so every move tries absolute first.
     let mut last: Option<(u32, u32)> = None;
+    let mut mode: Option<bool> = None;
     while let Some(ev) = rx.recv().await {
         let r = match ev {
             InputEvent::Key { code, down } => match keymap::qnum(&code) {
@@ -372,16 +373,28 @@ async fn input_task(
             InputEvent::Abs { x, y } => {
                 let prev = last.replace((x, y));
                 match display.mouse.set_abs_position(x, y).await {
-                    Ok(()) => Ok(()),
-                    Err(_) => match prev {
-                        Some((px, py)) => {
-                            display
-                                .mouse
-                                .rel_motion(x as i32 - px as i32, y as i32 - py as i32)
-                                .await
+                    Ok(()) => {
+                        if mode != Some(true) {
+                            mode = Some(true);
+                            tracing::debug!("console pointer: absolute");
                         }
-                        None => Ok(()),
-                    },
+                        Ok(())
+                    }
+                    Err(e) => {
+                        if mode != Some(false) {
+                            mode = Some(false);
+                            tracing::debug!("console pointer: relative ({e})");
+                        }
+                        match prev {
+                            Some((px, py)) => {
+                                display
+                                    .mouse
+                                    .rel_motion(x as i32 - px as i32, y as i32 - py as i32)
+                                    .await
+                            }
+                            None => Ok(()),
+                        }
+                    }
                 }
             }
             InputEvent::Rel { dx, dy } => display.mouse.rel_motion(dx, dy).await,
@@ -487,7 +500,10 @@ async fn compositor(
     let frame_gap = Duration::from_secs_f64(1.0 / profile.max_fps.max(1) as f64);
     let idle_gap = (profile.idle_refresh_fps > 0)
         .then(|| Duration::from_secs_f64(1.0 / profile.idle_refresh_fps as f64));
-    let mut tick = tokio::time::interval(frame_gap);
+    // Wake often and send as soon as the guest drew something and the
+    // frame-rate cap allows it, instead of waiting for the next frame slot
+    // (up to one frame interval of extra latency).
+    let mut tick = tokio::time::interval(frame_gap.min(Duration::from_millis(4)));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut codec: Option<(VideoCodec, encode::EncoderBackend)> = None;
     let mut last_keyframe_restart = Instant::now() - Duration::from_secs(60);
@@ -576,6 +592,7 @@ async fn compositor(
                 let Some(f) = fb.as_ref() else { continue };
                 let idle_due = idle_gap.map(|g| last_sent.elapsed() >= g).unwrap_or(false);
                 if !dirty && !idle_due { continue; }
+                if last_sent.elapsed() < frame_gap { continue; }
                 if encoder.as_mut().map(|e| !e.alive()).unwrap_or(false) {
                     encoder = None;
                 }

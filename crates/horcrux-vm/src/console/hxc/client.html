@@ -99,7 +99,28 @@
   }
 
   // ---- frame change detection (input-to-picture latency) ----
+  // Whole-picture change detector (coarse, every frame) plus an on-demand
+  // full-resolution watch of one region (a moved pointer is ~12x19 pixels).
+  // Colours are quantised so encoder noise does not count as a change.
   const probe = document.createElement("canvas"); probe.width = 64; probe.height = 36;
+  const rprobe = document.createElement("canvas");
+  const rctx = rprobe.getContext("2d", { willReadFrequently: true });
+  function regionHash(r) {
+    try {
+      rprobe.width = r.w; rprobe.height = r.h;
+      rctx.drawImage(video, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      const d = rctx.getImageData(0, 0, r.w, r.h).data;
+      let h = 2166136261;
+      for (let i = 0; i < d.length; i += 4) { h ^= (d[i] >> 3) | ((d[i + 1] >> 3) << 5) | ((d[i + 2] >> 3) << 10); h = Math.imul(h, 16777619); }
+      return h >>> 0;
+    } catch { return 0; }
+  }
+  hxc.watch = null; hxc.regionChangeMs = null;
+  hxc.watchRegion = (x, y, w, h) => {
+    const r = { x: Math.max(0, x), y: Math.max(0, y), w, h };
+    r.base = regionHash(r); r.at = performance.now();
+    hxc.regionChangeMs = null; hxc.watch = r;
+  };
   const pctx = probe.getContext("2d", { willReadFrequently: true });
   let lastHash = 0, inputAt = null;
   function frameHash() {
@@ -113,6 +134,9 @@
   }
   function onFrame(now) {
     hxc.framesDecoded++;
+    if (hxc.watch && regionHash(hxc.watch) !== hxc.watch.base) {
+      hxc.regionChangeMs = now - hxc.watch.at; hxc.watch = null;
+    }
     const h = frameHash();
     if (h !== lastHash) {
       lastHash = h; hxc.lastChangeAt = now;
@@ -128,6 +152,7 @@
 
   // ---- data channels ----
   const ch = {};
+  hxc.channels = ch;
   function send(name, data) { const c = ch[name]; if (c && c.readyState === "open") c.send(data); }
   let seq = 0;
   function motion(kind, x, y) {

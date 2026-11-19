@@ -270,8 +270,10 @@ fn console_settings_are_planned_validated_and_exported() {
     };
     assert!(plan(&s, &live, false).in_sync());
     // a change is one update with key-level details
-    let mut want = ConsoleSettings::default();
-    want.default_profile = ConsoleProfile::Gaming;
+    let mut want = ConsoleSettings {
+        default_profile: ConsoleProfile::Gaming,
+        ..Default::default()
+    };
     want.desktop.max_fps = 60;
     s.console = Some(want.clone());
     let p = plan(&s, &live, false);

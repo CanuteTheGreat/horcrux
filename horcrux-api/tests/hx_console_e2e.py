@@ -71,7 +71,7 @@ def login(user, pw):
 ADMIN = login("admin", "admin")
 
 
-def make_vm(vm_id, iso, memory, cpus=2, extra_hw=None):
+def make_vm(vm_id, iso, memory, cpus=2, extra_hw=None, relative_mouse=False):
     call("POST", f"/vms/{vm_id}/stop", token=ADMIN, ok=None)
     call("DELETE", f"/vms/{vm_id}", token=ADMIN, ok=None)
     hw = {"nets": [], "cdrom": iso, "boot": ["cdrom", "disk"]}
@@ -79,7 +79,7 @@ def make_vm(vm_id, iso, memory, cpus=2, extra_hw=None):
     call("POST", "/vms", {
         "id": vm_id, "name": vm_id, "hypervisor": "qemu", "architecture": "x86_64",
         "cpus": cpus, "memory": memory, "disk_size": 1, "status": "stopped",
-        "display": {"protocol": "vnc", "video": "std", "sound": "none"},
+        "display": {"protocol": "vnc", "video": "std", "sound": "none", "relative_mouse": relative_mouse},
         "hardware": hw,
     }, token=ADMIN)
     call("POST", f"/vms/{vm_id}/start", token=ADMIN, ok=(200, 202))
@@ -122,7 +122,10 @@ check(any(r.get("name") == "HxcViewer" for r in roles), "a view-only role exists
 
 # ---------------------------------------------------------------- Linux VM
 VM = "hxc-linux"
-make_vm(VM, ISO, 768)
+# Tiny Core's X server (Xvesa) reads only the PS/2 mouse: this guest runs
+# with the relative mouse, which also covers the console's relative path
+# (absolute moves become deltas). The Windows guest covers the USB tablet.
+make_vm(VM, ISO, 768, relative_mouse=True)
 argv = " ".join(qemu_cmdline(VM))
 check("-display dbus,p2p=yes" in argv, "the VM runs with QEMU's D-Bus display")
 check("-vnc 127.0.0.1:" in argv, "the classic VNC console is still configured")
@@ -190,6 +193,26 @@ def trial(page, action, timeout=10):
     return None
 
 
+def region_trial(page, x, y, action, timeout=10):
+    """Watch the guest picture at full resolution (the region around (x, y)
+    when x is not None, else all of it), run `action`, return the ms until
+    the watched pixels changed, or None. A relative (PS/2) pointer lands
+    wherever the guest's acceleration puts it, so those moves watch it all."""
+    if x is None:
+        page.evaluate("window.hxc.watchRegion(0,0,window.hxc.guest.width,window.hxc.guest.height)")
+    else:
+        page.evaluate(f"window.hxc.watchRegion({x - 32},{y - 32},64,64)")
+    page.evaluate(action)
+    end = time.time() + timeout
+    while time.time() < end:
+        v = page.evaluate("window.hxc.regionChangeMs")
+        if v is not None:
+            return v
+        time.sleep(0.05)
+    page.evaluate("window.hxc.watch = null")
+    return None
+
+
 def key(code):
     return f"window.hxc.sendKey('{code}', true); window.hxc.sendKey('{code}', false);"
 
@@ -239,27 +262,49 @@ with sync_playwright() as pw:
     moves = []
     for i, (fx, fy) in enumerate([(0.2, 0.2), (0.8, 0.25), (0.75, 0.7), (0.25, 0.75), (0.5, 0.3), (0.3, 0.5)]):
         x, y = int(g["width"] * fx), int(g["height"] * fy)
-        moves.append(trial(page, f"window.hxc.move({x},{y})"))
+        moves.append(region_trial(page, None, None, f"window.hxc.move({x},{y})"))
         wait_static(page, quiet_ms=600, timeout=10)
+        page.screenshot(path=f"{OUT}/linux-move-{i}.png")
     got = len([m for m in moves if m is not None])
+    if got < 4:
+        _, sess = call("GET", f"/console/{VM}/hxc/sessions", token=ADMIN)
+        print("DEBUG session stats", json.dumps(sess)[:1500], flush=True)
+        print("DEBUG channels", page.evaluate("""() => JSON.stringify(Object.fromEntries(
+            Object.entries(window.hxc.channels || {}).map(([n, c]) => [n, c.readyState])))"""), flush=True)
+        print("DEBUG qemu pointer devices", [a for a in qemu_cmdline(VM) if "tablet" in a or "mouse" in a], flush=True)
+        # same session, pointer moved through QMP instead: guest or path?
+        argv = qemu_cmdline(VM)
+        qsock = next((a.split("unix:", 1)[1].split(",")[0] for a in argv if a.startswith("unix:") and "qmp" in a), None)
+        if qsock:
+            import socket as _s
+            c = _s.socket(_s.AF_UNIX); c.connect(qsock); f = c.makefile("rw")
+            f.readline(); f.write('{"execute":"qmp_capabilities"}\n'); f.flush(); f.readline()
+            page.evaluate("window.hxc.watchRegion(0,0,window.hxc.guest.width,window.hxc.guest.height)")
+            f.write(json.dumps({"execute": "input-send-event", "arguments": {"events": [
+                {"type": "rel", "data": {"axis": "x", "value": 120}}, {"type": "rel", "data": {"axis": "y", "value": 90}}]}}) + "\n")
+            f.flush(); print("DEBUG qmp rel", f.readline().strip(), flush=True)
+            time.sleep(3)
+            print("DEBUG picture changed after a QMP pointer move:", page.evaluate("window.hxc.regionChangeMs"), flush=True)
+            c.close()
     check(got >= 4, f"pointer motion reaches the desktop ({got}/6 moves moved the guest's cursor)")
     latency_summary("desktop_pointer_input_to_picture", moves)
     page.screenshot(path=f"{OUT}/linux-moved.png")
 
-    # Click: the dock's last icon (bottom centre) opens a terminal window.
+    # Click: Tiny Core's window manager opens its menu on a click on the
+    # desktop background (top-left area: no icons there).
     clicks = []
-    for i, dx in enumerate([102, 100, 104]):
-        x, y = g["width"] // 2 + dx, g["height"] - 22
-        page.evaluate(f"window.hxc.move({x},{y})")
-        wait_static(page, quiet_ms=1200, timeout=15)  # the dock's hover zoom settles
-        lat = trial(page, f"window.hxc.press({x},{y},0)", timeout=2)
+    page.evaluate("window.hxc.move(40,40)")
+    wait_static(page, quiet_ms=1200, timeout=15)
+    for button in (2, 0, 1):
+        lat = trial(page, f"window.hxc.press(40,40,{button})", timeout=2)
         time.sleep(0.15)
-        lat2 = trial(page, "window.hxc.release(0)", timeout=8)
+        lat2 = trial(page, f"window.hxc.release({button})", timeout=6)
         clicks.append(lat if lat is not None else lat2)
+        page.screenshot(path=f"{OUT}/linux-click-{button}.png")
         if clicks[-1] is not None:
+            print(f"note: mouse button {button} opened the desktop menu", flush=True)
             break
-    page.screenshot(path=f"{OUT}/linux-click.png")
-    check(any(c is not None for c in clicks), f"a mouse click reaches the desktop (dock icon opened a window: {clicks})")
+    check(any(c is not None for c in clicks), f"a mouse click reaches the desktop (menu opened: {clicks})")
     latency_summary("desktop_click_input_to_picture", clicks)
     time.sleep(2.5)
     rtt = page.evaluate("window.hxc.rttMs")
@@ -370,6 +415,18 @@ with sync_playwright() as pw:
         check(len([x for x in wins if x is not None]) >= 3,
               f"keyboard input reaches Windows Setup ({len([x for x in wins if x is not None])}/6 Tab presses moved the focus)")
         latency_summary("windows_key_input_to_picture", wins)
+        # absolute pointer (USB tablet): the pointer follows exactly
+        wg = wpage.evaluate("window.hxc.guest")
+        wmoves = []
+        for fx, fy in [(0.2, 0.2), (0.8, 0.3), (0.7, 0.8), (0.3, 0.7), (0.5, 0.5), (0.1, 0.9)]:
+            wx, wy = int(wg['width'] * fx), int(wg['height'] * fy)
+            wmoves.append(region_trial(wpage, wx, wy, f"window.hxc.move({wx},{wy})"))
+            wait_static(wpage, quiet_ms=600, timeout=10)
+        wgot = len([m for m in wmoves if m is not None])
+        cur = wpage.evaluate("window.hxc.cursorPos")
+        check(wgot >= 4 or (cur and abs(cur["x"] - int(wg["width"] * 0.1)) < 8),
+              f"absolute pointer reaches Windows ({wgot}/6 moves changed the picture, guest cursor {cur})")
+        latency_summary("windows_pointer_input_to_picture", wmoves)
         RESULTS["windows_guest"] = wpage.evaluate("window.hxc.guest")
         wpage.close()
         call("POST", f"/vms/{WVM}/stop", token=ADMIN, ok=None)
