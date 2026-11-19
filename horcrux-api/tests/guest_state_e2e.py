@@ -317,8 +317,13 @@ for _ in range(100):   # stall the writer of the memory image: the migration can
 t.join(300)
 sh("pkill -CONT -f '[c]at > .*vmstate.tmp'; true", ok=False)
 out = res.get("out", "")
-check("shutdown vm gs-save" in out and "did not finish within 5 s" in out, f"timeout -> clean shutdown with the reason: {out[-300:]}")
-check(not qemu_running("gs-save") and not index_files(), "stopped, no half-written state kept")
+import re as _re
+hit = _re.search(r"shutdown vm (\S+) \(\S+\) - State could not be saved: .*did not finish within 5 s", out)
+check(hit is not None, f"timeout -> clean shutdown with the reason: {out[-400:]}")
+victim = hit.group(1)
+check(not qemu_running(victim), f"{victim}: stopped")
+check(victim not in index_files() and sh("find /var/lib/hx/saved-state -name '*.tmp' | wc -l") == "0",
+      f"{victim}: no half-written state kept")
 api("PUT", "/nodes/guest-power", {**_node, "save_encryption": "allow_unencrypted"})
 st, _ = api("POST", "/vms/gs-save/start")
 check(st == 200 and wait_status("gs-save", "running", 240), "started again")
