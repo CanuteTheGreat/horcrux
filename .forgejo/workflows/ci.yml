@@ -989,7 +989,7 @@ jobs:
       - name: Install cargo-audit
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install cargo-audit"
-          cargo install cargo-audit
+          bash "$GITHUB_WORKSPACE/ci/install-cargo-audit.sh"
 
       - name: Run security audit
         # RUSTSEC-2023-0071 (rsa crate, Marvin Attack timing side-channel):

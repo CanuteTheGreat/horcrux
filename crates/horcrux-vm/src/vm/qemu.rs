@@ -384,7 +384,8 @@ fn pass_fds(cmd: &mut Command, fds: &[(std::fs::File, i32)]) {
     // integers and a stack array run between fork and exec (no allocation).
     unsafe {
         cmd.pre_exec(move || {
-            let mut tmp = [-1i32; horcrux_common::MAX_VM_NICS];
+            // Slots past `pairs.len()` are never read, so the filler value is irrelevant.
+            let mut tmp = [0i32; horcrux_common::MAX_VM_NICS];
             for (k, (raw, _)) in pairs.iter().enumerate().take(tmp.len()) {
                 tmp[k] = nix::fcntl::fcntl(*raw, nix::fcntl::FcntlArg::F_DUPFD(above))
                     .map_err(std::io::Error::from)?;
@@ -2524,6 +2525,10 @@ esac
         std::fs::create_dir(f.net().join("wlan0/wireless")).unwrap();
         f.add_dev("tap1");
         std::fs::write(f.net().join("tap1/tun_flags"), "0x1002").unwrap();
+        // another VM's macvtap device (a `macvtap` directory, no tun_flags) and the loopback device
+        f.add_dev("macvtap0");
+        std::fs::create_dir(f.net().join("macvtap0/macvtap")).unwrap();
+        f.add_dev("lo");
         let h = &f.host;
         assert_eq!(h.macvtap_problem("eth0"), None);
         for (dev, why) in [
@@ -2531,6 +2536,8 @@ esac
             ("eth1", "port of a bridge"),
             ("wlan0", "Wi-Fi"),
             ("tap1", "can't carry"),
+            ("macvtap0", "can't carry"),
+            ("lo", "can't carry"),
             ("eth9", "does not exist"),
             ("../x", "not an interface name"),
         ] {
@@ -2635,6 +2642,61 @@ esac
         let lines: Vec<&str> = s.lines().collect();
         assert_eq!(lines.len(), 2, "{s}");
         assert!(lines[0].ends_with("/a") && lines[1].ends_with("/b"), "{s}");
+    }
+
+    #[test]
+    fn macvtap_fd_numbers_start_at_200_and_count_up_by_nic_index() {
+        // QEMU is handed these literal numbers on its command line: pin them.
+        assert_eq!(macvtap_fd(0), 200);
+        assert_eq!(macvtap_fd(1), 201);
+        assert_eq!(macvtap_fd(3), 203);
+    }
+
+    #[test]
+    fn pass_fds_never_parks_a_source_copy_on_a_target_descriptor() {
+        // Occupy every descriptor just below the targets, so a scratch copy made from a base that
+        // is too low would land exactly on a target (200) and be closed again by the cleanup.
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        let low = macvtap_fd(0) - horcrux_common::MAX_VM_NICS as i32;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        std::fs::write(&a, "").unwrap();
+        let src = std::fs::File::open(&a).unwrap();
+        let mut filler = Vec::new();
+        loop {
+            let raw =
+                nix::fcntl::fcntl(src.as_raw_fd(), nix::fcntl::FcntlArg::F_DUPFD_CLOEXEC(low))
+                    .expect("dup a filler descriptor");
+            // SAFETY: `raw` is a fresh descriptor returned by F_DUPFD_CLOEXEC, owned only here.
+            filler.push(unsafe { OwnedFd::from_raw_fd(raw) });
+            if raw >= macvtap_fd(0) - 1 {
+                break;
+            }
+        }
+        assert!(
+            !filler.is_empty() && filler.iter().all(|f| f.as_raw_fd() < macvtap_fd(0)),
+            "descriptors {low}..{} must be taken and {} free",
+            macvtap_fd(0) - 1,
+            macvtap_fd(0)
+        );
+        let fds = vec![(src, macvtap_fd(0))];
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let out = rt.block_on(async {
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c")
+                .arg(format!("readlink /proc/self/fd/{}", macvtap_fd(0)));
+            pass_fds(&mut cmd, &fds);
+            cmd.output().await.unwrap()
+        });
+        let s = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            s.trim().ends_with("/a"),
+            "fd {} in the child: {s:?}",
+            macvtap_fd(0)
+        );
     }
 
     #[tokio::test]
