@@ -429,13 +429,26 @@ with sync_playwright() as pw:
         WVM = "hxc-windows"
         make_vm(WVM, WIN_ISO, int(os.environ.get("HXC_WIN_MEM_MB", "3072")), cpus=2)
         wpage = open_console(admin, WVM, "windows")
-        # Windows Setup takes a while to draw its first window.
-        deadline = time.time() + 600
+        # Windows Setup takes a while to draw its first window. The boot
+        # logo is static too (black, small logo), so wait for the Setup
+        # window itself: a bright picture (its background and dialog) that
+        # stopped changing.
+        def mean_luma():
+            return wpage.evaluate("""() => {
+              const v = document.querySelector('video'); const c = document.createElement('canvas');
+              c.width = 160; c.height = 100; const x = c.getContext('2d');
+              x.drawImage(v, 0, 0, 160, 100); const d = x.getImageData(0, 0, 160, 100).data;
+              let s = 0; for (let i = 0; i < d.length; i += 4) s += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+              return s / (d.length / 4); }""")
+        deadline = time.time() + int(os.environ.get("HXC_WIN_SETUP_SECS", "900"))
+        luma = 0
         while time.time() < deadline:
             time.sleep(10)
             wpage.screenshot(path=f"{OUT}/windows-latest.png")
-            if wait_static(wpage, quiet_ms=8000, timeout=20) and wpage.evaluate("window.hxc.guest.width") >= 800:
+            luma = mean_luma()
+            if luma > 30 and wait_static(wpage, quiet_ms=5000, timeout=20) and wpage.evaluate("window.hxc.guest.width") >= 800:
                 break
+        check(luma > 30, f"Windows Setup drew its first window (mean brightness {luma:.0f})")
         wpage.screenshot(path=f"{OUT}/windows-setup.png")
         wins = []
         for i in range(6):
