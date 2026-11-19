@@ -23,6 +23,11 @@ possible on each machine and the UI says why when something is not. The picture
 reaches the player through Horcrux's own viewer and streaming (section 10), on
 the same machine, on the LAN, or over the internet, with no third-party viewer.
 
+A single standalone Horcrux machine (no cluster, no shared storage, no relay
+node) is a first-class target: it runs the VM, the viewer endpoint and, when
+WAN play is enabled, the relay itself. A cluster adds placement and failover
+(section 11).
+
 ## 1. GPU options, with evidence
 
 | Option | Gives DirectX 12 games a real GPU? | Host keeps a display? | Status (Nov 2026) |
@@ -276,35 +281,36 @@ external monitor output from the guest, AMD reset behaviour, Intel Arc.
 `quirks_files`. Per VM: `hostpci[].managed`, `hostpci[].allow_display_loss`,
 `adv.cpu_pinning`, `adv.hugepages`, `adv.hyperv`, `adv.evdev`.
 
-## 10. Native viewer and streaming (no third-party viewers)
+## 10. Native viewer and streaming: Horcrux Console (no third-party viewers)
+
+The viewer and streaming are not gaming-only: they are **Horcrux Console**, one
+remote-display component for every VM, container and (later) the host desktop,
+designed in docs/design/horcrux-console.md (prior-art study with licences,
+architecture, wire format, security model, latency budget, phases C1-C7).
+Gaming is its `gaming` profile (fixed high frame rate, lowest-latency rate
+control, raw mouse, gamepads, HDR) next to `desktop` (crisp text, low
+bandwidth) and `console` (serial + framebuffer, pre-OS).
 
 No Looking Glass, Sunshine/Moonlight, Parsec or similar in the user's path;
-Horcrux ships its own. Standard building blocks underneath are fine
-(ivshmem, VFIO, codec SDKs via FFmpeg, WebRTC libraries) after a licence check
-against Horcrux's licence; Looking Glass is GPL-2.0 and its code is not copied
-(clean-room design).
+Horcrux ships its own. Looking Glass is GPL-2.0-or-later (compatible with
+Horcrux's GPL-3.0), but its code is not copied: clean-room design, owner rule.
 
-- **Horcrux guest tools** (signed MSI, delivered into the VM by the wizard):
-  an Indirect Display Driver (virtual monitor, configurable resolution/refresh up
-  to 4K/5K and 240-360 Hz, used automatically for GPUs without a monitor or
-  without outputs; a dummy plug is only an optional fallback), capture (IDD
-  swap-chain / DXGI Desktop Duplication), hardware encode (NVENC, AMF, QSV;
-  software fallback), audio capture (WASAPI loopback), input injection (raw
-  mouse, keyboard, gamepads via a virtual HID), clipboard, cursor channel,
-  health. Built with the Windows Driver Kit in CI, signed.
-- **Same host:** a Horcrux-managed ivshmem shared-memory device carries raw
-  frames into the host; the Horcrux viewer window on the host desktop (and the
-  console in the Horcrux UI) shows them with no encode step.
-- **LAN/WAN:** Horcrux's own low-latency streaming: hardware-encoded video (AV1,
-  HEVC, H.264, picked by client), Opus audio, input back; WebRTC transport
-  (ICE with a Horcrux-hosted relay through the cluster for NAT, no third-party
-  service), adaptive bitrate/resolution, FEC/NACK for loss, encrypted (DTLS-SRTP),
-  authenticated with Horcrux accounts/RBAC/2FA and audited. Clients: the Horcrux
-  web UI in a browser, the Horcrux desktop app (Linux/Windows/macOS), later
-  Android/Android TV and iOS/Apple TV.
-- **Latency budget (target, to be measured per path in tests):** same host <
-  8 ms frame-to-viewer; LAN < 20 ms click-to-photon at 120+ fps; WAN = LAN + RTT
-  + jitter buffer. Tests publish measured numbers per path.
+What the gaming profile adds on top of the shared core:
+- **Guest tools** (Windows MSI, delivered by the wizard): Indirect Display
+  Driver (virtual monitor up to 4K/5K and 240-360 Hz, used automatically for
+  GPUs without a monitor or without outputs; a dummy plug is only an optional
+  fallback), in-guest capture (IDD swap chain / DXGI Desktop Duplication) and
+  hardware encode (NVENC, AMF, QSV; software fallback), WASAPI audio, raw mouse
+  and virtual HID gamepads.
+- **Same host:** a Horcrux-managed ivshmem device carries raw frames to the
+  native viewer with no encode step.
+- **LAN/WAN:** WebRTC with a Horcrux-hosted relay (on the standalone machine
+  itself or any cluster node), adaptive bitrate fitted to the uplink, FEC,
+  DTLS-SRTP, Horcrux accounts/RBAC/2FA/audit; clients are the web UI and the
+  Horcrux desktop app, mobile/TV later.
+- **Latency targets:** same host < 8 ms frame-to-viewer; LAN < 20 ms
+  click-to-photon at 120+ fps; WAN = LAN + RTT + jitter buffer. Measured per
+  path in tests (horcrux-console.md section 6).
 
 ## 11. HA clusters and remote players
 
@@ -373,10 +379,12 @@ NVIDIA support answer 5223. Measured Horcrux numbers are added as phases land.
 2. Gaming VM wizard + `POST /api/vms/gaming`, unattended Windows install with
    TPM/Secure Boot/VBS/stable SMBIOS, `gaming-compat.toml` + UI warnings,
    single-GPU display-manager hand-over, AMD CCD pinning, MSI/latency checks.
-3. Horcrux guest tools (IDD, capture, encode, input) + same-host shared-memory
-   viewer.
-4. Remote streaming (WebRTC, relay, adaptive bitrate) + web/desktop clients,
-   latency tests per path.
+3. Horcrux Console C1 (shared core: broker, tickets/RBAC/audit, QEMU D-Bus
+   display source, host encode, WebRTC, web client, native viewer), proven on
+   an ordinary desktop VM, then C2 (guest tools incl. IDD/capture/encode/
+   gamepad, `gaming` profile, same-host ivshmem path).
+4. Horcrux Console C3: WAN relay (standalone or cluster), adaptive bitrate,
+   FEC, desktop app; latency tests per path.
 5. HA placement and failover for GPU VMs; GPU pool, sessions, quotas.
 6. Protected gaming VM + attestation; confidential tier where hardware allows.
 7. GPU lending across nodes (compute follows the GPU); remote-GPU research.
