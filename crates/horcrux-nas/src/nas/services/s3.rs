@@ -816,9 +816,25 @@ fn live_pid(pid: i32, needle: &str) -> bool {
     if state == "Z" || state == "X" {
         return false;
     }
-    std::fs::read(format!("/proc/{}/cmdline", pid))
-        .map(|c| String::from_utf8_lossy(&c).contains(needle))
-        .unwrap_or(false)
+    let cmdline = std::fs::read(format!("/proc/{}/cmdline", pid)).unwrap_or_default();
+    let comm = std::fs::read_to_string(format!("/proc/{}/comm", pid)).unwrap_or_default();
+    process_matches(&cmdline, comm.trim(), needle)
+}
+
+/// Does a process (raw /proc cmdline, comm) belong to the server `needle`?
+/// A process caught inside execve has an EMPTY cmdline for a few microseconds
+/// (the spawn call returns before the kernel has set the new argument area);
+/// on a loaded nested-KVM node the very first liveness poll landed in that
+/// window and the gateway reported "S3 server exited after 0s" for a server
+/// that then started fine (VM-cluster ui.flows run 1119-0359). An empty
+/// cmdline therefore falls back to the process name (comm, set earlier in the
+/// exec; the kernel truncates it to 15 bytes).
+fn process_matches(cmdline: &[u8], comm: &str, needle: &str) -> bool {
+    if cmdline.is_empty() {
+        let n: String = needle.chars().take(15).collect();
+        return !comm.is_empty() && comm.contains(&n);
+    }
+    String::from_utf8_lossy(cmdline).contains(needle)
 }
 
 impl S3GatewayManager {
@@ -2777,6 +2793,20 @@ async fn get_disk_usage(path: &str) -> Result<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_caught_inside_exec_still_counts_as_the_server() {
+        // normal: the command line names the server
+        assert!(process_matches(b"/usr/local/bin/silo\0server\0/data\0", "silo", "silo"));
+        // inside execve: cmdline empty, comm already the new name
+        assert!(process_matches(b"", "silo", "silo"));
+        assert!(process_matches(b"", "minio", "minio"));
+        // empty cmdline and another name (a kernel thread, a recycled pid) is not the server
+        assert!(!process_matches(b"", "kworker/0:1", "silo"));
+        assert!(!process_matches(b"", "", "silo"));
+        // a different program is not the server
+        assert!(!process_matches(b"/bin/sleep\0100\0", "sleep", "silo"));
+    }
 
     #[tokio::test]
     async fn start_wait_tolerates_a_slow_server_and_reports_timeout_and_death() {
