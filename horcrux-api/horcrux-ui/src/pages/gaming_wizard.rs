@@ -93,6 +93,11 @@ pub fn GamingVmWizard() -> impl IntoView {
                 disk.set(s.default_disk_gb.to_string());
                 hugepages.set(s.hugepages_kb != 0);
                 timezone.set(s.timezone.clone());
+                // the wizard always sends its choice, so it applies the
+                // node's VBS defaults itself
+                if let Some(g) = report.get_untracked() {
+                    vbs.set(g.nested_virt && s.vbs && (!g.host_is_vm || s.vbs_on_virtual_host));
+                }
                 edit_settings.set(s.clone());
                 set_settings.set(Some(s));
             }
@@ -285,6 +290,9 @@ pub fn GamingVmWizard() -> impl IntoView {
                     })}
                     {(!g.nested_virt).then(|| view! {
                         <p class="warning" id="gaming-nested">{format!("VBS / Memory Integrity unavailable: {}", g.nested_virt_problem)}</p>
+                    })}
+                    {(g.nested_virt && g.host_is_vm).then(|| view! {
+                        <p class="warning" id="gaming-host-vm">"This Horcrux host is itself a virtual machine: with VBS / Memory Integrity, Windows' hypervisor would run a third level deep, and on many clouds and CPUs Windows then restarts in a loop at boot. VBS is off unless you turn it on."</p>
                     })}
                     <div class="form-group" id="gaming-gpu-pick">
                         {g.gpus.iter().map(|c| {
@@ -501,6 +509,8 @@ pub fn GamingVmWizard() -> impl IntoView {
                     {num_setting("gs-poll", "Answer disc check interval (s)", |s| s.unattend_poll_secs, |s, v| s.unattend_poll_secs = v)}
                     <label class="checkbox"><input type="checkbox" id="gs-vbs" prop:checked=move || edit_settings.get().vbs
                         on:change=move |ev| { let c = event_target_checked(&ev); edit_settings.update(|s| s.vbs = c) }/>"VBS on by default"</label>
+                    <label class="checkbox"><input type="checkbox" id="gs-vbs-vhost" prop:checked=move || edit_settings.get().vbs_on_virtual_host
+                        on:change=move |ev| { let c = event_target_checked(&ev); edit_settings.update(|s| s.vbs_on_virtual_host = c) }/>"VBS on by default even when this host is itself a VM"</label>
                     <button type="button" class="btn btn-primary" id="gs-save" on:click=save_settings>"Save settings"</button>
                 </div>
             </Show>

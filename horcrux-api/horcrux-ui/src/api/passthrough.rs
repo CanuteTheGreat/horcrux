@@ -50,6 +50,9 @@ pub struct GamingReport {
     pub nested_virt: bool,
     #[serde(default)]
     pub nested_virt_problem: String,
+    /// The host is itself a VM (VBS would be a third nesting level).
+    #[serde(default)]
+    pub host_is_vm: bool,
     /// Secure Boot OVMF (Microsoft keys) installed.
     #[serde(default)]
     pub secure_boot_firmware: bool,
@@ -133,6 +136,8 @@ pub struct GamingSettings {
     pub min_disk_gb: u64,
     pub hugepages_kb: u64,
     pub vbs: bool,
+    #[serde(default)]
+    pub vbs_on_virtual_host: bool,
     pub smbios_manufacturer: String,
     pub smbios_product: String,
     pub smbios_family: String,
