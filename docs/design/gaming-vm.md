@@ -254,8 +254,14 @@ back on bochs-drm with its device nodes, and the huge pages were returned.
 Windows spike (2026-11-18, rw-man-01, no GPU): Windows 11 Enterprise evaluation
 installed unattended with the gaming configuration (q35 + SMM, Secure Boot OVMF
 with Microsoft keys, swtpm TPM 2.0, `-cpu host` + Hyper-V flags, virtio-blk/net
-drivers from virtio-win in windowsPE, guest agent). See section 8.1 for the
-result.
+drivers from virtio-win in windowsPE, guest agent). Result: installed and at
+the desktop in 41 minutes; from inside the guest: Windows 11 Enterprise
+Evaluation build 26100, `Confirm-SecureBootUEFI` = True, TPM present and ready,
+hypervisor reported (no hiding), VirtIO disk/network/serial drivers bound,
+network up, evaluation licence active; vCPU threads pinned from QMP; clean ACPI
+shutdown. One answer-file fix found: the oobeSystem pass needs the
+International-Core component or OOBE stops at the region page (the wizard's
+generator includes it).
 
 Only provable on a host with a real discrete GPU (planned on a
 hybrid laptop with a discrete NVIDIA GPU): NVIDIA driver unbind/rebind under a live
