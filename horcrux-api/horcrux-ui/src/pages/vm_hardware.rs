@@ -4,7 +4,7 @@
 //! actions Shutdown / Reboot / Reset).
 use crate::api::{self, VmConfigUpdate, VmHostOptions};
 use horcrux_common::{
-    BootDevice, Firmware, MachineType, NicAttach, NicModel, VmConfig, VmDisk, VmHardware,
+    BootDevice, Firmware, MachineType, NicAttach, NicModel, TpmModel, VmConfig, VmDisk, VmHardware,
     VmHypervisor, VmNic, VmStatus,
 };
 use leptos::*;
@@ -102,6 +102,9 @@ pub fn HardwareFields(
     /// Network cards and boot order are fixed while the VM runs.
     #[prop(into, default = Signal::derive(|| false))]
     running: Signal<bool>,
+    /// The VM being edited (shows its TPM state); None on Create VM.
+    #[prop(into, default = Signal::derive(|| None))]
+    vm_id: Signal<Option<String>>,
     /// Re-read the host options after an ISO was added from this form
     /// (the form then offers the "Add an ISO" panel).
     #[prop(optional)]
@@ -311,7 +314,7 @@ pub fn HardwareFields(
             </div>
         </fieldset>
 
-        <SystemFields hardware=hardware options=options running=running/>
+        <SystemFields hardware=hardware options=options running=running vm_id=vm_id/>
     }
 }
 
@@ -321,7 +324,48 @@ pub fn SystemFields(
     hardware: RwSignal<VmHardware>,
     #[prop(into)] options: Signal<Option<VmHostOptions>>,
     #[prop(into, default = Signal::derive(|| false))] running: Signal<bool>,
+    // The VM whose TPM state is shown (Hardware page); None on Create VM.
+    #[prop(into, default = Signal::derive(|| None))] vm_id: Signal<Option<String>>,
 ) -> impl IntoView {
+    let (tpm_status, set_tpm_status) = create_signal(None::<api::VmTpmStatus>);
+    let (tpm_msg, set_tpm_msg) = create_signal(None::<String>);
+    let load_tpm = move || {
+        if let Some(id) = vm_id.get() {
+            spawn_local(async move {
+                if let Ok(t) = api::get_vm_tpm(&id).await {
+                    set_tpm_status.set(Some(t));
+                }
+            });
+        }
+    };
+    create_effect(move |_| load_tpm());
+    let reset_tpm = move |_| {
+        let Some(id) = vm_id.get() else { return };
+        let ok = web_sys::window()
+            .and_then(|w| {
+                w.confirm_with_message(
+                    "Create a NEW, empty TPM? The guest loses what it keeps in the old one: BitLocker keys, \
+                     Windows Hello and the Microsoft Entra/Intune device identity (Windows shows 'Device TPM \
+                     problem'). Only continue if you have the BitLocker recovery key.",
+                )
+                .ok()
+            })
+            .unwrap_or(false);
+        if !ok {
+            return;
+        }
+        spawn_local(async move {
+            match api::reset_vm_tpm(&id).await {
+                Ok(t) => {
+                    set_tpm_msg.set(Some(
+                        "The TPM state was deleted: the next start creates an empty TPM.".into(),
+                    ));
+                    set_tpm_status.set(Some(t));
+                }
+                Err(e) => set_tpm_msg.set(Some(e.message)),
+            }
+        });
+    };
     let ovmf = move || options.get().map(|o| o.ovmf).unwrap_or(true);
     let swtpm = move || options.get().map(|o| o.swtpm).unwrap_or(true);
     let cpu_value = move || hardware.get().cpu_type.unwrap_or_default();
@@ -423,10 +467,47 @@ pub fn SystemFields(
                             prop:checked={move || hardware.get().tpm}
                             on:change=move |ev| {
                                 let on = event_target_checked(&ev);
-                                hardware.update(|h| h.tpm = on);
+                                hardware.update(|h| {
+                                    h.tpm = on;
+                                    // A new TPM is CRB (what Windows 11 expects); an existing
+                                    // VM keeps the model it has.
+                                    if on && h.tpm_model.is_none() {
+                                        h.tpm_model = Some(TpmModel::Crb);
+                                    }
+                                });
                             }/>
                         " TPM 2.0 (emulated, swtpm)"
                     </label>
+                    {move || hardware.get().tpm.then(|| view! {
+                        <div class="form-group">
+                            <label for="vm-tpm-model">"TPM interface"</label>
+                            <select id="vm-tpm-model" disabled={move || running.get()} on:change=move |ev| {
+                                let m = if event_target_value(&ev) == "crb" { TpmModel::Crb } else { TpmModel::Tis };
+                                hardware.update(|h| h.tpm_model = Some(m));
+                            }>
+                                <option value="crb" selected={move || hardware.get().tpm_model() == TpmModel::Crb}>"CRB (Windows 11, libvirt default)"</option>
+                                <option value="tis" selected={move || hardware.get().tpm_model() == TpmModel::Tis}>"TIS (older VMs)"</option>
+                            </select>
+                            <small class="form-help">"Changing the interface keeps the TPM state."</small>
+                        </div>
+                    })}
+                    {move || tpm_status.get().filter(|t| t.enabled).map(|t| {
+                        let (cls, text) = if t.blocked {
+                            ("alert alert-error", "TPM state MISSING: this VM had a TPM and cannot start without its state (BitLocker keys, Windows Hello, Entra/Intune identity). Restore the state, or create a new TPM explicitly.".to_string())
+                        } else if t.state_present {
+                            ("form-help", format!("TPM state present ({} bytes), model {}.", t.state_bytes, if t.model == TpmModel::Crb { "CRB" } else { "TIS" }))
+                        } else {
+                            ("form-help", "No TPM state yet: the first start creates an empty TPM.".to_string())
+                        };
+                        view! {
+                            <div id="vm-tpm-state" class=cls>{text}
+                                {(!running.get() && (t.state_present || t.blocked)).then(|| view! {
+                                    <button type="button" class="btn btn-danger btn-sm" id="vm-tpm-reset" on:click=reset_tpm>"Create new TPM (destroys the old keys)…"</button>
+                                })}
+                            </div>
+                        }
+                    })}
+                    {move || tpm_msg.get().map(|m| view! { <small class="form-help" id="vm-tpm-msg">{m}</small> })}
                     {move || (!swtpm()).then(|| view! {
                         <small class="form-help" id="vm-no-swtpm">"A TPM needs swtpm on this node (app-crypt/swtpm)."</small>
                     })}
@@ -791,6 +872,7 @@ pub fn VmHardwarePage() -> impl IntoView {
                     <p class="form-help">"LXD/Incus VMs get their network and devices from their LXD/Incus profile."</p>
                 }>
                     <HardwareFields hardware=hardware options=options running=running
+                        vm_id=Signal::derive(move || Some(vm_id()).filter(|i| !i.is_empty()))
                         reload_options=Callback::new(move |_: ()| spawn_local(async move {
                             if let Ok(o) = api::get_vm_host_options().await { set_options.set(Some(o)); }
                         }))/>

@@ -639,6 +639,16 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "VM advanced hardware"
           bash horcrux-api/tests/vm_advanced_e2e.sh target/debug/horcrux-api
 
+      - name: "VM TPM state (import, backup, snapshot, refusal of a missing state, real swtpm + tpm2-tools)"
+        # tpm_state_e2e.sh seals a secret in a real swtpm, imports a libvirt
+        # domain (fake virsh), restores a backup, rolls a snapshot back and
+        # imports a Proxmox tpmstate0 volume; each time the secret must unseal
+        # from the VM's TPM (the same TPM), and a VM whose state vanished
+        # must refuse to start until a new TPM is created explicitly.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "VM TPM state"
+          bash horcrux-api/tests/tpm_state_e2e.sh target/debug/horcrux-api
+
       - name: VM networking + hardware (real taps, VLAN, PXE, live CD-ROM)
         # NET_ADMIN + /dev/net/tun sibling container with real QEMU: Host
         # Bridges API (create, re-create at start), ISO download, a VM NIC

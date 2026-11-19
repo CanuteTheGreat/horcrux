@@ -868,6 +868,34 @@ impl BackupManager {
                     source: Some(src.to_string_lossy().into()),
                 });
             }
+            // The TPM state and the EFI variables are part of the VM: without
+            // them a restored Windows VM loses its BitLocker keys, Windows
+            // Hello and Entra/Intune identity.
+            for (name, kind, src) in crate::vm::firmware::carried_state(&disks[0]) {
+                let dst = staging.join(&name);
+                let (s, d) = (src.clone(), dst.clone());
+                tokio::task::spawn_blocking(move || crate::vm::firmware::copy_live_tpm_file(&s, &d))
+                    .await
+                    .map_err(|e| Error::System(format!("state copy task failed: {e}")))??;
+                let (sha256, size) = archive::sha256_file_async(dst).await?;
+                files.push(ArchiveFile {
+                    name,
+                    kind,
+                    size,
+                    sha256,
+                    format: None,
+                    source: Some(src.to_string_lossy().into()),
+                });
+            }
+            if vm.hardware.tpm
+                && vm.hardware.tpm_state_expected
+                && !crate::vm::firmware::tpm_state_present(&disks[0])
+            {
+                tracing::warn!(
+                    "VM {}: its TPM state is missing, so this backup carries none (a restored copy will refuse to start until a new TPM is created explicitly)",
+                    vm.id
+                );
+            }
             Ok(files)
         }
         .await;
@@ -1223,6 +1251,39 @@ impl BackupManager {
                         dest.display()
                     ))
                 })?;
+        }
+
+        // Firmware and TPM state go next to the restored first disk.
+        let efi_dst = crate::vm::firmware::efivars_path(&dests[0]);
+        let tpm_dst = crate::vm::firmware::tpm_state_dir(&dests[0]);
+        for f in m
+            .files
+            .iter()
+            .filter(|f| f.kind == "efivars" || f.kind == "tpm")
+        {
+            let to = if f.kind == "efivars" {
+                efi_dst.clone()
+            } else {
+                match f.name.strip_prefix("tpm-") {
+                    Some(n) if !n.is_empty() && !n.contains('/') && !n.starts_with('.') => {
+                        tokio::fs::create_dir_all(&tpm_dst).await?;
+                        tpm_dst.join(n)
+                    }
+                    _ => {
+                        return Err(Error::System(format!(
+                            "backup has an unusable TPM state file name '{}'",
+                            f.name
+                        )))
+                    }
+                }
+            };
+            let src = dir.join(&f.name);
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                let data = std::fs::read(&src)?;
+                crate::vm::firmware::write_private(&to, &data)
+            })
+            .await
+            .map_err(|e| Error::System(format!("state restore task failed: {e}")))??;
         }
 
         config.id = target.to_string();

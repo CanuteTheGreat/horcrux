@@ -296,9 +296,362 @@ pub async fn remove_state(disk0: &Path) {
     let _ = tokio::fs::remove_dir_all(tpm_state_dir(disk0)).await;
 }
 
+// ------------------------------------------------------------ TPM state
+//
+// The TPM's state holds the guest's keys: BitLocker sealing, Windows Hello,
+// the Microsoft Entra / Intune device identity, LUKS-TPM2 enrolments. An
+// empty TPM in place of the old one breaks all of them (Windows: "Device TPM
+// problem" 0xc0090016 NTE_BAD_KEYSET), so the state is never replaced
+// silently: moves carry it, a missing state refuses the start, and only an
+// explicit reset creates a new one.
+
+/// swtpm's permanent-state file of a TPM 2.0 in a state directory.
+pub const TPM_PERMALL: &str = "tpm2-00.permall";
+
+/// Whether the VM's TPM state exists (a non-empty permanent-state file).
+pub fn tpm_state_present(disk0: &Path) -> bool {
+    std::fs::metadata(tpm_state_dir(disk0).join(TPM_PERMALL))
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false)
+}
+
+/// The refusal for a start without the TPM state the VM had.
+pub fn tpm_state_missing_error(vm_id: &str, disk0: &Path) -> Error {
+    Error::Conflict(format!(
+        "The TPM state of VM {vm_id} is missing ({}): this VM had a TPM, and starting it with an empty \
+         one would break what the guest keeps in it (BitLocker keys, Windows Hello, Microsoft Entra/Intune \
+         device identity, TPM-bound disk encryption; Windows shows 'Device TPM problem' 0xc0090016). \
+         Restore the TPM state (from a backup, snapshot, or the old host's swtpm directory) or, if you \
+         accept that loss and have your BitLocker recovery key, create a new TPM explicitly: \
+         POST /api/vms/{vm_id}/tpm/reset {{\"confirm_data_loss\": true}}",
+        tpm_state_dir(disk0).join(TPM_PERMALL).display()
+    ))
+}
+
+/// Refuse to start a VM whose TPM was in use but whose state is gone.
+pub fn check_tpm_state_for_start(
+    vm_id: &str,
+    disk0: &Path,
+    hw: &horcrux_common::VmHardware,
+) -> Result<()> {
+    if hw.tpm && hw.tpm_state_expected && !tpm_state_present(disk0) {
+        return Err(tpm_state_missing_error(vm_id, disk0));
+    }
+    Ok(())
+}
+
+/// Throw the TPM state away (the explicit "create new TPM" action).
+pub async fn reset_tpm_state(disk0: &Path) -> Result<()> {
+    stop_swtpm(disk0).await;
+    let dir = tpm_state_dir(disk0);
+    match tokio::fs::remove_dir_all(&dir).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::System(format!("removing {}: {e}", dir.display()))),
+    }
+}
+
+/// A swtpm state blob starts with a header whose total length (big endian,
+/// bytes 6..10) is the blob's own size: a truncated or foreign file fails.
+pub fn tpm_blob_is_complete(b: &[u8]) -> bool {
+    b.len() >= 10 && b[0] >= 2 && u32::from_be_bytes([b[6], b[7], b[8], b[9]]) as usize == b.len()
+}
+
+/// Copy a swtpm state directory (`tpm2-00.permall`, never the lock file) to
+/// `to` and read every copy back: the result is the same bytes, or an error.
+/// Returns the number of files copied. A directory without a TPM 2.0
+/// permanent state is an error (a TPM 1.2 state, `tpm-00.permall`, cannot be
+/// run by Horcrux's swtpm --tpm2).
+pub fn copy_tpm_state_verified(from: &Path, to: &Path) -> Result<usize> {
+    let src = from.join(TPM_PERMALL);
+    let first = std::fs::read(&src).map_err(|e| {
+        if from.join("tpm-00.permall").is_file() {
+            Error::Validation(format!(
+                "{} holds a TPM 1.2 state: only TPM 2.0 is supported",
+                from.display()
+            ))
+        } else {
+            Error::System(format!("reading {}: {e}", src.display()))
+        }
+    })?;
+    if !tpm_blob_is_complete(&first) {
+        return Err(Error::Validation(format!(
+            "{} is not a complete swtpm TPM 2.0 state",
+            src.display()
+        )));
+    }
+    std::fs::create_dir_all(to)
+        .map_err(|e| Error::System(format!("creating {}: {e}", to.display())))?;
+    let mut n = 0;
+    let rd = std::fs::read_dir(from)
+        .map_err(|e| Error::System(format!("reading {}: {e}", from.display())))?;
+    for e in rd {
+        let e = e.map_err(|e| Error::System(e.to_string()))?;
+        let name = e.file_name();
+        let nm = name.to_string_lossy();
+        if !e.file_type().map(|t| t.is_file()).unwrap_or(false) || nm.starts_with('.') {
+            continue;
+        }
+        let dst = to.join(&name);
+        let data = std::fs::read(e.path())
+            .map_err(|er| Error::System(format!("reading {}: {er}", e.path().display())))?;
+        write_private(&dst, &data)?;
+        let back = std::fs::read(&dst)
+            .map_err(|er| Error::System(format!("reading back {}: {er}", dst.display())))?;
+        if back != data {
+            return Err(Error::System(format!(
+                "the copy {} differs from its source",
+                dst.display()
+            )));
+        }
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// Write `data` to `path` (mode 0600, flushed to disk).
+pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| Error::System(format!("writing {}: {e}", path.display())))?;
+    f.write_all(data)
+        .and_then(|_| f.sync_all())
+        .map_err(|e| Error::System(format!("writing {}: {e}", path.display())))
+}
+
+/// The permanent state inside a swtpm *linear file* (`--tpmstate
+/// backend-uri=file://...`, what Proxmox keeps in a VM's `tpmstate0`
+/// volume): magic `nilmptws`, a header whose u32 at 0x0c is the data offset
+/// and u32 at 0x10 its length, then the same state blob a state directory
+/// holds as `tpm2-00.permall`. Anything that does not check out is refused.
+pub fn tpm_state_from_linear(raw: &[u8]) -> Result<Vec<u8>> {
+    let bad = |why: &str| Error::Validation(format!("not a swtpm TPM 2.0 state volume: {why}"));
+    if raw.len() < 0x18 || &raw[..8] != b"nilmptws" {
+        return Err(bad("no swtpm linear-file header (an empty or never-started TPM volume has no state to carry)"));
+    }
+    let u32le =
+        |o: usize| u32::from_le_bytes([raw[o], raw[o + 1], raw[o + 2], raw[o + 3]]) as usize;
+    let (off, len) = (u32le(0x0c), u32le(0x10));
+    let end = off.checked_add(len).filter(|e| *e <= raw.len());
+    let Some(end) = end.filter(|_| len > 10) else {
+        return Err(bad("the header's data range is outside the volume"));
+    };
+    let blob = &raw[off..end];
+    if !tpm_blob_is_complete(blob) {
+        return Err(bad("the state blob is incomplete"));
+    }
+    Ok(blob.to_vec())
+}
+
+/// Install a Proxmox `tpmstate0` volume (or any swtpm linear file) as the
+/// state directory `to`.
+pub fn import_linear_tpm_volume(volume: &Path, to: &Path) -> Result<()> {
+    let raw = std::fs::read(volume)
+        .map_err(|e| Error::System(format!("reading {}: {e}", volume.display())))?;
+    let blob = tpm_state_from_linear(&raw)?;
+    std::fs::create_dir_all(to)
+        .map_err(|e| Error::System(format!("creating {}: {e}", to.display())))?;
+    let dst = to.join(TPM_PERMALL);
+    write_private(&dst, &blob)?;
+    if std::fs::read(&dst).map_err(|e| Error::System(e.to_string()))? != blob {
+        return Err(Error::System(format!("the copy {} differs", dst.display())));
+    }
+    Ok(())
+}
+
+/// The per-VM firmware/TPM files a backup (or any export) must carry:
+/// `(archive name, kind, path)`. The EFI variable store (boot entries, Secure
+/// Boot keys) and every TPM state file; sockets, pidfiles and logs are not
+/// state.
+pub fn carried_state(disk0: &Path) -> Vec<(String, String, PathBuf)> {
+    let mut v = Vec::new();
+    let efi = efivars_path(disk0);
+    if efi.is_file() {
+        v.push(("efivars.qcow2".to_string(), "efivars".to_string(), efi));
+    }
+    if let Ok(rd) = std::fs::read_dir(tpm_state_dir(disk0)) {
+        let mut files: Vec<_> = rd
+            .flatten()
+            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            .collect();
+        files.sort_by_key(|e| e.file_name());
+        for e in files {
+            v.push((
+                format!("tpm-{}", e.file_name().to_string_lossy()),
+                "tpm".to_string(),
+                e.path(),
+            ));
+        }
+    }
+    v
+}
+
+/// Copy a TPM state file that a running swtpm may rewrite: retried until the
+/// bytes read are a complete state blob (swtpm replaces the file as a whole,
+/// so a torn read shows as a length mismatch).
+pub fn copy_live_tpm_file(src: &Path, dst: &Path) -> Result<()> {
+    let mut last = String::new();
+    for _ in 0..10 {
+        match std::fs::read(src) {
+            Ok(b) if !src.ends_with(TPM_PERMALL) || tpm_blob_is_complete(&b) => {
+                return write_private(dst, &b);
+            }
+            Ok(_) => last = "incomplete state blob".into(),
+            Err(e) => last = e.to_string(),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err(Error::System(format!(
+        "could not copy a consistent TPM state from {}: {last}",
+        src.display()
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A state blob with swtpm's header: version, min version, header size,
+    /// flags, total length (big endian) at bytes 6..10, then payload.
+    fn blob(total: usize) -> Vec<u8> {
+        let mut b = vec![0u8; total];
+        b[0] = 2;
+        b[1] = 1;
+        b[3] = 10;
+        b[6..10].copy_from_slice(&(total as u32).to_be_bytes());
+        for (i, x) in b.iter_mut().enumerate().skip(10) {
+            *x = (i % 251) as u8;
+        }
+        b
+    }
+
+    fn linear(blob: &[u8], off: usize) -> Vec<u8> {
+        let mut v = vec![0u8; off + blob.len() + 100];
+        v[..8].copy_from_slice(b"nilmptws");
+        v[8] = 1;
+        v[0x0a] = off as u8;
+        v[0x0c..0x10].copy_from_slice(&(off as u32).to_le_bytes());
+        v[0x10..0x14].copy_from_slice(&(blob.len() as u32).to_le_bytes());
+        v[off..off + blob.len()].copy_from_slice(blob);
+        v
+    }
+
+    #[test]
+    fn missing_tpm_state_refuses_the_start_only_when_the_vm_had_one() {
+        let d = tempfile::tempdir().unwrap();
+        let disk = d.path().join("vm.qcow2");
+        let mut hw = horcrux_common::VmHardware {
+            tpm: true,
+            ..Default::default()
+        };
+        // never started: a fresh TPM is fine
+        assert!(check_tpm_state_for_start("vm", &disk, &hw).is_ok());
+        // it had state, now the directory is gone: refused, never replaced
+        hw.tpm_state_expected = true;
+        let e = check_tpm_state_for_start("vm", &disk, &hw).unwrap_err();
+        assert!(matches!(e, Error::Conflict(_)));
+        let m = e.to_string();
+        for k in [
+            "TPM state of VM vm is missing",
+            "BitLocker",
+            "tpm/reset",
+            "confirm_data_loss",
+        ] {
+            assert!(m.contains(k), "{k} in {m}");
+        }
+        // an empty file is not state
+        std::fs::create_dir_all(tpm_state_dir(&disk)).unwrap();
+        std::fs::write(tpm_state_dir(&disk).join(TPM_PERMALL), b"").unwrap();
+        assert!(check_tpm_state_for_start("vm", &disk, &hw).is_err());
+        std::fs::write(tpm_state_dir(&disk).join(TPM_PERMALL), blob(64)).unwrap();
+        assert!(tpm_state_present(&disk));
+        assert!(check_tpm_state_for_start("vm", &disk, &hw).is_ok());
+        // no TPM at all: nothing to check
+        hw.tpm = false;
+        std::fs::remove_dir_all(tpm_state_dir(&disk)).unwrap();
+        assert!(check_tpm_state_for_start("vm", &disk, &hw).is_ok());
+    }
+
+    #[tokio::test]
+    async fn reset_deletes_the_state_and_is_idempotent() {
+        let d = tempfile::tempdir().unwrap();
+        let disk = d.path().join("vm.qcow2");
+        std::fs::create_dir_all(tpm_state_dir(&disk)).unwrap();
+        std::fs::write(tpm_state_dir(&disk).join(TPM_PERMALL), blob(64)).unwrap();
+        reset_tpm_state(&disk).await.unwrap();
+        assert!(!tpm_state_dir(&disk).exists());
+        reset_tpm_state(&disk).await.unwrap();
+    }
+
+    #[test]
+    fn verified_copy_is_byte_identical_skips_the_lock_and_refuses_junk() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dst) = (d.path().join("src"), d.path().join("dst"));
+        std::fs::create_dir_all(&src).unwrap();
+        let b = blob(3055);
+        std::fs::write(src.join(TPM_PERMALL), &b).unwrap();
+        std::fs::write(src.join(".lock"), b"").unwrap();
+        assert_eq!(copy_tpm_state_verified(&src, &dst).unwrap(), 1);
+        assert_eq!(std::fs::read(dst.join(TPM_PERMALL)).unwrap(), b);
+        assert!(!dst.join(".lock").exists());
+        // truncated state: refused, nothing created
+        std::fs::write(src.join(TPM_PERMALL), &b[..100]).unwrap();
+        let other = d.path().join("other");
+        assert!(copy_tpm_state_verified(&src, &other).is_err());
+        assert!(!other.exists());
+        // a TPM 1.2 state is named as such
+        let v12 = d.path().join("v12");
+        std::fs::create_dir_all(&v12).unwrap();
+        std::fs::write(v12.join("tpm-00.permall"), b"x").unwrap();
+        let e = copy_tpm_state_verified(&v12, &other)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("TPM 1.2"), "{e}");
+    }
+
+    #[test]
+    fn proxmox_style_linear_volume_yields_the_permanent_state() {
+        let b = blob(3126);
+        let raw = linear(&b, 192);
+        assert_eq!(tpm_state_from_linear(&raw).unwrap(), b);
+        // not a swtpm volume / empty volume / lying header / cut-off blob
+        assert!(tpm_state_from_linear(&vec![0u8; 4 << 20]).is_err());
+        assert!(tpm_state_from_linear(b"nilmptws").is_err());
+        let mut lie = raw.clone();
+        lie[0x10..0x14].copy_from_slice(&(1u32 << 30).to_le_bytes());
+        assert!(tpm_state_from_linear(&lie).is_err());
+        let mut wrong_len = raw.clone();
+        wrong_len[0x10..0x14].copy_from_slice(&3000u32.to_le_bytes());
+        assert!(tpm_state_from_linear(&wrong_len).is_err());
+        // installed as a state directory
+        let d = tempfile::tempdir().unwrap();
+        let vol = d.path().join("tpmstate0.raw");
+        std::fs::write(&vol, &raw).unwrap();
+        let to = d.path().join("vm.tpm");
+        import_linear_tpm_volume(&vol, &to).unwrap();
+        assert_eq!(std::fs::read(to.join(TPM_PERMALL)).unwrap(), b);
+    }
+
+    #[test]
+    fn carried_state_lists_efivars_and_tpm_files_only() {
+        let d = tempfile::tempdir().unwrap();
+        let disk = d.path().join("vm.qcow2");
+        assert!(carried_state(&disk).is_empty());
+        std::fs::write(efivars_path(&disk), b"nv").unwrap();
+        std::fs::create_dir_all(tpm_state_dir(&disk)).unwrap();
+        std::fs::write(tpm_state_dir(&disk).join(TPM_PERMALL), blob(64)).unwrap();
+        std::fs::write(tpm_state_dir(&disk).join(".lock"), b"").unwrap();
+        std::fs::write(tpm_socket(&disk), b"").unwrap();
+        let names: Vec<String> = carried_state(&disk).into_iter().map(|c| c.0).collect();
+        assert_eq!(names, ["efivars.qcow2", "tpm-tpm2-00.permall"]);
+    }
 
     #[test]
     fn state_lives_next_to_the_first_disk() {

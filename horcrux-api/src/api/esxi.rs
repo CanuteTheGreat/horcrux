@@ -131,6 +131,12 @@ pub fn plan_from_vmx(vmx: &HashMap<String, String>) -> Result<(OvfPlan, Vec<Stri
         .and_then(|m| m.parse::<u64>().ok())
         .unwrap_or(512)
         .max(16);
+    if get("vtpm.present").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
+        warnings.push(
+            "the VM has a VMware vTPM: its state (the .nvram, encrypted by VMware) cannot be carried over, so the guest loses its BitLocker keys, Windows Hello and Microsoft Entra/Intune device identity. Have the BitLocker recovery key at hand, or abort the import"
+                .into(),
+        );
+    }
     let firmware = if get("firmware").is_some_and(|f| f.eq_ignore_ascii_case("efi")) {
         "efi"
     } else {
@@ -676,6 +682,17 @@ ethernet1.present = "TRUE"
 ethernet1.virtualDev = "e1000e"
 sound.present = "TRUE"
 "#;
+
+    #[test]
+    fn a_vmware_vtpm_is_a_loud_warning() {
+        let vmx = parse_vmx(&format!("{VMX}\nvtpm.present = \"TRUE\"\n"));
+        let (p, _) = plan_from_vmx(&vmx).unwrap();
+        let w = p.warnings.join("|");
+        assert!(
+            w.contains("vTPM") && w.contains("BitLocker") && w.contains("abort"),
+            "{w}"
+        );
+    }
 
     #[test]
     fn vmx_maps_to_a_plan_with_flat_extents() {

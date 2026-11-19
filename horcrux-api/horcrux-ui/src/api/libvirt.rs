@@ -53,6 +53,12 @@ pub struct LvPlan {
     pub tpm: bool,
     pub nvram: Option<String>,
     pub tpm_state: Option<String>,
+    #[serde(default)]
+    pub tpm_model: Option<String>,
+    /// Why the TPM state cannot be carried over; the import is refused
+    /// unless a new, empty TPM is accepted.
+    #[serde(default)]
+    pub tpm_blocker: Option<String>,
     pub disks: Vec<LvDisk>,
     pub nics: Vec<LvNic>,
     pub warnings: Vec<String>,
@@ -127,13 +133,14 @@ pub async fn import(
     name: &str,
     bridge: &str,
     storage: &str,
+    accept_new_tpm: bool,
 ) -> Result<String, ApiError> {
     let opt = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
     let s: Started = post_json(
         "/vms/import/libvirt",
         &serde_json::json!({
             "domain": domain, "id": opt(id), "name": opt(name), "bridge": opt(bridge),
-            "storage": opt(storage),
+            "storage": opt(storage), "accept_new_tpm": accept_new_tpm,
         }),
     )
     .await?;

@@ -46,6 +46,9 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_vm_defaults).put(put_vm_defaults),
         )
         .route("/api/vms/:id/config", put(update_config))
+        .route("/api/vms/:id/tpm", get(tpm_status))
+        .route("/api/vms/:id/tpm/reset", post(tpm_reset))
+        .route("/api/vms/:id/tpm/import-state", post(tpm_import_state))
         .route("/api/vms/:id/shutdown", post(shutdown))
         .route("/api/vms/:id/reboot", post(reboot))
         .route("/api/vms/:id/reset", post(reset))
@@ -797,6 +800,166 @@ async fn update_config(
         check_host_hardware(&state, hw).await?;
     }
     Ok(Json(state.vm_manager.update_config(&id, upd).await?))
+}
+
+/// The VM's TPM: model and whether its state is there.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TpmStatus {
+    pub enabled: bool,
+    pub model: horcrux_common::TpmModel,
+    /// The state file exists on this node.
+    pub state_present: bool,
+    /// The VM has used its TPM: a start without the state is refused.
+    pub state_expected: bool,
+    pub state_bytes: u64,
+    /// Expected but missing: the VM cannot start until the state is restored
+    /// or a new TPM is created explicitly (`POST .../tpm/reset`).
+    pub blocked: bool,
+}
+
+pub fn tpm_status_of(vm: &VmConfig) -> TpmStatus {
+    let disk0 = vm.disks.first().map(|d| PathBuf::from(&d.path));
+    let (present, bytes) = match &disk0 {
+        Some(d) => (
+            crate::vm::firmware::tpm_state_present(d),
+            std::fs::metadata(
+                crate::vm::firmware::tpm_state_dir(d).join(crate::vm::firmware::TPM_PERMALL),
+            )
+            .map(|m| m.len())
+            .unwrap_or(0),
+        ),
+        None => (false, 0),
+    };
+    TpmStatus {
+        enabled: vm.hardware.tpm,
+        model: vm.hardware.tpm_model(),
+        state_present: present,
+        state_expected: vm.hardware.tpm_state_expected,
+        state_bytes: bytes,
+        blocked: vm.hardware.tpm && vm.hardware.tpm_state_expected && !present,
+    }
+}
+
+async fn tpm_status(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<TpmStatus>, ApiError> {
+    let vm = state.vm_manager.get_vm(&id).await?;
+    Ok(Json(tpm_status_of(&vm)))
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct TpmResetRequest {
+    /// Must be true: the guest loses its BitLocker keys, Windows Hello and
+    /// Entra/Intune device identity (keep the BitLocker recovery key).
+    #[serde(default)]
+    pub confirm_data_loss: bool,
+}
+
+/// Delete the TPM state and start over with an empty TPM at the next start.
+async fn tpm_reset(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Option<Json<TpmResetRequest>>,
+) -> Result<Json<TpmStatus>, ApiError> {
+    let req = body.map(|Json(b)| b).unwrap_or_default();
+    if !req.confirm_data_loss {
+        return Err(ApiError::BadRequest(
+            "Creating a new TPM destroys what the guest keeps in the old one (BitLocker keys, \
+             Windows Hello, Microsoft Entra/Intune device identity). Have the BitLocker recovery \
+             key at hand and send {\"confirm_data_loss\": true}"
+                .into(),
+        ));
+    }
+    let vm = state.vm_manager.reset_tpm(&id).await?;
+    Ok(Json(tpm_status_of(&vm)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TpmImportRequest {
+    /// A swtpm state directory (libvirt `.../swtpm/<uuid>/tpm2`, virt-manager's
+    /// per-user copy, a plain `swtpm --tpmstate dir=` directory) or a swtpm
+    /// linear state file (a Proxmox `tpmstate0` volume exported to a file).
+    /// Under the image library or a storage pool directory.
+    pub source: String,
+    /// Replace the TPM state the VM already has (the old one is kept as
+    /// `<disk0>.tpm.prev`).
+    #[serde(default)]
+    pub replace: bool,
+}
+
+/// Give a stopped VM the TPM state of the machine it was moved from, so the
+/// guest keeps its keys (BitLocker, Windows Hello, Entra/Intune identity).
+async fn tpm_import_state(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<TpmImportRequest>,
+) -> Result<Json<TpmStatus>, ApiError> {
+    let vm = state.vm_manager.get_vm(&id).await?;
+    if vm.hypervisor != horcrux_common::VmHypervisor::Qemu || !vm.hardware.tpm {
+        return Err(ApiError::BadRequest(format!(
+            "VM {id} has no emulated TPM: enable it under Hardware first"
+        )));
+    }
+    if crate::vm::QemuManager::process_running(&id) {
+        return Err(ApiError::Conflict(format!(
+            "VM {id} is running: stop it first"
+        )));
+    }
+    let disk0 = vm
+        .disks
+        .first()
+        .map(|d| PathBuf::from(&d.path))
+        .ok_or_else(|| ApiError::BadRequest("the VM has no disk".into()))?;
+    let src = std::fs::canonicalize(&req.source)
+        .map_err(|e| ApiError::BadRequest(format!("source {}: {e}", req.source)))?;
+    let mut roots = vec![image_dir(&state.config.paths.data_dir)];
+    roots.extend(
+        state
+            .storage_manager
+            .list_pools()
+            .await
+            .into_iter()
+            .filter(|p| p.path.starts_with('/'))
+            .map(|p| PathBuf::from(p.path)),
+    );
+    if !allowed_local_source(&src, &roots) {
+        return Err(ApiError::Forbidden(format!(
+            "the TPM state must lie under {} or a storage pool directory",
+            image_dir(&state.config.paths.data_dir).display()
+        )));
+    }
+    let to = crate::vm::firmware::tpm_state_dir(&disk0);
+    if crate::vm::firmware::tpm_state_present(&disk0) && !req.replace {
+        return Err(ApiError::Conflict(format!(
+            "VM {id} already has TPM state: send replace=true to swap it (the old state is kept as {}.prev)",
+            to.display()
+        )));
+    }
+    let tmp = to.with_extension("tpm.import");
+    let prev = to.with_extension("tpm.prev");
+    let (s2, t2) = (src.clone(), tmp.clone());
+    let staged = tokio::task::spawn_blocking(move || -> horcrux_common::Result<()> {
+        let _ = std::fs::remove_dir_all(&t2);
+        if s2.is_dir() {
+            crate::vm::firmware::copy_tpm_state_verified(&s2, &t2).map(|_| ())
+        } else {
+            crate::vm::firmware::import_linear_tpm_volume(&s2, &t2)
+        }
+    })
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if let Err(e) = staged {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(e.into());
+    }
+    if to.exists() {
+        let _ = std::fs::remove_dir_all(&prev);
+        std::fs::rename(&to, &prev).map_err(|e| ApiError::Internal(format!("{e}")))?;
+    }
+    std::fs::rename(&tmp, &to).map_err(|e| ApiError::Internal(format!("{e}")))?;
+    let vm = state.vm_manager.set_tpm_state_expected(&id, true).await?;
+    Ok(Json(tpm_status_of(&vm)))
 }
 
 #[derive(Debug, Default, Deserialize)]

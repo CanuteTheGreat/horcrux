@@ -17,7 +17,10 @@
 //! bridge), UEFI (OVMF) + Secure Boot, the OVMF variable store (`<nvram>`,
 //! converted to the VM's `<disk0>.efivars.qcow2` when its layout matches this
 //! host's OVMF) and the swtpm vTPM (libvirt's state directory is copied to
-//! `<disk0>.tpm/`), guest agent, balloon, xHCI.
+//! `<disk0>.tpm/` and read back; the TPM model tis/crb and the domain UUID,
+//! which becomes the SMBIOS system UUID, are kept), guest agent, balloon,
+//! xHCI. A domain whose TPM state cannot be carried (not found, encrypted,
+//! TPM 1.2, host pass-through) is refused unless `accept_new_tpm` is sent.
 //!
 //! Disks: always **copied** into Horcrux's own storage (the VM storage
 //! directory or the chosen pool: where a newly created VM's disk goes),
@@ -63,11 +66,32 @@ fn libvirt_uri() -> String {
     std::env::var("HORCRUX_LIBVIRT_URI").unwrap_or_else(|_| "qemu:///system".into())
 }
 
-/// libvirt's swtpm state root (`<root>/<uuid>/tpm2/`).
-fn swtpm_root() -> PathBuf {
-    std::env::var("HORCRUX_LIBVIRT_SWTPM_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/var/lib/libvirt/swtpm"))
+/// Where libvirt keeps swtpm state (`<root>/<uuid>/tpm2/`): the override, else
+/// the system location, plus the user's own for a `qemu:///session` URI
+/// (virt-manager's per-user VMs: `$XDG_DATA_HOME/libvirt/swtpm`).
+fn swtpm_roots() -> Vec<PathBuf> {
+    if let Ok(d) = std::env::var("HORCRUX_LIBVIRT_SWTPM_DIR") {
+        return d
+            .split(':')
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .collect();
+    }
+    let mut v = vec![PathBuf::from("/var/lib/libvirt/swtpm")];
+    if libvirt_uri().contains("/session") {
+        let data = std::env::var("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|h| PathBuf::from(h).join(".local/share"))
+            });
+        if let Some(d) = data {
+            v.insert(0, d.join("libvirt/swtpm"));
+        }
+    }
+    v
 }
 
 /// `Ok(None)`: virsh is not installed (libvirt is not used on this host).
@@ -131,6 +155,12 @@ pub struct LibvirtPlan {
     pub nvram: Option<String>,
     /// libvirt's swtpm state directory when it exists.
     pub tpm_state: Option<String>,
+    /// `tis` or `crb`, as the domain's `<tpm model>` (libvirt's default: tis).
+    pub tpm_model: Option<String>,
+    /// Why the domain's TPM state cannot be carried over (state not found,
+    /// encrypted, TPM 1.2, host pass-through): the import is refused unless
+    /// the caller accepts a NEW, empty TPM (`accept_new_tpm`).
+    pub tpm_blocker: Option<String>,
     pub cpu_type: Option<String>,
     pub guest_agent: bool,
     pub balloon: bool,
@@ -164,9 +194,9 @@ fn kib(n: &Node) -> u64 {
     }
 }
 
-/// Map a libvirt domain XML to a plan. `swtpm_root` is where libvirt keeps
+/// Map a libvirt domain XML to a plan. `swtpm_roots` is where libvirt keeps
 /// vTPM state.
-pub fn plan_from_domain(xml: &str, swtpm_root: &FsPath) -> Result<LibvirtPlan, String> {
+pub fn plan_from_domain(xml: &str, swtpm_roots: &[PathBuf]) -> Result<LibvirtPlan, String> {
     let d = parse_xml(xml)?;
     if d.name != "domain" {
         return Err(format!("not a libvirt domain (root element <{}>)", d.name));
@@ -362,27 +392,70 @@ pub fn plan_from_domain(xml: &str, swtpm_root: &FsPath) -> Result<LibvirtPlan, S
         });
     }
 
-    // TPM
+    // TPM: the state, the interface model and the version travel with the VM
+    // (a guest's keys live in the state; see vm::firmware "TPM state").
     let mut tpm = false;
     let mut tpm_state = None;
+    let mut tpm_model = None;
+    let mut tpm_blocker = None;
     if let Some(t) = dev.child("tpm") {
-        match t.child("backend").and_then(|b| b.attr("type")) {
+        let backend = t.child("backend");
+        match backend.and_then(|b| b.attr("type")) {
             Some("emulator") => {
                 tpm = true;
-                let dir = swtpm_root.join(&uuid).join("tpm2");
-                if !uuid.is_empty() && dir.is_dir() {
+                tpm_model = Some(
+                    if t.attr("model") == Some("tpm-crb") {
+                        "crb"
+                    } else {
+                        "tis"
+                    }
+                    .to_string(),
+                );
+                let version = backend.and_then(|b| b.attr("version")).unwrap_or("1.2");
+                let encrypted = backend.and_then(|b| b.child("encryption")).is_some();
+                let found = (!uuid.is_empty())
+                    .then(|| {
+                        swtpm_roots
+                            .iter()
+                            .map(|r| r.join(&uuid).join("tpm2"))
+                            .find(|d| d.is_dir())
+                    })
+                    .flatten();
+                if version != "2.0" {
+                    tpm_blocker = Some(format!(
+                        "the domain's TPM is version {version}: Horcrux runs TPM 2.0 only, so Windows would lose its BitLocker keys, Windows Hello and Microsoft Entra/Intune device identity"
+                    ));
+                } else if encrypted {
+                    tpm_blocker = Some(
+                        "the domain's TPM state is encrypted with a libvirt secret, which Horcrux cannot read: Windows would lose its BitLocker keys, Windows Hello and Microsoft Entra/Intune device identity".into(),
+                    );
+                } else if let Some(dir) = found {
                     tpm_state = Some(dir.to_string_lossy().to_string());
                 } else {
-                    w.push("the domain has a vTPM but libvirt holds no TPM state for it (never started): a fresh TPM is created at the first start".into());
-                }
-                if t.attr("model") == Some("tpm-crb") {
-                    w.push("the TPM device is tpm-tis instead of tpm-crb (the TPM state is the same)".into());
+                    let looked = swtpm_roots
+                        .iter()
+                        .map(|r| {
+                            r.join(if uuid.is_empty() { "<uuid>" } else { &uuid })
+                                .join("tpm2")
+                                .display()
+                                .to_string()
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    tpm_blocker = Some(format!(
+                        "the domain has a vTPM but its state was not found (looked in {looked}): Windows would lose its BitLocker keys, Windows Hello and Microsoft Entra/Intune device identity (device keys fail with 'Device TPM problem' 0xc0090016). Find the swtpm state directory of this domain and set HORCRUX_LIBVIRT_SWTPM_DIR to its parent, or accept a new empty TPM"
+                    ));
                 }
             }
-            _ => w.push(
-                "a pass-through host TPM cannot be imported: the VM has no TPM (enable the emulated TPM under Hardware)"
-                    .into(),
-            ),
+            _ => {
+                tpm_blocker = Some(
+                    "the domain uses the host's TPM (pass-through), which cannot be imported: the guest's keys stay in that hardware TPM. The VM would get no TPM (enable the emulated TPM under Hardware, with a new identity)"
+                        .into(),
+                );
+            }
+        }
+        if let Some(b) = &tpm_blocker {
+            w.push(format!("TPM: {b}"));
         }
     }
 
@@ -433,6 +506,8 @@ pub fn plan_from_domain(xml: &str, swtpm_root: &FsPath) -> Result<LibvirtPlan, S
         tpm,
         nvram,
         tpm_state,
+        tpm_model,
+        tpm_blocker,
         cpu_type,
         guest_agent,
         balloon,
@@ -652,7 +727,7 @@ async fn list_local(state: &Arc<AppState>) -> Result<ListResponse, ApiError> {
         };
         match domain_xml(n)
             .await
-            .and_then(|x| plan_from_domain(&x, &swtpm_root()).map_err(ApiError::BadRequest))
+            .and_then(|x| plan_from_domain(&x, &swtpm_roots()).map_err(ApiError::BadRequest))
         {
             Ok(p) => {
                 e.uuid = p.uuid;
@@ -795,7 +870,7 @@ async fn preview(
 ) -> Result<Json<PreviewResponse>, ApiError> {
     let dom = check_domain_name(&req.domain)?;
     let xml = domain_xml(dom).await?;
-    let mut plan = plan_from_domain(&xml, &swtpm_root()).map_err(ApiError::BadRequest)?;
+    let mut plan = plan_from_domain(&xml, &swtpm_roots()).map_err(ApiError::BadRequest)?;
     let st = virsh(&["domstate", dom]).await?.unwrap_or_default();
     if st.trim() != "shut off" {
         plan.warnings.push(format!(
@@ -822,6 +897,11 @@ struct ImportRequest {
     /// a newly created VM's disk goes too).
     #[serde(default)]
     storage: Option<String>,
+    /// The domain has a TPM whose state cannot be carried over (see
+    /// `plan.tpm_blocker`): import anyway, with a NEW empty TPM. The guest
+    /// loses its BitLocker keys, Windows Hello and Entra/Intune identity.
+    #[serde(default)]
+    accept_new_tpm: bool,
 }
 
 #[derive(Serialize)]
@@ -1143,10 +1223,15 @@ async fn run_import(
         )));
     }
     let xml = domain_xml(dom).await?;
-    let plan = plan_from_domain(&xml, &swtpm_root()).map_err(ApiError::BadRequest)?;
+    let plan = plan_from_domain(&xml, &swtpm_roots()).map_err(ApiError::BadRequest)?;
     if let Some(vm) = already_imported_as(state, dom, &plan.uuid).await {
         return Err(ApiError::Conflict(format!(
             "libvirt domain {dom} was already imported as VM {vm}: remove the old source with the cleanup offer instead"
+        )));
+    }
+    if let (Some(why), false) = (&plan.tpm_blocker, req.accept_new_tpm) {
+        return Err(ApiError::Conflict(format!(
+            "not imported: {why}. Nothing was changed. To import with a new, empty TPM anyway send accept_new_tpm=true (keep the BitLocker recovery key at hand)"
         )));
     }
     let mut warnings = plan.warnings.clone();
@@ -1313,6 +1398,9 @@ async fn run_import(
         "firmware": if firmware == "efi" { "ovmf" } else { "seabios" },
         "secure_boot": secure,
         "tpm": plan.tpm,
+        "tpm_model": plan.tpm_model,
+        "tpm_state_expected": plan.tpm_state.is_some(),
+        "adv": if plan.uuid.is_empty() { serde_json::json!({}) } else { serde_json::json!({"smbios": {"uuid": plan.uuid}}) },
         "guest_agent": plan.guest_agent,
         "balloon": plan.balloon,
         "usb_controller": plan.usb_controller,
@@ -1420,16 +1508,17 @@ async fn run_import(
     }
     if let Some(dir) = &plan.tpm_state {
         let to = crate::vm::firmware::tpm_state_dir(&disk0);
-        std::fs::create_dir_all(&to)?;
         undo.dirs.push(to.clone());
-        for e in std::fs::read_dir(dir)? {
-            let e = e?;
-            if e.file_type()?.is_file() {
-                std::fs::copy(e.path(), to.join(e.file_name()))?;
-            }
-        }
+        // Every file is read back and compared; a failure fails the import
+        // (and removes the copy), never leaves a VM with a half TPM.
+        let (src, dst) = (PathBuf::from(dir), to.clone());
+        tokio::task::spawn_blocking(move || {
+            crate::vm::firmware::copy_tpm_state_verified(&src, &dst)
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("TPM copy task: {e}")))?
+        .map_err(|e| ApiError::Internal(format!("TPM state not carried over: {e}")))?;
     }
-
     // 9. verify the stored VM: its disks are the verified copies inside the storage
     let got = state.vm_manager.get_vm(&vm.id).await?;
     let got_paths: Vec<PathBuf> = got.disks.iter().map(|d| PathBuf::from(&d.path)).collect();
@@ -1519,7 +1608,7 @@ mod tests {
 
     #[test]
     fn windows_domain_maps_hardware_firmware_tpm_and_mac() {
-        let p = plan_from_domain(WIN, FsPath::new("/nonexistent")).unwrap();
+        let p = plan_from_domain(WIN, &[PathBuf::from("/nonexistent")]).unwrap();
         assert_eq!((p.cpus, p.memory_mb), (4, 8192));
         assert_eq!(p.machine, "q35");
         assert_eq!(p.firmware, "efi");
@@ -1538,11 +1627,17 @@ mod tests {
             ),
             ("sata", true, "qcow2")
         );
+        assert_eq!(p.tpm_model.as_deref(), Some("crb"), "tpm-crb stays crb");
+        assert!(p.tpm_blocker.is_some() && p.tpm_state.is_none());
         assert_eq!(p.nics[0].mac.as_deref(), Some("52:54:00:1e:2f:09"));
         assert_eq!(p.nics[0].model, "e1000e", "e1000e stays e1000e");
         let w = p.warnings.join("|");
         assert!(!w.contains("e1000e"), "no NIC downgrade warning: {w}");
-        for k in ["cdrom", "never started", "local time", "tpm-tis"] {
+        for k in [
+            "cdrom",
+            "TPM: the domain has a vTPM but its state was not found",
+            "local time",
+        ] {
             assert!(w.contains(k), "{k} in {w}");
         }
     }
@@ -1555,21 +1650,72 @@ mod tests {
             .join("5880ef7c-4801-4911-88a7-79475a357d24")
             .join("tpm2");
         std::fs::create_dir_all(&t).unwrap();
-        let p = plan_from_domain(WIN, d.path()).unwrap();
+        let p = plan_from_domain(WIN, &[d.path().to_path_buf()]).unwrap();
         assert_eq!(p.tpm_state.as_deref(), Some(t.to_str().unwrap()));
-        assert!(!p.warnings.join("|").contains("never started"));
+        assert!(p.tpm_blocker.is_none(), "{:?}", p.tpm_blocker);
+        assert!(!p.warnings.join("|").contains("TPM:"));
+    }
+
+    #[test]
+    fn tpm_states_that_cannot_be_carried_are_blockers() {
+        let d = tempfile::tempdir().unwrap();
+        let roots = [d.path().to_path_buf()];
+        std::fs::create_dir_all(
+            d.path()
+                .join("5880ef7c-4801-4911-88a7-79475a357d24")
+                .join("tpm2"),
+        )
+        .unwrap();
+        // TPM 1.2, encrypted, pass-through: each refused, never silently replaced
+        let v12 = WIN.replace("version='2.0'", "version='1.2'");
+        assert!(plan_from_domain(&v12, &roots)
+            .unwrap()
+            .tpm_blocker
+            .unwrap()
+            .contains("1.2"));
+        let enc = WIN.replace(
+            "<backend type='emulator' version='2.0'/>",
+            "<backend type='emulator' version='2.0'><encryption secret='x'/></backend>",
+        );
+        assert!(plan_from_domain(&enc, &roots)
+            .unwrap()
+            .tpm_blocker
+            .unwrap()
+            .contains("encrypted"));
+        let pt = WIN.replace(
+            "<backend type='emulator' version='2.0'/>",
+            "<backend type='passthrough'><device path='/dev/tpm0'/></backend>",
+        );
+        let p = plan_from_domain(&pt, &roots).unwrap();
+        assert!(!p.tpm && p.tpm_blocker.unwrap().contains("pass-through"));
+        // the tis model is libvirt's default
+        let tis = WIN.replace("<tpm model='tpm-crb'>", "<tpm>");
+        assert_eq!(
+            plan_from_domain(&tis, &roots).unwrap().tpm_model.as_deref(),
+            Some("tis")
+        );
+        // session roots: the second root holds the state
+        let r2 = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(r2.path().join("5880ef7c-4801-4911-88a7-79475a357d24/tpm2"))
+            .unwrap();
+        let p = plan_from_domain(
+            WIN,
+            &[PathBuf::from("/nonexistent"), r2.path().to_path_buf()],
+        )
+        .unwrap();
+        assert!(p.tpm_state.is_some() && p.tpm_blocker.is_none());
     }
 
     #[test]
     fn refusals() {
-        assert!(plan_from_domain("<vm/>", FsPath::new("/")).is_err());
-        assert!(plan_from_domain("<!DOCTYPE x><domain/>", FsPath::new("/")).is_err());
+        assert!(plan_from_domain("<vm/>", &[]).is_err());
+        assert!(plan_from_domain("<!DOCTYPE x><domain/>", &[]).is_err());
         let blk = WIN.replace("<source file='/img/w.qcow2'/>", "<source dev='/dev/sda'/>");
-        assert!(plan_from_domain(&blk, FsPath::new("/"))
+        assert!(plan_from_domain(&blk, &[])
             .unwrap_err()
             .contains("plain image file"));
         let xen = WIN.replace("type='kvm'", "type='xen'");
-        assert!(plan_from_domain(&xen, FsPath::new("/")).is_err());
+        assert!(plan_from_domain(&xen, &[]).is_err());
     }
 
     #[test]

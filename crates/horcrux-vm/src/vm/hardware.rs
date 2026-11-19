@@ -110,6 +110,10 @@ impl VmManager {
             }
             if let Some(hw) = &upd.hardware {
                 next.hardware = hw.clone();
+                // Server-managed: a client replacing the hardware (even one
+                // that never heard of the field) cannot make the VM forget
+                // that its TPM holds state.
+                next.hardware.tpm_state_expected = vm.hardware.tpm_state_expected;
             }
             prepare_hardware(&mut next)?;
 

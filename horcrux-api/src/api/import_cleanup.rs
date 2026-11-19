@@ -164,11 +164,7 @@ pub fn evaluate(
             {
                 p.bytes = size_of(&path);
                 p.reason = Some("in use by a Horcrux VM: kept".into());
-            } else if it
-                .requires
-                .as_deref()
-                .is_some_and(|r| !FsPath::new(r).exists())
-            {
+            } else if it.requires.as_deref().is_some_and(|r| !copy_present(it, r)) {
                 p.bytes = size_of(&path);
                 p.reason = Some("the Horcrux copy is missing: kept".into());
             } else {
@@ -178,6 +174,56 @@ pub fn evaluate(
             p
         })
         .collect()
+}
+
+/// A TPM state directory is only "copied" when the copy holds the TPM's
+/// permanent state; everything else needs just to exist.
+fn copy_present(it: &Item, requires: &str) -> bool {
+    let r = FsPath::new(requires);
+    if it.kind == "dir" && requires.ends_with(".tpm") {
+        return std::fs::metadata(r.join(crate::vm::firmware::TPM_PERMALL))
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
+    }
+    r.exists()
+}
+
+/// A source TPM directory goes only when every state file in it is
+/// byte-identical to the Horcrux copy (the TPM holds the guest's keys).
+fn verify_tpm_copies(rec: &Record, items: &[Planned]) -> Result<(), ApiError> {
+    for (it, p) in rec.items.iter().zip(items) {
+        let Some(copy) = it.requires.as_deref() else {
+            continue;
+        };
+        if !(it.kind == "dir" && p.kind == "dir" && p.remove && copy.ends_with(".tpm")) {
+            continue;
+        }
+        let rd = std::fs::read_dir(&it.path)
+            .map_err(|e| ApiError::Conflict(format!("cannot read {}: {e}", it.path)))?;
+        for e in rd.flatten() {
+            let name = e.file_name();
+            if name.to_string_lossy().starts_with('.')
+                || !e.file_type().map(|t| t.is_file()).unwrap_or(false)
+            {
+                continue;
+            }
+            let same = match (
+                std::fs::read(e.path()),
+                std::fs::read(FsPath::new(copy).join(&name)),
+            ) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            };
+            if !same {
+                return Err(ApiError::Conflict(format!(
+                    "the TPM copy {copy} differs from {} ({}): nothing was removed",
+                    it.path,
+                    name.to_string_lossy()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The disk copies a removal depends on: each source disk file about to go is compared
@@ -194,6 +240,7 @@ fn disk_pairs(rec: &Record, items: &[Planned]) -> Vec<(String, String)> {
 }
 
 async fn verify_copies(rec: &Record, items: &[Planned]) -> Result<(), ApiError> {
+    verify_tpm_copies(rec, items)?;
     for (src, copy) in disk_pairs(rec, items) {
         if !FsPath::new(&copy).is_file() {
             return Err(ApiError::Conflict(format!(

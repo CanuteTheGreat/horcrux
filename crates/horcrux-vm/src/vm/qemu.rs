@@ -287,7 +287,7 @@ pub fn qemu_command(
 
     // TPM 2.0: swtpm (started by `start_vm`) on its control socket.
     if vm.hardware.tpm {
-        let device = if x86 { "tpm-tis" } else { "tpm-tis-device" };
+        let device = vm.hardware.tpm_model().qemu_device(x86);
         args.extend([
             "-chardev".into(),
             format!(
@@ -1359,6 +1359,11 @@ impl QemuManager {
         };
         // TPM: swtpm serves the socket QEMU connects to.
         if vm.hardware.tpm {
+            // An incoming live migration brings the TPM state in its stream;
+            // every other start needs the state the VM had (never an empty TPM).
+            if !incoming {
+                super::firmware::check_tpm_state_for_start(&vm.id, &vm.disk_path, &vm.hardware)?;
+            }
             super::firmware::start_swtpm(&vm.disk_path).await?;
         }
         // Tap devices on the configured bridges (before QEMU opens them).
@@ -2115,6 +2120,12 @@ mod tests {
         ] {
             assert!(a.contains(want), "missing {want}\nin {a}");
         }
+        // The model is the VM's own: CRB where the source had CRB.
+        let mut c = v.clone();
+        c.hardware.tpm_model = Some(horcrux_common::TpmModel::Crb);
+        let a = qemu_command(&c, &rt, true, Some(&ovmf)).1.join(" ");
+        assert!(a.contains("-device tpm-crb,tpmdev=tpm0"), "{a}");
+        assert!(!a.contains("tpm-tis"), "{a}");
         // Defaults: i440FX stays QEMU's plain default machine, no -cpu on
         // x86, plain -smp, no firmware/TPM arguments.
         let v = vm(VmArchitecture::X86_64, VmDisplay::default());

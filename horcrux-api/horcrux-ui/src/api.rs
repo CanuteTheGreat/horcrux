@@ -6636,6 +6636,30 @@ pub async fn get_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
     fetch_json(&format!("/vms/{}", urlencoding::encode(vm_id))).await
 }
 
+/// `GET /api/vms/:id/tpm`: TPM model and whether its state exists.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct VmTpmStatus {
+    pub enabled: bool,
+    pub model: horcrux_common::TpmModel,
+    pub state_present: bool,
+    pub state_expected: bool,
+    pub state_bytes: u64,
+    pub blocked: bool,
+}
+
+pub async fn get_vm_tpm(vm_id: &str) -> Result<VmTpmStatus, ApiError> {
+    fetch_json(&format!("/vms/{}/tpm", urlencoding::encode(vm_id))).await
+}
+
+/// `POST /api/vms/:id/tpm/reset`: delete the TPM state (explicit, confirmed).
+pub async fn reset_vm_tpm(vm_id: &str) -> Result<VmTpmStatus, ApiError> {
+    post_json(
+        &format!("/vms/{}/tpm/reset", urlencoding::encode(vm_id)),
+        &serde_json::json!({ "confirm_data_loss": true }),
+    )
+    .await
+}
+
 pub async fn update_vm_config(vm_id: &str, upd: &VmConfigUpdate) -> Result<VmConfig, ApiError> {
     put_json(&format!("/vms/{}/config", urlencoding::encode(vm_id)), upd).await
 }

@@ -171,12 +171,44 @@ impl VmSnapshotManager {
             vm_state_bytes,
         };
 
+        // The TPM state is part of a disk-only snapshot (a RAM snapshot
+        // carries it in its device state): rolling the disk back to a
+        // moment the TPM did not know about would break the guest's keys.
+        if vm_config.hardware.tpm && snapshot.vm_state != VmSnapshotState::Running {
+            if let Some(d0) = vm_config.disks.first() {
+                let from = super::firmware::tpm_state_dir(std::path::Path::new(&d0.path));
+                if from.join(super::firmware::TPM_PERMALL).is_file() {
+                    let to = self.tpm_copy_dir(&snapshot.id);
+                    let (f, t) = (from.clone(), to.clone());
+                    let r = tokio::task::spawn_blocking(move || {
+                        super::firmware::copy_tpm_state_verified(&f, &t)
+                    })
+                    .await
+                    .map_err(|e| horcrux_common::Error::System(e.to_string()))
+                    .and_then(|r| r);
+                    if let Err(e) = r {
+                        let _ = fs::remove_dir_all(&to).await;
+                        // Roll the disk snapshots back out: a snapshot without its TPM would be a trap.
+                        for d in &snapshot.disk_snapshots {
+                            let _ = self.delete_disk_snapshot(d).await;
+                        }
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
         // Save snapshot metadata
         self.save_snapshot_metadata(&snapshot).await?;
         self.snapshots.insert(snapshot_id, snapshot.clone());
 
         tracing::info!("Snapshot created successfully: {}", snapshot.id);
         Ok(snapshot)
+    }
+
+    /// Where a disk-only snapshot keeps the VM's TPM state.
+    fn tpm_copy_dir(&self, snapshot_id: &str) -> PathBuf {
+        PathBuf::from(&self.snapshot_dir).join(format!("{snapshot_id}.tpm"))
     }
 
     /// Create a snapshot of a single disk
@@ -436,6 +468,8 @@ impl VmSnapshotManager {
             }
         }
 
+        let _ = fs::remove_dir_all(self.tpm_copy_dir(snapshot_id)).await;
+
         // Delete memory snapshot if exists
         if let Some(mem_file) = &snapshot.memory_snapshot {
             if let Err(e) = fs::remove_file(mem_file).await {
@@ -537,6 +571,19 @@ impl VmSnapshotManager {
         } else {
             for disk_snap in &snapshot.disk_snapshots {
                 self.restore_disk_snapshot(disk_snap).await?;
+            }
+            // The TPM goes back to the snapshot's moment together with the disk.
+            let saved = self.tpm_copy_dir(&snapshot.id);
+            if saved.join(super::firmware::TPM_PERMALL).is_file() {
+                if let Some(d0) = snapshot.config_backup.disks.first() {
+                    let to = super::firmware::tpm_state_dir(std::path::Path::new(&d0.path));
+                    super::firmware::stop_swtpm(std::path::Path::new(&d0.path)).await;
+                    tokio::task::spawn_blocking(move || {
+                        super::firmware::copy_tpm_state_verified(&saved, &to)
+                    })
+                    .await
+                    .map_err(|e| horcrux_common::Error::System(e.to_string()))??;
+                }
             }
         }
 

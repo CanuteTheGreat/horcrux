@@ -597,6 +597,18 @@ mod tests {
             priv_of(requirement("GET", "/api/vms/abc/snapshots")),
             (P::VmAudit, "/vms/abc".into())
         );
+        // TPM state: reading is audit, replacing/importing/resetting is VM config
+        assert_eq!(
+            priv_of(requirement("GET", "/api/vms/abc/tpm")),
+            (P::VmAudit, "/vms/abc".into())
+        );
+        for p in ["/api/vms/abc/tpm/reset", "/api/vms/abc/tpm/import-state"] {
+            assert_eq!(
+                priv_of(requirement("POST", p)),
+                (P::VmConfig, "/vms/abc".into()),
+                "{p}"
+            );
+        }
         assert_eq!(
             priv_of(requirement("POST", "/api/console/abc/vnc")),
             (P::VmConsole, "/vms/abc".into())

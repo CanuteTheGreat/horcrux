@@ -115,6 +115,10 @@ pub fn config_fingerprint(config: &VmConfig) -> serde_json::Value {
     if let Some(o) = v.as_object_mut() {
         o.remove("status");
         o.remove("name");
+        // Bookkeeping, not configuration: set once the TPM state exists.
+        if let Some(h) = o.get_mut("hardware").and_then(|h| h.as_object_mut()) {
+            h.remove("tpm_state_expected");
+        }
     }
     v
 }
@@ -126,10 +130,13 @@ fn stamps_of(vm: &QemuVm) -> Vec<FileStamp> {
         .iter()
         .map(|d| PathBuf::from(&d.path))
         .collect();
-    let vars = vm.disk_path.with_extension("efivars.fd");
-    if vars.exists() {
-        files.push(vars);
-    }
+    // The EFI variable store and the TPM state: a saved state resumed on top
+    // of a different TPM or NVRAM would not match its guest.
+    files.extend(
+        super::firmware::carried_state(&vm.disk_path)
+            .into_iter()
+            .map(|(_, _, p)| p),
+    );
     files.iter().filter_map(|f| FileStamp::of(f)).collect()
 }
 

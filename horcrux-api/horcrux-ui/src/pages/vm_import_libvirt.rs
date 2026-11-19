@@ -140,6 +140,7 @@ pub fn VmImportLibvirtPage() -> impl IntoView {
     let id = create_rw_signal(String::new());
     let name = create_rw_signal(String::new());
     let bridge = create_rw_signal(String::new());
+    let accept_new_tpm = create_rw_signal(false);
     let storage = create_rw_signal(String::new());
     let (progress, set_progress) = create_signal(None::<(f32, String)>);
     let (options, set_options) = create_signal(None::<api::VmHostOptions>);
@@ -207,11 +208,12 @@ pub fn VmImportLibvirtPage() -> impl IntoView {
             bridge.get_untracked(),
             storage.get_untracked(),
         );
+        let accept = accept_new_tpm.get_untracked();
         set_busy.set(true);
         set_error.set(None);
         set_progress.set(Some((0.0, "starting".into())));
         spawn_local(async move {
-            let job = match libvirt::import(&p.plan.domain, &i, &n, &b, &s).await {
+            let job = match libvirt::import(&p.plan.domain, &i, &n, &b, &s, accept).await {
                 Ok(j) => j,
                 Err(e) => {
                     set_error.set(Some(e.message));
@@ -321,6 +323,14 @@ pub fn VmImportLibvirtPage() -> impl IntoView {
                         </ul>
                         <p id="lv-state">{format!("UEFI variables: {}; TPM state: {}",
                             pl.nvram.clone().unwrap_or_else(|| "fresh".into()), pl.tpm_state.clone().unwrap_or_else(|| "none yet".into()))}</p>
+                        {pl.tpm_blocker.clone().map(|why| view! {
+                            <div class="alert alert-error" id="lv-tpm-blocker">
+                                <strong>"The TPM cannot be carried over. "</strong>{why}
+                                <label><input id="lv-accept-new-tpm" type="checkbox" prop:checked=accept_new_tpm
+                                    on:change=move |ev| accept_new_tpm.set(event_target_checked(&ev))/>
+                                    " Import anyway with a NEW, empty TPM (BitLocker keys, Windows Hello and Entra/Intune identity are lost)"</label>
+                            </div>
+                        })}
                         {(!pl.warnings.is_empty()).then(|| view! {
                             <div id="lv-warnings"><strong>"Not mapped / notes"</strong>
                                 <ul>{pl.warnings.iter().map(|w| view! { <li>{w.clone()}</li> }).collect_view()}</ul>
@@ -348,7 +358,7 @@ pub fn VmImportLibvirtPage() -> impl IntoView {
                         {move || progress.get().map(|(p, m)| view! {
                             <div id="lv-progress"><progress max="100" value=p></progress>{format!(" {p:.0}% - {m}")}</div>
                         })}
-                        <div><button class="btn btn-primary" id="lv-import" disabled=move || busy.get() on:click=do_import>"Import"</button></div>
+                        <div><button class="btn btn-primary" id="lv-import" disabled=move || busy.get() || (plan.get().map(|p| p.plan.tpm_blocker.is_some()).unwrap_or(false) && !accept_new_tpm.get()) on:click=do_import>"Import"</button></div>
                     </div>
                 }
             })}

@@ -52,6 +52,27 @@ impl Default for VmManager {
     }
 }
 
+/// Once a VM's TPM state exists, remember that the VM must keep it: a later
+/// start without the state is refused (see `firmware::check_tpm_state_for_start`)
+/// instead of silently creating an empty TPM. swtpm writes the state within
+/// a moment of QEMU's first TPM command, so a fresh start waits briefly.
+/// The caller persists the config.
+async fn note_tpm_state(vm: &mut QemuVm) {
+    if vm.hypervisor != VmHypervisor::Qemu || !vm.hardware.tpm || vm.hardware.tpm_state_expected {
+        return;
+    }
+    for _ in 0..20 {
+        if firmware::tpm_state_present(&vm.disk_path) {
+            vm.hardware.tpm_state_expected = true;
+            return;
+        }
+        if !QemuManager::process_running(&vm.id) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+}
+
 /// Report a QEMU VM's real state: the stored status is whatever the last
 /// start/stop wrote, but QEMU can exit on its own (guest poweroff, crash,
 /// kill) and then the VM is stopped no matter what the database says. An
@@ -230,9 +251,18 @@ impl VmManager {
     /// a disk image through `import-disk` instead.
     pub async fn create_vm_from_image(
         &self,
-        config: VmConfig,
+        mut config: VmConfig,
         image: Option<String>,
     ) -> Result<VmConfig> {
+        // A new VM's TPM is CRB (libvirt/virt-manager's Windows 11 choice);
+        // only a VM from before the setting existed stays on TIS.
+        if config.hypervisor == VmHypervisor::Qemu
+            && config.hardware.tpm
+            && config.hardware.tpm_model.is_none()
+            && config.architecture == horcrux_common::VmArchitecture::X86_64
+        {
+            config.hardware.tpm_model = Some(horcrux_common::TpmModel::Crb);
+        }
         let image = image
             .map(|i| i.trim().to_string())
             .filter(|i| !i.is_empty());
@@ -263,7 +293,6 @@ impl VmManager {
             .validate(&config.architecture)
             .map_err(horcrux_common::Error::Validation)?;
         // NICs (MACs generated here), CD-ROM, boot order.
-        let mut config = config;
         hardware::prepare_hardware(&mut config)?;
 
         // Create the VM
@@ -425,6 +454,7 @@ impl VmManager {
         let vm = vms
             .get_mut(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
+        note_tpm_state(vm).await;
         if vm.hypervisor == VmHypervisor::Qemu {
             // The in-memory status goes stale when QEMU dies on its own.
             let live = observed_status(&vm.to_config());
@@ -458,6 +488,7 @@ impl VmManager {
         };
         started?;
         vm.status = VmStatus::Running;
+        note_tpm_state(vm).await;
         let config = vm.to_config();
 
         // Persist the new status if available
@@ -468,6 +499,54 @@ impl VmManager {
         Ok(config)
     }
 
+    /// Start the VM's TPM over: delete its state and forget that it had any
+    /// (the explicit, confirmed "create new TPM" action; the guest loses
+    /// whatever it keeps in the old TPM). The VM must be stopped.
+    pub async fn reset_tpm(&self, id: &str) -> Result<VmConfig> {
+        let mut vms = self.vms.write().await;
+        self.hydrate(&mut vms, id).await?;
+        let vm = vms
+            .get_mut(id)
+            .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
+        if vm.hypervisor != VmHypervisor::Qemu || !vm.hardware.tpm {
+            return Err(horcrux_common::Error::Validation(format!(
+                "VM {id} has no emulated TPM"
+            )));
+        }
+        if QemuManager::process_running(&vm.id) {
+            return Err(horcrux_common::Error::Conflict(format!(
+                "VM {id} is running: stop it before replacing its TPM"
+            )));
+        }
+        advanced::check_unlocked(id, &vm.hardware.adv, "replace its TPM")?;
+        firmware::reset_tpm_state(&vm.disk_path).await?;
+        vm.hardware.tpm_state_expected = false;
+        tracing::warn!(
+            "VM {id}: TPM state deleted on request; the next start creates an empty TPM"
+        );
+        let config = vm.to_config();
+        if let Some(db) = &self.db {
+            db.update_vm(&config).await?;
+        }
+        Ok(config)
+    }
+
+    /// Record that the VM's TPM now has state that must be kept (after a
+    /// state import). The VM must be stopped.
+    pub async fn set_tpm_state_expected(&self, id: &str, expected: bool) -> Result<VmConfig> {
+        let mut vms = self.vms.write().await;
+        self.hydrate(&mut vms, id).await?;
+        let vm = vms
+            .get_mut(id)
+            .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
+        vm.hardware.tpm_state_expected = expected;
+        let config = vm.to_config();
+        if let Some(db) = &self.db {
+            db.update_vm(&config).await?;
+        }
+        Ok(config)
+    }
+
     /// Stop a virtual machine
     pub async fn stop_vm(&self, id: &str) -> Result<VmConfig> {
         let mut vms = self.vms.write().await;
@@ -475,6 +554,7 @@ impl VmManager {
         let vm = vms
             .get_mut(id)
             .ok_or_else(|| horcrux_common::Error::VmNotFound(id.to_string()))?;
+        note_tpm_state(vm).await;
         if vm.hypervisor == VmHypervisor::Qemu {
             // The in-memory status goes stale when QEMU dies on its own.
             let live = observed_status(&vm.to_config());
@@ -498,6 +578,7 @@ impl VmManager {
         };
         stopped?;
         vm.status = VmStatus::Stopped;
+        note_tpm_state(vm).await;
         let config = vm.to_config();
 
         // Persist the new status if available

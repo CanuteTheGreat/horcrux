@@ -265,6 +265,18 @@ pub struct VmHardware {
     /// Emulated TPM 2.0 chip (swtpm; its state lives next to the first disk).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tpm: bool,
+    /// TPM interface model. None = a VM from before the setting existed
+    /// (TIS, what it always ran). New VMs get CRB (what libvirt and
+    /// virt-manager use for Windows 11); an import keeps the source's model.
+    /// Changing it keeps the TPM state: only the device interface differs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tpm_model: Option<TpmModel>,
+    /// The VM's TPM has been in use, so its state (keys, BitLocker/Windows
+    /// Hello/Entra sealing) MUST exist when the VM starts. A start without
+    /// the state is refused instead of silently creating an empty TPM
+    /// (`POST /api/vms/:id/tpm/reset` is the explicit way to start over).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tpm_state_expected: bool,
     /// Memory ballooning (virtio-balloon): the host can take memory back
     /// from the running guest and give it back (`POST /api/vms/:id/balloon`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -825,6 +837,35 @@ impl MachineType {
     }
 }
 
+/// Interface model of the emulated TPM.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TpmModel {
+    /// `tpm-tis` (the legacy default of older VMs).
+    #[default]
+    Tis,
+    /// `tpm-crb` (libvirt/virt-manager's choice for Windows 11).
+    Crb,
+}
+
+impl TpmModel {
+    /// QEMU device name on x86 (aarch64 only has `tpm-tis-device`).
+    pub fn qemu_device(self, x86: bool) -> &'static str {
+        match (self, x86) {
+            (_, false) => "tpm-tis-device",
+            (TpmModel::Tis, true) => "tpm-tis",
+            (TpmModel::Crb, true) => "tpm-crb",
+        }
+    }
+}
+
+impl VmHardware {
+    /// The TPM interface this VM runs (legacy VMs: TIS).
+    pub fn tpm_model(&self) -> TpmModel {
+        self.tpm_model.unwrap_or_default()
+    }
+}
+
 /// VM firmware.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -1075,6 +1116,12 @@ impl VmHardware {
         }
         self.adv.validate(arch, cpus, self.sockets)?;
         if *arch != VmArchitecture::X86_64 {
+            if self.tpm_model() != TpmModel::Tis {
+                return Err(
+                    "the CRB TPM interface is for x86_64 VMs (this architecture only has TIS)"
+                        .into(),
+                );
+            }
             if !self.machine.is_default() {
                 return Err("the q35 chipset is for x86_64 VMs".into());
             }
@@ -1842,6 +1889,29 @@ mod tests {
         );
         let old: VmHardware = serde_json::from_str(r#"{"nets":[]}"#).unwrap();
         assert!(!old.balloon && !old.guest_agent && old.usb.is_empty());
+    }
+
+    #[test]
+    fn tpm_model_defaults_keep_old_vms_on_tis_and_round_trip() {
+        let old: VmHardware = serde_json::from_str(r#"{"nets":[],"tpm":true}"#).unwrap();
+        assert_eq!(old.tpm_model(), TpmModel::Tis);
+        assert!(!old.tpm_state_expected);
+        let j = serde_json::to_value(&old).unwrap();
+        assert!(j.get("tpm_model").is_none() && j.get("tpm_state_expected").is_none());
+        let hw = VmHardware {
+            tpm: true,
+            tpm_model: Some(TpmModel::Crb),
+            tpm_state_expected: true,
+            ..Default::default()
+        };
+        let back: VmHardware = serde_json::from_str(&serde_json::to_string(&hw).unwrap()).unwrap();
+        assert_eq!(back, hw);
+        assert_eq!(TpmModel::Crb.qemu_device(true), "tpm-crb");
+        assert_eq!(TpmModel::Tis.qemu_device(true), "tpm-tis");
+        assert_eq!(TpmModel::Crb.qemu_device(false), "tpm-tis-device");
+        // CRB is an x86 interface
+        assert!(hw.validate_for(&VmArchitecture::X86_64, 2).is_ok());
+        assert!(hw.validate_for(&VmArchitecture::Aarch64, 2).is_err());
     }
 
     #[test]
