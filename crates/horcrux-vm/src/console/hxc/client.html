@@ -102,7 +102,8 @@
   // Whole-picture change detector (coarse, every frame) plus an on-demand
   // full-resolution watch of one region (a moved pointer is ~12x19 pixels).
   // Colours are quantised so encoder noise does not count as a change.
-  const probe = document.createElement("canvas"); probe.width = 64; probe.height = 36;
+  // 320x200 keeps one changed text line visible after the downscale
+  const probe = document.createElement("canvas"); probe.width = 320; probe.height = 200;
   const rprobe = document.createElement("canvas");
   const rctx = rprobe.getContext("2d", { willReadFrequently: true });
   function regionHash(r) {
@@ -132,7 +133,10 @@
       return h >>> 0;
     } catch { return 0; }
   }
-  function onFrame(now) {
+  function onFrame() {
+    // performance.now(), not the callback's frame timestamp: that one can
+    // predate an input sent during the same frame (negative latencies)
+    const now = performance.now();
     hxc.framesDecoded++;
     if (hxc.watch && regionHash(hxc.watch) !== hxc.watch.base) {
       hxc.regionChangeMs = now - hxc.watch.at; hxc.watch = null;
@@ -169,7 +173,13 @@
     const x = Math.round((e.clientX - ox) / s), y = Math.round((e.clientY - oy) / s);
     return [Math.max(0, Math.min(gw - 1, x)), Math.max(0, Math.min(gh - 1, y))];
   }
-  function markInput() { if (inputAt === null) inputAt = performance.now(); }
+  // The first input since the last picture change starts the clock; an
+  // input that changed nothing for 2 s (a modifier, a click on nothing)
+  // stops counting so it cannot inflate the next sample.
+  function markInput() {
+    const t = performance.now();
+    if (inputAt === null || t - inputAt > 2000) inputAt = t;
+  }
   function key(e, down) {
     e.preventDefault();
     if (down) markInput();

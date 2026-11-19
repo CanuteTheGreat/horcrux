@@ -322,7 +322,7 @@ with sync_playwright() as pw:
     clicks = []
     for button in (0, 2, 1):
         wait_static(page, quiet_ms=800, timeout=10)
-        lat = trial(page, f"window.hxc.press({g['width'] // 2},{g['height'] // 2},{button})", timeout=3)
+        lat = region_trial(page, None, None, f"window.hxc.press({g['width'] // 2},{g['height'] // 2},{button})", timeout=4)
         time.sleep(0.15)
         page.evaluate(f"window.hxc.release({button})")
         clicks.append(lat)
