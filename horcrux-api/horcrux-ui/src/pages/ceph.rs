@@ -132,7 +132,7 @@ pub fn CephPage() -> impl IntoView {
             {move || status.get().map(|s| {
                 if !s.reachable {
                     return view! {
-                        <div class="alert alert-error" id="ceph-unavailable">
+                        <div class="alert alert-info" id="ceph-unavailable">
                             {s.error.clone().unwrap_or_else(|| "No Ceph cluster answers on this node.".into())}
                         </div>
                     }.into_view();
