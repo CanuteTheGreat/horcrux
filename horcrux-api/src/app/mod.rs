@@ -5529,6 +5529,11 @@ struct HaStatusResponse {
     running: usize,
     stopped: usize,
     migrating: usize,
+    /// Times HA moved a resource to another node (failover recoveries and
+    /// relocations) since this node started; counted from the event log.
+    total_failovers: usize,
+    /// RFC 3339 time of the latest such move.
+    last_failover: Option<String>,
     /// Per-resource state, so the HA dashboard can show what is running.
     resources: Vec<ha::HaResource>,
 }
@@ -5550,11 +5555,23 @@ async fn get_ha_status(State(state): State<Arc<AppState>>) -> Json<HaStatusRespo
         }
     }
 
+    let moves: Vec<_> = state
+        .ha_manager
+        .get_events(None, Some(1000))
+        .await
+        .into_iter()
+        .filter(|e| matches!(e.event_type, ha::HaEventType::Migrated))
+        .collect();
+    // get_events returns newest first.
+    let last_failover = moves.first().map(|e| e.timestamp.to_rfc3339());
+
     Json(HaStatusResponse {
         total_resources: resources.len(),
         running,
         stopped,
         migrating,
+        total_failovers: moves.len(),
+        last_failover,
         resources,
     })
 }

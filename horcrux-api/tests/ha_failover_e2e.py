@@ -174,6 +174,9 @@ r = ha_res(owner)
 check(r["current_node"] == NAME[owner] and r["state"] == "Started", f"HA resource now placed on {NAME[owner]} ({r['current_node']}, {r['state']})")
 st, ev = api(owner if owner != 1 else 2, "GET", "/ha/events")
 check(any("recovered" in e["message"] for e in ev), "an HA event records the recovery")
+st, hs = api(owner, "GET", "/ha/status")
+check(st == 200 and hs.get("total_failovers", 0) >= 1 and hs.get("last_failover"),
+      f"/ha/status counts the failover for the dashboard ({hs.get('total_failovers')}, {hs.get('last_failover')})")
 
 # --- 4. node1 returns ----------------------------------------------------------
 log("== 4. node1 comes back: no second copy")

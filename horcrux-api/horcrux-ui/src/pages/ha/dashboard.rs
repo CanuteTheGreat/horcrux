@@ -223,7 +223,7 @@ pub fn HaDashboard() -> impl IntoView {
                                             {ha_groups.get().len()}
                                         </p>
                                         <p class="text-xs text-gray-500">
-                                            {ha_groups.get().iter().map(|g| g.vm_ids.len()).sum::<usize>()}
+                                            {ha_resources.get().iter().filter(|r| ha_groups.get().iter().any(|g| g.name == r.group)).count()}
                                             " total VMs"
                                         </p>
                                     </div>
