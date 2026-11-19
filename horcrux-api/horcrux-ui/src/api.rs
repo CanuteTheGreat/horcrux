@@ -3797,6 +3797,10 @@ struct HaStatusWire {
     #[serde(default)]
     migrating: usize,
     #[serde(default)]
+    total_failovers: u32,
+    #[serde(default)]
+    last_failover: Option<String>,
+    #[serde(default)]
     resources: Vec<HaStatusResourceWire>,
 }
 
@@ -3850,8 +3854,8 @@ impl From<HaStatusWire> for HaStatus {
                 HaClusterStatus::Active
             },
             resources,
-            last_failover: None,
-            total_failovers: 0,
+            last_failover: w.last_failover,
+            total_failovers: w.total_failovers,
         }
     }
 }
@@ -5774,6 +5778,22 @@ mod tests {
     //! actually sends. Each sample below is the real serialized shape of the
     //! named server type.
     use super::*;
+
+    #[test]
+    fn ha_status_carries_the_failover_count_from_the_server() {
+        let st: HaStatus = serde_json::from_str(
+            r#"{"total_resources":1,"running":1,"stopped":0,"migrating":0,
+                "total_failovers":2,"last_failover":"2026-11-19T12:25:35+00:00",
+                "resources":[{"vm_id":"ha-vm","state":"Started","current_node":"node3"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(st.total_failovers, 2);
+        assert_eq!(
+            st.last_failover.as_deref(),
+            Some("2026-11-19T12:25:35+00:00")
+        );
+        assert_eq!(st.resources.len(), 1);
+    }
 
     #[test]
     fn migration_target_note_explains_offline_only_nodes() {
