@@ -7413,6 +7413,48 @@ pub struct NodePower {
     pub max_parallel: usize,
     pub drain_on_shutdown: bool,
     pub drain_timeout_secs: u64,
+    #[serde(default = "default_save_fallback")]
+    pub save_fallback: String,
+    #[serde(default = "default_save_encryption")]
+    pub save_encryption: String,
+    #[serde(default)]
+    pub resume_stagger_secs: u32,
+    #[serde(default = "default_stop_margin")]
+    pub stop_margin_secs: u64,
+}
+
+fn default_save_fallback() -> String {
+    "shutdown".into()
+}
+fn default_save_encryption() -> String {
+    "require".into()
+}
+fn default_stop_margin() -> u64 {
+    60
+}
+
+/// What a directory is stored on (saved memory needs encrypted storage).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SaveTarget {
+    pub kind: String,
+    pub encrypted: bool,
+    pub detail: String,
+}
+
+/// A guest's power settings and what the host shutdown will really do.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct GuestPolicyView {
+    #[serde(rename = "override")]
+    pub overrides: GuestPowerOverride,
+    pub effective: GuestPowerEffective,
+    #[serde(default)]
+    pub host_stop_action: String,
+    #[serde(default)]
+    pub host_stop_reason: Option<String>,
+}
+
+pub async fn guest_power_policy(kind: &str, id: &str) -> Result<GuestPolicyView, ApiError> {
+    fetch_json(&format!("/{}/{}/power-policy", guest_base(kind), id)).await
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -7470,6 +7512,10 @@ pub struct PowerGuest {
     pub can_save: bool,
     pub save_blocker: Option<String>,
     pub last_result: Option<PowerResult>,
+    #[serde(default)]
+    pub host_stop_action: String,
+    #[serde(default)]
+    pub host_stop_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -7500,6 +7546,12 @@ pub struct PowerOverview {
     pub guests: Vec<PowerGuest>,
     #[serde(default)]
     pub last_stop: Option<serde_json::Value>,
+    #[serde(default)]
+    pub save_target: Option<SaveTarget>,
+    #[serde(default)]
+    pub stop_budget_secs: u64,
+    #[serde(default)]
+    pub stop_budget_warning: Option<String>,
 }
 
 fn guest_base(kind: &str) -> &'static str {

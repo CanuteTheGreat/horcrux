@@ -31,6 +31,7 @@ class InitSystem:
     def restart(self, u): raise NotImplementedError
     def enable(self, u): raise NotImplementedError
     def disable(self, u): raise NotImplementedError
+    def reload_units(self): return "true"
     def boot_complete(self): raise NotImplementedError
     def status_all(self): raise NotImplementedError
     def log(self, u, lines=200): raise NotImplementedError
@@ -47,6 +48,7 @@ class Systemd(InitSystem):
     def restart(self, u): return f"systemctl restart {shlex.quote(u)}"
     def enable(self, u): return f"systemctl enable {shlex.quote(u)}"
     def disable(self, u): return f"systemctl disable {shlex.quote(u)}"
+    def reload_units(self): return "systemctl daemon-reload"
     # `is-system-running` says "running" or "degraded" once boot finished; "starting"/"initializing" while booting.
     def boot_complete(self): return "s=$(systemctl is-system-running 2>/dev/null); [ \"$s\" = running ] || [ \"$s\" = degraded ]"
     def status_all(self): return "systemctl list-units --all --no-pager --no-legend 2>&1 | head -150"

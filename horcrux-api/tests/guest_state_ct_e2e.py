@@ -154,7 +154,7 @@ check(g["can_save"] is False and "CRIU" in (g["save_blocker"] or ""), f"guest sh
 st, b = req("POST", "/containers/gsct/save-state", {}, expect=None)
 check(st >= 400 and "CRIU" in json.dumps(b), f"manual save refused with the reason ({st})")
 check("RUNNING" in state("gsct"), "container keeps running after the refused save")
-req("PUT", "/nodes/guest-power", {**ov["node"], "stop_action": "save", "start_action": "resume_if_running"})
+req("PUT", "/nodes/guest-power", {**ov["node"], "stop_action": "save", "start_action": "resume_if_running", "save_encryption": "allow_unencrypted"})
 out = host_stop()
 log("guests stop:\n  " + out.replace("\n", "\n  "))
 check("shutdown container gsct" in out and "CRIU" in out, "host shutdown: clean shutdown fallback, reason printed")

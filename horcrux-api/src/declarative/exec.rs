@@ -20,7 +20,24 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         vnets: sdn::list_vnets(State(state.clone())).await.0,
         subnets: sdn::list_subnets(State(state.clone())).await.0,
         vms: state.vm_manager.list_vms().await,
+        power_node: crate::api::guest_state::policy::load_node(state).await,
+        power_vms: power_vms(state).await,
     }
+}
+
+/// Per-VM power overrides by VM name.
+async fn power_vms(
+    state: &Arc<AppState>,
+) -> std::collections::BTreeMap<String, crate::api::guest_state::GuestOverride> {
+    use crate::api::guest_state::{engine::GuestKind, policy};
+    let mut out = std::collections::BTreeMap::new();
+    for v in state.vm_manager.list_vms().await {
+        let o = policy::load_override(state, GuestKind::Vm, &v.id).await;
+        if o != Default::default() {
+            out.insert(v.name.clone(), o);
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -231,6 +248,26 @@ async fn run_change(
             {
                 return Ok(Some(format!("deleted, but its firewall rules stayed: {x}")));
             }
+            Ok(None)
+        }
+        ("guest_power", Action::Update | Action::Delete) => {
+            use crate::api::guest_state::{engine::GuestKind, policy};
+            let gp = spec.guest_power.as_ref().ok_or("not in spec")?;
+            if c.name == super::NODE_POWER {
+                policy::save_node(state, &gp.node)
+                    .await
+                    .map_err(|x| e(&x))?;
+                return Ok(None);
+            }
+            let id = vm_id(state, spec, &c.name).await?;
+            let o = if c.action == Action::Delete {
+                Default::default()
+            } else {
+                gp.vms.get(&c.name).cloned().unwrap_or_default()
+            };
+            policy::save_override(state, GuestKind::Vm, &id, &o)
+                .await
+                .map_err(|x| e(&x))?;
             Ok(None)
         }
         (k, a) => Err(format!("no executor for {k} {a:?}")),

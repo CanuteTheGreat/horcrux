@@ -19,6 +19,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const SPEC_VERSION: u32 = 1;
 
+/// The change name of the node-wide guest power defaults (a VM can never be
+/// called this: the parentheses are not valid in VM names).
+pub const NODE_POWER: &str = "(node defaults)";
+
 fn one() -> u32 {
     SPEC_VERSION
 }
@@ -48,9 +52,25 @@ pub struct Spec {
     pub networks: Option<NetworksSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vms: Option<Vec<VmSpec>>,
+    /// What happens to guests when the host goes down and restarts: node
+    /// defaults plus per-VM overrides (the stop action `host_shutdown_action`
+    /// defaults to saving state to encrypted storage).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_power: Option<GuestPowerSpec>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+/// Host shutdown / boot behaviour of guests (see docs/SAVE_STATE.md). Every
+/// field of `node` is optional (the documented default applies); `vms` are
+/// overrides keyed by VM name, with the same fields as the API's power policy.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GuestPowerSpec {
+    #[serde(default)]
+    pub node: crate::api::guest_state::NodePolicy,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -179,8 +199,17 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
     }
     if let Some(k) = spec.extra.keys().next() {
         return Err(format!(
-            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks and vms)"
+            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms and guest_power)"
         ));
+    }
+    if let Some(gp) = &spec.guest_power {
+        gp.node
+            .validate()
+            .map_err(|e| format!("guest_power.node: {e}"))?;
+        for (name, o) in &gp.vms {
+            o.validate()
+                .map_err(|e| format!("guest_power.vms.{name}: {e}"))?;
+        }
     }
     if let Some(pools) = &spec.storage_pools {
         dup("storage pool", pools.iter().map(|p| p.name.as_str()))?;
@@ -297,6 +326,9 @@ pub struct Live {
     pub vnets: Vec<VNet>,
     pub subnets: Vec<Subnet>,
     pub vms: Vec<VmConfig>,
+    pub power_node: crate::api::guest_state::NodePolicy,
+    /// Per-VM power overrides by VM name (only VMs that have one).
+    pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -592,19 +624,120 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // guest power: node defaults and per-VM overrides (by VM name)
+    if let Some(gp) = &spec.guest_power {
+        let mut d = Vec::new();
+        power_node_diff(&mut d, &live.power_node, &gp.node);
+        if !d.is_empty() {
+            creates.push(ch("guest_power", NODE_POWER, Action::Update, d));
+        }
+        let known = |n: &str| {
+            live.vms.iter().any(|v| v.name == n) || spec.vms.iter().flatten().any(|v| v.name == n)
+        };
+        for (name, w) in &gp.vms {
+            if !known(name) {
+                p.errors.push(format!(
+                    "guest_power.vms.{name}: there is no VM with that name"
+                ));
+                continue;
+            }
+            let l = live.power_vms.get(name).cloned().unwrap_or_default();
+            if l != *w {
+                creates.push(ch(
+                    "guest_power",
+                    name,
+                    Action::Update,
+                    vec![format!("override: {l:?} -> {w:?}")],
+                ));
+            }
+        }
+        if prune {
+            for name in live.power_vms.keys().filter(|n| !gp.vms.contains_key(*n)) {
+                deletes.push(ch("guest_power", name, Action::Delete, vec![]));
+            }
+        }
+    }
+
     // Creates/updates run dependency-first (pools, zones, vnets, subnets,
-    // VMs); deletes run in the opposite order (VMs first, pools last).
+    // VMs, guest power); deletes run in the opposite order (VMs first, pools last).
     let rank = |k: &str| {
-        ["storage_pool", "zone", "vnet", "subnet", "vm"]
-            .iter()
-            .position(|x| *x == k)
-            .unwrap_or(9)
+        [
+            "storage_pool",
+            "zone",
+            "vnet",
+            "subnet",
+            "vm",
+            "guest_power",
+        ]
+        .iter()
+        .position(|x| *x == k)
+        .unwrap_or(9)
     };
     creates.sort_by_key(|c| rank(&c.kind));
     deletes.sort_by_key(|c| std::cmp::Reverse(rank(&c.kind)));
     p.changes = creates;
     p.changes.extend(deletes);
     p
+}
+
+fn power_node_diff(
+    out: &mut Vec<String>,
+    l: &crate::api::guest_state::NodePolicy,
+    w: &crate::api::guest_state::NodePolicy,
+) {
+    diff(out, "host_shutdown_action", &l.stop_action, &w.stop_action);
+    diff(out, "start_action", &l.start_action, &w.start_action);
+    diff(
+        out,
+        "start_delay_secs",
+        &l.start_delay_secs,
+        &w.start_delay_secs,
+    );
+    diff(out, "save_dir", &l.save_dir, &w.save_dir);
+    diff(
+        out,
+        "save_timeout_secs",
+        &l.save_timeout_secs,
+        &w.save_timeout_secs,
+    );
+    diff(
+        out,
+        "shutdown_timeout_secs",
+        &l.shutdown_timeout_secs,
+        &w.shutdown_timeout_secs,
+    );
+    diff(out, "max_parallel", &l.max_parallel, &w.max_parallel);
+    diff(
+        out,
+        "drain_on_shutdown",
+        &l.drain_on_shutdown,
+        &w.drain_on_shutdown,
+    );
+    diff(
+        out,
+        "drain_timeout_secs",
+        &l.drain_timeout_secs,
+        &w.drain_timeout_secs,
+    );
+    diff(out, "save_fallback", &l.save_fallback, &w.save_fallback);
+    diff(
+        out,
+        "save_encryption",
+        &l.save_encryption,
+        &w.save_encryption,
+    );
+    diff(
+        out,
+        "resume_stagger_secs",
+        &l.resume_stagger_secs,
+        &w.resume_stagger_secs,
+    );
+    diff(
+        out,
+        "stop_margin_secs",
+        &l.stop_margin_secs,
+        &w.stop_margin_secs,
+    );
 }
 
 /// Differences between a spec VM and the live one, limited to what the spec
@@ -739,6 +872,10 @@ pub fn export(live: &Live) -> Spec {
             subnets: Some(subnets),
         }),
         vms: Some(vms),
+        guest_power: Some(GuestPowerSpec {
+            node: live.power_node.clone(),
+            vms: live.power_vms.clone(),
+        }),
         extra: BTreeMap::new(),
     }
 }

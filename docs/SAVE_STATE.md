@@ -18,14 +18,27 @@ Per guest, overriding a **node default**:
 
 | Setting | Values |
 |---|---|
-| Automatic stop action | **Save state** (default) / Shut down / Power off |
+| Automatic stop action (`host_shutdown_action`) | **Save state** (default) / Shut down / Power off / Do nothing (the guest ends with the host) |
 | Automatic start action | **Resume if it was running** (default) / Always start / Nothing |
 | Start delay | seconds after the boot pass began |
 | Start order | lower starts first (default 1000) |
 | Save states to | a directory on the storage of your choice (default `<data dir>/saved-state/data`) |
 
-Node-only: save timeout per guest (300 s), shutdown timeout per guest (120 s),
-guests handled at once (4), *drain on shutdown* (on) and its per-move timeout.
+Node-only (all of them settable in the UI, the API, `horcrux power node-default`
+and the declarative `guest_power.node` section; nothing is built in):
+
+| Setting | Default |
+|---|---|
+| `save_timeout_secs` per guest | 300 |
+| `shutdown_timeout_secs` per guest (then power off) | 120 |
+| `max_parallel` guests handled at once | 4 |
+| `save_fallback` when a state cannot be saved: `shutdown` / `poweroff` | `shutdown` |
+| `save_encryption`: `require` (encrypted storage only) / `allow_unencrypted` | `require` |
+| `resume_stagger_secs` between two resumes at boot | 0 |
+| `start_delay_secs`, per-guest `start_order` / delay | 0 / 1000 |
+| `save_dir` | `<data dir>/saved-state/data` |
+| `drain_on_shutdown` (clusters) and `drain_timeout_secs` | on / 900 |
+| `stop_margin_secs` added to the computed shutdown wait | 60 |
 
 * **Save state** falls back to *Shut down* when the state cannot be saved, and
   *Shut down* falls back to *Power off* after the shutdown timeout. The reason
@@ -35,6 +48,49 @@ guests handled at once (4), *drain on shutdown* (on) and its per-move timeout.
   crashed) is started normally; a guest that was stopped stays stopped.
 * **Always start**: resume if there is saved state, otherwise start.
 * **Nothing**: the guest stays stopped; a saved state is kept.
+
+## Saved memory is encrypted at rest, or not written
+
+A saved memory image contains whatever was in the guest's RAM: the keys of an
+unlocked encrypted disk, TLS keys, passwords. Horcrux therefore writes it
+**only to encrypted storage**:
+
+* a ZFS dataset with native encryption whose key is loaded (`encryption` is
+  not `off`, `keystatus=available`), or
+* a LUKS / dm-crypt volume (the block device under the target has a `crypt`
+  layer).
+
+The target is checked before every save (manual and at host shutdown). A
+target on plain storage, on tmpfs/overlay (not persistent) or on network
+storage is **refused** with the reason; at host shutdown the guest then follows
+the *save fallback* (clean shutdown by default), and the guest list shows
+"will shut down, not save: ..." beforehand. Runtimes that keep the state
+themselves (Incus/LXD instances, Podman) are checked against the runtime's own
+storage directory. An administrator who accepts plain RAM images on a given
+storage can set `save_encryption: allow_unencrypted` (node-wide); that is never
+the default. (An ephemeral key held only in RAM cannot be used: it would not
+survive the reboot, which is the whole point of the save.)
+
+The state directory is root-only (0700), the image file is created 0600 before
+the first byte is written, and everything is deleted after a successful resume.
+
+## What happens to a guest at host shutdown
+
+1. HA cluster: running VMs are live-migrated to other nodes first (*drain on
+   shutdown*); what cannot move continues below.
+2. Guests are handled in the reverse of their start order, `max_parallel` at a
+   time.
+3. **Save**: the guest is saved if it can be. It cannot when it owns passthrough
+   devices (PCI/GPU/mediated; QEMU cannot save device state of real hardware),
+   when the target is not encrypted, when there is no room, when CRIU is
+   missing (containers) or when the save exceeds `save_timeout_secs` (the
+   guest keeps running meanwhile and is then handled by the fallback).
+4. **Fallback** (`save_fallback`): clean shutdown (ACPI + guest agent) with its
+   own timeout, then power off. The reason is logged, stored per guest, shown in
+   the UI and printed by `horcrux-api guests stop`. Passthrough VMs are flagged
+   in the UI up front.
+5. At boot the guest is resumed (or started, if it had been shut down) in start
+   order, after storage and network are up (the unit orders it).
 
 ## How state is saved
 
@@ -143,6 +199,15 @@ order it so shutdown runs it **before** the things it needs go down:
   `<data dir>/saved-state/.guests-service-enabled`; an administrator who
   disables the service later is not overridden; `HORCRUX_GUESTS_NO_SERVICE=1`
   opts out).
+
+**Waiting for the saves.** The stop client asks the API for the node's *stop
+budget* (worst case from the configured timeouts: waves of `max_parallel`
+guests, each `save + shutdown (+ drain)` seconds, plus `stop_margin_secs`) and
+waits exactly that long, so changing a timeout changes the wait on both init
+systems; the units themselves carry no fixed timeout (systemd:
+`TimeoutStopSec=infinity`, OpenRC: no limit). systemd ends a shutdown job after
+30 minutes by default (`JobTimeoutSec` of the shutdown targets): when the budget
+exceeds that, the Guest Power page says so.
 
 If the API runs sandboxed with `ProtectSystem=strict` (the shipped
 `horcrux.service`), a custom *Save states to* directory must be added to its

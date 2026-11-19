@@ -194,10 +194,12 @@ def run_runtime(name):
     n0, m0 = rt.start_counter()
     log(f"{name}: counter {n0}, marker {m0}")
     time.sleep(33)  # the API caches its CRIU probe for 30 s
+    # The throwaway VM has no encrypted storage: opt in (the default refuses).
+    req("PUT", "/nodes/guest-power", {**req("GET", "/nodes/guest-power")[1]["node"], "save_encryption": "allow_unencrypted"})
     g, ov = guest(rt.id)
     check(ov["capabilities"]["criu"]["available"], f"{name}: API reports CRIU available ({ov['capabilities']['criu'].get('version')})")
     check(g["can_save"], f"{name}: guest can save state ({g.get('save_blocker')})")
-    req("PUT", "/nodes/guest-power", {**ov["node"], "stop_action": "save", "start_action": "resume_if_running"})
+    req("PUT", "/nodes/guest-power", {**ov["node"], "stop_action": "save", "start_action": "resume_if_running", "save_encryption": "allow_unencrypted"})
 
     log(f"--- {name}: manual Save state / Resume")
     n0, m0 = rt.read()

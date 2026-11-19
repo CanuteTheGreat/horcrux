@@ -220,6 +220,12 @@ pub enum PowerCommands {
         /// Directory for saved states ("" = default)
         #[arg(long)]
         dir: Option<String>,
+        /// When state cannot be saved: shutdown | poweroff
+        #[arg(long)]
+        fallback: Option<String>,
+        /// Where saved memory may go: require (encrypted storage only) | allow_unencrypted
+        #[arg(long)]
+        encryption: Option<String>,
     },
 }
 

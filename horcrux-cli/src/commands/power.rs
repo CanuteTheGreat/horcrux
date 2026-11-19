@@ -155,6 +155,8 @@ pub async fn handle_power_command(
             start,
             delay,
             dir,
+            fallback,
+            encryption,
         } => {
             let cur: Value = api.get("/api/nodes/guest-power").await?;
             let mut n = cur["node"].clone();
@@ -169,6 +171,12 @@ pub async fn handle_power_command(
             }
             if let Some(d) = dir {
                 n["save_dir"] = if d.is_empty() { Value::Null } else { json!(d) };
+            }
+            if let Some(f) = fallback {
+                n["save_fallback"] = json!(f);
+            }
+            if let Some(e) = encryption {
+                n["save_encryption"] = json!(e);
             }
             let v: Value = api.put("/api/nodes/guest-power", &n).await?;
             output::print_single(&v, OutputFormat::from_str(output_format))?;

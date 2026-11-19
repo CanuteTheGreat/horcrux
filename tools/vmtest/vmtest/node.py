@@ -405,6 +405,7 @@ class Node:
     def start_unit(self, name): return self.succeed(self.init.start(self._unit(name)), timeout=120)
     def stop_unit(self, name): return self.succeed(self.init.stop(self._unit(name)), timeout=120)
     def restart_unit(self, name): return self.succeed(self.init.restart(self._unit(name)), timeout=120)
+    def reload_units(self): return self.succeed(self.init.reload_units())
     def enable_unit(self, name): return self.succeed(self.init.enable(self._unit(name)))
     def disable_unit(self, name): return self.succeed(self.init.disable(self._unit(name)))
     def unit_active(self, name): return self.execute(self.init.is_active(self._unit(name)), 30)[0] == 0
