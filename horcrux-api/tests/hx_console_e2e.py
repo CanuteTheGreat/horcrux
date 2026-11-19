@@ -185,11 +185,12 @@ def wait_static(page, quiet_ms=1500, timeout=120):
 
 def trial(page, action, timeout=10):
     """Run `action` (JS) and return the input-to-picture latency in ms, or None."""
-    n = page.evaluate("window.hxc.inputToFrameMs.length")
+    # a counter, not the length: the client keeps only the last 50 samples
+    n = page.evaluate("window.hxc.inputToFrameCount")
     page.evaluate(action)
     end = time.time() + timeout
     while time.time() < end:
-        if page.evaluate("window.hxc.inputToFrameMs.length") > n:
+        if page.evaluate("window.hxc.inputToFrameCount") > n:
             return page.evaluate("window.hxc.inputToFrameMs[window.hxc.inputToFrameMs.length-1]")
         time.sleep(0.05)
     return None

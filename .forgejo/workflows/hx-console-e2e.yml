@@ -79,17 +79,24 @@ jobs:
           fi
           (cd horcrux-api/horcrux-ui && trunk build --release)
 
-      - name: Windows ISO (runner cache volume hxc-win-iso, optional)
+      - name: Windows ISO (runner cache volume hxc-win-iso)
+        env:
+          # Microsoft's Windows 11 Enterprise evaluation ISO (x64, en-US),
+          # free for testing; downloaded once per runner host into a volume
+          WIN_EVAL_URL: https://go.microsoft.com/fwlink/?linkid=2289031&clcid=0x409&culture=en-us&country=us
         run: |
-          if docker volume inspect hxc-win-iso >/dev/null 2>&1; then
-            docker run --rm -v hxc-win-iso:/c:ro debian:bookworm cat /c/win11-eval.iso > /tmp/win11-eval.iso || rm -f /tmp/win11-eval.iso
-          fi
-          ls -l /tmp/win11-eval.iso || echo "no Windows ISO cache on this runner: the Windows guest is skipped"
+          docker volume create hxc-win-iso >/dev/null
+          docker run --rm -e URL="$WIN_EVAL_URL" -v hxc-win-iso:/c debian:bookworm bash -c '
+            [ -s /c/win11-eval.iso ] && exit 0
+            apt-get update -qq >/dev/null && apt-get install -y -qq curl ca-certificates >/dev/null
+            curl -fsSL --retry 3 -o /c/win11-eval.iso.part "$URL" && mv /c/win11-eval.iso.part /c/win11-eval.iso'
+          docker run --rm -v hxc-win-iso:/c:ro debian:bookworm cat /c/win11-eval.iso > /tmp/win11-eval.iso
+          ls -l /tmp/win11-eval.iso
 
       - name: Horcrux Console e2e
         run: |
           set -o pipefail
-          [ -s /tmp/win11-eval.iso ] && export HXC_WIN_ISO=/tmp/win11-eval.iso
+          export HXC_WIN_ISO=/tmp/win11-eval.iso
           HXC_OUT=/tmp/hxc-e2e bash horcrux-api/tests/hx_console_e2e.sh target/debug/horcrux-api horcrux-api/horcrux-ui/dist 2>&1 | tee /tmp/hxc-e2e.log
           grep -E '^(LATENCY|RESULTS)' /tmp/hxc-e2e.log || true
 

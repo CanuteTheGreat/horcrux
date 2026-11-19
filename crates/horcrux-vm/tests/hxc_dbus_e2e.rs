@@ -92,7 +92,9 @@ async fn type_text(d: &DbusDisplay, text: &str) {
 #[ignore = "needs QEMU with the D-Bus display and HXC_TEST_ISO"]
 async fn dbus_display_frames_keyboard_and_pointer() {
     let iso = std::env::var("HXC_TEST_ISO").expect("HXC_TEST_ISO");
-    let tablet = std::env::var("HXC_TEST_TABLET").map(|v| v == "1").unwrap_or(false);
+    let tablet = std::env::var("HXC_TEST_TABLET")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     let boot: u64 = std::env::var("HXC_TEST_BOOT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -100,8 +102,17 @@ async fn dbus_display_frames_keyboard_and_pointer() {
     let dir = tempfile::tempdir().unwrap();
     let qmp = dir.path().join("qmp.sock");
     let mut args: Vec<String> = [
-        "-machine", "accel=kvm:tcg", "-m", "512", "-cdrom", &iso, "-vga", "std",
-        "-display", "dbus,p2p=yes", "-qmp",
+        "-machine",
+        "accel=kvm:tcg",
+        "-m",
+        "512",
+        "-cdrom",
+        &iso,
+        "-vga",
+        "std",
+        "-display",
+        "dbus,p2p=yes",
+        "-qmp",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -123,7 +134,9 @@ async fn dbus_display_frames_keyboard_and_pointer() {
     }
 
     let (tx, mut rx) = mpsc::channel::<DisplayEvent>(64);
-    let display = DbusDisplay::connect(&qmp, "t", tx, false).await.expect("connect");
+    let display = DbusDisplay::connect(&qmp, "t", tx, false)
+        .await
+        .expect("connect");
     let updates = Arc::new(AtomicU64::new(0));
     let scanouts = Arc::new(AtomicU64::new(0));
     let (u, s) = (updates.clone(), scanouts.clone());
@@ -142,7 +155,10 @@ async fn dbus_display_frames_keyboard_and_pointer() {
         }
     });
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(scanouts.load(Ordering::SeqCst) >= 1, "a first frame (Scanout) arrives");
+    assert!(
+        scanouts.load(Ordering::SeqCst) >= 1,
+        "a first frame (Scanout) arrives"
+    );
     println!("ok - first frame arrived");
 
     // Boot to the login prompt and log in. The framebuffer console blinks
@@ -166,7 +182,10 @@ async fn dbus_display_frames_keyboard_and_pointer() {
             echoed += 1;
         }
     }
-    assert!(echoed >= 3, "typed characters echo at the shell ({echoed}/4)");
+    assert!(
+        echoed >= 3,
+        "typed characters echo at the shell ({echoed}/4)"
+    );
     println!("ok - keyboard input reaches the guest ({echoed}/4 keystrokes echoed)");
     type_text(&display, "\nod -tx1 -w3 -v /dev/input/mice\n").await;
     assert!(
@@ -197,7 +216,12 @@ async fn dbus_display_frames_keyboard_and_pointer() {
         if n > 0 {
             moved += 1;
         }
-        quiet(&updates, Duration::from_millis(800), Duration::from_secs(10)).await;
+        quiet(
+            &updates,
+            Duration::from_millis(800),
+            Duration::from_secs(10),
+        )
+        .await;
     }
     assert!(moved >= 3, "pointer moves reach the guest ({moved}/4)");
     println!("ok - pointer motion reaches the guest through D-Bus ({moved}/4)");

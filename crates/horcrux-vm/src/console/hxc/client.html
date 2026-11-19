@@ -44,7 +44,7 @@
   // State exposed for diagnostics and automated tests.
   const hxc = window.hxc = {
     state: "starting", hello: null, guest: { width: 0, height: 0 }, codec: null,
-    framesDecoded: 0, rttMs: null, inputToFrameMs: [], lastError: null, denied: [],
+    framesDecoded: 0, rttMs: null, inputToFrameMs: [], inputToFrameCount: 0, lastError: null, denied: [],
     server: null,
   };
   function setState(s, text) {
@@ -142,7 +142,7 @@
       lastHash = h; hxc.lastChangeAt = now;
       if (inputAt !== null) {
         const ms = now - inputAt; inputAt = null;
-        hxc.inputToFrameMs.push(ms);
+        hxc.inputToFrameMs.push(ms); hxc.inputToFrameCount++;
         if (hxc.inputToFrameMs.length > 50) hxc.inputToFrameMs.shift();
         send("ctl", JSON.stringify({ t: "report", input_to_frame_ms: ms, rtt_ms: hxc.rttMs }));
       }
