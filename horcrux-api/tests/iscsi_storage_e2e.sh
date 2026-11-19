@@ -10,7 +10,7 @@
 # the host's socket-activated iscsid does the work), the host /dev (the LUN block
 # devices appear there) and /var/lib/iscsi (the node database iscsiadm and the host
 # iscsid must share). The test logs out and deletes its node record before it removes
-# anything. Skips (exit 0) when the host cannot load iscsi_tcp or has no iscsid.
+# anything. Skips (exit 0) when the host cannot load iscsi_tcp; starts its own iscsid when the host has none (no systemd).
 # Usage: horcrux-api/tests/iscsi_storage_e2e.sh <horcrux-api binary> [image]
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/sibling-apt.sh"
@@ -56,9 +56,20 @@ SRV_IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddre
 
 docker exec "$CLI" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   open-iscsi qemu-utils iproute2 curl python3 libvirt0 udev >/dev/null'
-if docker exec "$CLI" iscsiadm -m session 2>&1 | grep -qi "can not connect\|not connect to iSCSI daemon"; then
-  echo "SKIP the host has no iscsid to talk to"; exit 0
+# The initiator needs iscsid. A systemd host has it socket-activated (the container shares
+# its network namespace, so it talks to the host's abstract socket); a runner without
+# systemd (CI job containers) has none, and iscsiadm then fails with "can not connect to
+# iSCSI daemon". Start our own iscsid in the container (same namespace, same node
+# database) when nothing answers, and fail loudly if it still does not come up.
+docker exec "$CLI" bash -c '
+set -u
+[ -s /etc/iscsi/initiatorname.iscsi ] || { mkdir -p /etc/iscsi; echo "InitiatorName=$(iscsi-iname)" > /etc/iscsi/initiatorname.iscsi; }
+up() { grep -q ISCSIADM_ABSTRACT_NAMESPACE /proc/net/unix; }
+if ! up; then
+  nohup iscsid -f >/tmp/iscsid.log 2>&1 &
+  for i in $(seq 1 20); do up && break; sleep 1; done
 fi
+up || { echo "FAIL iscsid did not come up"; cat /tmp/iscsid.log; exit 1; }' || exit 1
 docker exec -e SRV_IP="$SRV_IP" -e IQN="$IQN" -e PORT="$PORT" "$CLI" bash -c '
 set -euo pipefail
 mkdir -p /tmp/dev && cd /tmp/dev

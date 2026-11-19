@@ -606,7 +606,7 @@ jobs:
         # target in a sibling container, checks the refused cases, the logged-in
         # session, the LUNs as volumes with their real size, a write through a
         # volume's device path into the target's backing file, and that removing
-        # the pool logs out. Skips when the host cannot load iscsi_tcp.
+        # the pool logs out. Skips when the host cannot load iscsi_tcp; starts its own iscsid on a host without one.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "iSCSI storage pool"
           timeout 900 bash horcrux-api/tests/iscsi_storage_e2e.sh target/debug/horcrux-api
