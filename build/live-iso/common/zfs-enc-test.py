@@ -51,6 +51,12 @@ def world_resolve_verdict(o):
     return True, "resolves, no blocker markers"
 
 
+
+def zfs_scrub_progress(o):
+    """the (scanned, issued) byte counters of a running scrub in `zpool status` output, or None"""
+    m = re.search(r"scan:\s+scrub in progress.*?\n\s+(\S+)(?: / \S+)? scanned.*?(\S+)(?: / \S+)? issued", o, re.S)
+    return (m.group(1), m.group(2)) if m else None
+
 class ZRun(qt.Runner):
     def __init__(self, a):
         ns = types.SimpleNamespace(iso=a.iso, project="horcrux", arch=qt.HOST_ARCH, mode="uefi", media="usb", flow="auto", fs="zfs",
@@ -268,6 +274,51 @@ class ZRun(qt.Runner):
                 break
             rc, o = self.sh(cmd, timeout=timeout)
         return rc, o
+
+    @staticmethod
+    def scrub_state(o):
+        """(done, progress-token) from `zpool status rpool`: done once a scrub FINISHED ('scrub repaired ... with N errors'); the token changes
+        whenever the scrub scanned/issued more (None when no scrub is running and none finished)"""
+        if re.search(r"scan:\s+scrub repaired .* with \d+ errors", o):
+            return True, "done"
+        m = zfs_scrub_progress(o)
+        return False, m
+
+    def scrub_wait(self, vm, boot_id, label="scrub-after-resume", idle=600, hard=3600, poll=15):
+        """Scrub the resumed pool and wait until it is finished. Replaces one blocking `zpool scrub -w` capped at 600 s (run 4083: the resumed guest was
+        alive, pool ONLINE, and the single ssh command simply outlived its cap on the nested-KVM runner, so the harness saw only 'timeout'). The scrub is
+        started (a scrub already running or paused is resumed), then `zpool status` is polled; the wait ends when the scrub finished, fails when it
+        made NO progress (scanned/issued bytes unchanged) for `idle` seconds, or when `hard` seconds passed. The assertion on the final
+        `zpool status` ('with 0 errors', 'No known data errors') is unchanged; a failure prints why the scrub is stuck (D-state tasks, load, zpool
+        events, dmesg) instead of 'timeout'. Returns (rc, output) like sh()."""
+        grep = "zpool status rpool | grep -E 'scan:|errors:|state:'"
+        rc, o = self.sh_resilient("zpool scrub rpool 2>&1; zpool status rpool | sed -n '/scan:/,/config:/p'", timeout=int(qt.T(120)), label=label, boot_id=boot_id, vm=vm)
+        t0 = last_change = time.time()
+        prev, polls = None, 0
+        while True:
+            done, tok = self.scrub_state(o)
+            if done:
+                rc, o = self.sh_resilient(grep, timeout=int(qt.T(120)), label=label, boot_id=boot_id, vm=vm)
+                print(f"[DIAG] {label}: scrub finished after {int(time.time() - t0)} s ({polls} polls)", flush=True)
+                return rc, o
+            if "paused" in o and "scrub" in o:
+                self.sh_resilient("zpool scrub rpool 2>&1", timeout=int(qt.T(60)), label=label, boot_id=boot_id, vm=vm)
+            if tok != prev:
+                prev, last_change = tok, time.time()
+            now = time.time()
+            if rc != 0 and "timeout" not in o and not self.TRANSPORT_LOST.search(o) and polls > 2:
+                return rc, o
+            if now - last_change > qt.T(idle) or now - t0 > qt.T(hard):
+                _r, d = self.sh("cat /proc/loadavg; ps -eo pid,stat,wchan:24,comm | awk '$2 ~ /D/' | head -15; zpool events 2>&1 | tail -8; "
+                                "zpool status rpool | head -15; dmesg | tail -20", timeout=int(qt.T(60)))
+                msg = (f"{label}: scrub made no progress for {int(now - last_change)} s (total {int(now - t0)} s, progress token {tok!r}); guest: "
+                       + re.sub(r"\s+", " ", d).strip()[:900])
+                print("[DIAG] " + msg, flush=True)
+                self.res.setdefault("scrub_stalled", []).append(msg)
+                return 1, "scrub stalled: " + o.strip()[:200] + " | " + msg[-300:]
+            time.sleep(qt.T(poll))
+            polls += 1
+            rc, o = self.sh_resilient("zpool status rpool | sed -n '/scan:/,/config:/p'", timeout=int(qt.T(120)), label=label, boot_id=boot_id, vm=vm)
 
     def vga_stable(self, vm, label, timeout=360):
         """wait until the VGA console shows something and then stops changing (= the passphrase prompt)"""
@@ -799,8 +850,7 @@ class ZRun(qt.Runner):
             self.res["resume_dmesg"] = "\n".join(ls)
             rc, o = self.sh("zpool status -x; zpool status rpool | grep -E 'state|errors'; zfs get -H -o value keystatus rpool; test -e /run/hx/key && echo KEYLEFT || echo nokey")
             self.step("pool-healthy-after-resume", "all pools are healthy" in o and "available" in o and "KEYLEFT" not in o, o.strip().replace("\n", " | ")[:300])
-            rc, o = self.sh_resilient("zpool scrub -w rpool; zpool status rpool | grep -E 'scan:|errors:|state:'", timeout=int(qt.T(600)),
-                                      label="scrub-after-resume", boot_id=before["boot_id"], vm=vm)
+            rc, o = self.scrub_wait(vm, before["boot_id"])
             self.step("scrub-clean-after-resume", rc == 0 and "with 0 errors" in o and "No known data errors" in o, o.strip().replace("\n", " | ")[:300])
             self.sh("poweroff", timeout=10)
             self.wait_exit(vm)
