@@ -212,7 +212,10 @@ class ZRun(qt.Runner):
             pass
         dbg = ""
         try:
-            dbg = " | qemu -d cpu_reset log tail: " + open(f"{vm.out}/{vm.name}-qemu-debug.log", errors="replace").read().strip()[-1500:].replace("\n", " / ")
+            raw = open(f"{vm.out}/{vm.name}-qemu-debug.log", errors="replace").read()
+            # the register dumps fill the tail; the lines that NAME the reset (Triple fault, shutdown, exception) are what matters
+            named = [l.strip() for l in raw.splitlines() if re.search(r"triple|shutdown|exception|fault|KVM|error|Servicing", l, re.I)][-15:]
+            dbg = " | qemu -d cpu_reset: reset-naming lines: " + " / ".join(named) + " | log tail: " + raw.strip()[-600:].replace("\n", " / ")
         except OSError:
             pass
         err += dbg
@@ -752,6 +755,9 @@ class ZRun(qt.Runner):
         try:
             _ok, ok = self.type_passphrase_usb(vm, "passphrase-prompt-resume-boot")
             self.step("resume-boot-single-passphrase-ssh", ok, "back on the network after ONE passphrase")
+            # diagnostics (runs 3963/3964: the resumed guest resets seconds later and says nothing): the quiet kernel prints nothing on the serial line, so
+            # stream every kernel message to it from the first command on; an oops/VERIFY/panic before the reset then lands in the serial tail of the report
+            self.sh("dmesg -n 8; nohup sh -c 'dmesg -w > /dev/ttyS0' </dev/null >/dev/null 2>&1 & sleep 1; echo streaming", timeout=15)
             rc, o = self.sh("echo BOOT_NOW=$(cat /proc/sys/kernel/random/boot_id); echo BOOT_BEFORE=$(cat /dev/shm/boot_id_before 2>/dev/null); "
                             "echo GUEST_DATE=$(date -u +%FT%TZ); echo MARKER=$(cat /dev/shm/marker 2>/dev/null); echo C1=$(cat /dev/shm/counter 2>/dev/null); "
                             "p=$(cat /dev/shm/counter.pid 2>/dev/null); kill -0 $p 2>/dev/null && echo PROC=ALIVE || echo PROC=DEAD; sleep 3; "
