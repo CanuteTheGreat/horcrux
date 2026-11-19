@@ -207,7 +207,7 @@ class SafetyNetPackage(unittest.TestCase):
 
     def test_firstboot_indexes_eix_before_the_done_marker(self):
         f = open(os.path.join(REPO, "gentoo", "sys-apps", "horcrux-firstboot", "files", "horcrux-firstboot")).read()
-        self.assertLess(f.index("eix-update -q"), f.index("> /var/lib/horcrux/firstboot-done"))
+        self.assertLess(f.index("eix-update -q"), f.rindex("> \"$DONE_MARKER\"\n"))
         self.assertTrue(glob.glob(os.path.join(REPO, "gentoo", "sys-apps", "horcrux-firstboot", "horcrux-firstboot-1-r*.ebuild"))
                         or any(int(re.search(r"-r(\d+)\.ebuild$", p).group(1)) > 4
                                for p in glob.glob(os.path.join(REPO, "gentoo", "sys-apps", "horcrux-firstboot", "horcrux-firstboot-1-r*.ebuild"))))
