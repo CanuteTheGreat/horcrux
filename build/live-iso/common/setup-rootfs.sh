@@ -178,6 +178,15 @@ rm -f /tmp/dracut.log /tmp/initrd.lst
 ls -l /boot
 ls /boot/vmlinuz-* >/dev/null
 
+# --- project packages (the Portage tree is still here) -------------------------------------------------------------
+# A product that ships its own package(s) puts an executable /usr/libexec/project-image-packages in its project overlay; it installs them
+# through Portage here, so the installed system owns every file of the product (Patronus: net-firewall/patronus). Horcrux installs its
+# packages from packages.txt and has no such file. The script is removed afterwards.
+if [ -x /usr/libexec/project-image-packages ]; then
+  /usr/libexec/project-image-packages
+  rm -f /usr/libexec/project-image-packages
+fi
+
 # --- installer data (needs the Portage tree: runs BEFORE the slimming below) --------------------------------------
 # USE-flag descriptions + installed-package USE/REQUIRED_USE/dependency constraints for the installer's USE page
 python3 /tmp/mk-portage-meta.py /usr/share/live-installer/portage-meta.json.xz

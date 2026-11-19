@@ -239,6 +239,10 @@ if [ "$result" = pass ]; then
       if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
     done
   fi
+  # Product gates beyond the shared QEMU matrix (e.g. a vmtest scenario driving the installed system): <project>/ci-gates.sh is SOURCED here with
+  # $ISO, $EVI, $HERE, $PROJECT, $ARCH, with_deadline, failed_list and fail() in scope; it appends a failing gate to failed_list and calls fail like
+  # the matrix loop above. Horcrux has none.
+  if [ -f "$HERE/../project/ci-gates.sh" ] && [ -z "$VARIANT" ]; then . "$HERE/../project/ci-gates.sh"; fi
   TEST_S=$(( $(date +%s)-t ))
 fi
 # SBOM (CycloneDX JSON) of the TESTED image: the Portage package database read back out of the ISO's own squashfs, plus every Rust
