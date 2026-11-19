@@ -57,6 +57,22 @@ pub struct PassthroughConfig {
     /// Known-issue tables for passthrough devices (TOML, later files add to
     /// earlier ones; missing files are skipped).
     pub quirks_files: Vec<PathBuf>,
+    /// Single-GPU passthrough (`allow_display_loss`): host services that
+    /// drive the local screen, stopped (when running) before the GPU moves
+    /// to the VM and started again when it comes back. `display-manager` is
+    /// the service name on OpenRC (x11-base/xorg-server) and the alias of
+    /// the active display manager on systemd.
+    pub handoff_display_services: Vec<String>,
+    /// Single-GPU passthrough: also detach the kernel's framebuffer console
+    /// (vtconsole + EFI/simple framebuffer) from the GPU, and re-attach it
+    /// afterwards.
+    pub handoff_unbind_consoles: bool,
+    /// Single-GPU passthrough: how long to wait for the desktop's programs
+    /// to let go of the GPU after the display services stopped.
+    pub handoff_display_release_secs: u64,
+    /// Per-game anti-cheat/VM compatibility tables (TOML, later files add to
+    /// and override earlier ones by title; missing files are skipped).
+    pub gaming_compat_files: Vec<PathBuf>,
 }
 
 impl Default for PassthroughConfig {
@@ -89,6 +105,13 @@ impl Default for PassthroughConfig {
             quirks_files: vec![
                 PathBuf::from("/usr/share/horcrux/gpu-quirks.toml"),
                 PathBuf::from("/etc/horcrux/gpu-quirks.toml"),
+            ],
+            handoff_display_services: vec!["display-manager".into()],
+            handoff_unbind_consoles: true,
+            handoff_display_release_secs: 15,
+            gaming_compat_files: vec![
+                PathBuf::from("/usr/share/horcrux/gaming-compat.toml"),
+                PathBuf::from("/etc/horcrux/gaming-compat.toml"),
             ],
         }
     }

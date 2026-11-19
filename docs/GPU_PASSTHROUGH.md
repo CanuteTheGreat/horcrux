@@ -217,8 +217,15 @@ Design and limits: [design/gaming-vm.md](design/gaming-vm.md).
    *Usable, see notes* (known issues, programs holding it), *Host's only screen*
    (single-GPU passthrough) or *Not usable*. Keep the integrated GPU for the
    host desktop and give the discrete GPU to the VM.
-2. Create a Windows 11 VM (q35, UEFI with Secure Boot, TPM 2.0, virtio disk and
-   network) and on its Hardware page add the GPU with **hand over at start**
+2. Click **New Gaming VM** (Virtual Machines, or the readiness check): pick
+   the GPU, size the VM, pick or download the Windows 11 and virtio-win ISOs,
+   set the Windows account, list the games you plan to play (blocked ones are
+   named before anything is created), *Check plan*, then *Create*. Windows
+   installs by itself (about 30-60 minutes) with Secure Boot, TPM 2.0 and VBS;
+   the one-time answer disc with your password is deleted once Windows is
+   installed. API: `POST /api/vms/gaming` (`dry_run: true` for the plan only).
+   Or by hand: create a Windows 11 VM (q35, UEFI with Secure Boot, TPM 2.0,
+   virtio disk and network) and on its Hardware page add the GPU with **hand over at start**
    (`hardware.hostpci[].managed: true`). Horcrux moves the GPU and the other
    functions of its IOMMU group (its HDMI audio) to `vfio-pci` when the VM
    starts and gives them back to their host drivers when the VM is shut down,
@@ -257,13 +264,24 @@ handoff_refuse_when_held = true
 handoff_timeout_secs = 20
 hugepages_release_on_stop = true
 quirks_files = ["/usr/share/horcrux/gpu-quirks.toml", "/etc/horcrux/gpu-quirks.toml"]
+# single-GPU passthrough (allow_display_loss): the desktop is stopped while the VM runs
+handoff_display_services = ["display-manager"]
+handoff_unbind_consoles = true
+handoff_display_release_secs = 15
+gaming_compat_files = ["/usr/share/horcrux/gaming-compat.toml", "/etc/horcrux/gaming-compat.toml"]
 ```
+
+The wizard's own defaults (memory, disk, SMBIOS strings, Windows language and
+time zone, download links, ...) are on the wizard page under *Wizard settings*
+(`GET/PUT /api/vms/gaming/settings`).
 
 Anti-cheat: Horcrux does not hide the hypervisor. Games whose anti-cheat
 refuses VMs (Valorant, League of Legends, Call of Duty, Battlefield 6, ARC
 Raiders, BattlEye titles such as Rainbow Six Siege, PUBG and Tarkov) will not run
 in the VM unless their publishers allow it; several of them run on the Horcrux
-host itself through Steam/Proton. The per-game table is in the design document.
+host itself through Steam/Proton. The per-game table is shown in the wizard
+(`GET /api/vms/gaming/compat`); add or correct rows in
+`/etc/horcrux/gaming-compat.toml`.
 
 ## vGPU / mediated devices (NVIDIA vGPU, Intel GVT-g, AMD MxGPU)
 

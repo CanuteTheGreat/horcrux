@@ -189,6 +189,18 @@ pub struct VmDefaults {
 
 const VM_DEFAULTS_KIND: &str = "vm_defaults";
 
+/// The network a new QEMU VM gets by default: the global default network if
+/// set (and present), else the hypervisor's own (vmbr0, else the bridge the
+/// host reaches the network through). Same rule as the create form.
+pub async fn default_vm_network(state: &AppState) -> Option<String> {
+    let bridges = vm_bridges();
+    load_vm_defaults(state)
+        .await
+        .default_network
+        .filter(|n| bridges.iter().any(|b| &b.name == n))
+        .or_else(|| default_qemu_bridge(&bridges, default_route_dev().as_deref()))
+}
+
 pub async fn load_vm_defaults(state: &AppState) -> VmDefaults {
     crate::db::config_store::ConfigStore::new(&state.database)
         .load_values::<VmDefaults>(VM_DEFAULTS_KIND)
@@ -677,14 +689,23 @@ pub async fn check_host_hardware(state: &AppState, hw: &VmHardware) -> Result<()
         }
     }
     if let Some(iso) = &hw.cdrom {
-        let p = std::fs::canonicalize(iso)
-            .map_err(|e| ApiError::BadRequest(format!("cdrom {iso}: {e}")))?;
-        if !p.is_file() || !allowed_local_source(&p, &iso_roots(state).await) {
-            return Err(ApiError::Forbidden(format!(
-                "cdrom: ISOs must be files in the ISO library ({} or a storage pool directory)",
-                image_dir(&state.config.paths.data_dir).display()
-            )));
-        }
+        check_library_iso(state, "cdrom", iso).await?;
+    }
+    for (i, iso) in hw.extra_cdroms.iter().enumerate() {
+        check_library_iso(state, &format!("extra_cdroms[{i}]"), iso).await?;
+    }
+    Ok(())
+}
+
+/// An ISO a VM's CD-ROM drive may use: a file in the ISO library.
+async fn check_library_iso(state: &AppState, what: &str, iso: &str) -> Result<(), ApiError> {
+    let p = std::fs::canonicalize(iso)
+        .map_err(|e| ApiError::BadRequest(format!("{what} {iso}: {e}")))?;
+    if !p.is_file() || !allowed_local_source(&p, &iso_roots(state).await) {
+        return Err(ApiError::Forbidden(format!(
+            "{what}: ISOs must be files in the ISO library ({} or a storage pool directory)",
+            image_dir(&state.config.paths.data_dir).display()
+        )));
     }
     Ok(())
 }

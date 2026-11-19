@@ -270,6 +270,7 @@ pub fn qemu_command(
     // CD-ROM drive (installer ISOs) with a stable device id, so media can
     // be changed while the VM runs (QMP blockdev-change-medium / eject).
     args.extend(cdrom_args(vm, &boot_index));
+    args.extend(extra_cdrom_args(vm));
 
     // Boot order: per-device bootindex (SeaBIOS and OVMF), or for VMs
     // with a legacy-bus disk (no -device to put it on) SeaBIOS letters.
@@ -511,6 +512,78 @@ fn cdrom_args(vm: &QemuVm, boot: &BootIndex) -> Vec<String> {
 fn escape(v: &str) -> String {
     v.replace(',', ",,")
 }
+
+/// Where a VM's generated Windows answer-file disc lives (next to its first
+/// disk, like the cloud-init seed). Attached while the file exists; Horcrux
+/// deletes it once the installed guest's agent answers.
+pub fn unattend_iso(disk: &std::path::Path) -> PathBuf {
+    disk.with_extension("unattend.iso")
+}
+
+/// The extra CD-ROM drives (`hardware.extra_cdroms`, read-only ISOs from the
+/// library) and the generated answer-file disc when it exists. x86 only: the
+/// drives go on the chipset's IDE/AHCI ports.
+fn extra_cdrom_args(vm: &QemuVm) -> Vec<String> {
+    let mut args = Vec::new();
+    if vm.architecture != horcrux_common::VmArchitecture::X86_64 {
+        return args;
+    }
+    let mut isos: Vec<(String, String)> = vm
+        .hardware
+        .extra_cdroms
+        .iter()
+        .enumerate()
+        .map(|(i, iso)| (format!("cdx{}", i + 1), iso.clone()))
+        .collect();
+    let answer = unattend_iso(&vm.disk_path);
+    if answer.is_file() {
+        isos.push(("cdunattend".into(), answer.to_string_lossy().to_string()));
+    }
+    // Explicit ports: QEMU places an unplaced ide-cd/ide-hd on the LAST IDE
+    // bus and fails once that is full ("bus supports only 1 units"), while
+    // legacy default-bus disks (`-drive file=`, if=ide) take index slots
+    // from the first port up. So: q35 (ich9 AHCI, one unit on each of
+    // ide.0-ide.5): the CD-ROM sits on ide.5, legacy disks on ide.0 up, the
+    // extra drives on the next free ports above the legacy disks. i440FX
+    // (PIIX, two channels x two units): the CD-ROM takes ide.1 unit 0, legacy
+    // disks fill ide.0 first, the extra drives get what is left.
+    let legacy = vm
+        .all_disks()
+        .iter()
+        .filter(|d| d.disk_type == "default")
+        .count();
+    let slots: Vec<String> = if vm.hardware.machine == horcrux_common::MachineType::Q35 {
+        (legacy..Q35_AHCI_PORTS - 1)
+            .map(|p| format!("bus=ide.{p}"))
+            .collect()
+    } else {
+        [(0, 0), (0, 1), (1, 1)]
+            .into_iter()
+            .filter(|(b, u)| b * 2 + u >= legacy)
+            .map(|(b, u)| format!("bus=ide.{b},unit={u}"))
+            .collect()
+    };
+    for (n, (id, iso)) in isos.into_iter().enumerate() {
+        // more drives than free ports: QEMU's own error names the drive
+        let bus = slots
+            .get(n)
+            .cloned()
+            .unwrap_or_else(|| "bus=ide.0".to_string());
+        args.extend([
+            "-drive".into(),
+            format!(
+                "if=none,id={id},media=cdrom,readonly=on,format=raw,file={}",
+                escape(&iso)
+            ),
+            "-device".into(),
+            format!("ide-cd,{bus},drive={id},id=dev{id}"),
+        ]);
+    }
+    args
+}
+
+/// Ports of the AHCI controller built into QEMU's q35 machine (ich9-ahci).
+const Q35_AHCI_PORTS: usize = 6;
 
 /// QEMU drive id (QMP `device`/block backend name) of a VM's `index`-th
 /// disk. Stable, so snapshots, live migration mirrors and resizes can
@@ -1303,6 +1376,20 @@ impl QemuManager {
                 )));
             }
         }
+        for iso in &vm.hardware.extra_cdroms {
+            if !std::path::Path::new(iso).is_file() {
+                return Err(horcrux_common::Error::Validation(format!(
+                    "The ISO in one of the VM's extra CD-ROM drives is missing: {iso}"
+                )));
+            }
+        }
+        // Nested virtualisation (VBS/HVCI, Hyper-V in the guest) needs it
+        // enabled in the host's KVM module.
+        if vm.hardware.adv.nested_virt {
+            if let Some(why) = super::tuning::nested_kvm_problem(std::path::Path::new("/sys")) {
+                return Err(horcrux_common::Error::Validation(why));
+            }
+        }
         for (i, d) in vm.all_disks().iter().enumerate() {
             if !std::path::Path::new(&d.path).exists() {
                 return Err(horcrux_common::Error::Validation(format!(
@@ -1912,6 +1999,56 @@ mod tests {
             "{a}"
         );
         assert!(!a.contains("-boot"), "{a}");
+    }
+
+    #[test]
+    fn extra_cdroms_and_the_answer_disc_get_their_own_drives() {
+        let t = tempfile::tempdir().unwrap();
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        v.disk_path = t.path().join("g1.qcow2");
+        v.hardware.machine = horcrux_common::MachineType::Q35;
+        v.hardware.cdrom = Some("/isos/win11.iso".into());
+        v.hardware.extra_cdroms = vec!["/isos/virtio,win.iso".into()];
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        // q35: the legacy disk is on ide.0, the CD-ROM is placed on ide.5
+        assert!(
+            a.contains("-drive if=none,id=cdx1,media=cdrom,readonly=on,format=raw,file=/isos/virtio,,win.iso -device ide-cd,bus=ide.1,drive=cdx1,id=devcdx1"),
+            "{a}"
+        );
+        assert!(!a.contains("cdunattend"), "{a}");
+        // the generated answer disc is attached while it exists
+        let iso = super::unattend_iso(&v.disk_path);
+        assert_eq!(iso, t.path().join("g1.unattend.iso"));
+        std::fs::write(&iso, b"x").unwrap();
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(
+            a.contains(&format!(
+                "id=cdunattend,media=cdrom,readonly=on,format=raw,file={} -device ide-cd,bus=ide.2,",
+                iso.display()
+            )),
+            "{a}"
+        );
+        // a virtio system disk leaves ide.0 free
+        v.disks = vec![disk("/vms/g1.qcow2", "virtio")];
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(a.contains("ide-cd,bus=ide.0,drive=cdx1"), "{a}");
+        assert!(a.contains("ide-cd,bus=ide.1,drive=cdunattend"), "{a}");
+        // i440FX: what the legacy disk (ide.0 unit 0) and the CD-ROM
+        // (ide.1 unit 0) leave free
+        v.disks = vec![];
+        v.hardware.machine = horcrux_common::MachineType::I440fx;
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(a.contains("ide-cd,bus=ide.0,unit=1,drive=cdx1"), "{a}");
+        assert!(
+            a.contains("ide-cd,bus=ide.1,unit=1,drive=cdunattend"),
+            "{a}"
+        );
+        // ARM: no extra IDE drives
+        let mut v = vm(VmArchitecture::Aarch64, VmDisplay::default());
+        v.hardware.extra_cdroms = vec!["/isos/x.iso".into()];
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(!a.contains("cdx1"), "{a}");
     }
 
     fn disk(path: &str, bus: &str) -> horcrux_common::VmDisk {

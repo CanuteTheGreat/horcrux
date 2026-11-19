@@ -244,6 +244,18 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             if id == "defaults" {
                 return read_write(m, P::VmAudit, P::SysModify, "/nodes");
             }
+            // Gaming VM wizard: creating one is VM.Allocate; its game table
+            // is readable by VM auditors; its node settings are Sys.Modify.
+            if id == "gaming" {
+                return match (arg(2), is_read(m)) {
+                    ("settings", true) | ("compat", _) => Requirement::AnyBelow {
+                        privilege: P::VmAudit,
+                        prefix: "/vms".into(),
+                    },
+                    ("settings", false) => need(P::SysModify, "/nodes"),
+                    _ => need(P::VmAllocate, "/vms"),
+                };
+            }
             guest_action(m, &format!("/vms/{}", id), arg(2))
         }
 
@@ -576,6 +588,27 @@ mod tests {
         match r {
             Requirement::Privilege { privilege, path } => (privilege, path),
             other => panic!("expected a privilege requirement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn gaming_wizard_routes_map_to_privileges() {
+        assert_eq!(
+            priv_of(requirement("POST", "/api/vms/gaming")),
+            (P::VmAllocate, "/vms".into())
+        );
+        assert_eq!(
+            priv_of(requirement("PUT", "/api/vms/gaming/settings")),
+            (P::SysModify, "/nodes".into())
+        );
+        for path in ["/api/vms/gaming/settings", "/api/vms/gaming/compat"] {
+            assert!(matches!(
+                requirement("GET", path),
+                Requirement::AnyBelow {
+                    privilege: P::VmAudit,
+                    ..
+                }
+            ));
         }
     }
 

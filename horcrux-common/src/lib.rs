@@ -239,6 +239,11 @@ pub struct VmHardware {
     /// drive empty. Can be changed while the VM runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cdrom: Option<String>,
+    /// More CD-ROM drives with ISOs from the ISO library (x86 only; e.g. the
+    /// virtio-win driver ISO next to a Windows installer). Not bootable;
+    /// changed with the VM stopped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_cdroms: Vec<String>,
     /// Boot order; empty = disk, then CD-ROM.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boot: Vec<BootDevice>,
@@ -340,6 +345,11 @@ pub struct VmAdvanced {
     /// Host keyboards/mice handed to the guest through evdev (`input-linux`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evdev: Vec<VmEvdev>,
+    /// Expose the host CPU's virtualisation extensions (VT-x/AMD-V) to the
+    /// guest, so it can run its own hypervisor: Windows VBS / Memory
+    /// Integrity (HVCI), Hyper-V, WSL2. Needs nested KVM on the host.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nested_virt: bool,
 }
 
 /// Most evdev input devices one VM can grab.
@@ -591,6 +601,9 @@ impl VmAdvanced {
         if self.hyperv && !x86 {
             return Err("Hyper-V enlightenments are for x86_64 guests".into());
         }
+        if self.nested_virt && !x86 {
+            return Err("nested virtualisation is offered for x86_64 guests".into());
+        }
         if self.evdev.len() > MAX_VM_EVDEV {
             return Err(format!("at most {MAX_VM_EVDEV} evdev input devices"));
         }
@@ -691,6 +704,9 @@ pub fn valid_guid(g: &str) -> bool {
             .zip([8, 4, 4, 4, 12])
             .all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
 }
+
+/// Most extra CD-ROM drives (`VmHardware::extra_cdroms`) one VM can have.
+pub const MAX_VM_EXTRA_CDROMS: usize = 3;
 
 /// Most host PCI / mediated devices one VM can get.
 pub const MAX_VM_HOSTPCI: usize = 8;
@@ -995,6 +1011,19 @@ impl VmHardware {
                 return Err("cdrom: empty ISO path (omit it to leave the drive empty)".into());
             }
         }
+        if self.extra_cdroms.len() > MAX_VM_EXTRA_CDROMS {
+            return Err(format!(
+                "a VM can have at most {MAX_VM_EXTRA_CDROMS} extra CD-ROM drives"
+            ));
+        }
+        for (i, iso) in self.extra_cdroms.iter().enumerate() {
+            if iso.trim().is_empty() {
+                return Err(format!("extra_cdroms[{i}]: empty ISO path"));
+            }
+            if self.extra_cdroms[..i].contains(iso) {
+                return Err(format!("extra_cdroms: {iso} is listed twice"));
+            }
+        }
         if let Some(c) = &self.cpu_type {
             if !valid_cpu_type(c) {
                 return Err(format!(
@@ -1074,6 +1103,19 @@ impl VmHardware {
             }
         }
         self.adv.validate(arch, cpus, self.sockets)?;
+        if !self.extra_cdroms.is_empty() {
+            if *arch != VmArchitecture::X86_64 {
+                return Err("extra CD-ROM drives are offered for x86_64 VMs".into());
+            }
+            // i440FX has four IDE places: the CD-ROM, one extra drive and a
+            // generated seed/answer-file disc; Q35's AHCI has six ports.
+            if self.machine == MachineType::I440fx && self.extra_cdroms.len() > 1 {
+                return Err(
+                    "the i440FX chipset has room for one extra CD-ROM drive; use the q35 chipset for more"
+                        .into(),
+                );
+            }
+        }
         if *arch != VmArchitecture::X86_64 {
             if !self.machine.is_default() {
                 return Err("the q35 chipset is for x86_64 VMs".into());

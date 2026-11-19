@@ -1,7 +1,10 @@
 # Gaming VM: Windows with a real GPU on Horcrux
 
 Status: phase 1 (research, design, host tuning + managed GPU hand-off) implemented
-and proven on a real kernel (section 8); phases 2-7 (section 15) are the build plan. Owner idea, 2026-11-18: install Windows for
+and proven on a real kernel (section 8); phase 2 (Gaming VM wizard, unattended
+Windows 11 install, single-GPU hand-over, CCD pinning, anti-cheat table)
+implemented and proven by a Windows install in CI (section 6); phases 3-7
+(section 15) are the build plan. Owner idea, 2026-11-18: install Windows for
 gaming, with a virtualized/passed-through graphics card, able to play current
 FPS games.
 
@@ -28,7 +31,7 @@ the same machine, on the LAN, or over the internet, with no third-party viewer.
 | Option | Gives DirectX 12 games a real GPU? | Host keeps a display? | Status (Nov 2026) |
 |---|---|---|---|
 | **Whole discrete GPU via VFIO** (dGPU passthrough, host keeps the iGPU) | Yes, native driver, ~bare-metal frame rates | Yes, on the iGPU | **Supported (phase 1 code).** The path for gaming. |
-| **Single-GPU passthrough** (the only GPU goes to the VM) | Yes | No: the local screen is the VM's while it runs | Phase 3 (needs the display manager stopped and the console unbound; `allow_display_loss` already gates it) |
+| **Single-GPU passthrough** (the only GPU goes to the VM) | Yes | No: the local screen is the VM's while it runs | **Supported (phase 2):** with `allow_display_loss` the display manager is stopped and the console detached while the VM runs, both restored afterwards |
 | **Intel iGPU SR-IOV** (iGPU split into virtual functions) | In principle (native Intel driver on a VF), small iGPU, no display output on a VF | Yes | Mainline xe enables PF SR-IOV for Tiger Lake/Alder Lake, Panther Lake and Battlemage, **not Meteor Lake/Arrow Lake**; out-of-tree strongtz/i915-sriov-dkms is "highly experimental" with mixed Arrow Lake reports. Not a gaming path; tracked as an info quirk. |
 | **NVIDIA vGPU** | Only on datacenter/RTX professional cards with an NVIDIA vGPU licence | Yes | **Not available on GeForce.** NVIDIA's own FAQ: GeForce supports passthrough to one VM (the Code 43 VM check was removed in driver 465+), no vGPU. Community "unlock" work on Blackwell is compute-only/broken. |
 | **AMD SR-IOV / MxGPU** | Instinct/some Radeon Pro only | Yes | Not on consumer Radeon. |
@@ -217,6 +220,87 @@ UI page "New gaming VM" + `POST /api/vms/gaming` composing an ordinary VM config
 6. One-click Start/Shut down; Start does the hand-off, Shut down gives the GPU
    back; the VM page shows who holds the GPU when the start is refused.
 
+### Phase 2 as built
+
+- UI: **Virtual Machines > New Gaming VM** (also linked from the Gaming VM
+  readiness check), route `/vms/gaming/new`. GPU choice from the check
+  (including GPUs without display outputs, flagged with how the picture
+  reaches the player; "no GPU yet" installs first), vCPUs, memory, disk
+  storage, huge pages, VBS, ISO pickers with one-click downloads into the ISO
+  library (stable virtio-win, the 90-day evaluation ISO, or the personal link
+  from Microsoft's download page), Windows account, product key, edition,
+  time zone, the games the user plans to play, *Check plan* (dry run) and
+  *Create*. Node defaults are editable on the same page.
+- API: `POST /api/vms/gaming` (VM.Allocate on /vms; `dry_run` returns the plan
+  only), `GET /api/vms/gaming/compat[?q=title]`, `GET/PUT
+  /api/vms/gaming/settings` (Sys.Modify on /nodes to change). Code:
+  `crates/horcrux-vm/src/vm/gaming.rs` (compose, answer file, answer disc,
+  compat table), `horcrux-api/src/api/gaming.rs`.
+- The composed config is an ordinary VM: q35, OVMF Secure Boot with Microsoft
+  keys, swtpm TPM 2.0 (state next to the disk, kept for the VM's life),
+  Hyper-V enlightenments, `adv.nested_virt` (`vmx=on`/`svm=on`, refused at
+  start with the modprobe fix when the host's KVM has nested off), `auto`
+  pinning, huge pages, virtio-blk with an I/O thread, guest agent, a VM
+  Generation ID, and an SMBIOS identity generated once (random UUID and
+  serial, Horcrux manufacturer/product strings: never a real vendor's
+  model). The hypervisor is never hidden.
+- Media: `hardware.extra_cdroms` (up to 3 more read-only drives, x86) carries
+  virtio-win next to the Windows ISO; the generated answer disc
+  (`<disk>.unattend.iso`, 0600, it holds the account password) is attached
+  while it exists. QEMU places unplaced IDE devices on the last port, so the
+  extra drives get explicit ports (q35: above legacy disks, below the
+  CD-ROM on ide.5; i440FX: the free units). The disc is deleted as soon as
+  the installed Windows' guest agent answers (checked every
+  `unattend_poll_secs`, also after a restart of the server when the VM is
+  started again).
+- Answer file (ported from the spike): locale/keyboard/time zone, virtio
+  storage + network drivers from the virtio-win disc in Windows PE, GPT
+  layout, local administrator account, VBS + Memory Integrity registry keys in
+  the specialize pass, first logon installs the virtio guest tools and the
+  QEMU guest agent and turns Fast Startup off. The installer's "press any key
+  to boot from CD" is answered over QMP for `boot_key_secs`.
+- Single-GPU hand-over (`allow_display_loss`): when the GPU drives the
+  host's only connected screen, Start stops `passthrough.handoff_display_services`
+  (default `display-manager`, through the init abstraction: OpenRC and
+  systemd), waits up to `handoff_display_release_secs` for the desktop's
+  programs to close the card, detaches framebuffer vtconsoles and the boot
+  framebuffer (`handoff_unbind_consoles`), then moves the GPU. Stop gives the
+  GPU back, re-attaches the console, then starts the desktop again. Any
+  failure on the way undoes the steps already taken.
+- AMD CCD-aware pinning: `auto` on a non-hybrid host with several L3 domains
+  fills one CCD/CCX by whole cores, preferring the biggest L3 (the X3D V-Cache
+  die), then one without CPU 0; it spills into the next domain only when the
+  guest is bigger than a domain. The readiness check suggests one CCD's CPUs.
+- `gaming-compat.toml` (22 titles, per row: anti-cheat, VM status, needed VM
+  settings, how it runs on the host through Steam, note, source + URL,
+  `checked_on`): built into the binary, also installed as
+  `/usr/share/horcrux/gaming-compat.toml`; `/etc/horcrux/gaming-compat.toml`
+  rows replace shipped ones by title. The wizard warns about blocked or
+  unknown titles before anything is created.
+- Settings (every value has a default, nothing hard-coded): download pages
+  and ISO links, memory default/minimum, disk default/minimum, huge-page
+  size, VBS default, SMBIOS strings, Windows language/keyboard/time zone,
+  image index, driver disc letters, boot-key seconds, answer-disc check
+  interval (`GamingSettings`), and the hand-over settings in `[passthrough]`.
+- Tests: unit tests for composition, refusals, the answer file, the real ISO
+  9660 answer disc, the compat table, settings validation, QEMU drive
+  placement, single-GPU hand-over against a fixture sysfs with a mock init
+  backend, CCD pinning with Ryzen/X3D fixtures, RBAC mapping; UI contract test;
+  `horcrux-api/tests/gaming_wizard_e2e.sh` (workflow
+  `gaming-wizard-e2e.yml`, kvm-x86_64): fetches the ISOs through the library,
+  creates the VM with the wizard API, Windows installs unattended until the
+  agent answers, then Secure Boot, TPM 2.0, VBS + Memory Integrity running,
+  the visible hypervisor, the SMBIOS identity, virtio drivers and the account
+  are checked from inside Windows.
+- Needs real GPU hardware (not provable in CI): the hand-over of a real
+  display-driving GPU (desktop stop, console detach, frames on the passed-
+  through GPU, desktop back), NVIDIA/AMD reset behaviour, CCD pinning on a
+  real Ryzen/EPYC, game performance.
+- Left for later phases: MSI/latency checks inside the guest, zvol disks by
+  default when the pool is ZFS (today: the chosen storage pool), raw-input
+  through the Horcrux viewer (phase 3), a declarative-config kind for the
+  wizard settings once the declarative kinds extension point is on main.
+
 ## 7. Compatibility matrix (platforms Horcrux supports)
 
 | Platform | dGPU VFIO | Hand-off | Pinning `auto` | Huge pages | Horcrux viewer | Notes |
@@ -224,10 +308,10 @@ UI page "New gaming VM" + `POST /api/vms/gaming` composing an ordinary VM config
 | amd64, Intel hybrid (Alder Lake+), iGPU + dGPU desktop | Yes | Yes | P-cores | 2M/1G | phase 3 | Best case |
 | amd64 laptop with MUX/Advanced Optimus (hybrid mode) | Yes | Yes | P-cores | 2M | phase 3 | Panel stays on iGPU; external ports follow the dGPU |
 | amd64 muxless laptop | Yes (romfile/ACPI quirks) | Yes | P-cores | 2M | phase 3 (only way to see the guest) | Not tested on hardware yet |
-| amd64 single-GPU desktop | Yes | `allow_display_loss` (phase 2 finishes display-manager stop/console) | all but CPU 0 | 2M/1G | remote only | Screen goes to the VM and back |
+| amd64 single-GPU desktop | Yes | `allow_display_loss` (display manager stopped, console detached, both restored) | all but CPU 0 | 2M/1G | remote only | Screen goes to the VM and back |
 | Headless server / GPU without outputs (NVIDIA L4/A-series, AMD Instinct/Radeon Pro, Intel Flex/Arc Pro) | Yes | Yes | as above | 2M/1G | stream (phase 4) | Virtual display in the guest; datacenter NVIDIA graphics needs the vendor's licensed driver (phase 2 research) |
 | HA cluster nodes | Yes | Yes | as above | as above | follows the VM | Cold restart on another GPU node; no live migration with a passed-through GPU |
-| amd64 AMD Ryzen/EPYC | Yes | Yes | all but CPU 0 (no P/E) | 2M/1G | phase 3 | CCD-aware pinning: phase 2 |
+| amd64 AMD Ryzen/EPYC | Yes | Yes | one CCD (X3D die first) | 2M/1G | phase 3 | CCD-aware pinning (phase 2) |
 | arm64 hosts | No Windows-on-ARM gaming target | Code path neutral | Yes | x86 guests only | No | Out of scope for gaming |
 | OpenRC / systemd | Same code; services stopped through the init abstraction | | | | | Both |
 | T2 Macs (Intel) | Single-GPU or iGPU-only machines; no supported dGPU passthrough | - | - | - | - | Not a gaming target |
@@ -370,9 +454,11 @@ NVIDIA support answer 5223. Measured Horcrux numbers are added as phases land.
 
 1. **Done:** research, design, managed GPU hand-off, pinning, huge pages,
    Hyper-V, evdev, readiness API/UI, real-kernel e2e, Windows unattended spike.
-2. Gaming VM wizard + `POST /api/vms/gaming`, unattended Windows install with
-   TPM/Secure Boot/VBS/stable SMBIOS, `gaming-compat.toml` + UI warnings,
-   single-GPU display-manager hand-over, AMD CCD pinning, MSI/latency checks.
+2. **Done (section 6, "Phase 2 as built"):** Gaming VM wizard +
+   `POST /api/vms/gaming`, unattended Windows install with TPM/Secure
+   Boot/VBS/stable SMBIOS, `gaming-compat.toml` + UI warnings, single-GPU
+   display-manager hand-over, AMD CCD pinning. MSI/latency checks moved to
+   phase 3 (they need the guest tools).
 3. Horcrux guest tools (IDD, capture, encode, input) + same-host shared-memory
    viewer.
 4. Remote streaming (WebRTC, relay, adaptive bitrate) + web/desktop clients,

@@ -1,0 +1,257 @@
+# Per-game compatibility of online games with a Horcrux gaming VM.
+#
+# Shown by the Gaming VM wizard and GET /api/vms/gaming/compat, so nobody
+# buys, installs or launches a title that refuses to run in a VM without
+# being told first. Horcrux never hides the hypervisor, patches anti-cheat
+# or fakes hardware ids: a title marked blocked-by-publisher stays blocked
+# until its publisher allows VMs.
+#
+# Installed as /usr/share/horcrux/gaming-compat.toml. Local rows go in
+# /etc/horcrux/gaming-compat.toml (same format; a row with the same title
+# replaces the shipped one). The list of files is the node setting
+# passthrough.gaming_compat_files.
+#
+#   title        game title as sold
+#   aliases      other names to match (optional)
+#   anti_cheat   anti-cheat system
+#   vm_status    works | works-if | blocked-by-publisher | unknown
+#   requires     for works / works-if: VM settings the game needs
+#                (secure_boot, tpm, vbs); the wizard turns them on
+#   host_status  how it runs on Horcrux itself through Steam (Proton or
+#                native): works | supported | broken | denied |
+#                single-player-only | steamos-only | unknown
+#   note         one line for the user
+#   source       where the VM status comes from ("reported" = user
+#                reports, not a publisher statement)
+#   source_url   link to that source
+#   checked_on   date the row was last checked (YYYY-MM-DD)
+
+[[game]]
+title = "Valorant"
+anti_cheat = "Riot Vanguard"
+vm_status = "blocked-by-publisher"
+host_status = "denied"
+note = "Riot does not support virtual machines (error VAN 138). Needs bare-metal Windows."
+source = "Riot Support, Error VAN 138"
+source_url = "https://support.riotgames.com/en-us/riot/performance/error-van-138"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "League of Legends"
+aliases = ["LoL"]
+anti_cheat = "Riot Vanguard"
+vm_status = "blocked-by-publisher"
+host_status = "broken"
+note = "Same Vanguard VM policy as Valorant."
+source = "Riot Support, Error VAN 138; League Wiki, Riot Vanguard"
+source_url = "https://support.riotgames.com/en-us/riot/performance/error-van-138"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Call of Duty: Black Ops 6"
+aliases = ["Black Ops 6", "Black Ops 7", "Call of Duty: Black Ops 7", "Warzone", "Call of Duty: Warzone"]
+anti_cheat = "RICOCHET"
+vm_status = "blocked-by-publisher"
+host_status = "broken"
+note = "RICOCHET relies on Secure Boot + TPM remote attestation; Activision does not support VMs."
+source = "Activision, RICOCHET Season 05 Reloaded (remote attestation)"
+source_url = "https://www.callofduty.com/ca/en/blog/2025/09/call-of-duty-black-ops-6-ricochet-anti-cheat-season-05-reloaded"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Battlefield 6"
+aliases = ["Battlefield REDSEC", "REDSEC"]
+anti_cheat = "EA Javelin"
+vm_status = "blocked-by-publisher"
+host_status = "broken"
+note = "EA names virtual machines as a threat its Secure Boot requirement counters."
+source = "EA, Battlefield 6 Secure Boot Information"
+source_url = "https://www.ea.com/games/battlefield/battlefield-6/news/secure-boot-information"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Battlefield 2042"
+anti_cheat = "EA Javelin"
+vm_status = "blocked-by-publisher"
+host_status = "denied"
+note = "Same anti-cheat family as Battlefield 6; treated as unsupported in a VM."
+source = "AreWeAntiCheatYet (Denied); EA Javelin family"
+source_url = "https://areweanticheatyet.com/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "EA Sports FC"
+aliases = ["EA Sports FC 26", "EA Sports FC 27", "FC 26", "FC 27"]
+anti_cheat = "EA Javelin"
+vm_status = "blocked-by-publisher"
+host_status = "broken"
+note = "Same anti-cheat family as Battlefield 6; treated as unsupported in a VM."
+source = "GamingOnLinux anti-cheat updates (FC 27 Broken)"
+source_url = "https://www.gamingonlinux.com/anticheat/updates/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "ARC Raiders"
+anti_cheat = "Denuvo Anti-Cheat"
+vm_status = "blocked-by-publisher"
+host_status = "works"
+note = "Embark: virtual machines are disallowed and may trigger action against the account. Runs on Horcrux itself through Steam."
+source = "Embark ID Help Center, Common Anti-Cheat Questions"
+source_url = "https://id.embark.games/arc-raiders/support/faq/167-common-anti-cheat-questions"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "The Finals"
+anti_cheat = "Easy Anti-Cheat + Denuvo Anti-Cheat"
+vm_status = "unknown"
+host_status = "works"
+note = "Same studio as ARC Raiders, which disallows VMs. Play it on Horcrux itself through Steam."
+source = "GamingOnLinux anti-cheat updates (Works on Proton)"
+source_url = "https://www.gamingonlinux.com/anticheat/updates/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Fortnite"
+anti_cheat = "Easy Anti-Cheat"
+vm_status = "blocked-by-publisher"
+host_status = "denied"
+note = "Players report being kicked for running in a virtual machine."
+source = "Unraid forum, Blocked for [Virtual Machine] (reported)"
+source_url = "https://forums.unraid.net/topic/133384-blocked-by-battleye-for-virtual-machine/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Apex Legends"
+anti_cheat = "Easy Anti-Cheat"
+vm_status = "blocked-by-publisher"
+host_status = "broken"
+note = "No VM statement; EA/Respawn blocked Linux in October 2024. Treated as unsupported."
+source = "The Verge, Apex Legends drops Linux / Steam Deck"
+source_url = "https://www.theverge.com/2024/10/31/24284644/apex-legends-loses-linux-steam-deck-support-anti-cheat"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Rainbow Six Siege X"
+aliases = ["Rainbow Six Siege", "R6"]
+anti_cheat = "BattlEye"
+vm_status = "blocked-by-publisher"
+host_status = "denied"
+note = "BattlEye kicks virtual machines (\"disallowed program\")."
+source = "BattlEye VM statement quoted on r/unRAID (reported)"
+source_url = "https://www.reddit.com/r/unRAID/comments/hzxkk8/a_word_of_warning_regarding_gaming_in_a_vm/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "PUBG: Battlegrounds"
+aliases = ["PUBG"]
+anti_cheat = "BattlEye"
+vm_status = "blocked-by-publisher"
+host_status = "broken"
+note = "PUBG support: running on virtual machines is not supported (reported reply)."
+source = "PUBG support reply, r/linux_gaming (reported)"
+source_url = "https://www.reddit.com/r/linux_gaming/comments/1mv32is/pubg_customer_service_statement_on_running_pubg/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Escape from Tarkov"
+anti_cheat = "BattlEye"
+vm_status = "blocked-by-publisher"
+host_status = "broken"
+note = "BattlEye stops the launch when it detects a virtual machine."
+source = "SenseOS, Tarkov platforms and requirements (secondary)"
+source_url = "https://senseos.gg/guides/escape-from-tarkov/platforms-and-requirements/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Destiny 2"
+anti_cheat = "BattlEye"
+vm_status = "works-if"
+requires = ["secure_boot", "tpm"]
+host_status = "broken"
+note = "Reported to work in a VM with a passed-through GPU; Bungie blocks Linux/Proton."
+source = "ProtonDB Destiny 2 comments (reported)"
+source_url = "https://www.protondb.com/app/1085660"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "GTA Online"
+aliases = ["Grand Theft Auto Online", "GTA V Online"]
+anti_cheat = "BattlEye"
+vm_status = "unknown"
+host_status = "single-player-only"
+note = "No VM statement from Rockstar; BattlEye titles often refuse VMs."
+source = "Rockstar Support, GTA Online BattlEye FAQ"
+source_url = "https://support.rockstargames.com/articles/33490543992467/Grand-Theft-Auto-Online-BattlEye-FAQ"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Counter-Strike 2"
+aliases = ["CS2"]
+anti_cheat = "VAC"
+vm_status = "works"
+host_status = "works"
+note = "Reported to work in VMs (no Valve VM policy). Runs natively on Horcrux through Steam."
+source = "Steam CS2 forum, VM with GPU passthrough (reported)"
+source_url = "https://steamcommunity.com/app/730/discussions/0/3821922030309186762/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Deadlock"
+anti_cheat = "VAC"
+vm_status = "works"
+host_status = "works"
+note = "Reported to work (same anti-cheat as CS2). Runs on Horcrux itself through Steam."
+source = "r/linux_gaming, VAC and Proton (reported)"
+source_url = "https://www.reddit.com/r/linux_gaming/comments/1rqlheu/vac_doesnt_work_on_proton/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Marvel Rivals"
+anti_cheat = "NetEase NEAC"
+vm_status = "unknown"
+host_status = "works"
+note = "No VM policy found. Runs on Horcrux itself through Steam (SteamDeck=1 launch option)."
+source = "GamingOnLinux anti-cheat list (Works)"
+source_url = "https://www.gamingonlinux.com/anticheat/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Overwatch 2"
+anti_cheat = "Blizzard"
+vm_status = "works"
+host_status = "works"
+note = "Reported to work in a VM; also runs on Horcrux itself through Steam."
+source = "r/VFIO, Overwatch 2 in a VM (reported)"
+source_url = "https://www.reddit.com/r/VFIO/comments/xw8aei/a_question_about_overwatch_2/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Halo Infinite"
+anti_cheat = "Easy Anti-Cheat"
+vm_status = "unknown"
+host_status = "supported"
+note = "No VM policy found. Supported on Horcrux itself through Steam."
+source = "AreWeAntiCheatYet, Halo Infinite (Supported)"
+source_url = "https://areweanticheatyet.com/game/halo-infinite"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Splitgate 2"
+aliases = ["Splitgate"]
+anti_cheat = "RedKard"
+vm_status = "unknown"
+host_status = "works"
+note = "No VM policy found. Runs on Horcrux itself through Steam."
+source = "GamingOnLinux, Splitgate 2 works on desktop Linux"
+source_url = "https://www.gamingonlinux.com/2025/05/splitgate-2-now-works-on-desktop-linux-with-the-anti-cheat-updated/"
+checked_on = "2026-11-18"
+
+[[game]]
+title = "Delta Force"
+anti_cheat = "Tencent ACE"
+vm_status = "unknown"
+host_status = "steamos-only"
+note = "No VM policy found; kernel anti-cheat. Treat as risky."
+source = "GamingOnLinux, Delta Force entry"
+source_url = "https://www.gamingonlinux.com/itemdb/app/24779/"
+checked_on = "2026-11-18"

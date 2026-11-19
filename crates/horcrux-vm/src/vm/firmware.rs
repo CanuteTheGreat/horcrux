@@ -178,6 +178,7 @@ pub fn state_files(disk0: &Path) -> Vec<PathBuf> {
         tpm_socket(disk0),
         tpm_pidfile(disk0),
         tpm_log(disk0),
+        super::qemu::unattend_iso(disk0),
     ]
 }
 
