@@ -1185,13 +1185,18 @@ def main():
     ap.add_argument("--mem", type=int, default=4096)
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"))
     ap.add_argument("--disk-gb", type=int, default=24)
+    ap.add_argument("--hibernate-mem", type=int, default=int(os.environ.get("QEMU_TEST_HIBERNATE_MEM", 5120)),
+                    help="guest RAM (MiB) of the desktop --hibernate run; the cgroup's page-cache room is the cap minus this (env QEMU_TEST_HIBERNATE_MEM)")
     ap.add_argument("--keep-disks", action="store_true")
     a = ap.parse_args()
     qt.ARCH = qt.HOST_ARCH
     kvm = os.path.exists("/dev/kvm")
     qt.SLOW = float(os.environ.get("QEMU_SLOW", 0) or 0) or (1.0 if kvm else 3.0)
     if a.desktop:
-        a.mem = max(a.mem, 6144)
+        # the hibernate flow restores the whole guest RAM from swap while QEMU's disk writes fill the host page cache, all inside ONE job cgroup:
+        # with a 6144 MiB guest in the kvm runner's 7 GiB cap the cgroup hit memory.max 35999 times (runs 4082/4083/4126/4127: reclaim thrash, then a
+        # scrub that outlived 600 s, ssh banner timeouts, a guest gone seconds after the resume). A smaller guest leaves room for the page cache.
+        a.mem = max(a.mem, a.hibernate_mem if a.hibernate else 6144)
     a.mem, note = qt.fit_guest_mem(a.mem, qt.cgroup_mem_limit_mb())      # never a guest the container's memory cap would OOM-kill mid-install
     if note:
         print("NOTE " + note, flush=True)
