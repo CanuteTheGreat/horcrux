@@ -95,7 +95,15 @@ pub fn ContainerList() -> impl IntoView {
     let start_container = move |container_id: String| {
         spawn_local(async move {
             match api::start_container(&container_id).await {
-                Ok(()) => set_action_error.set(None),
+                // A list that was already being served while the action ran
+                // (docker's listing blocks on a container that is mid-stop) can
+                // come back with the old status after the 200: keep polling
+                // until the row shows the wanted state.
+                Ok(()) => {
+                    set_action_error.set(None);
+                    settle(container_id, "running");
+                    return;
+                }
                 Err(e) if api::is_transport_error(&e.message) => {
                     set_action_error.set(None);
                     settle(container_id, "running");
@@ -112,7 +120,12 @@ pub fn ContainerList() -> impl IntoView {
     let stop_container = move |container_id: String| {
         spawn_local(async move {
             match api::stop_container(&container_id).await {
-                Ok(()) => set_action_error.set(None),
+                // See start_container: the first list after the 200 can be stale.
+                Ok(()) => {
+                    set_action_error.set(None);
+                    settle(container_id, "stopped");
+                    return;
+                }
                 Err(e) if api::is_transport_error(&e.message) => {
                     set_action_error.set(None);
                     settle(container_id, "stopped");
