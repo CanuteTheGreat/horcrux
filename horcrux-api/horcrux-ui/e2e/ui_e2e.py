@@ -73,6 +73,7 @@ REP_CLONE = "e2e-rep-linked"
 BK_VM = "e2e-bk-restored"
 BK_JOB = "e2e-bk-job"
 DISP_VM = "e2e-display-vm"
+DISP3D_VM = "e2e-display-3d-vm"
 NOTIFY = "e2e-notify-hook"
 NOTIFY_EDIT = "e2e-notify-edit"
 NOTIFY_EDITED = "e2e-notify-edited"
@@ -171,7 +172,7 @@ def cleanup():
             if r.get("name") == ALERT_RULE:
                 _req("DELETE", f"/api/alerts/rules/{r['id']}", tok)
         for v in api_get("/api/vms", tok) or []:
-            if v.get("name") == DISP_VM:
+            if v.get("name") in (DISP_VM, DISP3D_VM):
                 try:
                     _req("POST", f"/api/vms/{v['id']}/stop", tok, {})
                 except AssertionError:
@@ -746,6 +747,39 @@ def main():
         page.locator("#verify-all-btn").click()
         expect(page.locator("#verify-summary")).to_contain_text("0 failed", timeout=180000)
         access_control_checks(context, page)
+
+        # ---- 3D virtio-gpu (Venus + virgl): create form explains the host, saves the options ----
+        page.goto(f"{BASE}/vms/create")
+        page.locator(".form-group", has_text="VM Name").locator("input").fill(DISP3D_VM)
+        for rid, val in (("vm-memory", "512"), ("vm-disk", "10")):
+            page.check(f"#{rid}-custom")
+            page.fill(f"#{rid}-input", val)
+        page.select_option("#disp-video", "virtio-3d")
+        expect(page.locator("#disp-3d")).to_be_visible(timeout=10000)
+        # the host check answers either "ready" or says what is missing and what to do (a CI container has no GPU)
+        expect(page.locator("#disp-3d-ready, #disp-3d-host p[data-reason]").first).to_be_visible(timeout=30000)
+        for p_ in page.locator("#disp-3d-host p[data-reason]").all():
+            assert len(p_.inner_text().strip()) > 20 and p_.get_attribute("data-reason"), p_.inner_text()
+        expect(page.locator("#disp-3d-save-note")).to_contain_text("cannot be saved or live-migrated")
+        expect(page.locator("#disp-3d-gpu option").first).to_contain_text("Automatic")
+        page.uncheck("#disp-3d-virgl")
+        page.fill("#disp-3d-hostmem", "1024")
+        page.locator("button[type=submit]").click()
+        page.wait_for_url(f"{BASE}/vms", timeout=120000)
+        v3 = next(v for v in api_get("/api/vms", token()) if v["name"] == DISP3D_VM)
+        d3 = v3["display"]
+        assert d3["video"] == "virtio-3d" and d3["gpu3d"] == {"venus": True, "virgl": False, "hostmem_mib": 1024}, d3
+        # the VM list says it cannot be saved, with the reason
+        page.goto(f"{BASE}/vms")
+        expect(page.locator(f"tr[data-vm-id='{v3['id']}'] .save-blocker")).to_have_attribute(
+            "title", re.compile("cannot save 3D virtio-gpu state.*shut down cleanly"), timeout=30000)
+        # SPICE is not offered with it: the API refuses it too
+        try:
+            _req("PUT", f"/api/vms/{v3['id']}/display", token(), {"protocol": "spice", "video": "virtio-3d"})
+            raise AssertionError("SPICE with 3D virtio-gpu was accepted")
+        except AssertionError as e:
+            assert "400" in str(e), e
+        _req("DELETE", f"/api/vms/{v3['id']}", token())
 
         # ---- VM display: Create VM form -> console page -> live consoles ----
         page.goto(f"{BASE}/vms/create")

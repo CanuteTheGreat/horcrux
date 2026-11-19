@@ -566,7 +566,7 @@ impl CrossNodeCloneManager {
             status: horcrux_common::VmStatus::Stopped,
             architecture: source_vm.architecture.clone(),
             disks: Vec::new(),
-            display: source_vm.display,
+            display: source_vm.display.clone(),
             // Same NICs/ISO/boot order; the clone gets new MAC addresses.
             hardware: source_vm.hardware.for_clone(),
         };

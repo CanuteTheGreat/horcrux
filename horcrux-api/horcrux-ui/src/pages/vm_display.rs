@@ -1,5 +1,6 @@
 //! Per-VM display settings (protocol, video card, sound card), shared by the
 //! Create VM form and the console page's "Display settings" panel.
+use crate::api::passthrough as pt;
 use horcrux_common::{DisplayProtocol, SoundDevice, VideoDevice, VmDisplay};
 use leptos::*;
 
@@ -34,6 +35,10 @@ pub fn DisplaySettingsFields(display: RwSignal<VmDisplay>) -> impl IntoView {
         (VideoDevice::Std, "Standard VGA"),
         (VideoDevice::Virtio, "virtio-gpu"),
         (VideoDevice::Qxl, "QXL (best with SPICE, x86 only)"),
+        (
+            VideoDevice::Virtio3d,
+            "virtio-gpu 3D (Vulkan + OpenGL on the host GPU, Linux guests)",
+        ),
         (VideoDevice::None, "None"),
     ];
     let sounds = [
@@ -42,6 +47,15 @@ pub fn DisplaySettingsFields(display: RwSignal<VmDisplay>) -> impl IntoView {
         (SoundDevice::Ich9IntelHda, "Intel HDA (ich9)"),
         (SoundDevice::Ac97, "AC97"),
     ];
+    // What this host can do for 3D guests (loaded when the card is picked).
+    let host3d = create_rw_signal(None::<Result<pt::Host3d, String>>);
+    create_effect(move |_| {
+        if display.get().video == VideoDevice::Virtio3d && host3d.get_untracked().is_none() {
+            spawn_local(async move {
+                host3d.set(Some(pt::host_3d().await.map_err(|e| e.message)));
+            });
+        }
+    });
     view! {
         <div class="form-group">
             <label for="disp-protocol">"Display"</label>
@@ -74,6 +88,84 @@ pub fn DisplaySettingsFields(display: RwSignal<VmDisplay>) -> impl IntoView {
                 }).collect_view()}
             </select>
         </div>
+        {move || (display.get().video == VideoDevice::Virtio3d).then(|| view! {
+            <fieldset class="form-group" id="disp-3d">
+                <legend>"3D virtio-gpu"</legend>
+                {move || match host3d.get() {
+                    None => view! { <p class="form-help">"Checking this host..."</p> }.into_view(),
+                    Some(Err(e)) => view! { <p class="form-help warning">"Host check failed: " {e}</p> }.into_view(),
+                    Some(Ok(h)) => view! {
+                        <div id="disp-3d-host">
+                            {h.ready.then(|| view! {
+                                <p class="form-help" id="disp-3d-ready">
+                                    "This host can run 3D guests (QEMU " {h.qemu.version.clone().unwrap_or_default()} ")."
+                                </p>
+                            })}
+                            {h.issues.iter().map(|i| view! {
+                                <p class="form-help warning" data-reason=i.reason.clone()>
+                                    {i.message.clone()} " " {i.hint.clone()}
+                                </p>
+                            }).collect_view()}
+                            {h.warnings.iter().map(|w| view! { <p class="form-help">{w.clone()}</p> }).collect_view()}
+                        </div>
+                    }.into_view(),
+                }}
+                <label>
+                    <input id="disp-3d-venus" type="checkbox"
+                        prop:checked=move || display.get().gpu3d.venus
+                        on:change=move |ev| {
+                            let on = event_target_checked(&ev);
+                            display.update(|d| d.gpu3d.venus = on);
+                        }/>
+                    " Vulkan (Venus)"
+                </label>
+                <label>
+                    <input id="disp-3d-virgl" type="checkbox"
+                        prop:checked=move || display.get().gpu3d.virgl
+                        on:change=move |ev| {
+                            let on = event_target_checked(&ev);
+                            display.update(|d| d.gpu3d.virgl = on);
+                        }/>
+                    " OpenGL (virgl)"
+                </label>
+                <label for="disp-3d-gpu">"Host GPU"</label>
+                <select id="disp-3d-gpu" on:change=move |ev| {
+                    let v = event_target_value(&ev);
+                    display.update(|d| d.gpu3d.render_node = (!v.is_empty()).then_some(v));
+                }>
+                    <option value="" selected=move || display.get().gpu3d.render_node.is_none()>
+                        "Automatic (first suitable GPU)"
+                    </option>
+                    {move || host3d.get().and_then(|h| h.ok()).map(|h| h.gpus.into_iter().map(|g| {
+                        let value = g.path.clone();
+                        let label = format!(
+                            "{} {}{}",
+                            g.name.clone().or(g.driver.clone()).unwrap_or_else(|| g.path.clone()),
+                            g.pci_address.clone().unwrap_or_default(),
+                            g.reason.clone().map(|r| format!(" (not usable: {r})")).unwrap_or_default()
+                        );
+                        let v2 = value.clone();
+                        view! {
+                            <option value=value disabled=!g.suitable
+                                selected=move || display.get().gpu3d.render_node.as_deref() == Some(v2.as_str())>
+                                {label}
+                            </option>
+                        }
+                    }).collect_view())}
+                </select>
+                <label for="disp-3d-hostmem">"Host-visible GPU memory (MiB)"</label>
+                <input id="disp-3d-hostmem" type="number" min="64" max="65536"
+                    placeholder=move || host3d.get().and_then(|h| h.ok()).map(|h| h.default_hostmem_mib.to_string()).unwrap_or_default()
+                    prop:value=move || display.get().gpu3d.hostmem_mib.map(|m| m.to_string()).unwrap_or_default()
+                    on:input=move |ev| {
+                        let v = event_target_value(&ev);
+                        display.update(|d| d.gpu3d.hostmem_mib = v.trim().parse::<u32>().ok());
+                    }/>
+                <p class="form-help" id="disp-3d-save-note">
+                    "A VM with a 3D virtio-gpu cannot be saved or live-migrated: QEMU cannot save 3D virtio-gpu state and the guest driver refuses hibernation, so it shuts down cleanly when the host stops. Shown through VNC (the Horcrux console); not with SPICE."
+                </p>
+            </fieldset>
+        })}
         <div class="form-group">
             <label for="disp-sound">"Sound card"</label>
             <select id="disp-sound"
@@ -118,6 +210,11 @@ mod tests {
         assert_eq!(wire(&SoundDevice::Ich9IntelHda), "ich9-intel-hda");
         assert_eq!(wire(&DisplayProtocol::Spice), "spice");
         assert_eq!(parse::<VideoDevice>("qxl"), Some(VideoDevice::Qxl));
+        assert_eq!(wire(&VideoDevice::Virtio3d), "virtio-3d");
+        assert_eq!(
+            parse::<VideoDevice>("virtio-3d"),
+            Some(VideoDevice::Virtio3d)
+        );
         assert_eq!(parse::<SoundDevice>("ac97"), Some(SoundDevice::Ac97));
     }
 }

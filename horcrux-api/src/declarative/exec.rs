@@ -288,7 +288,7 @@ async fn create_vm(state: &Arc<AppState>, spec: &Spec, name: &str) -> Result<Str
         status: VmStatus::Stopped,
         architecture: w.architecture.clone().unwrap_or_default(),
         disks,
-        display: w.display.unwrap_or_default(),
+        display: w.display.clone().unwrap_or_default(),
         hardware: w.hardware.clone().unwrap_or_default(),
     };
     let api = api_msg;

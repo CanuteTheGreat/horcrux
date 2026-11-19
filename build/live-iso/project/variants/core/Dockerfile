@@ -34,7 +34,8 @@ RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked 
     qlist -I | sort > /tmp/pkgs.after; comm -13 /tmp/pkgs.before /tmp/pkgs.after > /tmp/pkgs.added; \
     echo "core added $(wc -l < /tmp/pkgs.added) packages:"; cat /tmp/pkgs.added; \
     # GATE: the headless core pulls no display stack (the live-only graphical installer stack was there before this layer and is removed again on a server install)
-    if grep -E '^(gui-libs|gui-wm|x11-base|x11-libs|x11-misc|x11-apps|x11-drivers|x11-themes|gnome-base|gnome-extra|kde-|dev-qt|media-libs/mesa|media-libs/libglvnd|xfce-)' /tmp/pkgs.added; then echo "CORE PULLED A DISPLAY STACK (see above): core must stay headless"; exit 1; fi; \
+    # (the GL/Vulkan client libraries QEMU's egl-headless display and Venus need for 3D guests are not a display stack: allow-listed below)
+    if grep -E '^(gui-libs|gui-wm|x11-base|x11-libs|x11-misc|x11-apps|x11-drivers|x11-themes|gnome-base|gnome-extra|kde-|dev-qt|media-libs/mesa|media-libs/libglvnd|xfce-)' /tmp/pkgs.added | grep -vE '^(media-libs/(mesa|libglvnd)|x11-libs/(libX[A-Za-z0-9]*|libxcb|libdrm|libpciaccess|libxshmfence|pixman|xtrans|xcb-util-[a-z]+)|x11-base/(xcb-proto|xorg-proto)|x11-misc/(compose-tables|shared-mime-info))-[0-9]'; then echo "CORE PULLED A DISPLAY STACK (see above): core must stay headless"; exit 1; fi; \
     # GATE: nothing personal / machine specific in a public image (project/public-forbidden.txt: the owner's apps live in the machine layers)
     for p in $(grep -v '^#' /tmp/public-forbidden.txt); do if qlist -I "$p" | grep .; then echo "PERSONAL/MACHINE PACKAGE $p IN A PUBLIC IMAGE"; exit 1; fi; done; \
     # the clock rules were applied by net-misc/horcrux-time's postinst; every file is package-owned
@@ -45,6 +46,9 @@ RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked 
     # GATE: the release signing key (verifies downloaded Horcrux images, checksums and SBOMs: gpg --verify) is package-owned
     [ "$(qfile -q /usr/share/openpgp-keys/errantsolutions.asc)" = sec-keys/openpgp-keys-errantsolutions ]; [ "$(qfile -q /usr/bin/horcrux-api)" = app-emulation/horcrux-bin ]; [ "$(qfile -q /usr/bin/horcrux)" = app-emulation/horcrux-bin ]; test -d /usr/share/horcrux/ui; \
     cat /var/db/pkg/app-emulation/qemu-*/USE | tr ' ' '\n' | grep -qx spice || { echo "GATE: qemu built without SPICE"; exit 1; }; \
+    # GATE: 3D virtio-gpu guests (docs/design/hx-vgpu.md): QEMU with the virtio-gpu-gl device + egl-headless display, virglrenderer with Venus
+    for f in opengl virgl; do cat /var/db/pkg/app-emulation/qemu-*/USE | tr ' ' '\n' | grep -qx $f || { echo "GATE: qemu built without $f (3D virtio-gpu)"; exit 1; }; done; \
+    cat /var/db/pkg/media-libs/virglrenderer-*/USE | tr ' ' '\n' | grep -qx venus || { echo "GATE: virglrenderer built without venus"; exit 1; }; \
     rm -f /usr/share/horcrux/prebuilt/horcrux-manager-*.tar.zst; rmdir /usr/share/horcrux/prebuilt 2>/dev/null || true; \
     qfile -q /usr/sbin/horcrux-time-config /usr/libexec/horcrux-timesync /etc/init.d/horcrux-timesync /etc/init.d/horcrux-firstboot /usr/libexec/horcrux-firstboot \
               /etc/NetworkManager/dispatcher.d/20-horcrux-chrony /etc/portage/package.use/horcrux-core /etc/portage/repos.conf/horcrux.conf /usr/sbin/ctg-restic /usr/share/horcrux/core-release; \

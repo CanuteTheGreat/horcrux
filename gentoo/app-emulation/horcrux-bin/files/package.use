@@ -1,3 +1,7 @@
 # owned by app-emulation/horcrux-bin: the manager's VM console needs SPICE (and USB redirection / virtiofs shares for guests); QEMU is
 # built with it on every Horcrux server image and, through this file, on every machine that installs the manager.
-app-emulation/qemu spice usbredir virtfs vnc zstd
+app-emulation/qemu opengl spice usbredir virgl virtfs vnc zstd
+# 3D virtio-gpu guests: Venus (Vulkan) in virglrenderer, host Vulkan drivers in Mesa
+media-libs/virglrenderer venus
+# qemu[opengl] needs libglvnd with X (EGL dispatch)
+media-libs/libglvnd X

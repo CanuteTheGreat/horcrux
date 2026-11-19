@@ -5,6 +5,7 @@ pub mod cross_node_clone;
 pub mod devices;
 pub mod display;
 pub mod firmware;
+pub mod gpu3d;
 pub mod handoff;
 pub mod hardware;
 pub mod hold;
@@ -351,6 +352,8 @@ impl VmManager {
         }
         display
             .validate(&vm.architecture)
+            .map_err(horcrux_common::Error::Validation)?;
+        gpu3d::check_compat(&vm.hardware.adv, &display)
             .map_err(horcrux_common::Error::Validation)?;
         vm.display = display;
         let config = vm.to_config();

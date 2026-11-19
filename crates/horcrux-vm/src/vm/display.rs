@@ -40,6 +40,9 @@ pub struct DisplayRuntime {
     pub serial_socket: PathBuf,
     pub serial_log: PathBuf,
     pub qmp_socket: PathBuf,
+    /// 3D virtio-gpu: the GPU and sizes this run got (`virtio-3d` video).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu3d: Option<super::gpu3d::Runtime3d>,
 }
 
 impl DisplayRuntime {
@@ -89,6 +92,7 @@ impl DisplayRuntime {
             serial_socket: Self::serial_socket(disk),
             serial_log: Self::serial_log(disk),
             qmp_socket: Self::qmp_socket(disk),
+            gpu3d: None,
         })
     }
 
@@ -176,11 +180,28 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
     let qmp = format!("unix:{},server=on,wait=off", rt.qmp_socket.display());
     push(&["-qmp", &qmp]);
 
-    // No local window, ever: graphical consoles are network protocols.
-    push(&["-display", "none"]);
+    // No local window, ever: graphical consoles are network protocols. A 3D
+    // guest renders on the host GPU through egl-headless (no window either).
+    let gpu3d = rt.gpu3d.as_ref().filter(|_| display.uses_3d() && pc);
+    match gpu3d {
+        Some(g) => {
+            let d = super::gpu3d::display_arg(g);
+            push(&["-display", &d]);
+        }
+        None => push(&["-display", "none"]),
+    }
 
     // Video card.
     match (display.video, pc) {
+        (VideoDevice::Virtio3d, true) => match gpu3d {
+            Some(g) => {
+                let dev = super::gpu3d::device_args(g);
+                push(&dev.iter().map(String::as_str).collect::<Vec<_>>());
+            }
+            // Not prepared by a real start (tests, previews): plain virtio-gpu.
+            None => push(&["-vga", "virtio"]),
+        },
+        (VideoDevice::Virtio3d, false) => push(&["-device", "virtio-gpu-pci"]),
         (VideoDevice::None, true) => push(&["-vga", "none"]),
         (VideoDevice::None, false) => {}
         (VideoDevice::Std, true) => push(&["-vga", "std"]),
@@ -352,6 +373,7 @@ mod tests {
             serial_socket: "/vms/a.serial.sock".into(),
             serial_log: "/vms/a.serial.log".into(),
             qmp_socket: "/vms/a.qmp.sock".into(),
+            gpu3d: None,
         }
     }
 
@@ -382,8 +404,9 @@ mod tests {
             video: VideoDevice::Qxl,
             sound: SoundDevice::Ich9IntelHda,
             relative_mouse: false,
+            gpu3d: Default::default(),
         };
-        let a = joined(d, DisplayProtocol::Spice);
+        let a = joined(d.clone(), DisplayProtocol::Spice);
         assert!(a.contains("-spice port=61002,addr=127.0.0.1"), "{a}");
         assert!(
             !a.contains("password") && !a.contains("disable-ticketing"),
@@ -399,7 +422,7 @@ mod tests {
         let ac97 = joined(
             VmDisplay {
                 sound: SoundDevice::Ac97,
-                ..d
+                ..d.clone()
             },
             DisplayProtocol::Spice,
         );
@@ -413,6 +436,7 @@ mod tests {
             video: VideoDevice::None,
             sound: SoundDevice::None,
             relative_mouse: false,
+            gpu3d: Default::default(),
         };
         let a = joined(d, DisplayProtocol::None);
         assert!(a.contains("-vga none") && !a.contains("-vnc") && !a.contains("-spice"));
@@ -454,6 +478,40 @@ mod tests {
         };
         assert!(qxl_arm.validate(&VmArchitecture::Aarch64).is_err());
         assert!(VmDisplay::default().validate(&x86).is_ok());
+    }
+
+    #[test]
+    fn three_d_validation() {
+        let x86 = VmArchitecture::X86_64;
+        let d = VmDisplay {
+            video: VideoDevice::Virtio3d,
+            ..Default::default()
+        };
+        assert!(d.validate(&x86).is_ok());
+        assert!(d.uses_3d());
+        assert!(d.validate(&VmArchitecture::Aarch64).is_err());
+        let spice = VmDisplay {
+            protocol: DisplayProtocol::Spice,
+            ..d.clone()
+        };
+        assert!(spice.validate(&x86).unwrap_err().contains("SPICE"));
+        let mut none = d.clone();
+        none.gpu3d.venus = false;
+        none.gpu3d.virgl = false;
+        assert!(none.validate(&x86).is_err());
+        let mut mem = d.clone();
+        mem.gpu3d.hostmem_mib = Some(8);
+        assert!(mem.validate(&x86).is_err());
+        let mut node = d.clone();
+        node.gpu3d.render_node = Some("/dev/dri/../../etc/passwd".into());
+        assert!(node.validate(&x86).is_err());
+        node.gpu3d.render_node = Some("0000:00:02.0".into());
+        assert!(node.validate(&x86).is_ok());
+        // defaults stay out of the stored JSON
+        let plain = serde_json::to_string(&VmDisplay::default()).unwrap();
+        assert!(!plain.contains("gpu3d"), "{plain}");
+        let back: VmDisplay = serde_json::from_str(r#"{"video":"virtio-3d"}"#).unwrap();
+        assert!(back.uses_3d() && back.gpu3d.venus && back.gpu3d.virgl);
     }
 
     #[test]

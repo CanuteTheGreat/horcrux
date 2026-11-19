@@ -35,6 +35,8 @@ LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="amd64 arm64 riscv"
 
+# qemu[opengl,virgl] + virglrenderer[venus]: VMs with a 3D virtio-gpu (Vulkan via Venus, OpenGL via virgl) render on the host GPU through
+# QEMU's egl-headless display (docs/design/hx-vgpu.md); the host's own Mesa/vendor Vulkan driver does the drawing.
 # qemu[zstd]: qcow2 images with zstd compression (libvirt / virt-manager default on some distros) are imported with qemu-img; without
 # USE=zstd qemu-img answers "unknown compression type: 1" and the VM importer cannot read the disk (owner-ws 2026-11-12).
 RDEPEND="
@@ -42,7 +44,8 @@ RDEPEND="
 	acct-group/kvm
 	app-arch/zstd
 	app-emulation/libvirt[qemu]
-	app-emulation/qemu[spice,usbredir,virtfs,vnc,zstd]
+	app-emulation/qemu[opengl,spice,usbredir,virgl,virtfs,vnc,zstd]
+	media-libs/virglrenderer[venus]
 	net-dns/dnsmasq
 	net-fs/nfs-utils
 	net-misc/bridge-utils

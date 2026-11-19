@@ -8,4 +8,9 @@ dev-libs/raft lz4
 dev-util/xdelta lzma
 # the manager (app-emulation/horcrux-bin) and every Horcrux VM console need QEMU with SPICE (lab finding 2026-11-05: QEMU "-spice: invalid option" on every laptop).
 # Here and not in horcrux-bin: Portage reads this while it resolves horcrux-bin's own dependencies, a file horcrux-bin installs would come too late.
-app-emulation/qemu spice usbredir virtfs vnc zstd
+app-emulation/qemu opengl spice usbredir virgl virtfs vnc zstd
+# 3D virtio-gpu guests: Venus (Vulkan) in virglrenderer, host Vulkan drivers in Mesa
+media-libs/virglrenderer venus
+# qemu[opengl] needs libglvnd with X (EGL dispatch)
+media-libs/libglvnd X
+media-libs/mesa vulkan

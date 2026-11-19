@@ -59,7 +59,7 @@ impl QemuVm {
             status: self.status.clone(),
             architecture: self.architecture.clone(),
             disks: self.all_disks(),
-            display: self.display,
+            display: self.display.clone(),
             hardware: self.hardware.clone(),
         }
     }
@@ -200,12 +200,25 @@ pub fn qemu_command(
     };
     // Secure Boot firmware keeps its variables in SMM-protected flash.
     let secure = x86 && vm.hardware.secure_boot && uses_ovmf(vm);
+    // A 3D virtio-gpu VM's RAM is a shareable memfd (the GPU process maps
+    // guest memory for blob resources); with virtiofs the shared memfd
+    // nodes already exist (see advanced::cpu_mem_args).
+    let mem3d = vm.display.uses_3d()
+        && x86
+        && vm.hardware.adv.virtiofs.is_empty()
+        && !vm.hardware.adv.numa
+        && vm.hardware.adv.hugepages.is_none();
+    let backend = if mem3d {
+        format!(",memory-backend={}", super::gpu3d::MEM_BACKEND_ID)
+    } else {
+        String::new()
+    };
     args.push("-machine".into());
     args.push(match (machine, secure) {
-        (Some(m), true) => format!("{m},smm=on,accel={accel}"),
-        (None, true) => format!("pc,smm=on,accel={accel}"),
-        (Some(m), false) => format!("{m},accel={accel}"),
-        (None, false) => format!("accel={accel}"),
+        (Some(m), true) => format!("{m},smm=on,accel={accel}{backend}"),
+        (None, true) => format!("pc,smm=on,accel={accel}{backend}"),
+        (Some(m), false) => format!("{m},accel={accel}{backend}"),
+        (None, false) => format!("accel={accel}{backend}"),
     });
     if secure {
         args.extend([
@@ -232,6 +245,16 @@ pub fn qemu_command(
 
     // CPU topology and memory.
     args.extend(super::advanced::cpu_mem_args(vm));
+    if mem3d {
+        args.extend([
+            "-object".into(),
+            format!(
+                "memory-backend-memfd,id={},size={}M,share=on",
+                super::gpu3d::MEM_BACKEND_ID,
+                vm.memory
+            ),
+        ]);
+    }
 
     // UEFI: read-only OVMF code + the VM's own variable store (qcow2).
     if uses_ovmf(vm) {
@@ -1221,7 +1244,7 @@ impl QemuManager {
             _pid: None,
             hypervisor: VmHypervisor::Qemu,
             architecture: config.architecture.clone(),
-            display: config.display,
+            display: config.display.clone(),
             hardware: config.hardware.clone(),
             disks,
         })
@@ -1252,7 +1275,7 @@ impl QemuManager {
             _pid: None,
             hypervisor: config.hypervisor.clone(),
             architecture: config.architecture.clone(),
-            display: config.display,
+            display: config.display.clone(),
             hardware: config.hardware.clone(),
             disks: config.disks.clone(),
         }
@@ -1288,7 +1311,12 @@ impl QemuManager {
 
         // Consoles: serial Unix socket (+ <disk>.serial.log), QMP, and the
         // VM's display protocol / video / sound (see vm/display.rs).
-        let runtime = super::display::DisplayRuntime::plan(&vm.disk_path, &vm.display)?;
+        let mut runtime = super::display::DisplayRuntime::plan(&vm.disk_path, &vm.display)?;
+        if vm.display.uses_3d() {
+            super::gpu3d::check_compat(&vm.hardware.adv, &vm.display)
+                .map_err(horcrux_common::Error::Validation)?;
+            runtime.gpu3d = Some(super::gpu3d::prepare(&vm.display).await?);
+        }
         for stale in [
             &runtime.serial_socket,
             &runtime.qmp_socket,
@@ -1389,6 +1417,9 @@ impl QemuManager {
         };
         let mut cmd = Command::new(binary);
         cmd.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
+        if let Some(g) = &runtime.gpu3d {
+            cmd.envs(super::gpu3d::env(g));
+        }
         pass_fds(&mut cmd, &macvtaps);
 
         debug!("QEMU command: {:?}", cmd);
@@ -1752,6 +1783,79 @@ mod tests {
         }
     }
 
+    fn runtime_3d(rt: &mut crate::vm::display::DisplayRuntime) {
+        rt.gpu3d = Some(crate::vm::gpu3d::Runtime3d {
+            render_node: "/dev/dri/renderD128".into(),
+            hostmem_mib: 2048,
+            venus: true,
+            virgl: true,
+            device_select: Some("8086:46a6".into()),
+        });
+    }
+
+    #[test]
+    fn three_d_guest_gets_memfd_ram_gl_device_and_egl_headless() {
+        let d = VmDisplay {
+            video: VideoDevice::Virtio3d,
+            ..Default::default()
+        };
+        let mut v = vm(VmArchitecture::X86_64, d.clone());
+        v.memory = 4096;
+        v.hardware.machine = horcrux_common::MachineType::Q35;
+        let mut rt = crate::vm::display::DisplayRuntime::plan(&v.disk_path, &d).unwrap();
+        runtime_3d(&mut rt);
+        let (_, args) = qemu_command(&v, &rt, true, None);
+        let a = args.join(" ");
+        assert!(
+            a.contains("-machine q35,accel=kvm:tcg,memory-backend=hx3dmem"),
+            "{a}"
+        );
+        assert!(
+            a.contains("-object memory-backend-memfd,id=hx3dmem,size=4096M,share=on"),
+            "{a}"
+        );
+        assert!(a.contains("-m 4096"), "{a}");
+        assert!(
+            a.contains("-display egl-headless,rendernode=/dev/dri/renderD128"),
+            "{a}"
+        );
+        assert!(
+            a.contains("-vga none -device virtio-vga-gl,hostmem=2048M,blob=true,venus=true"),
+            "{a}"
+        );
+        assert!(
+            !a.contains("-display none") && !a.contains("-vga std"),
+            "{a}"
+        );
+        // a plain VM keeps its exact old command line
+        let plain = vm(VmArchitecture::X86_64, VmDisplay::default());
+        let rt2 =
+            crate::vm::display::DisplayRuntime::plan(&plain.disk_path, &plain.display).unwrap();
+        let p = qemu_command(&plain, &rt2, true, None).1.join(" ");
+        assert!(
+            !p.contains("memory-backend") && !p.contains("virtio-vga-gl"),
+            "{p}"
+        );
+    }
+
+    #[test]
+    fn three_d_with_virtiofs_reuses_the_shared_memfd_nodes() {
+        let d = VmDisplay {
+            video: VideoDevice::Virtio3d,
+            ..Default::default()
+        };
+        let mut v = vm(VmArchitecture::X86_64, d.clone());
+        v.hardware.adv.virtiofs = vec![horcrux_common::VmVirtiofs {
+            tag: "share".into(),
+            path: "/srv/share".into(),
+        }];
+        let mut rt = crate::vm::display::DisplayRuntime::plan(&v.disk_path, &d).unwrap();
+        runtime_3d(&mut rt);
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(!a.contains("hx3dmem"), "{a}");
+        assert!(a.contains("memory-backend-memfd,share=on"), "{a}");
+    }
+
     #[test]
     fn one_command_line_with_consoles_and_pidfile() {
         let d = VmDisplay {
@@ -1759,8 +1863,9 @@ mod tests {
             video: VideoDevice::Qxl,
             sound: SoundDevice::IntelHda,
             relative_mouse: false,
+            gpu3d: Default::default(),
         };
-        let v = vm(VmArchitecture::X86_64, d);
+        let v = vm(VmArchitecture::X86_64, d.clone());
         let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &d).unwrap();
         let (bin, args) = qemu_command(&v, &rt, true, None);
         let a = args.join(" ");

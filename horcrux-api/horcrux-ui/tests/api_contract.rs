@@ -416,6 +416,7 @@ async fn ui_types_read_real_api_responses() {
         video: horcrux_common::VideoDevice::Qxl,
         sound: horcrux_common::SoundDevice::Ich9IntelHda,
         relative_mouse: false,
+        gpu3d: Default::default(),
     };
     let r = c
         .put(format!("{}/vms/{vm}/display", api_base()))
@@ -445,6 +446,75 @@ async fn ui_types_read_real_api_responses() {
     assert_eq!(status, 200, "spice.vv: {body}");
     let _ = post(&c, &token, &format!("/vms/{vm}/stop"), json!({})).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // ---- 3D virtio-gpu: setting, validation, save blocker, host check ----
+    let put_display = |d: serde_json::Value| {
+        let (c, token, url) = (
+            c.clone(),
+            token.clone(),
+            format!("{}/vms/{vm}/display", api_base()),
+        );
+        async move {
+            let r = c
+                .put(url)
+                .bearer_auth(&token)
+                .json(&d)
+                .send()
+                .await
+                .unwrap();
+            (r.status().as_u16(), r.text().await.unwrap_or_default())
+        }
+    };
+    let (status, body) = put_display(json!({
+        "protocol": "vnc", "video": "virtio-3d",
+        "gpu3d": {"venus": true, "virgl": false, "hostmem_mib": 512, "render_node": "0000:00:02.0"}
+    }))
+    .await;
+    assert_eq!(status, 200, "PUT display virtio-3d: {body}");
+    let cfg: horcrux_common::VmConfig =
+        serde_json::from_str(&body).expect("UI reads the 3D display");
+    assert!(
+        cfg.display.uses_3d()
+            && !cfg.display.gpu3d.virgl
+            && cfg.display.gpu3d.hostmem_mib == Some(512)
+    );
+    let ov: api::PowerOverview = fetch(&c, &token, "/nodes/guest-power").await;
+    let g = ov
+        .guests
+        .iter()
+        .find(|g| g.id == vm && g.kind == "vm")
+        .expect("VM in the power overview");
+    assert!(!g.can_save, "a 3D virtio-gpu VM is not saveable");
+    let why = g.save_blocker.clone().unwrap_or_default();
+    assert!(
+        why.contains("cannot save 3D virtio-gpu state") && why.contains("shut down cleanly"),
+        "{why}"
+    );
+    let (status, body) = put_display(json!({"protocol": "spice", "video": "virtio-3d"})).await;
+    assert_eq!(status, 400, "SPICE with 3D is refused: {body}");
+    let (status, body) = put_display(
+        json!({"protocol": "vnc", "video": "virtio-3d", "gpu3d": {"venus": false, "virgl": false}}),
+    )
+    .await;
+    assert_eq!(
+        status, 400,
+        "3D with neither Venus nor virgl is refused: {body}"
+    );
+    let (status, body) =
+        put_display(json!({"protocol": "vnc", "video": "virtio-3d", "gpu3d": {"hostmem_mib": 1}}))
+            .await;
+    assert_eq!(status, 400, "tiny hostmem is refused: {body}");
+    let host3d: api::passthrough::Host3d = fetch(&c, &token, "/gpu/3d").await;
+    assert_eq!(host3d.default_hostmem_mib, 2048);
+    assert_eq!(host3d.ready, host3d.issues.is_empty());
+    for i in &host3d.issues {
+        assert!(
+            !i.reason.is_empty() && !i.message.is_empty() && !i.hint.is_empty(),
+            "{i:?}"
+        );
+    }
+    let (status, body) = put_display(serde_json::to_value(&display).unwrap()).await;
+    assert_eq!(status, 200, "restore display: {body}");
 
     // ---- every list endpoint the UI reads --------------------------------
     macro_rules! check {

@@ -321,6 +321,11 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
                     "uses host PCI/mediated device(s) ({}): cannot be live-migrated; its state is saved instead",
                     v.hardware.hostpci.iter().map(|d| d.device.as_str()).collect::<Vec<_>>().join(", ")
                 ))
+            } else if v.display.uses_3d() {
+                Some(
+                    "has a 3D virtio-gpu: cannot be live-migrated; it is shut down cleanly instead"
+                        .to_string(),
+                )
             } else {
                 None
             },

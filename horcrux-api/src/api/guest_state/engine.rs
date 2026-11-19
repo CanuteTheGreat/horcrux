@@ -43,6 +43,9 @@ pub struct GuestInfo {
     pub instance_cli: Option<&'static str>,
     /// A VM with host PCI / mediated devices: QEMU cannot save its state.
     pub passthrough: bool,
+    /// A VM with a 3D virtio-gpu: QEMU cannot save its state and the guest
+    /// driver refuses hibernation.
+    pub gpu3d: bool,
 }
 
 impl GuestInfo {
@@ -260,6 +263,7 @@ fn vm_info(v: &horcrux_common::VmConfig) -> GuestInfo {
             _ => None,
         },
         passthrough: !v.hardware.hostpci.is_empty(),
+        gpu3d: v.display.uses_3d(),
     }
 }
 
@@ -275,6 +279,7 @@ fn ct_info(c: &horcrux_common::ContainerConfig) -> GuestInfo {
         ct_runtime: Some(c.runtime.clone()),
         instance_cli: cli_of(&c.runtime),
         passthrough: false,
+        gpu3d: false,
     }
 }
 
@@ -450,6 +455,9 @@ async fn save_locked(
     }
     if g.passthrough {
         return Err(Error::Conflict(PASSTHROUGH_NO_SAVE.into()));
+    }
+    if g.gpu3d {
+        return Err(Error::Conflict(crate::vm::gpu3d::NOT_SAVEABLE.into()));
     }
     let eff = policy::effective(state, k, id).await;
     let base = match dir_override.as_deref().filter(|d| !d.trim().is_empty()) {
@@ -1233,6 +1241,7 @@ async fn view_of(
 ) -> GuestView {
     let (can_save, save_blocker) = match (&g.ct_runtime, g.qemu) {
         (_, true) if g.passthrough => (false, Some(PASSTHROUGH_NO_SAVE.to_string())),
+        (_, true) if g.gpu3d => (false, Some(crate::vm::gpu3d::NOT_SAVEABLE.to_string())),
         (_, true) => (true, None),
         (Some(rt), _) => {
             let s = match sup.get(&g.runtime) {

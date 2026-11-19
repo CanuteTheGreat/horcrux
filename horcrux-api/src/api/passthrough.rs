@@ -1,5 +1,7 @@
 //! Host PCI inventory for passthrough (any device, not only GPUs).
 //!
+//! * `GET  /api/gpu/3d`                              can this host run a 3D virtio-gpu VM
+//!   (Venus Vulkan / virgl): QEMU pieces, usable GPU render nodes, what is missing and why
 //! * `GET  /api/gpu/pci/status`                      IOMMU / vfio / mdev support of this host
 //! * `GET  /api/gpu/pci/devices`                     every PCI device with class, driver,
 //!   IOMMU group (and which group members block passthrough) and the VMs that list it
@@ -31,6 +33,7 @@ use std::sync::Arc;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/api/gpu/3d", get(host_3d))
         .route("/api/gpu/pci/status", get(status))
         .route("/api/gpu/pci/gaming-check", get(gaming_check))
         .route("/api/gpu/pci/devices", get(list))
@@ -163,4 +166,10 @@ async fn unbind(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))??;
     Ok(Json(d))
+}
+
+/// `GET /api/gpu/3d`: what this host can do for 3D virtio-gpu VMs.
+async fn host_3d() -> Json<crate::vm::gpu3d::Host3d> {
+    let cfg = horcrux_core::config::HorcruxConfig::load().vgpu;
+    Json(crate::vm::gpu3d::probe(&cfg).await)
 }

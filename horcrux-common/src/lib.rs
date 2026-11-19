@@ -1108,7 +1108,52 @@ pub enum VideoDevice {
     Virtio,
     /// Paravirtual card for SPICE (x86 only).
     Qxl,
+    /// virtio-gpu with 3D acceleration on the host GPU (Venus Vulkan and/or
+    /// virgl OpenGL); the settings are in `VmDisplay::gpu3d`. x86 Linux
+    /// guests with the virtio-gpu driver; see docs/design/hx-vgpu.md.
+    #[serde(rename = "virtio-3d")]
+    Virtio3d,
     None,
+}
+
+/// Settings of the 3D virtio-gpu (`VideoDevice::Virtio3d`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Gpu3d {
+    /// Venus: Vulkan in the guest, executed by the host GPU's Vulkan driver.
+    #[serde(default = "default_true")]
+    pub venus: bool,
+    /// virgl: OpenGL in the guest.
+    #[serde(default = "default_true")]
+    pub virgl: bool,
+    /// Host-visible memory window for Venus (MiB); unset = the node's
+    /// `[vgpu] hostmem_mib`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostmem_mib: Option<u32>,
+    /// DRM render node (`/dev/dri/renderD128`) or the GPU's PCI address
+    /// (`0000:00:02.0`); unset = the first suitable GPU of this node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_node: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for Gpu3d {
+    fn default() -> Self {
+        Self {
+            venus: true,
+            virgl: true,
+            hostmem_mib: None,
+            render_node: None,
+        }
+    }
+}
+
+impl Gpu3d {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// Emulated sound card. With SPICE the audio travels over SPICE's playback
@@ -1126,7 +1171,7 @@ pub enum SoundDevice {
 }
 
 /// Per-VM display settings.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct VmDisplay {
     #[serde(default)]
     pub protocol: DisplayProtocol,
@@ -1140,9 +1185,18 @@ pub struct VmDisplay {
     /// USB HID support.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub relative_mouse: bool,
+    /// 3D settings, used when `video` is `virtio-3d`.
+    #[serde(default, skip_serializing_if = "Gpu3d::is_default")]
+    pub gpu3d: Gpu3d,
 }
 
 impl VmDisplay {
+    /// Whether the VM gets a 3D virtio-gpu (host GPU state the guest owns:
+    /// QEMU cannot save or migrate it).
+    pub fn uses_3d(&self) -> bool {
+        self.video == VideoDevice::Virtio3d
+    }
+
     /// Reject combinations QEMU can't do (or that would silently do nothing).
     pub fn validate(&self, arch: &VmArchitecture) -> std::result::Result<(), String> {
         if self.video == VideoDevice::Qxl && *arch != VmArchitecture::X86_64 {
@@ -1153,6 +1207,37 @@ impl VmDisplay {
         }
         if self.protocol != DisplayProtocol::None && self.video == VideoDevice::None {
             return Err("A graphical console needs a video card (or set protocol to none)".into());
+        }
+        if self.uses_3d() {
+            if *arch != VmArchitecture::X86_64 {
+                return Err("The 3D virtio-gpu is offered for x86_64 guests".into());
+            }
+            if self.protocol == DisplayProtocol::Spice {
+                return Err(
+                    "The 3D virtio-gpu is shown through VNC (the Horcrux console) or no display; \
+                     SPICE is not supported with it yet"
+                        .into(),
+                );
+            }
+            if !self.gpu3d.venus && !self.gpu3d.virgl {
+                return Err("Enable Venus (Vulkan) or virgl (OpenGL) for the 3D virtio-gpu".into());
+            }
+            if let Some(m) = self.gpu3d.hostmem_mib {
+                if !(64..=65536).contains(&m) {
+                    return Err("hostmem_mib must be between 64 and 65536".into());
+                }
+            }
+            if let Some(n) = &self.gpu3d.render_node {
+                let ok = !n.is_empty()
+                    && n.len() <= 64
+                    && n.chars().all(|c| {
+                        c.is_ascii_alphanumeric() || matches!(c, '/' | ':' | '.' | '-' | '_')
+                    })
+                    && !n.split('/').any(|p| p == "..");
+                if !ok {
+                    return Err("render_node must be a /dev/dri path or a PCI address".into());
+                }
+            }
         }
         Ok(())
     }

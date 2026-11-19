@@ -31,6 +31,9 @@ pub struct HorcruxConfig {
     /// GPU / PCI passthrough and VM tuning (gaming VMs)
     #[serde(default)]
     pub passthrough: PassthroughConfig,
+    /// 3D virtio-gpu (Venus / virgl) node defaults
+    #[serde(default)]
+    pub vgpu: VgpuConfig,
 }
 
 /// GPU / PCI passthrough and VM tuning settings (`[passthrough]`).
@@ -90,6 +93,54 @@ impl Default for PassthroughConfig {
                 PathBuf::from("/usr/share/horcrux/gpu-quirks.toml"),
                 PathBuf::from("/etc/horcrux/gpu-quirks.toml"),
             ],
+        }
+    }
+}
+
+/// 3D virtio-gpu settings (`[vgpu]`): defaults for VMs whose video card is
+/// `virtio-3d` (docs/design/hx-vgpu.md). Every value has a default; a node
+/// overrides any of them in `/etc/horcrux/config.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VgpuConfig {
+    /// Host-visible memory window (MiB) Venus guests get when the VM sets none.
+    pub hostmem_mib: u32,
+    /// GPUs VMs may use, as render-node paths or PCI addresses; empty = every
+    /// suitable GPU of the node.
+    pub render_nodes: Vec<String>,
+    /// Directory with the DRM render nodes.
+    pub dri_dir: PathBuf,
+    /// sysfs DRM class directory used to identify each render node's GPU.
+    pub drm_sysfs_dir: PathBuf,
+    /// Kernel drivers of render nodes that never back a real GPU (software
+    /// or virtual devices); they are not offered.
+    pub ignore_drivers: Vec<String>,
+    /// Program that lists Vulkan devices and their extensions (used to check
+    /// that a GPU's driver can export dma-bufs, which Venus needs); the
+    /// check is skipped, and reported as unverified, when it is missing.
+    pub vulkaninfo: String,
+    /// Seconds one host probe command (QEMU device/display lists, vulkaninfo)
+    /// may take.
+    pub probe_timeout_secs: u64,
+    /// Seconds a host check result is reused (the check runs QEMU and
+    /// vulkaninfo, so the UI's repeated reads share one).
+    pub probe_cache_secs: u64,
+}
+
+impl Default for VgpuConfig {
+    fn default() -> Self {
+        Self {
+            hostmem_mib: 2048,
+            render_nodes: Vec::new(),
+            dri_dir: PathBuf::from("/dev/dri"),
+            drm_sysfs_dir: PathBuf::from("/sys/class/drm"),
+            ignore_drivers: ["vgem", "vkms", "virtio_gpu", "udl", "evdi"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            vulkaninfo: "vulkaninfo".into(),
+            probe_timeout_secs: 20,
+            probe_cache_secs: 30,
         }
     }
 }

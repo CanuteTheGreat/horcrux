@@ -7,9 +7,13 @@
 
 # QEMU - Full virtualization with all important features
 app-emulation/qemu aio alsa bpf bzip2 caps curl fdt filecaps fuse gnutls io-uring
-app-emulation/qemu jpeg lzo ncurses nfs numa -opengl pin-upstream-blobs png
+app-emulation/qemu jpeg lzo ncurses nfs numa opengl pin-upstream-blobs png
 app-emulation/qemu -pulseaudio -sdl -sdl-image seccomp slirp snappy spice ssh
-app-emulation/qemu -static-user udev usb usbredir vde vhost-net -virgl virtfs vnc
+app-emulation/qemu -static-user udev usb usbredir vde vhost-net virgl virtfs vnc
+# 3D virtio-gpu guests (Venus Vulkan + virgl OpenGL on the host GPU)
+media-libs/virglrenderer venus
+# qemu[opengl] needs libglvnd with X (EGL dispatch)
+media-libs/libglvnd X
 # xen: app-emulation/xen-tools-4.20.3's ebuild is broken in this Gentoo
 # snapshot (src_prepare does `mv ../dtc-v${QEMU_DTC_VERSION} ...` with
 # QEMU_DTC_VERSION unset, so it dies with "cannot stat '../dtc-v'").

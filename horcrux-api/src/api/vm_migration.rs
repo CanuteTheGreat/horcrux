@@ -201,6 +201,13 @@ struct Plan {
 /// QEMU cannot save or move). A stopped VM can still move offline: the
 /// target must have the same device bound to `vfio-pci` to start it.
 pub fn live_pinned(vm: &VmConfig, live_requested: bool, running: bool) -> Option<String> {
+    if live_requested && running && vm.display.uses_3d() {
+        return Some(format!(
+            "VM {} has a 3D virtio-gpu: QEMU cannot migrate it (\"virgl is not yet migratable\"). \
+             Stop it and migrate offline, or switch its video card to a plain virtio-gpu",
+            vm.id
+        ));
+    }
     if !live_requested || vm.hardware.hostpci.is_empty() || !running {
         return None;
     }
@@ -1112,6 +1119,12 @@ mod tests {
         assert!(live_pinned(&pt, false, true).is_none());
         assert!(live_pinned(&pt, true, false).is_none());
         assert!(live_pinned(&vm_with(json!([])), true, true).is_none());
+        let mut g3d = vm_with(json!([]));
+        g3d.display.video = horcrux_common::VideoDevice::Virtio3d;
+        let why = live_pinned(&g3d, true, true).unwrap();
+        assert!(why.contains("3D virtio-gpu"), "{why}");
+        assert!(live_pinned(&g3d, true, false).is_none());
+        assert!(live_pinned(&g3d, false, true).is_none());
     }
 
     /// Only the connections to the target are yanked, never the VM's

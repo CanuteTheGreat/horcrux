@@ -81,7 +81,7 @@ pub fn VmConsole() -> impl IntoView {
                             }
                         },
                     );
-                    display_edit.set(config.display);
+                    display_edit.set(config.display.clone());
                     set_vm.set(Some(config));
                     set_error_message.set(None);
                 }

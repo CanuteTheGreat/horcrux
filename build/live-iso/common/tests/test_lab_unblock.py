@@ -139,13 +139,15 @@ class ProductBlockers(unittest.TestCase):
         self.assertNotIn("~", kw, "the manager must not be masked by a testing keyword (the original blocker)")
         for arch in ("amd64", "arm64"):
             self.assertIn(arch, kw)
-        self.assertIn("app-emulation/qemu[spice", eb)
+        self.assertIn("app-emulation/qemu[opengl,spice", eb)
+        self.assertIn("media-libs/virglrenderer[venus]", eb)
         self.assertIn("net-fs/nfs-utils", eb)                           # shared (NFS) storage for a cluster: lab 2026-11-05 had to install it by hand
         self.assertIn("!app-emulation/horcrux", eb)                     # same files as the source build: never both
         core = _rd("build", "live-iso", "project", "variants", "core", "Dockerfile")
         self.assertIn("app-emulation/horcrux-bin", core)
         self.assertIn("--select sys-apps/horcrux-core app-emulation/horcrux-bin", core)
         self.assertIn("GATE: qemu built without SPICE", core)
+        self.assertIn("GATE: virglrenderer built without venus", core)
         # desktop editions are built FROM the core image: the manager reaches gnome-light and every machine layer
         gl = _rd("build", "live-iso", "project", "variants", "gnome-light", "Dockerfile")
         self.assertIn("BASE", gl)
@@ -163,13 +165,23 @@ class ProductBlockers(unittest.TestCase):
     def test_qemu_has_spice_in_image_and_on_machines(self):
         for path in (("build", "live-iso", "project", "portage", "package.use", "horcrux-virt"), ("gentoo", "app-emulation", "horcrux-bin", "files", "package.use")):
             line = [l for l in _rd(*path).splitlines() if l.startswith("app-emulation/qemu")][0].split()
-            for flag in ("spice", "usbredir", "virtfs", "vnc", "zstd"):   # zstd: qcow2 imports (libvirt default compression)
+            for flag in ("spice", "usbredir", "virtfs", "vnc", "zstd", "opengl", "virgl"):   # zstd: qcow2 imports (libvirt default compression); opengl+virgl: 3D virtio-gpu guests
                 self.assertIn(flag, line[1:], path[-1])
         use = _rd("gentoo", "sys-apps", "horcrux-repo-config", "files", "horcrux-roles.use")
         self.assertRegex(use, r"(?m)^app-emulation/qemu .*\bzstd\b")
         for eb in os.listdir(os.path.join(GENTOO, "app-emulation", "horcrux-bin")):
             if eb.endswith(".ebuild"):
-                self.assertIn("app-emulation/qemu[spice,usbredir,virtfs,vnc,zstd]", _rd("gentoo", "app-emulation", "horcrux-bin", eb), eb)
+                body = _rd("gentoo", "app-emulation", "horcrux-bin", eb)
+                # stamped copies cut before the 3D virtio-gpu change keep their older (still valid) dependency line
+                self.assertRegex(body, r"app-emulation/qemu\[(opengl,)?spice,usbredir,(virgl,)?virtfs,vnc,zstd\]", eb)
+                if eb == "horcrux-bin-0.1.0.ebuild":
+                    self.assertIn("app-emulation/qemu[opengl,spice,usbredir,virgl,virtfs,vnc,zstd]", body)
+                    self.assertIn("media-libs/virglrenderer[venus]", body)
+        # 3D virtio-gpu guests: every package-use source (image, machine, role config) builds QEMU with opengl+virgl and virglrenderer with venus
+        for u in (use, _rd("gentoo", "app-emulation", "horcrux-bin", "files", "package.use"), _rd("build", "live-iso", "project", "portage", "package.use", "horcrux-virt")):
+            self.assertRegex(u, r"(?m)^app-emulation/qemu .*\bopengl\b.*\bvirgl\b")
+            self.assertRegex(u, r"(?m)^media-libs/virglrenderer venus$")
+            self.assertRegex(u, r"(?m)^media-libs/libglvnd X$")
         self.assertRegex(use, r"(?m)^app-emulation/qemu .*\bspice\b")      # first install of the manager on an existing machine resolves without autounmask
         # a global -spice / USE="-spice" in the image's own config would silently undo it
         for root, _, files in os.walk(os.path.join(REPO, "build", "live-iso")):

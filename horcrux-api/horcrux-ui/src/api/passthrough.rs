@@ -156,3 +156,51 @@ pub async fn create_mdev(parent: &str, mdev_type: &str) -> Result<serde_json::Va
 pub async fn delete_mdev(uuid: &str) -> Result<(), ApiError> {
     delete_json(&format!("/gpu/mdev/devices/{}", urlencoding::encode(uuid))).await
 }
+
+// ---- 3D virtio-gpu host check (mirrors horcrux-vm `vm::gpu3d::Host3d`) ----
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Gpu3dIssue {
+    pub reason: String,
+    pub message: String,
+    pub hint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Gpu3dNode {
+    pub path: String,
+    pub pci_address: Option<String>,
+    pub vendor_id: Option<String>,
+    pub device_id: Option<String>,
+    pub driver: Option<String>,
+    pub name: Option<String>,
+    pub dmabuf_export: Option<bool>,
+    pub allowed: bool,
+    pub suitable: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Gpu3dQemu {
+    pub binary: String,
+    pub found: bool,
+    pub version: Option<String>,
+    pub virtio_vga_gl: bool,
+    pub egl_headless: bool,
+    pub venus: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Host3d {
+    pub ready: bool,
+    pub qemu: Gpu3dQemu,
+    pub gpus: Vec<Gpu3dNode>,
+    pub default_node: Option<String>,
+    pub default_hostmem_mib: u32,
+    pub issues: Vec<Gpu3dIssue>,
+    pub warnings: Vec<String>,
+}
+
+pub async fn host_3d() -> Result<Host3d, ApiError> {
+    fetch_json("/gpu/3d").await
+}
