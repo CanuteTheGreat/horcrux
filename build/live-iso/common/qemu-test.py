@@ -698,7 +698,7 @@ def grub_index(iso, *pats):
     raise SystemExit(f"no GRUB entry matching {pats} in {ents}")
 
 
-def http(port, path, method="GET", body=None, timeout=10):
+def http_once(port, path, method="GET", body=None, timeout=10):
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -715,6 +715,20 @@ def http(port, path, method="GET", body=None, timeout=10):
         except Exception as e:
             last = e
     return None, 0, str(last).encode()
+
+
+def http(port, path, method="GET", body=None, timeout=10, tries=4):
+    """https first, plain http as the fallback. A slow guest (aarch64 TCG) can fail the TLS attempt once
+    (handshake timeout) while the plain-http listener already answers with a 308 'only speaks HTTPS':
+    that redirect is a transient answer from the fallback, never a result. Retry https instead."""
+    res = http_once(port, path, method, body, timeout)
+    for _ in range(tries - 1):
+        scheme, code, _body = res
+        if scheme is not None and not (scheme == "http" and code in (301, 302, 307, 308)):
+            break
+        time.sleep(5)
+        res = http_once(port, path, method, body, max(timeout, 20))
+    return res
 
 
 def ssh_banner(port, timeout=6):
