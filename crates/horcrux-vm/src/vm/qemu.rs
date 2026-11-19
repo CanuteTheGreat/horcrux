@@ -2108,15 +2108,19 @@ mod tests {
         };
         let a = qemu_command(&v, &rt, true, Some(&ovmf)).1.join(" ");
         for want in [
-            "-machine q35,accel=kvm:tcg -cpu x86-64-v2-AES -m 256 -smp 4,sockets=2,cores=2,threads=1",
+            "-machine q35,accel=kvm:tcg -cpu qemu64,+popcnt,+pni,+ssse3,+sse4.1,+sse4.2,+aes -m 256 -smp 4,sockets=2,cores=2,threads=1",
             "-drive if=pflash,unit=0,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd",
             "-drive if=pflash,unit=1,id=drive-efivars,format=qcow2,file=/vms/t1.efivars.qcow2",
             "-chardev socket,id=chrtpm,path=/vms/t1.tpm.sock -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,tpmdev=tpm0",
         ] {
             assert!(a.contains(want), "missing {want}\nin {a}");
         }
-        // Defaults: i440FX stays QEMU's plain default machine, no -cpu on
-        // x86, plain -smp, no firmware/TPM arguments.
+        // Defaults: i440FX stays QEMU's plain default machine, plain -smp,
+        // no firmware/TPM arguments. A VM stored WITHOUT a CPU type (created
+        // by a release before the node default existed) still starts with no
+        // -cpu, i.e. its exact old command line; new VMs get their default
+        // written into the config at create time (see
+        // new_x86_vm_gets_the_node_default_cpu_model).
         let v = vm(VmArchitecture::X86_64, VmDisplay::default());
         let a = qemu_command(&v, &rt, true, Some(&ovmf)).1.join(" ");
         assert!(
@@ -2127,6 +2131,56 @@ mod tests {
             !a.contains("pflash") && !a.contains("tpm") && !a.contains("-cpu"),
             "{a}"
         );
+    }
+
+    #[test]
+    fn new_x86_vm_gets_the_node_default_cpu_model() {
+        use horcrux_common::VmConfig;
+        let rt = super::super::display::DisplayRuntime::plan(
+            std::path::Path::new("/vms/t1.qcow2"),
+            &VmDisplay::default(),
+        )
+        .unwrap();
+        let new_cfg = |arch: VmArchitecture| VmConfig {
+            id: "t1".into(),
+            name: "t1".into(),
+            hypervisor: VmHypervisor::Qemu,
+            memory: 256,
+            cpus: 2,
+            disk_size: 1,
+            status: VmStatus::Stopped,
+            architecture: arch,
+            disks: vec![],
+            display: VmDisplay::default(),
+            hardware: Default::default(),
+        };
+        let args = |c: &VmConfig| {
+            let mut v = vm(c.architecture.clone(), VmDisplay::default());
+            v.hardware = c.hardware.clone();
+            qemu_command(&v, &rt, true, None).1.join(" ")
+        };
+        // x86: create-time default -> the x86-64-v2-AES baseline (qemu64 plus
+        // SSE4.2/POPCNT/AES), not the bare qemu64, and never the literal
+        // name, which QEMU does not know
+        let mut c = new_cfg(VmArchitecture::X86_64);
+        crate::vm::defaults::apply_create_defaults(&mut c);
+        assert_eq!(c.hardware.cpu_type.as_deref(), Some("x86-64-v2-AES"));
+        let a = args(&c);
+        assert!(
+            a.contains("-cpu qemu64,+popcnt,+pni,+ssse3,+sse4.1,+sse4.2,+aes "),
+            "{a}"
+        );
+        assert!(!a.contains("-cpu x86-64"), "{a}");
+        // an explicit model is kept
+        let mut c = new_cfg(VmArchitecture::X86_64);
+        c.hardware.cpu_type = Some("host".into());
+        crate::vm::defaults::apply_create_defaults(&mut c);
+        assert!(args(&c).contains("-cpu host "), "{}", args(&c));
+        // aarch64 keeps its own `-cpu max`, never an x86 model
+        let mut c = new_cfg(VmArchitecture::Aarch64);
+        crate::vm::defaults::apply_create_defaults(&mut c);
+        let a = args(&c);
+        assert!(a.contains("-cpu max") && !a.contains("x86-64"), "{a}");
     }
 
     #[test]

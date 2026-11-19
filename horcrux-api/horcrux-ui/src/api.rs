@@ -6562,6 +6562,16 @@ pub struct DefaultNetworks {
 pub struct VmDefaults {
     #[serde(default)]
     pub default_network: Option<String>,
+    /// CPU model written into every new x86 VM that names none (None = the
+    /// node's config.toml value, else x86-64-v2-AES).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_model: Option<String>,
+    /// Read-only: what a new VM gets now.
+    #[serde(default, skip_serializing)]
+    pub effective_cpu_model: String,
+    /// Read-only: `api` | `config` | `builtin`.
+    #[serde(default, skip_serializing)]
+    pub cpu_model_source: String,
 }
 
 pub async fn get_vm_defaults() -> Result<VmDefaults, ApiError> {
@@ -6598,6 +6608,9 @@ pub struct VmHostOptions {
     pub host: HostCapabilities,
     #[serde(default)]
     pub default_networks: DefaultNetworks,
+    /// CPU model a new x86 VM gets when the form leaves it open.
+    #[serde(default)]
+    pub default_cpu_model: String,
     /// Wired host interfaces a NIC can use directly as macvtap (no bridge).
     #[serde(default)]
     pub macvtap_uplinks: Vec<String>,

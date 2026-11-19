@@ -65,6 +65,16 @@ pub fn VmCreate() -> impl IntoView {
                             }
                         });
                     }
+                    // The node's default CPU model is preselected (QEMU's own
+                    // default, qemu64, cannot boot Windows 11 24H2).
+                    if !o.default_cpu_model.is_empty() {
+                        let m = o.default_cpu_model.clone();
+                        hardware.update(|h| {
+                            if h.cpu_type.is_none() {
+                                h.cpu_type = Some(m)
+                            }
+                        });
+                    }
                     // Default ISO is not preselected, but the sliders start
                     // inside what the host can give.
                     let cpu_max = o.host.cpus.max(1) as u64;
@@ -148,7 +158,11 @@ pub fn VmCreate() -> impl IntoView {
             display: display.get(),
             // Hardware settings are for QEMU VMs (LXD/Incus use profiles).
             hardware: if matches!(hypervisor.get(), VmHypervisor::Qemu) {
-                hardware.get()
+                let mut hw = hardware.get();
+                if architecture.get() != VmArchitecture::X86_64 {
+                    hw.cpu_type = None;
+                }
+                hw
             } else {
                 Default::default()
             },
@@ -239,6 +253,20 @@ pub fn VmCreate() -> impl IntoView {
                             "ppc64le" => VmArchitecture::Ppc64le,
                             _ => VmArchitecture::X86_64,
                         };
+                        // CPU model names are x86 ones: keep the node default
+                        // on x86 VMs only.
+                        let x86 = arch == VmArchitecture::X86_64;
+                        let default_cpu = host_options
+                            .get_untracked()
+                            .map(|o| o.default_cpu_model)
+                            .filter(|m| !m.is_empty());
+                        hardware.update(|h| {
+                            if !x86 {
+                                h.cpu_type = None;
+                            } else if h.cpu_type.is_none() {
+                                h.cpu_type = default_cpu;
+                            }
+                        });
                         set_architecture.set(arch);
 
                     }>
@@ -336,6 +364,7 @@ pub fn VmCreate() -> impl IntoView {
 
                 <Show when=move || !is_instance()>
                     <super::vm_hardware::HardwareFields hardware=hardware options=host_options
+                        creating=true
                         reload_options=Callback::new(move |_: ()| load_options(false))/>
                 </Show>
 

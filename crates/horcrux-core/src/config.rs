@@ -28,9 +28,42 @@ pub struct HorcruxConfig {
     /// Authentication settings
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Defaults for new VMs (`[vm_defaults]`)
+    #[serde(default)]
+    pub vm_defaults: VmDefaultsConfig,
     /// GPU / PCI passthrough and VM tuning (gaming VMs)
     #[serde(default)]
     pub passthrough: PassthroughConfig,
+}
+
+/// The CPU model new x86 VMs get when the request names none: a portable
+/// x86-64-v2 baseline with AES (Proxmox VE 8's default). It is what Windows
+/// 11 24H2 (SSE4.2/POPCNT) and x86-64-v2 Linux distributions need, and any
+/// KVM host from the last decade can run it, so it is migration-safe.
+pub const DEFAULT_VM_CPU_MODEL: &str = "x86-64-v2-AES";
+
+/// Defaults for VMs created from now on (`[vm_defaults]` in config.toml).
+///
+/// The value is written into each new VM's own configuration at create time,
+/// so changing it later never changes an existing guest. An operator can also
+/// set it at run time (Settings > Configuration, `PUT /api/vms/defaults`, or
+/// the `vm_defaults` section of a declarative spec); that setting wins over
+/// this file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VmDefaultsConfig {
+    /// QEMU CPU model of new x86 VMs without an explicit one
+    /// (`x86-64-v2-AES`, `x86-64-v3`, `host`, `EPYC-v4`, ...).
+    /// Env: `HORCRUX_VM_DEFAULT_CPU_MODEL`.
+    pub cpu_model: String,
+}
+
+impl Default for VmDefaultsConfig {
+    fn default() -> Self {
+        Self {
+            cpu_model: DEFAULT_VM_CPU_MODEL.into(),
+        }
+    }
 }
 
 /// GPU / PCI passthrough and VM tuning settings (`[passthrough]`).
@@ -458,6 +491,14 @@ impl HorcruxConfig {
         }
         if let Ok(path) = std::env::var("HORCRUX_QEMU_RUN_DIR") {
             self.qemu.run_dir = PathBuf::from(path);
+        }
+
+        // VM defaults
+        if let Ok(m) = std::env::var("HORCRUX_VM_DEFAULT_CPU_MODEL") {
+            let m = m.trim();
+            if !m.is_empty() {
+                self.vm_defaults.cpu_model = m.to_string();
+            }
         }
 
         // Logging

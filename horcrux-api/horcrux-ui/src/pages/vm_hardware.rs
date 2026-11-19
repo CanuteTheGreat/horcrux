@@ -106,6 +106,9 @@ pub fn HardwareFields(
     /// (the form then offers the "Add an ISO" panel).
     #[prop(optional)]
     reload_options: Option<Callback<()>>,
+    /// The Create VM form: an empty CPU type means the node's default.
+    #[prop(optional)]
+    creating: bool,
 ) -> impl IntoView {
     let bridges = move || options.get().map(|o| o.bridges).unwrap_or_default();
     let uplinks = move || options.get().map(|o| o.macvtap_uplinks).unwrap_or_default();
@@ -311,7 +314,7 @@ pub fn HardwareFields(
             </div>
         </fieldset>
 
-        <SystemFields hardware=hardware options=options running=running/>
+        <SystemFields hardware=hardware options=options running=running creating=creating/>
     }
 }
 
@@ -321,7 +324,22 @@ pub fn SystemFields(
     hardware: RwSignal<VmHardware>,
     #[prop(into)] options: Signal<Option<VmHostOptions>>,
     #[prop(into, default = Signal::derive(|| false))] running: Signal<bool>,
+    #[prop(optional)] creating: bool,
 ) -> impl IntoView {
+    // What "no CPU type" means: a new VM gets the node's default; a stored VM
+    // without one runs with QEMU's bare qemu64.
+    let empty_label = move || {
+        if creating {
+            let d = options
+                .get()
+                .map(|o| o.default_cpu_model)
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| "x86-64-v2-AES".to_string());
+            format!("Node default ({d})")
+        } else {
+            "None (QEMU's bare qemu64: no SSE4.2, Windows 11 24H2 cannot boot)".to_string()
+        }
+    };
     let ovmf = move || options.get().map(|o| o.ovmf).unwrap_or(true);
     let swtpm = move || options.get().map(|o| o.swtpm).unwrap_or(true);
     let cpu_value = move || hardware.get().cpu_type.unwrap_or_default();
@@ -357,7 +375,8 @@ pub fn SystemFields(
                     }>
                         {CPU_TYPES.iter().map(|(v, label)| {
                             let v = *v;
-                            view! { <option value=v selected={move || cpu_value() == v}>{*label}</option> }
+                            let label = *label;
+                            view! { <option value=v selected={move || cpu_value() == v}>{move || if v.is_empty() { empty_label() } else { label.to_string() }}</option> }
                         }).collect_view()}
                         <option value="custom" selected={move || !is_listed()}>"Other model..."</option>
                     </select>
@@ -712,6 +731,54 @@ pub fn VmHardwarePage() -> impl IntoView {
         });
     };
 
+    // VMs created before the node default existed start with no CPU model,
+    // i.e. QEMU's bare qemu64 (no SSE4.2/POPCNT): Windows 11 24H2 and
+    // x86-64-v2 Linux distributions cannot boot on it. They keep running as
+    // they are; this is a one-click switch to the node default.
+    let legacy_cpu = move || {
+        vm.get()
+            .map(|v| {
+                v.hypervisor == VmHypervisor::Qemu
+                    && v.architecture == horcrux_common::VmArchitecture::X86_64
+                    && v.hardware.cpu_type.is_none()
+                    && !v.hardware.adv.hyperv
+            })
+            .unwrap_or(false)
+    };
+    let node_cpu = move || {
+        options
+            .get()
+            .map(|o| o.default_cpu_model)
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "x86-64-v2-AES".to_string())
+    };
+    let switch_cpu = move |_| {
+        let id = vm_id();
+        let Some(cur) = vm.get() else { return };
+        let mut hw = cur.hardware.clone();
+        hw.cpu_type = Some(node_cpu());
+        let upd = VmConfigUpdate {
+            hardware: Some(hw),
+            ..Default::default()
+        };
+        set_busy.set(true);
+        set_error.set(None);
+        spawn_local(async move {
+            match api::update_vm_config(&id, &upd).await {
+                Ok(v) => {
+                    hardware.set(v.hardware.clone());
+                    set_notice.set(Some(format!(
+                        "CPU type set to {}: applies at the next start",
+                        v.hardware.cpu_type.clone().unwrap_or_default()
+                    )));
+                    set_vm.set(Some(v));
+                }
+                Err(e) => set_error.set(Some(e.message)),
+            }
+            set_busy.set(false);
+        });
+    };
+
     let power = move |action: &'static str| {
         let id = vm_id();
         set_busy.set(true);
@@ -749,6 +816,18 @@ pub fn VmHardwarePage() -> impl IntoView {
             })}
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="vm-hw-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="vm-hw-error">{e}</div> })}
+
+            <Show when=legacy_cpu>
+                <div class="alert alert-warning" id="vm-cpu-legacy-warning">
+                    <p>"This VM has no CPU type, so QEMU runs it on its bare qemu64 CPU (no SSE4.2/POPCNT). Windows 11 24H2 hangs at the boot logo on it and recent Linux distributions built for x86-64-v2 do not start. It keeps running as it is; switch it when the guest needs it."</p>
+                    <button type="button" class="btn btn-sm btn-primary" id="vm-cpu-legacy-switch"
+                        disabled={move || busy.get() || running.get()}
+                        on:click=switch_cpu>
+                        {move || format!("Switch to {}", node_cpu())}
+                    </button>
+                    {move || running.get().then(|| view! { <small class="form-help">" Stop the VM first: the CPU type applies at its next start."</small> })}
+                </div>
+            </Show>
 
             <div class="form-actions" id="vm-power">
                 <button class="btn btn-warning" id="vm-shutdown" disabled={move || busy.get() || !running.get()}

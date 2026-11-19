@@ -2,6 +2,7 @@ pub mod advanced;
 pub mod clone;
 pub mod clone_progress;
 pub mod cross_node_clone;
+pub mod defaults;
 pub mod devices;
 pub mod display;
 pub mod firmware;
@@ -264,6 +265,15 @@ impl VmManager {
             .map_err(horcrux_common::Error::Validation)?;
         // NICs (MACs generated here), CD-ROM, boot order.
         let mut config = config;
+        // A new x86 VM that names no CPU model gets the node's default
+        // written into its own config (QEMU's bare qemu64 cannot boot
+        // Windows 11 24H2 or x86-64-v2 distributions).
+        if let Some(m) = defaults::apply_create_defaults(&mut config) {
+            tracing::debug!(
+                "VM {}: no CPU type given, using the node default {m}",
+                config.id
+            );
+        }
         hardware::prepare_hardware(&mut config)?;
 
         // Create the VM

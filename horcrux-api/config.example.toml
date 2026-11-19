@@ -67,3 +67,12 @@ bin_dir = "/opt/cni/bin"
 conf_dir = "/etc/cni/net.d"
 # Enable CNI features
 enabled = true
+
+[vm_defaults]
+# QEMU CPU model written into every NEW x86 VM that names none (existing VMs
+# are never changed). x86-64-v2-AES is portable across KVM hosts and is what
+# Windows 11 24H2 and x86-64-v2 Linux distributions need; QEMU's own default
+# (qemu64) cannot boot them. Run-time override: Settings > Configuration,
+# PUT /api/vms/defaults, or `vm_defaults:` in a declarative spec.
+# Env: HORCRUX_VM_DEFAULT_CPU_MODEL
+cpu_model = "x86-64-v2-AES"

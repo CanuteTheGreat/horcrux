@@ -20,6 +20,7 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         vnets: sdn::list_vnets(State(state.clone())).await.0,
         subnets: sdn::list_subnets(State(state.clone())).await.0,
         vms: state.vm_manager.list_vms().await,
+        vm_defaults: crate::api::vm_hw::load_vm_defaults(state).await,
     }
 }
 
@@ -200,6 +201,14 @@ async fn run_change(
         }
         ("subnet", Action::Delete) => {
             let _ = sdn::delete_subnet(State(state.clone()), Path(c.name.clone()))
+                .await
+                .map_err(api)?;
+            Ok(None)
+        }
+
+        ("vm_defaults", Action::Update) => {
+            let w = spec.vm_defaults.clone().ok_or("not in spec")?;
+            crate::api::vm_hw::save_vm_defaults(state, w)
                 .await
                 .map_err(api)?;
             Ok(None)

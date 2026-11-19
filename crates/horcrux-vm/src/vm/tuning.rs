@@ -336,16 +336,19 @@ pub fn hugepage_backend(h: &VmHugePages, shared: bool) -> String {
 }
 
 /// The `-cpu` value of a VM: its model plus the Hyper-V enlightenments.
+/// Baseline names (`x86-64-v2-AES`, `x86-64-v3`, ...) are expanded to what
+/// QEMU understands, see [`super::defaults::expand_cpu_model`].
 pub fn cpu_arg(
     cpu_type: Option<&str>,
     adv: &VmAdvanced,
     cfg: &PassthroughConfig,
 ) -> Option<String> {
+    use super::defaults::expand_cpu_model;
     if !adv.hyperv {
-        return cpu_type.map(str::to_string);
+        return cpu_type.map(expand_cpu_model);
     }
-    let model = cpu_type.unwrap_or(cfg.hyperv_cpu_model.as_str());
-    let mut parts = vec![model.to_string()];
+    let model = expand_cpu_model(cpu_type.unwrap_or(cfg.hyperv_cpu_model.as_str()));
+    let mut parts = vec![model];
     parts.extend(
         cfg.hyperv_enlightenments
             .iter()

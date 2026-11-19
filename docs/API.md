@@ -454,7 +454,14 @@ Authorization: Bearer <token>
   fields are kept.
 - `GET /api/vms/host-options`: the host's bridges (`name`, `vlan_aware`), the
   wired interfaces a NIC can use as macvtap (`macvtap_uplinks`), the ISO library
-  and its directory, for VM forms.
+  and its directory, for VM forms; `default_cpu_model` is the CPU model the
+  Create VM form preselects.
+- `GET|PUT /api/vms/defaults`: node-wide defaults for new VMs (read: VM.Audit,
+  change: Sys.Modify). `{"default_network": "vmbr0"|null, "cpu_model": "x86-64-v3"|null}`
+  plus the read-only `effective_cpu_model` and `cpu_model_source`
+  (`api` | `config` | `builtin`). `PUT` replaces the document; an empty or
+  absent key goes back to the config.toml / built-in value. See
+  [VM-CPU-MODEL.md](VM-CPU-MODEL.md).
 
 ### Shutdown / Reboot / Reset VM
 

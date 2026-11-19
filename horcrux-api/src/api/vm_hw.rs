@@ -176,19 +176,63 @@ pub struct HostOptions {
     /// Wired host interfaces a NIC can use directly as macvtap (no bridge).
     #[serde(default)]
     pub macvtap_uplinks: Vec<String>,
+    /// CPU model a new x86 VM gets when the form leaves it open (the node's
+    /// default, Settings > Configuration); the Create VM form preselects it.
+    #[serde(default)]
+    pub default_cpu_model: String,
 }
 
-/// Global VM defaults (Settings): `GET|PUT /api/vms/defaults`.
+/// Global VM defaults (Settings): `GET|PUT /api/vms/defaults`, the
+/// `vm_defaults` section of a declarative spec.
+///
+/// `PUT` replaces the whole document: a field left out goes back to its
+/// built-in/config-file value.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct VmDefaults {
     /// Network (bridge) every new VM's first NIC attaches to instead of the
     /// hypervisor's own default; empty/absent = per hypervisor.
     #[serde(default)]
     pub default_network: Option<String>,
+    /// QEMU CPU model written into every new x86 VM that names none
+    /// (`x86-64-v2-AES`, `x86-64-v3`, `host`, ...); empty/absent = the node's
+    /// `[vm_defaults] cpu_model` from config.toml, else `x86-64-v2-AES`.
+    /// Existing VMs are never changed by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_model: Option<String>,
+    /// Read-only: the model a new VM gets right now.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effective_cpu_model: String,
+    /// Read-only: where it comes from (`api` = this setting, `config` =
+    /// config.toml / environment, `builtin`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cpu_model_source: String,
+}
+
+impl VmDefaults {
+    /// The part that is stored and compared (without the read-only fields).
+    pub fn settings(&self) -> VmDefaults {
+        VmDefaults {
+            default_network: self.default_network.clone(),
+            cpu_model: self.cpu_model.clone(),
+            ..Default::default()
+        }
+    }
+
+    /// With the read-only fields filled in.
+    pub fn with_effective(mut self) -> VmDefaults {
+        let (m, src) = crate::vm::defaults::cpu_model();
+        self.effective_cpu_model = m;
+        self.cpu_model_source = serde_json::to_value(src)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        self
+    }
 }
 
 const VM_DEFAULTS_KIND: &str = "vm_defaults";
 
+/// The stored run-time settings.
 pub async fn load_vm_defaults(state: &AppState) -> VmDefaults {
     crate::db::config_store::ConfigStore::new(&state.database)
         .load_values::<VmDefaults>(VM_DEFAULTS_KIND)
@@ -196,18 +240,35 @@ pub async fn load_vm_defaults(state: &AppState) -> VmDefaults {
         .ok()
         .and_then(|v| v.into_iter().next())
         .unwrap_or_default()
+        .settings()
+}
+
+/// Hand the stored CPU-model default to the VM manager (start-up).
+pub async fn sync_vm_defaults(state: &AppState) {
+    crate::vm::defaults::set_cpu_model_override(load_vm_defaults(state).await.cpu_model);
 }
 
 async fn get_vm_defaults(State(state): State<Arc<AppState>>) -> Json<VmDefaults> {
-    Json(load_vm_defaults(&state).await)
+    Json(load_vm_defaults(&state).await.with_effective())
 }
 
 async fn put_vm_defaults(
     State(state): State<Arc<AppState>>,
-    Json(mut req): Json<VmDefaults>,
+    Json(req): Json<VmDefaults>,
 ) -> Result<Json<VmDefaults>, ApiError> {
+    Ok(Json(save_vm_defaults(&state, req).await?))
+}
+
+/// Validate and store the global VM defaults (the API and a declarative
+/// apply both come through here).
+pub async fn save_vm_defaults(state: &AppState, req: VmDefaults) -> Result<VmDefaults, ApiError> {
+    let mut req = req.settings();
     req.default_network = req
         .default_network
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
+    req.cpu_model = req
+        .cpu_model
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty());
     if let Some(n) = &req.default_network {
@@ -225,10 +286,38 @@ async fn put_vm_defaults(
             )));
         }
     }
+    if let Some(m) = &req.cpu_model {
+        check_cpu_model(m).await?;
+    }
     crate::db::config_store::ConfigStore::new(&state.database)
         .put(VM_DEFAULTS_KIND, "default", &req)
         .await?;
-    Ok(Json(req))
+    crate::vm::defaults::set_cpu_model_override(req.cpu_model.clone());
+    Ok(req.with_effective())
+}
+
+/// A default that QEMU does not know would stop every new VM from starting,
+/// so refuse it here when this node can tell (`qemu-system-x86_64 -cpu help`;
+/// no QEMU installed = no check).
+async fn check_cpu_model(m: &str) -> Result<(), ApiError> {
+    if !horcrux_common::valid_cpu_type(m) {
+        return Err(ApiError::BadRequest(format!(
+            "cpu_model {m:?}: use a QEMU CPU model name (letters, digits, - _ .), flags go on the VM"
+        )));
+    }
+    let out = tokio::process::Command::new("qemu-system-x86_64")
+        .args(["-cpu", "help"])
+        .output()
+        .await;
+    if let Ok(o) = out {
+        let known = crate::vm::defaults::parse_cpu_help(&String::from_utf8_lossy(&o.stdout));
+        if !known.is_empty() && !crate::vm::defaults::model_is_known(m, &known) {
+            return Err(ApiError::BadRequest(format!(
+                "cpu_model {m}: QEMU on this node has no such CPU model (try x86-64-v2-AES, x86-64-v3, host, max, EPYC-v4)"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Logical CPUs, RAM and reserve of this host.
@@ -693,6 +782,7 @@ async fn host_options(State(state): State<Arc<AppState>>) -> Json<HostOptions> {
     Json(HostOptions {
         bridges: vm_bridges(),
         macvtap_uplinks: macvtap_uplinks(),
+        default_cpu_model: crate::vm::defaults::cpu_model().0,
         isos: scan_isos(&state).await,
         iso_dir: image_dir(&state.config.paths.data_dir)
             .to_string_lossy()

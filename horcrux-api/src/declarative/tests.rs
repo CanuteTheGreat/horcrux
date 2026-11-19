@@ -256,3 +256,47 @@ fn immutable_network_and_pool_changes_are_blocked_not_silently_dropped() {
     );
     assert!(!actions(&p).iter().any(|a| a.contains("storage_pool")));
 }
+
+#[test]
+fn vm_defaults_section_is_planned_exported_and_validated() {
+    // a spec sets the node's default CPU model
+    let s = parse("vm_defaults: {cpu_model: ' x86-64-v3 '}").unwrap();
+    assert_eq!(
+        s.vm_defaults.as_ref().unwrap().cpu_model.as_deref(),
+        Some("x86-64-v3")
+    );
+    // the node has none stored: one update, run before everything else
+    let p = plan(&s, &Live::default(), false);
+    assert_eq!(actions(&p), ["Update vm_defaults node"]);
+    assert!(
+        p.changes[0].details[0].contains("x86-64-v3"),
+        "{:?}",
+        p.changes
+    );
+    // already stored: in sync (the read-only fields never count)
+    let live = Live {
+        vm_defaults: crate::api::vm_hw::VmDefaults {
+            cpu_model: Some("x86-64-v3".into()),
+            effective_cpu_model: "x86-64-v3".into(),
+            ..Default::default()
+        }
+        .settings(),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).in_sync());
+    // a present section is the whole setting: leaving the key out clears it
+    let cleared = parse("vm_defaults: {}").unwrap();
+    assert_eq!(
+        actions(&plan(&cleared, &live, false)),
+        ["Update vm_defaults node"]
+    );
+    // absent section = unmanaged
+    assert!(plan(&parse("vms: []").unwrap(), &live, false).in_sync());
+    // export -> yaml -> parse -> plan is in sync
+    let exported = export(&live);
+    let text = serde_yaml::to_string(&exported).unwrap();
+    assert!(text.contains("cpu_model: x86-64-v3"), "{text}");
+    assert!(plan(&parse(&text).unwrap(), &live, false).in_sync());
+    // an implausible model is refused up front
+    assert!(parse("vm_defaults: {cpu_model: 'a b;c'}").is_err());
+}

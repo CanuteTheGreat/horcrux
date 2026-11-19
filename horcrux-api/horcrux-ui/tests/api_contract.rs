@@ -602,6 +602,15 @@ async fn ui_types_read_real_api_responses() {
         "{:?}",
         opts.storage_pools
     );
+    // The Create VM form preselects the node's default CPU model, and
+    // Settings reads/writes it with the other VM defaults.
+    assert_eq!(opts.default_cpu_model, "x86-64-v2-AES", "{opts:?}");
+    let defaults: api::VmDefaults = fetch(&c, &token, "/vms/defaults").await;
+    assert_eq!(
+        defaults.effective_cpu_model, "x86-64-v2-AES",
+        "{defaults:?}"
+    );
+    assert_eq!(defaults.cpu_model_source, "builtin", "{defaults:?}");
     delete(
         &c,
         &token,

@@ -398,6 +398,9 @@ pub async fn run() -> anyhow::Result<()> {
     // through the host's init system (OpenRC or systemd), and VMs that were
     // running across an API restart get their exit watchers back.
     crate::vm::handoff::set_host_services(Box::new(crate::init::HandoffServices));
+    // The CPU model new x86 VMs get (Settings > Configuration): hand the
+    // stored value to the VM manager before the first request.
+    crate::api::vm_hw::sync_vm_defaults(&state).await;
     {
         let vms = state.vm_manager.clone();
         tokio::spawn(async move { vms.reconcile_passthrough().await });

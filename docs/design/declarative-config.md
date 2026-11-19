@@ -36,6 +36,10 @@ networks:
   vnets:   [{id: web, zone: lab}]               # becomes bridge `web`
   subnets: [{vnet: web, cidr: 10.20.0.0/24, gateway: 10.20.0.1, snat: true}]
 
+vm_defaults:          # node-wide defaults for NEW VMs (absent = unmanaged)
+  cpu_model: x86-64-v2-AES   # absent/empty = config.toml [vm_defaults], else x86-64-v2-AES
+  default_network: null
+
 vms:                  # key = name
   - name: app1
     id: app1          # optional, default = name

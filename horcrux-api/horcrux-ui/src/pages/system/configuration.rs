@@ -690,12 +690,15 @@ pub fn SystemConfigurationPage() -> impl IntoView {
     }
 }
 
-/// Global default network for new VMs (Create VM attaches the first NIC to
-/// it instead of the hypervisor's own default).
+/// Defaults for new VMs: the network (Create VM attaches the first NIC to it
+/// instead of the hypervisor's own default) and the CPU model every new x86
+/// VM gets when its form names none. Existing VMs are never changed by either.
 #[component]
 fn VmDefaultNetworkCard() -> impl IntoView {
     let (bridges, set_bridges) = create_signal(Vec::<String>::new());
     let (current, set_current) = create_signal(String::new());
+    let (cpu_model, set_cpu_model) = create_signal(String::new());
+    let (effective, set_effective) = create_signal((String::new(), String::new()));
     let (hv_default, set_hv_default) = create_signal(String::new());
     let (msg, set_msg) = create_signal(None::<(bool, String)>);
     // The select stays disabled until both the bridges and the saved value
@@ -705,6 +708,8 @@ fn VmDefaultNetworkCard() -> impl IntoView {
     spawn_local(async move {
         if let Ok(d) = crate::api::get_vm_defaults().await {
             set_current.set(d.default_network.unwrap_or_default());
+            set_cpu_model.set(d.cpu_model.unwrap_or_default());
+            set_effective.set((d.effective_cpu_model, d.cpu_model_source));
         }
         if let Ok(o) = crate::api::get_vm_host_options().await {
             set_bridges.set(o.bridges.iter().map(|b| b.name.clone()).collect());
@@ -715,21 +720,28 @@ fn VmDefaultNetworkCard() -> impl IntoView {
     let save = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         let v = current.get_untracked();
+        let cpu = cpu_model.get_untracked().trim().to_string();
         spawn_local(async move {
             let d = crate::api::VmDefaults {
                 default_network: (!v.is_empty()).then_some(v),
+                cpu_model: (!cpu.is_empty()).then_some(cpu),
+                ..Default::default()
             };
             match crate::api::put_vm_defaults(&d).await {
-                Ok(_) => set_msg.set(Some((true, "Default VM network saved".into()))),
+                Ok(saved) => {
+                    set_effective.set((saved.effective_cpu_model, saved.cpu_model_source));
+                    set_msg.set(Some((true, "Default VM settings saved".into())))
+                }
                 Err(e) => set_msg.set(Some((false, e.message))),
             }
         });
     };
     view! {
         <div class="network-config-section" id="vm-default-network">
-            <div class="section-header"><h2>"Default VM network"</h2></div>
+            <div class="section-header"><h2>"Defaults for new VMs"</h2></div>
             <form on:submit=save>
-                <div class="form-row">
+                <div class="form-group">
+                    <label for="vm-default-network-select">"Network"</label>
                     <select id="vm-default-network-select" aria-label="Default network for new VMs" disabled=move || !loaded.get() on:change=move |ev| set_current.set(event_target_value(&ev))>
                         <option value="" selected=move || current.get().is_empty()>
                             {move || format!("Per hypervisor (QEMU: {})", if hv_default.get().is_empty() { "no bridge found".to_string() } else { hv_default.get() })}
@@ -739,9 +751,31 @@ fn VmDefaultNetworkCard() -> impl IntoView {
                             view! { <option value=b.clone() selected=sel>{b.clone()}</option> }
                         }).collect_view()}
                     </select>
-                    <button type="submit" id="vm-default-network-save" class="btn btn-primary" disabled=move || !loaded.get()>"Save"</button>
+                    <small class="form-help">"New VMs get a network card on this bridge. Leave on \"Per hypervisor\" to use each hypervisor's own network."</small>
                 </div>
-                <small class="form-help">"New VMs get a network card on this bridge. Leave on \"Per hypervisor\" to use each hypervisor's own network."</small>
+                <div class="form-group">
+                    <label for="vm-default-cpu-model">"CPU model (x86)"</label>
+                    <input id="vm-default-cpu-model" type="text" list="vm-default-cpu-models"
+                        placeholder="empty = the node's config.toml value, else x86-64-v2-AES"
+                        disabled=move || !loaded.get()
+                        prop:value=cpu_model
+                        on:input=move |ev| set_cpu_model.set(event_target_value(&ev))/>
+                    <datalist id="vm-default-cpu-models">
+                        {crate::pages::vm_hardware::CPU_TYPES.iter().filter(|(v, _)| !v.is_empty()).map(|(v, label)| view! { <option value=*v>{*label}</option> }).collect_view()}
+                    </datalist>
+                    <small class="form-help" id="vm-default-cpu-effective">
+                        {move || {
+                            let (m, src) = effective.get();
+                            let from = match src.as_str() {
+                                "api" => "set here",
+                                "config" => "from config.toml",
+                                _ => "built-in default",
+                            };
+                            format!("New x86 VMs without a CPU type get {m} ({from}). It is written into each VM when it is created, so changing it never changes an existing VM. x86-64-v2-AES runs Windows 11 and current Linux distributions on any KVM host and live-migrates between different CPUs; QEMU's own default (qemu64) cannot.")
+                        }}
+                    </small>
+                </div>
+                <button type="submit" id="vm-default-network-save" class="btn btn-primary" disabled=move || !loaded.get()>"Save"</button>
                 {move || msg.get().map(|(ok, m)| view! { <div class=if ok { "alert alert-success" } else { "alert alert-error" } id="vm-default-network-msg">{m}</div> })}
             </form>
         </div>

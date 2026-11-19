@@ -248,3 +248,117 @@ async fn wait_iso(api: &crate::support::Api, name: &str, failed: bool) -> serde_
     }
     panic!("ISO {name} did not reach the expected state");
 }
+
+/// A new x86 VM that names no CPU type gets the node's default CPU model
+/// written into its own config (QEMU's bare qemu64 cannot boot Windows 11
+/// 24H2 or x86-64-v2 distributions); a later change of the default reaches
+/// only VMs created afterwards.
+#[tokio::test]
+async fn new_vm_without_cpu_type_gets_the_node_default_cpu_model() {
+    let dir = scratch("vm-default-cpu");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let mk = |id: &str, extra: serde_json::Value| {
+        let mut v = json!({"id": id, "name": id, "hypervisor": "qemu", "architecture": "x86_64",
+            "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped",
+            "display": {"protocol": "none"}});
+        if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+            o.extend(e.clone());
+        }
+        v
+    };
+
+    // the form learns the default; the setting reports where it comes from
+    let (_, o) = api.get("/vms/host-options").await;
+    assert_eq!(o["default_cpu_model"], "x86-64-v2-AES", "{o}");
+    let (s, d) = api.get("/vms/defaults").await;
+    assert_eq!(s, 200, "{d}");
+    assert_eq!(d["effective_cpu_model"], "x86-64-v2-AES", "{d}");
+    assert_eq!(d["cpu_model_source"], "builtin", "{d}");
+    assert!(d["cpu_model"].is_null(), "{d}");
+
+    // no cpu_type -> the default, stored in the VM
+    let (s, vm) = api.post("/vms", mk("cpu-a", json!({}))).await;
+    assert_eq!(s, 201, "{vm}");
+    assert_eq!(vm["hardware"]["cpu_type"], "x86-64-v2-AES", "{vm}");
+    let (_, got) = api.get("/vms/cpu-a").await;
+    assert_eq!(got["hardware"]["cpu_type"], "x86-64-v2-AES", "{got}");
+
+    // an explicit type is kept as given
+    let (s, vm) = api
+        .post(
+            "/vms",
+            mk("cpu-b", json!({"hardware": {"cpu_type": "qemu64"}})),
+        )
+        .await;
+    assert_eq!(s, 201, "{vm}");
+    assert_eq!(vm["hardware"]["cpu_type"], "qemu64", "{vm}");
+
+    // implausible models are refused
+    let put = |body: serde_json::Value| api.call(reqwest::Method::PUT, "/vms/defaults", Some(body));
+    let (s, e) = put(json!({"cpu_model": "bad model;x"})).await;
+    assert_eq!(s, 400, "{e}");
+    if std::process::Command::new("qemu-system-x86_64")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        let (s, e) = put(json!({"cpu_model": "no-such-cpu-model"})).await;
+        assert_eq!(s, 400, "QEMU knows no such model: {e}");
+    }
+
+    // change the default: only VMs created afterwards get it
+    let (s, d) = put(json!({"cpu_model": "x86-64-v3"})).await;
+    assert_eq!(s, 200, "{d}");
+    assert_eq!(d["effective_cpu_model"], "x86-64-v3", "{d}");
+    assert_eq!(d["cpu_model_source"], "api", "{d}");
+    let (_, o) = api.get("/vms/host-options").await;
+    assert_eq!(o["default_cpu_model"], "x86-64-v3", "{o}");
+    let (s, vm) = api.post("/vms", mk("cpu-c", json!({}))).await;
+    assert_eq!(s, 201, "{vm}");
+    assert_eq!(vm["hardware"]["cpu_type"], "x86-64-v3", "{vm}");
+    let (_, a) = api.get("/vms/cpu-a").await;
+    assert_eq!(a["hardware"]["cpu_type"], "x86-64-v2-AES", "{a}");
+
+    // the setting survives an API restart
+    drop(api);
+    srv.kill9();
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let (_, d) = api.get("/vms/defaults").await;
+    assert_eq!(d["cpu_model"], "x86-64-v3", "{d}");
+    assert_eq!(d["effective_cpu_model"], "x86-64-v3", "{d}");
+    let (s, vm) = api.post("/vms", mk("cpu-d", json!({}))).await;
+    assert_eq!(s, 201, "{vm}");
+    assert_eq!(vm["hardware"]["cpu_type"], "x86-64-v3", "{vm}");
+
+    // empty clears the run-time setting: back to the built-in default
+    let (s, d) = api
+        .call(
+            reqwest::Method::PUT,
+            "/vms/defaults",
+            Some(json!({"cpu_model": ""})),
+        )
+        .await;
+    assert_eq!(s, 200, "{d}");
+    assert_eq!(d["effective_cpu_model"], "x86-64-v2-AES", "{d}");
+    assert_eq!(d["cpu_model_source"], "builtin", "{d}");
+    // a declarative spec manages it too: plan, apply, then in sync
+    let spec = "vm_defaults: {cpu_model: x86-64-v3}";
+    let (s, plan) = api.post("/declarative/plan", json!({"spec": spec})).await;
+    assert_eq!(s, 200, "{plan}");
+    assert_eq!(plan["plan"]["changes"][0]["kind"], "vm_defaults", "{plan}");
+    let (s, rep) = api.post("/declarative/apply", json!({"spec": spec})).await;
+    assert_eq!(s, 200, "{rep}");
+    assert_eq!(rep["ok"], true, "{rep}");
+    let (_, d) = api.get("/vms/defaults").await;
+    assert_eq!(d["effective_cpu_model"], "x86-64-v3", "{d}");
+    let (_, plan) = api.post("/declarative/plan", json!({"spec": spec})).await;
+    assert_eq!(plan["in_sync"], true, "{plan}");
+    let (s, vm) = api.post("/vms", mk("cpu-e", json!({}))).await;
+    assert_eq!(s, 201, "{vm}");
+    assert_eq!(vm["hardware"]["cpu_type"], "x86-64-v3", "{vm}");
+}

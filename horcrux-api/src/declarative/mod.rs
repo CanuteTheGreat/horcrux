@@ -48,6 +48,13 @@ pub struct Spec {
     pub networks: Option<NetworksSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vms: Option<Vec<VmSpec>>,
+    /// Node-wide defaults for new VMs (Settings > Configuration, `PUT
+    /// /api/vms/defaults`): `cpu_model` (QEMU CPU model written into every new
+    /// x86 VM that names none) and `default_network`. Absent = unmanaged; a
+    /// present section is the whole setting, so a key left out means "back to
+    /// the config.toml / built-in value".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vm_defaults: Option<crate::api::vm_hw::VmDefaults>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
@@ -149,6 +156,18 @@ pub fn parse(text: &str) -> Result<Spec, String> {
 
 /// Derived fields: a subnet's id comes from its VNet and CIDR.
 fn normalize(spec: &mut Spec) -> Result<(), String> {
+    if let Some(d) = spec.vm_defaults.take() {
+        let mut d = d.settings();
+        d.default_network = d
+            .default_network
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty());
+        d.cpu_model = d
+            .cpu_model
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty());
+        spec.vm_defaults = Some(d);
+    }
     if let Some(n) = spec.networks.as_mut() {
         for s in n.subnets.iter_mut().flatten() {
             let (net, p) = parse_cidr(&s.cidr).map_err(|e| format!("subnet {}: {e}", s.cidr))?;
@@ -179,8 +198,19 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
     }
     if let Some(k) = spec.extra.keys().next() {
         return Err(format!(
-            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks and vms)"
+            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms and vm_defaults)"
         ));
+    }
+    if let Some(m) = spec
+        .vm_defaults
+        .as_ref()
+        .and_then(|d| d.cpu_model.as_deref())
+    {
+        if !horcrux_common::valid_cpu_type(m) {
+            return Err(format!(
+                "vm_defaults.cpu_model {m:?}: use a QEMU CPU model name (letters, digits, - _ .)"
+            ));
+        }
     }
     if let Some(pools) = &spec.storage_pools {
         dup("storage pool", pools.iter().map(|p| p.name.as_str()))?;
@@ -297,6 +327,8 @@ pub struct Live {
     pub vnets: Vec<VNet>,
     pub subnets: Vec<Subnet>,
     pub vms: Vec<VmConfig>,
+    /// The stored node-wide VM defaults (without the read-only fields).
+    pub vm_defaults: crate::api::vm_hw::VmDefaults,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -313,7 +345,7 @@ pub enum Action {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Change {
-    /// storage_pool | zone | vnet | subnet | vm
+    /// vm_defaults | storage_pool | zone | vnet | subnet | vm
     pub kind: String,
     pub name: String,
     pub action: Action,
@@ -357,6 +389,26 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
     };
     let mut creates: Vec<Change> = Vec::new();
     let mut deletes: Vec<Change> = Vec::new();
+
+    // node-wide VM defaults (one document per node)
+    if let Some(w) = &spec.vm_defaults {
+        let mut d = Vec::new();
+        diff(
+            &mut d,
+            "cpu_model",
+            &live.vm_defaults.cpu_model,
+            &w.cpu_model,
+        );
+        diff(
+            &mut d,
+            "default_network",
+            &live.vm_defaults.default_network,
+            &w.default_network,
+        );
+        if !d.is_empty() {
+            creates.push(ch("vm_defaults", "node", Action::Update, d));
+        }
+    }
 
     // storage pools, by name
     let want_pool_names: BTreeSet<&str> = spec
@@ -595,10 +647,17 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
     // Creates/updates run dependency-first (pools, zones, vnets, subnets,
     // VMs); deletes run in the opposite order (VMs first, pools last).
     let rank = |k: &str| {
-        ["storage_pool", "zone", "vnet", "subnet", "vm"]
-            .iter()
-            .position(|x| *x == k)
-            .unwrap_or(9)
+        [
+            "vm_defaults",
+            "storage_pool",
+            "zone",
+            "vnet",
+            "subnet",
+            "vm",
+        ]
+        .iter()
+        .position(|x| *x == k)
+        .unwrap_or(9)
     };
     creates.sort_by_key(|c| rank(&c.kind));
     deletes.sort_by_key(|c| std::cmp::Reverse(rank(&c.kind)));
@@ -739,6 +798,7 @@ pub fn export(live: &Live) -> Spec {
             subnets: Some(subnets),
         }),
         vms: Some(vms),
+        vm_defaults: Some(live.vm_defaults.settings()),
         extra: BTreeMap::new(),
     }
 }
