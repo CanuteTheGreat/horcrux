@@ -383,7 +383,12 @@ with sync_playwright() as pw:
     wait_static(vpage, quiet_ms=1500, timeout=30)
     lat = trial(vpage, f"window.hxc.move(10,10); window.hxc.click({g['width']//2},{g['height']//2},2)", timeout=4)
     time.sleep(1)
-    check(lat is None, "the view-only user's click changed nothing in the guest")
+    _, sess = call("GET", f"/console/{VM}/hxc/sessions", token=ADMIN, ok=None)
+    vs = [x for x in sess if x["user"] == "hxcview"]
+    check(len(vs) == 1 and vs[0]["stats"]["input_denied"] >= 2 and vs[0]["stats"]["keys_in"] == 0
+          and vs[0]["stats"]["pointer_in"] == 0,
+          f"the server refused the view-only user's input ({vs[0]['stats'] if vs else sess})")
+    check(lat is None, "the view-only user's click changed nothing in the guest (od printed nothing)")
     check(len(vpage.evaluate("window.hxc.denied")) >= 1, "the view-only user is told input needs VM.Console.Input")
     vpage.close()
     nobody = login_context(browser, "hxcnone", "Hxc-e2e-pass-1")
