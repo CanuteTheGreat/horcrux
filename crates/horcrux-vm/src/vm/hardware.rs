@@ -697,6 +697,41 @@ mod tests {
     }
 
     #[test]
+    fn extra_cdroms_and_nested_virt_are_validated() {
+        use horcrux_common::{MachineType, VmArchitecture, MAX_VM_EXTRA_CDROMS};
+        let mut c = cfg(VmHypervisor::Qemu);
+        c.hardware.machine = MachineType::Q35;
+        c.hardware.extra_cdroms = vec!["/i/virtio-win.iso".into()];
+        c.hardware.adv.nested_virt = true;
+        assert!(prepare_hardware(&mut c).is_ok());
+        c.hardware.extra_cdroms = vec!["/i/a.iso".into(), "/i/a.iso".into()];
+        assert!(prepare_hardware(&mut c)
+            .unwrap_err()
+            .to_string()
+            .contains("twice"));
+        c.hardware.extra_cdroms = vec![String::new()];
+        assert!(prepare_hardware(&mut c).is_err());
+        c.hardware.extra_cdroms = (0..=MAX_VM_EXTRA_CDROMS)
+            .map(|i| format!("/i/{i}.iso"))
+            .collect();
+        assert!(prepare_hardware(&mut c).is_err());
+        // i440FX: IDE has room for one extra drive next to CD + answer disc
+        c.hardware.machine = MachineType::I440fx;
+        c.hardware.extra_cdroms = vec!["/i/a.iso".into(), "/i/b.iso".into()];
+        assert!(prepare_hardware(&mut c).is_err());
+        c.hardware.extra_cdroms = vec!["/i/a.iso".into()];
+        assert!(prepare_hardware(&mut c).is_ok());
+        // x86 only
+        let mut c = cfg(VmHypervisor::Qemu);
+        c.architecture = VmArchitecture::Aarch64;
+        c.hardware.adv.nested_virt = true;
+        assert!(prepare_hardware(&mut c).is_err());
+        c.hardware.adv.nested_virt = false;
+        c.hardware.extra_cdroms = vec!["/i/a.iso".into()];
+        assert!(prepare_hardware(&mut c).is_err());
+    }
+
+    #[test]
     fn hardware_on_lxd_or_incus_vms_is_refused() {
         let mut c = cfg(VmHypervisor::Incus);
         assert!(prepare_hardware(&mut c).is_ok());

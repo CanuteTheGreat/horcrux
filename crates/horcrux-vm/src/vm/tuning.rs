@@ -47,6 +47,25 @@ pub struct HostCpus {
     pub efficiency: Vec<u32>,
     /// CPUs that share a core with another CPU (SMT siblings), as groups.
     pub smt_groups: Vec<Vec<u32>>,
+    /// CPUs sharing one last-level (L3) cache, as groups: an AMD CCD/CCX
+    /// each, one group on most Intel CPUs. A guest whose vCPUs span two
+    /// groups pays cross-die latency, so `auto` pinning keeps it in one.
+    pub l3_groups: Vec<Vec<u32>>,
+    /// L3 size in KiB per entry of `l3_groups` (X3D parts have one bigger
+    /// 3D V-Cache die, which `auto` prefers).
+    pub l3_sizes_kb: Vec<u64>,
+}
+
+/// Parse a sysfs cache size (`32768K`, `96M`) into KiB.
+fn cache_kb(s: &str) -> u64 {
+    let s = s.trim();
+    let (num, mul) = match s.chars().last() {
+        Some('K') => (&s[..s.len() - 1], 1),
+        Some('M') => (&s[..s.len() - 1], 1024),
+        Some('G') => (&s[..s.len() - 1], 1024 * 1024),
+        _ => (s, 1),
+    };
+    num.parse::<u64>().map(|n| n * mul).unwrap_or(0)
 }
 
 impl HostCpus {
@@ -55,12 +74,28 @@ impl HostCpus {
         let list = |p: PathBuf| parse_cpu_list(&read(&p)).unwrap_or_default();
         let online = list(sys.join("devices/system/cpu/online"));
         let mut smt_groups: Vec<Vec<u32>> = Vec::new();
+        let mut l3_groups: Vec<Vec<u32>> = Vec::new();
+        let mut l3_sizes_kb: Vec<u64> = Vec::new();
         for c in &online {
-            let s = list(sys.join(format!(
-                "devices/system/cpu/cpu{c}/topology/thread_siblings_list"
-            )));
+            let cpu = sys.join(format!("devices/system/cpu/cpu{c}"));
+            let s = list(cpu.join("topology/thread_siblings_list"));
             if s.len() > 1 && !smt_groups.contains(&s) {
                 smt_groups.push(s);
+            }
+            for idx in 0..8 {
+                let d = cpu.join(format!("cache/index{idx}"));
+                if !d.is_dir() {
+                    break;
+                }
+                if read(&d.join("level")) != "3" {
+                    continue;
+                }
+                let shared = list(d.join("shared_cpu_list"));
+                if !shared.is_empty() && !l3_groups.contains(&shared) {
+                    l3_groups.push(shared);
+                    l3_sizes_kb.push(cache_kb(&read(&d.join("size"))));
+                }
+                break;
             }
         }
         Self {
@@ -68,18 +103,127 @@ impl HostCpus {
             efficiency: list(sys.join("devices/cpu_atom/cpus")),
             online,
             smt_groups,
+            l3_groups,
+            l3_sizes_kb,
         }
     }
 
     pub fn hybrid(&self) -> bool {
         !self.performance.is_empty() && !self.efficiency.is_empty()
     }
+
+    /// More than one L3 domain (AMD CCDs/CCXs, multi-socket hosts).
+    pub fn multi_l3(&self) -> bool {
+        self.l3_groups.len() > 1
+    }
+
+    /// L3 domains, best for a latency-sensitive guest first: the biggest
+    /// cache (3D V-Cache die), then one without CPU 0 (housekeeping and
+    /// most interrupts), then by CPU number.
+    pub fn l3_order(&self) -> Vec<Vec<u32>> {
+        let mut g: Vec<(u64, bool, u32, Vec<u32>)> = self
+            .l3_groups
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                (
+                    self.l3_sizes_kb.get(i).copied().unwrap_or(0),
+                    c.contains(&0),
+                    c.first().copied().unwrap_or(0),
+                    c.clone(),
+                )
+            })
+            .collect();
+        g.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        g.into_iter().map(|x| x.3).collect()
+    }
+
+    /// `cpus` ordered core by core (SMT siblings next to each other), the
+    /// core holding CPU 0 last.
+    fn by_core(&self, cpus: &[u32]) -> Vec<u32> {
+        let mut cores: Vec<Vec<u32>> = Vec::new();
+        for c in cpus {
+            if cores.iter().any(|k| k.contains(c)) {
+                continue;
+            }
+            let core: Vec<u32> = self
+                .smt_groups
+                .iter()
+                .find(|g| g.contains(c))
+                .map(|g| g.iter().copied().filter(|x| cpus.contains(x)).collect())
+                .unwrap_or_else(|| vec![*c]);
+            cores.push(core);
+        }
+        cores.sort_by_key(|k| (k.contains(&0), k.first().copied().unwrap_or(0)));
+        cores.into_iter().flatten().collect()
+    }
+}
+
+/// Is nested virtualisation enabled in the host's KVM module? `None` = yes;
+/// otherwise why not and how to turn it on.
+pub fn nested_kvm_problem(sys: &Path) -> Option<String> {
+    for m in ["kvm_intel", "kvm_amd"] {
+        let d = sys.join("module").join(m);
+        if d.is_dir() {
+            let v = read(&d.join("parameters/nested"));
+            return if matches!(v.as_str(), "Y" | "y" | "1") {
+                None
+            } else {
+                Some(format!(
+                    "the VM needs nested virtualisation (Windows VBS / Memory Integrity, Hyper-V), but {m} has it turned off on this host: add \"options {m} nested=1\" to /etc/modprobe.d/kvm.conf and reload the {m} module (or reboot the host), or turn nested virtualisation off for this VM"
+                ))
+            };
+        }
+    }
+    Some("KVM (kvm_intel / kvm_amd) is not loaded on this host, so nested virtualisation is not available".into())
+}
+
+/// `GenuineIntel` / `AuthenticAMD` (from /proc/cpuinfo), cached.
+pub fn host_cpu_vendor() -> &'static str {
+    static V: OnceLock<String> = OnceLock::new();
+    V.get_or_init(|| {
+        std::fs::read_to_string("/proc/cpuinfo")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find_map(|l| l.strip_prefix("vendor_id"))
+                    .map(|v| v.trim_start_matches([' ', '\t', ':']).trim().to_string())
+            })
+            .unwrap_or_default()
+    })
 }
 
 /// `auto` vCPU placement: `n` host CPUs from the performance cores of a
 /// hybrid CPU (never mixed with E-cores), otherwise from all CPUs; CPU 0
 /// (where the kernel's housekeeping and most interrupts land) is used last.
 pub fn auto_vcpu_cpus(h: &HostCpus, n: u32) -> Result<Vec<u32>> {
+    // Several L3 domains (AMD CCDs/CCXs, multi-socket) on a non-hybrid CPU:
+    // fill the best domain first, whole cores (SMT siblings together), and
+    // only spill into the next one when the guest is bigger than a domain.
+    if !h.hybrid() && h.multi_l3() {
+        let want = n as usize;
+        if want > h.online.len() {
+            return Err(Error::Validation(format!(
+                "the VM has {n} vCPUs but the host only {} CPUs",
+                h.online.len()
+            )));
+        }
+        let mut picked: Vec<u32> = Vec::new();
+        for g in h.l3_order() {
+            if picked.len() >= want {
+                break;
+            }
+            let online: Vec<u32> = g.into_iter().filter(|c| h.online.contains(c)).collect();
+            for c in h.by_core(&online) {
+                if picked.len() >= want {
+                    break;
+                }
+                picked.push(c);
+            }
+        }
+        picked.sort_unstable();
+        return Ok(picked);
+    }
     let pool: &Vec<u32> = if h.hybrid() {
         &h.performance
     } else {
@@ -335,14 +479,35 @@ pub fn hugepage_backend(h: &VmHugePages, shared: bool) -> String {
     )
 }
 
-/// The `-cpu` value of a VM: its model plus the Hyper-V enlightenments.
+/// The `-cpu` value of a VM: its model plus the Hyper-V enlightenments and,
+/// with `nested_virt`, the host's virtualisation extension.
 pub fn cpu_arg(
     cpu_type: Option<&str>,
     adv: &VmAdvanced,
     cfg: &PassthroughConfig,
 ) -> Option<String> {
+    cpu_arg_for(cpu_type, adv, cfg, host_cpu_vendor())
+}
+
+/// [`cpu_arg`] for a given host CPU vendor (`GenuineIntel`, `AuthenticAMD`).
+pub fn cpu_arg_for(
+    cpu_type: Option<&str>,
+    adv: &VmAdvanced,
+    cfg: &PassthroughConfig,
+    vendor: &str,
+) -> Option<String> {
+    let nested = adv.nested_virt.then(|| {
+        if vendor == "AuthenticAMD" || vendor == "HygonGenuine" {
+            "svm=on"
+        } else {
+            "vmx=on"
+        }
+    });
     if !adv.hyperv {
-        return cpu_type.map(str::to_string);
+        return match (cpu_type, nested) {
+            (c, None) => c.map(str::to_string),
+            (c, Some(flag)) => Some(format!("{},{flag}", c.unwrap_or("host"))),
+        };
     }
     let model = cpu_type.unwrap_or(cfg.hyperv_cpu_model.as_str());
     let mut parts = vec![model.to_string()];
@@ -356,6 +521,9 @@ pub fn cpu_arg(
             })
             .cloned(),
     );
+    if let Some(flag) = nested {
+        parts.push(flag.to_string());
+    }
     Some(parts.join(","))
 }
 
@@ -613,6 +781,118 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p.emulator, vec![0, 1, 2, 3]);
+    }
+
+    /// A two-CCD Ryzen (8 cores + SMT per CCD): CPUs n and n+16 are
+    /// siblings; CCD0 = 0-7,16-23, CCD1 = 8-15,24-31. `vcache` gives CCD1
+    /// the bigger L3 (an X3D part with the V-Cache die second).
+    fn ryzen(vcache: bool) -> tempfile::TempDir {
+        let t = sysfs("0-31", None, None);
+        for c in 0..32u32 {
+            let d = t.path().join(format!("devices/system/cpu/cpu{c}"));
+            let core = c % 16;
+            fs::create_dir_all(d.join("topology")).unwrap();
+            fs::write(
+                d.join("topology/thread_siblings_list"),
+                format!("{core},{}", core + 16),
+            )
+            .unwrap();
+            for (idx, level) in [(0, "1"), (1, "1"), (2, "2"), (3, "3")] {
+                let i = d.join(format!("cache/index{idx}"));
+                fs::create_dir_all(&i).unwrap();
+                fs::write(i.join("level"), level).unwrap();
+                if level == "3" {
+                    let ccd1 = core >= 8;
+                    fs::write(
+                        i.join("shared_cpu_list"),
+                        if ccd1 { "8-15,24-31" } else { "0-7,16-23" },
+                    )
+                    .unwrap();
+                    fs::write(
+                        i.join("size"),
+                        if ccd1 && vcache { "98304K" } else { "32768K" },
+                    )
+                    .unwrap();
+                } else {
+                    fs::write(i.join("shared_cpu_list"), c.to_string()).unwrap();
+                }
+            }
+        }
+        t
+    }
+
+    #[test]
+    fn auto_keeps_a_guest_on_one_ccd_with_whole_cores() {
+        let h = HostCpus::read(ryzen(false).path());
+        assert_eq!(h.l3_groups.len(), 2);
+        assert_eq!(h.l3_sizes_kb, vec![32768, 32768]);
+        // same-size CCDs: the one without CPU 0 first, siblings together
+        assert_eq!(
+            auto_vcpu_cpus(&h, 8).unwrap(),
+            vec![8, 9, 10, 11, 24, 25, 26, 27]
+        );
+        assert_eq!(
+            format_cpu_list(&auto_vcpu_cpus(&h, 16).unwrap()),
+            "8-15,24-31"
+        );
+        // bigger than a CCD: spills into CCD0, CPU 0's core last
+        let v = auto_vcpu_cpus(&h, 18).unwrap();
+        assert_eq!(format_cpu_list(&v), "1,8-15,17,24-31");
+        assert!(auto_vcpu_cpus(&h, 33).is_err());
+    }
+
+    #[test]
+    fn auto_prefers_the_v_cache_die() {
+        let h = HostCpus::read(ryzen(true).path());
+        assert_eq!(h.l3_sizes_kb, vec![32768, 98304]);
+        assert_eq!(
+            h.l3_order()[0],
+            vec![8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31]
+        );
+        assert_eq!(cache_kb("96M"), 98304);
+        assert_eq!(cache_kb("512K"), 512);
+    }
+
+    #[test]
+    fn nested_virtualisation_flag_and_host_check() {
+        let adv = VmAdvanced {
+            nested_virt: true,
+            ..Default::default()
+        };
+        let cfg = PassthroughConfig::default();
+        assert_eq!(
+            cpu_arg_for(None, &adv, &cfg, "GenuineIntel").unwrap(),
+            "host,vmx=on"
+        );
+        assert_eq!(
+            cpu_arg_for(Some("EPYC-v4"), &adv, &cfg, "AuthenticAMD").unwrap(),
+            "EPYC-v4,svm=on"
+        );
+        let hv = VmAdvanced {
+            nested_virt: true,
+            hyperv: true,
+            ..Default::default()
+        };
+        let a = cpu_arg_for(None, &hv, &cfg, "GenuineIntel").unwrap();
+        assert!(
+            a.starts_with("host,hv-relaxed") && a.ends_with(",vmx=on"),
+            "{a}"
+        );
+        // off: unchanged
+        assert_eq!(
+            cpu_arg_for(None, &VmAdvanced::default(), &cfg, "GenuineIntel"),
+            None
+        );
+
+        let t = tempfile::tempdir().unwrap();
+        assert!(nested_kvm_problem(t.path()).unwrap().contains("not loaded"));
+        let p = t.path().join("module/kvm_amd/parameters");
+        fs::create_dir_all(&p).unwrap();
+        fs::write(p.join("nested"), "0\n").unwrap();
+        let why = nested_kvm_problem(t.path()).unwrap();
+        assert!(why.contains("options kvm_amd nested=1"), "{why}");
+        fs::write(p.join("nested"), "1\n").unwrap();
+        assert_eq!(nested_kvm_problem(t.path()), None);
     }
 
     #[test]

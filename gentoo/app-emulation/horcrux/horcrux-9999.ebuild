@@ -338,6 +338,10 @@ src_install() {
 	# /etc/horcrux/gpu-quirks.toml)
 	insinto /usr/share/horcrux
 	doins crates/horcrux-vm/data/gpu-quirks.toml
+	# Per-game anti-cheat table of the Gaming VM wizard (built in as well;
+	# passthrough.gaming_compat_files; local rows go in
+	# /etc/horcrux/gaming-compat.toml)
+	doins crates/horcrux-vm/data/gaming-compat.toml
 
 	# Create necessary directories
 	keepdir /etc/horcrux
@@ -382,6 +386,7 @@ pkg_postinst() {
 	if use qemu; then
 		optfeature "UEFI (OVMF) firmware for QEMU VMs" sys-firmware/edk2-bin
 		optfeature "emulated TPM 2.0 for QEMU VMs" app-crypt/swtpm
+		optfeature "the Gaming VM wizard's Windows answer-file disc" dev-libs/libisoburn
 		optfeature "Corosync quorum checks for clusters (USE=cluster works without it)" sys-cluster/corosync
 		optfeature "saving the state of running containers (Guest Power: CRIU stateful stop)" sys-process/criu
 	fi
