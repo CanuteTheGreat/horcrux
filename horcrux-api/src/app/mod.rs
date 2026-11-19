@@ -2070,10 +2070,7 @@ async fn create_vm_snapshot(
 
 /// Recompute every per-VM and global snapshot quota's usage from the real
 /// snapshots (the quota manager only keeps a cache; nothing else fills it).
-async fn refresh_quota_usage(
-    state: &AppState,
-    snapshot_manager: &vm::snapshot::VmSnapshotManager,
-) {
+async fn refresh_quota_usage(state: &AppState, snapshot_manager: &vm::snapshot::VmSnapshotManager) {
     use vm::snapshot_quota::{QuotaType, SnapshotUsageInfo};
     let all = snapshot_manager.all_snapshots();
     for quota in state.snapshot_quota_manager.list_quotas().await {
@@ -2102,7 +2099,10 @@ async fn refresh_quota_usage(
             .update_usage_cache(&quota.id, infos)
             .await
         {
-            warn!("Could not refresh usage of snapshot quota {}: {}", quota.id, e);
+            warn!(
+                "Could not refresh usage of snapshot quota {}: {}",
+                quota.id, e
+            );
         }
     }
 }
