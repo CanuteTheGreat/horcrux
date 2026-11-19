@@ -3,8 +3,9 @@ name: Horcrux Console e2e (real QEMU, WebRTC, KVM)
 # Phase C1 of docs/design/horcrux-console.md on a single standalone node:
 # real QEMU guests started through the API with the D-Bus display, viewed
 # in headless Chromium through the node's WebRTC client page
-# (horcrux-api/tests/hx_console_e2e.sh): a Linux desktop VM (pre-OS boot
-# loader + X desktop, keyboard and mouse round trip), a Windows VM (Windows
+# (horcrux-api/tests/hx_console_e2e.sh): a Linux VM (pre-OS boot loader
+# keyboard, then in-OS keyboard, pointer and clicks read back from the guest
+# kernel), a Windows VM (Windows
 # Setup, no guest tools) when the runner has the Windows ISO cache, RBAC
 # (view-only, no access, ticket binding), audit, settings API + UI, classic
 # console still working. Latency numbers are printed as LATENCY lines.
@@ -20,6 +21,7 @@ on:
       - 'horcrux-api/horcrux-ui/src/pages/system/console_settings.rs'
       - 'horcrux-common/src/console.rs'
       - 'horcrux-api/tests/hx_console_e2e.*'
+      - 'crates/horcrux-vm/tests/hxc_dbus_e2e.rs'
       - '.forgejo/workflows/hx-console-e2e.yml'
   workflow_dispatch: {}
 
@@ -90,3 +92,9 @@ jobs:
           [ -s /tmp/win11-eval.iso ] && export HXC_WIN_ISO=/tmp/win11-eval.iso
           HXC_OUT=/tmp/hxc-e2e bash horcrux-api/tests/hx_console_e2e.sh target/debug/horcrux-api horcrux-api/horcrux-ui/dist 2>&1 | tee /tmp/hxc-e2e.log
           grep -E '^(LATENCY|RESULTS)' /tmp/hxc-e2e.log || true
+
+      - name: QEMU D-Bus display source (frames, keyboard, pointer; no browser)
+        run: |
+          # the e2e step above downloaded and checksummed the Alpine ISO
+          HXC_TEST_ISO="$HOME/.cache/hxc/alpine-virt.iso" \
+            cargo test -p horcrux-vm --features qemu --test hxc_dbus_e2e -- --ignored --nocapture

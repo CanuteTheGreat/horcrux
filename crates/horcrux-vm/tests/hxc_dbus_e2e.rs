@@ -1,15 +1,22 @@
 //! Real-QEMU test of the Horcrux Console frame source (QEMU's D-Bus display):
-//! frames arrive, and keyboard and pointer input through the D-Bus
-//! interfaces change the guest's picture. Needs QEMU with the dbus display
-//! module and a bootable ISO with a graphical desktop that draws its own
-//! pointer (Tiny Core Linux in CI):
+//! frames arrive, keyboard input typed through the D-Bus keyboard logs in
+//! and runs a command, and pointer moves and clicks sent through the D-Bus
+//! mouse reach the guest kernel (`od` on `/dev/input/mice` prints them, so
+//! the picture changes). Needs QEMU with the dbus display module and the
+//! Alpine "virt" ISO (any x86_64 Linux live ISO with a root console works):
 //!
-//!     HXC_TEST_ISO=/path/TinyCore-current.iso \
+//!     HXC_TEST_ISO=/path/alpine-virt.iso \
 //!       cargo test -p horcrux-vm --features qemu --test hxc_dbus_e2e -- --ignored --nocapture
 //!
-//! `HXC_TEST_TABLET=1` adds a USB tablet (absolute pointer) to the guest.
+//! `HXC_TEST_TABLET=1` adds a USB tablet (absolute pointer) to the guest;
+//! `HXC_TEST_BOOT_SECS` (default 35) is the wait for the login prompt.
+//!
+//! Why not a desktop guest: Tiny Core's Xvesa ignores both PS/2 and tablet
+//! input under QEMU (QMP input-send-event does not move its pointer either),
+//! so its desktop picture proves nothing about the input path.
 #![cfg(feature = "qemu")]
 
+use horcrux_vm::console::hxc::keymap;
 use horcrux_vm::console::hxc::qemu_dbus::{DbusDisplay, DisplayEvent};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -45,15 +52,55 @@ where
     updates.load(Ordering::SeqCst) - before
 }
 
+/// DOM key code for one character of a shell command (lower case only).
+fn code_of(c: char) -> String {
+    match c {
+        'a'..='z' => format!("Key{}", c.to_ascii_uppercase()),
+        '0'..='9' => format!("Digit{c}"),
+        ' ' => "Space".into(),
+        '-' => "Minus".into(),
+        '/' => "Slash".into(),
+        '.' => "Period".into(),
+        '\n' => "Enter".into(),
+        other => panic!("no key for {other:?}"),
+    }
+}
+
+async fn type_text(d: &DbusDisplay, text: &str) {
+    let shift = keymap::qnum("ShiftLeft").expect("qnum");
+    for c in text.chars() {
+        // '>' and '_' are shifted keys on a US layout
+        let (code, shifted) = match c {
+            '>' => ("Period".to_string(), true),
+            '_' => ("Minus".to_string(), true),
+            c => (code_of(c), false),
+        };
+        let q = keymap::qnum(&code).expect("qnum");
+        if shifted {
+            d.keyboard.press(shift).await.unwrap();
+        }
+        d.keyboard.press(q).await.unwrap();
+        d.keyboard.release(q).await.unwrap();
+        if shifted {
+            d.keyboard.release(shift).await.unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs QEMU with the D-Bus display and HXC_TEST_ISO"]
 async fn dbus_display_frames_keyboard_and_pointer() {
     let iso = std::env::var("HXC_TEST_ISO").expect("HXC_TEST_ISO");
     let tablet = std::env::var("HXC_TEST_TABLET").map(|v| v == "1").unwrap_or(false);
+    let boot: u64 = std::env::var("HXC_TEST_BOOT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(35);
     let dir = tempfile::tempdir().unwrap();
     let qmp = dir.path().join("qmp.sock");
     let mut args: Vec<String> = [
-        "-machine", "accel=kvm:tcg", "-m", "768", "-cdrom", &iso, "-vga", "std",
+        "-machine", "accel=kvm:tcg", "-m", "512", "-cdrom", &iso, "-vga", "std",
         "-display", "dbus,p2p=yes", "-qmp",
     ]
     .iter()
@@ -98,27 +145,52 @@ async fn dbus_display_frames_keyboard_and_pointer() {
     assert!(scanouts.load(Ordering::SeqCst) >= 1, "a first frame (Scanout) arrives");
     println!("ok - first frame arrived");
 
-    // boot to the desktop: Enter at the boot prompt, then wait until the
-    // picture stays still for 8 s
-    display.keyboard.press(28).await.unwrap();
-    display.keyboard.release(28).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(25)).await;
+    // Boot to the login prompt and log in. The framebuffer console blinks
+    // its cursor (a picture update every ~200 ms), so the first command
+    // stops the blinking; only then is "no update" meaningful.
+    tokio::time::sleep(Duration::from_secs(boot)).await;
+    type_text(&display, "root\n").await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    type_text(&display, "echo 0 >/sys/class/graphics/fbcon/cursor_blink\n").await;
     assert!(
-        quiet(&updates, Duration::from_secs(8), Duration::from_secs(240)).await,
-        "the desktop settles"
+        quiet(&updates, Duration::from_secs(2), Duration::from_secs(30)).await,
+        "the console settles once the cursor stops blinking (the login worked)"
     );
-    println!("ok - desktop settled (absolute pointer: {})", display.absolute);
+    let mut echoed = 0;
+    for c in "echo".chars() {
+        let n = changes_after(&updates, Duration::from_millis(700), || async {
+            type_text(&display, &c.to_string()).await;
+        })
+        .await;
+        if n > 0 {
+            echoed += 1;
+        }
+    }
+    assert!(echoed >= 3, "typed characters echo at the shell ({echoed}/4)");
+    println!("ok - keyboard input reaches the guest ({echoed}/4 keystrokes echoed)");
+    type_text(&display, "\nod -tx1 -w3 -v /dev/input/mice\n").await;
+    assert!(
+        quiet(&updates, Duration::from_secs(2), Duration::from_secs(20)).await,
+        "the console settles after starting od"
+    );
 
     let mut moved = 0;
-    for (i, (x, y)) in [(200u32, 150u32), (800, 200), (700, 600), (250, 550)].iter().enumerate() {
+    for (i, (x, y)) in [(200u32, 150u32), (800, 200), (700, 600), (250, 550)]
+        .iter()
+        .enumerate()
+    {
         let d = &display;
         let n = changes_after(&updates, Duration::from_millis(1500), || async move {
             let abs = d.mouse.set_abs_position(*x, *y).await;
-            let r = match abs {
+            let r = match &abs {
                 Ok(()) => Ok(()),
-                Err(_) => d.mouse.rel_motion(if i % 2 == 0 { 120 } else { -120 }, 80).await,
+                Err(_) => {
+                    d.mouse
+                        .rel_motion(if i % 2 == 0 { 40 } else { -40 }, 20)
+                        .await
+                }
             };
-            println!("move {i}: abs={:?} result={r:?}", abs.is_ok());
+            println!("move {i}: absolute={} result={r:?}", abs.is_ok());
         })
         .await;
         println!("move {i}: {n} display updates");
@@ -127,8 +199,17 @@ async fn dbus_display_frames_keyboard_and_pointer() {
         }
         quiet(&updates, Duration::from_millis(800), Duration::from_secs(10)).await;
     }
-    assert!(moved >= 3, "pointer moves change the picture ({moved}/4)");
-    println!("ok - pointer input reaches the guest through D-Bus ({moved}/4)");
+    assert!(moved >= 3, "pointer moves reach the guest ({moved}/4)");
+    println!("ok - pointer motion reaches the guest through D-Bus ({moved}/4)");
+
+    let d = &display;
+    let clicks = changes_after(&updates, Duration::from_millis(1500), || async move {
+        d.mouse.press(0).await.unwrap();
+        d.mouse.release(0).await.unwrap();
+    })
+    .await;
+    assert!(clicks > 0, "a click reaches the guest");
+    println!("ok - button press/release reaches the guest ({clicks} updates)");
     drop(display);
     let _ = qemu.kill().await;
 }

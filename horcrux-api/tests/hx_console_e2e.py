@@ -4,9 +4,11 @@
 Real QEMU guests started through the API with the D-Bus display, viewed in
 a real Chromium through the node's WebRTC client page:
 
-* Linux desktop VM (Tiny Core Linux ISO, no guest tools): the picture
-  arrives before any OS runs (ISOLINUX boot prompt), keyboard input echoes
-  there, then the X desktop answers a mouse click (menu opens);
+* Linux VM, no guest tools: the picture arrives before any OS runs and
+  keyboard input echoes at the boot loader prompt (Tiny Core ISO, whose
+  ISOLINUX waits); then the same VM boots Alpine, where typing reaches the
+  shell and pointer moves and clicks reach the guest kernel (`od` on
+  /dev/input/mice prints every event);
 * optional Windows VM (HXC_WIN_ISO, no tools): Windows Setup renders and
   answers keyboard input;
 * RBAC: a view-only user (VM.Console without VM.Console.Input) sees the
@@ -30,6 +32,7 @@ import urllib.request
 
 BASE = os.environ.get("HXC_BASE", "https://127.0.0.1:8006")
 ISO = os.environ["HXC_LINUX_ISO"]
+ALPINE_ISO = os.environ["HXC_ALPINE_ISO"]
 WIN_ISO = os.environ.get("HXC_WIN_ISO", "")
 OUT = os.environ.get("HXC_OUT", "/tmp/hxc-e2e")
 CTX = ssl.create_default_context()
@@ -122,9 +125,8 @@ check(any(r.get("name") == "HxcViewer" for r in roles), "a view-only role exists
 
 # ---------------------------------------------------------------- Linux VM
 VM = "hxc-linux"
-# Tiny Core's X server (Xvesa) reads only the PS/2 mouse: this guest runs
-# with the relative mouse, which also covers the console's relative path
-# (absolute moves become deltas). The Windows guest covers the USB tablet.
+# Pre-OS check on Tiny Core's boot prompt, relative (PS/2) mouse; the
+# Alpine and Windows guests then use the default USB tablet.
 make_vm(VM, ISO, 768, relative_mouse=True)
 argv = " ".join(qemu_cmdline(VM))
 check("-display dbus,p2p=yes" in argv, "the VM runs with QEMU's D-Bus display")
@@ -250,62 +252,83 @@ with sync_playwright() as pw:
     check(len(got) >= 6, f"keyboard input reaches the guest before any OS runs ({len(got)}/8 keystrokes changed the screen)")
     latency_summary("preos_key_input_to_picture", pre)
 
-    # Boot Tiny Core and wait for its X desktop.
-    page.evaluate(key("Enter"))
-    time.sleep(20)
-    if not wait_static(page, quiet_ms=6000, timeout=240):
-        print("note: desktop kept changing; continuing", flush=True)
-    page.screenshot(path=f"{OUT}/linux-desktop.png")
+    # In-OS checks run on Alpine's root console: Tiny Core's X server ignores
+    # QEMU's pointer devices (QMP input-send-event does not move it either),
+    # so a desktop picture there proves nothing about pointer input. Alpine
+    # prints what the guest kernel receives: `od` on /dev/input/mice shows a
+    # line per pointer event, so a move or click that reaches the guest
+    # changes the picture, and one that is lost changes nothing.
+    page.close()
+    call("POST", f"/vms/{VM}/stop", token=ADMIN, ok=None)
+    make_vm(VM, ALPINE_ISO, 512)
+    page = open_console(admin, VM, "linux")
+    time.sleep(int(os.environ.get("HXC_ALPINE_BOOT_SECS", "40")))
+    page.screenshot(path=f"{OUT}/linux-login.png")
     g = page.evaluate("window.hxc.guest")
-    # Pointer motion: the guest draws its own (software) cursor into the
-    # framebuffer, so every move to a new place changes the picture.
+
+    def code_of(c):
+        return {" ": "Space", "-": "Minus", "/": "Slash", ".": "Period", "\n": "Enter"}.get(
+            c, f"Digit{c}" if c.isdigit() else f"Key{c.upper()}")
+
+    SHIFTED = {">": "Period", "_": "Minus"}
+
+    def keystroke(c):
+        if c in SHIFTED:
+            return ("window.hxc.sendKey('ShiftLeft', true);" + key(SHIFTED[c])
+                    + "window.hxc.sendKey('ShiftLeft', false);")
+        return key(code_of(c))
+
+    def type_text(text, measure=None):
+        for c in text:
+            if measure is None:
+                page.evaluate(keystroke(c))
+                time.sleep(0.06)
+            else:
+                measure.append(trial(page, keystroke(c), timeout=4))
+                time.sleep(0.15)
+
+    # The framebuffer console blinks its cursor (a new picture every
+    # ~200 ms): the first command stops that, so "nothing changed" means
+    # something from here on.
+    type_text("root\n")
+    time.sleep(3)
+    type_text("echo 0 >/sys/class/graphics/fbcon/cursor_blink\n")
+    check(wait_static(page, quiet_ms=2000, timeout=30),
+          "logged in on the Alpine console; the picture is still once the cursor stops blinking")
+    oskeys = []
+    type_text("echo hello", measure=oskeys)
+    got = len([x for x in oskeys if x is not None])
+    check(got >= 8, f"keyboard input reaches the running OS ({got}/10 keystrokes echoed at the shell)")
+    latency_summary("os_key_input_to_picture", oskeys)
+    type_text("\nod -tx1 -w3 -v /dev/input/mice\n")
+    wait_static(page, quiet_ms=1500, timeout=30)
+    page.screenshot(path=f"{OUT}/linux-od.png")
+
     moves = []
     for i, (fx, fy) in enumerate([(0.2, 0.2), (0.8, 0.25), (0.75, 0.7), (0.25, 0.75), (0.5, 0.3), (0.3, 0.5)]):
         x, y = int(g["width"] * fx), int(g["height"] * fy)
         moves.append(region_trial(page, None, None, f"window.hxc.move({x},{y})"))
         wait_static(page, quiet_ms=600, timeout=10)
-        page.screenshot(path=f"{OUT}/linux-move-{i}.png")
+    page.screenshot(path=f"{OUT}/linux-moved.png")
     got = len([m for m in moves if m is not None])
     if got < 4:
-        _, sess = call("GET", f"/console/{VM}/hxc/sessions", token=ADMIN)
+        _, sess = call("GET", f"/console/{VM}/hxc/sessions", token=ADMIN, ok=None)
         print("DEBUG session stats", json.dumps(sess)[:1500], flush=True)
-        print("DEBUG channels", page.evaluate("""() => JSON.stringify(Object.fromEntries(
-            Object.entries(window.hxc.channels || {}).map(([n, c]) => [n, c.readyState])))"""), flush=True)
         print("DEBUG qemu pointer devices", [a for a in qemu_cmdline(VM) if "tablet" in a or "mouse" in a], flush=True)
-        # same session, pointer moved through QMP instead: guest or path?
-        argv = qemu_cmdline(VM)
-        qsock = next((a.split("unix:", 1)[1].split(",")[0] for a in argv if a.startswith("unix:") and "qmp" in a), None)
-        if qsock:
-            import socket as _s
-            c = _s.socket(_s.AF_UNIX); c.connect(qsock); f = c.makefile("rw")
-            f.readline(); f.write('{"execute":"qmp_capabilities"}\n'); f.flush(); f.readline()
-            page.evaluate("window.hxc.watchRegion(0,0,window.hxc.guest.width,window.hxc.guest.height)")
-            f.write(json.dumps({"execute": "input-send-event", "arguments": {"events": [
-                {"type": "rel", "data": {"axis": "x", "value": 120}}, {"type": "rel", "data": {"axis": "y", "value": 90}}]}}) + "\n")
-            f.flush(); print("DEBUG qmp rel", f.readline().strip(), flush=True)
-            time.sleep(3)
-            print("DEBUG picture changed after a QMP pointer move:", page.evaluate("window.hxc.regionChangeMs"), flush=True)
-            c.close()
-    check(got >= 4, f"pointer motion reaches the desktop ({got}/6 moves moved the guest's cursor)")
-    latency_summary("desktop_pointer_input_to_picture", moves)
-    page.screenshot(path=f"{OUT}/linux-moved.png")
+    check(got >= 4, f"pointer motion reaches the guest kernel ({got}/6 moves printed by od)")
+    latency_summary("os_pointer_input_to_picture", moves)
 
-    # Click: Tiny Core's window manager opens its menu on a click on the
-    # desktop background (top-left area: no icons there).
     clicks = []
-    page.evaluate("window.hxc.move(40,40)")
-    wait_static(page, quiet_ms=1200, timeout=15)
-    for button in (2, 0, 1):
-        lat = trial(page, f"window.hxc.press(40,40,{button})", timeout=2)
+    for button in (0, 2, 1):
+        wait_static(page, quiet_ms=800, timeout=10)
+        lat = trial(page, f"window.hxc.press({g['width'] // 2},{g['height'] // 2},{button})", timeout=3)
         time.sleep(0.15)
-        lat2 = trial(page, f"window.hxc.release({button})", timeout=6)
-        clicks.append(lat if lat is not None else lat2)
-        page.screenshot(path=f"{OUT}/linux-click-{button}.png")
-        if clicks[-1] is not None:
-            print(f"note: mouse button {button} opened the desktop menu", flush=True)
-            break
-    check(any(c is not None for c in clicks), f"a mouse click reaches the desktop (menu opened: {clicks})")
-    latency_summary("desktop_click_input_to_picture", clicks)
+        page.evaluate(f"window.hxc.release({button})")
+        clicks.append(lat)
+    page.screenshot(path=f"{OUT}/linux-clicks.png")
+    got = len([c for c in clicks if c is not None])
+    check(got >= 2, f"mouse buttons reach the guest kernel ({got}/3 button presses printed by od)")
+    latency_summary("os_click_input_to_picture", clicks)
     time.sleep(2.5)
     rtt = page.evaluate("window.hxc.rttMs")
     server = page.evaluate("window.hxc.server")

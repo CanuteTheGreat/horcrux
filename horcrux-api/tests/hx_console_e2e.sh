@@ -62,6 +62,22 @@ if [ ! -s "$ISO" ]; then
 fi
 [ -s "$ISO" ] || { echo "FAIL cannot download the Tiny Core ISO"; exit 1; }
 mkdir -p "$DATA/images" && cp "$ISO" "$DATA/images/tinycore.iso"
+# Alpine "virt" ISO (~70 MB, root console without a password): the in-OS
+# keyboard, pointer and click checks read /dev/input/mice in the guest.
+# Tiny Core's X server ignores QEMU's pointer devices, so it only serves the
+# pre-OS (boot loader) check. Version and checksum come from Alpine's own
+# latest-releases.yaml (overridable: HXC_ALPINE_MIRROR).
+AMIRROR=${HXC_ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64}
+AISO="$CACHE/alpine-virt.iso"
+if [ ! -s "$AISO" ]; then
+  meta=$(curl -fsSL --retry 3 "$AMIRROR/latest-releases.yaml")
+  afile=$(printf '%s\n' "$meta" | awk '/flavor: alpine-virt/{f=1} f&&/file:/{print $2; exit}')
+  asum=$(printf '%s\n' "$meta" | awk '/flavor: alpine-virt/{f=1} f&&/sha256:/{print $2; exit}')
+  curl -fsSL --retry 3 -o "$AISO.part" "$AMIRROR/$afile"
+  echo "$asum  $AISO.part" | sha256sum -c --quiet || { echo "FAIL Alpine ISO checksum"; exit 1; }
+  mv "$AISO.part" "$AISO"
+fi
+cp "$AISO" "$DATA/images/alpine-virt.iso"
 
 cleanup() {
   [ -f "$DATA/api.pid" ] && kill "$(cat "$DATA/api.pid")" 2>/dev/null || true
@@ -90,7 +106,7 @@ if [ -n "${HXC_WIN_ISO:-}" ] && [ -s "$HXC_WIN_ISO" ]; then
 fi
 
 rc=0
-HXC_LINUX_ISO="$DATA/images/tinycore.iso" HXC_OUT="$OUT" HXC_UI=$([ -n "$UI" ] && echo 1 || echo 0) \
+HXC_LINUX_ISO="$DATA/images/tinycore.iso" HXC_ALPINE_ISO="$DATA/images/alpine-virt.iso" HXC_OUT="$OUT" HXC_UI=$([ -n "$UI" ] && echo 1 || echo 0) \
   "$PY" -u "$HERE/hx_console_e2e.py" || rc=$?
 if [ $rc -ne 0 ]; then
   echo "---- api.log (tail)"; tail -120 "$DATA/api.log"
