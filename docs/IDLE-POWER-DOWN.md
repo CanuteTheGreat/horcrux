@@ -20,8 +20,6 @@ removing it keeps quorum and at least `min_online` (default 3) nodes online.
 ## Automatic power-down (opt-in)
 
 Off by default. Set `HORCRUX_IDLE_POWER=1` in the service environment on every node to let the
-You can also switch it on or off at runtime, no restart: `PUT /api/cluster/power/auto` with `{"enabled":true}` (`GET` shows `enabled` and `forced_by_env`). The choice is stored in `/etc/horcrux/idle-power` (override with `HORCRUX_IDLE_POWER_FILE`) on the node you call, so set it on every node. `HORCRUX_IDLE_POWER=1` in the environment keeps the loop on regardless.
-
 cluster shut idle `power-managed` nodes down by itself:
 
 - Only the leader (lowest-named online node) acts, and at most one node per sample.
@@ -30,6 +28,8 @@ cluster shut idle `power-managed` nodes down by itself:
   a short CPU dip never powers a node off. Any busy sample restarts the count.
 - The shutdown is the same guarded graceful BMC call as `POST /api/cluster/power/down`; a refusal
   is logged as a warning and retried after a fresh streak.
+
+You can also switch it on or off at runtime, no restart: `PUT /api/cluster/power/auto` with `{"enabled":true}` (`GET` shows `enabled` and `forced_by_env`). The choice is stored in `/etc/horcrux/idle-power` (override with `HORCRUX_IDLE_POWER_FILE`) on the node you call, so set it on every node. `HORCRUX_IDLE_POWER=1` in the environment keeps the loop on regardless.
 
 ## Automatic wake-on-demand
 
