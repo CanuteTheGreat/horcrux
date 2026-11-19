@@ -215,10 +215,16 @@ RUN chmod -R a+rX /var/cache/distfiles/horcrux-vendor
 
 # git-r3 would otherwise re-clone from the remote (EGIT_REPO_URI) even though
 # we just vendored the local checkout above, silently ignoring uncommitted
-# local changes. EGIT_OVERRIDE_REPO_<PN> is git-r3's documented mechanism to
-# point it at a local path instead - this Docker build now genuinely
-# reflects what's in this checkout, not whatever's on the remote's HEAD/tag.
-ENV EGIT_OVERRIDE_REPO_HORCRUX=/usr/src/horcrux
+# local changes. git-r3's override variable is named after the REPOSITORY
+# ID it prints ("Repository id: CanuteTheGreat_horcrux.git" ->
+# EGIT_OVERRIDE_REPO_CANUTETHEGREAT_HORCRUX), not after ${PN}: the earlier
+# EGIT_OVERRIDE_REPO_HORCRUX was silently ignored and every ebuild job built
+# GitHub main instead of the commit under test. git-r3 fetches as the
+# portage user, so the root-owned checkout must be a safe.directory.
+ENV EGIT_OVERRIDE_REPO_CANUTETHEGREAT_HORCRUX=/usr/src/horcrux
+RUN git config --system --add safe.directory /usr/src/horcrux && \
+    git config --system --add safe.directory /usr/src/horcrux/.git && \
+    git -C /usr/src/horcrux rev-parse HEAD > /usr/src/horcrux.HEAD && cat /usr/src/horcrux.HEAD
 
 # Generate a real Manifest for the ebuild (thin-manifests only needs
 # Manifest.gz-style DIST entries when SRC_URI points at real distfiles;
