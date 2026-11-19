@@ -1111,6 +1111,10 @@ fn cluster_routes() -> Router<Arc<AppState>> {
         .route("/api/cluster/power/wake", post(wake_cluster_node))
         .route("/api/cluster/power/bmc-on", post(bmc_power_on_node))
         .route("/api/cluster/power/down", post(power_down_node))
+        .route(
+            "/api/cluster/power/auto",
+            get(get_power_auto).put(set_power_auto),
+        )
         .route("/api/cluster/quorum/plan", get(get_quorum_plan))
         .route(
             "/api/cluster/quorum/qdevice",
@@ -4780,6 +4784,43 @@ async fn get_cluster_power_status(State(state): State<Arc<AppState>>) -> Json<se
         "policy": policy,
         "nodes": nodes,
     }))
+}
+
+#[cfg(feature = "cluster")]
+fn power_auto_json() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "enabled": crate::api::idle_power::enabled(),
+        "forced_by_env": crate::api::idle_power::env_forced(),
+    }))
+}
+
+/// `GET /api/cluster/power/auto` -- whether the automatic idle power-down loop is on.
+#[cfg(feature = "cluster")]
+async fn get_power_auto() -> Json<serde_json::Value> {
+    power_auto_json()
+}
+
+#[cfg(feature = "cluster")]
+#[derive(Debug, Deserialize)]
+struct PowerAutoRequest {
+    enabled: bool,
+}
+
+/// `PUT /api/cluster/power/auto` -- body `{"enabled":true}` switches the automatic
+/// idle power-down loop on or off without a restart (persisted in
+/// `/etc/horcrux/idle-power`). `HORCRUX_IDLE_POWER=1` in the environment keeps it on.
+#[cfg(feature = "cluster")]
+async fn set_power_auto(
+    Json(req): Json<PowerAutoRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    crate::api::idle_power::save_enabled(&crate::api::idle_power::setting_file(), req.enabled)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("saving the idle power setting: {e}"),
+            )
+        })?;
+    Ok(power_auto_json())
 }
 
 #[cfg(feature = "cluster")]

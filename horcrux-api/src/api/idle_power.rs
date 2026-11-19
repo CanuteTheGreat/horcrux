@@ -1,7 +1,8 @@
 //! Idle power-down of lab nodes (readiness area 7): the live planner view, the
 //! guarded "power one node off" action, and an opt-in background loop.
 //!
-//! The loop is OFF unless `HORCRUX_IDLE_POWER=1`. Only the leader (lowest-named
+//! The loop is OFF unless `HORCRUX_IDLE_POWER=1` or the operator switched it on with
+//! `PUT /api/cluster/power/auto` (persisted in `/etc/horcrux/idle-power`, no restart). Only the leader (lowest-named
 //! online node) acts, at most one node per sample, and only a node that the
 //! quorum-safe planner has listed as a candidate for `HORCRUX_IDLE_POWER_SAMPLES`
 //! (default 3) consecutive samples taken `HORCRUX_IDLE_POWER_INTERVAL_SECS`
@@ -77,17 +78,48 @@ fn env_num<T: std::str::FromStr>(name: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
-/// True when the operator enabled automatic idle power-down.
-pub fn enabled() -> bool {
+fn truthy(v: &str) -> bool {
     matches!(
-        std::env::var("HORCRUX_IDLE_POWER").as_deref(),
-        Ok("1") | Ok("true") | Ok("yes") | Ok("on")
+        v.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
     )
+}
+
+/// Where the on/off switch set from the API is persisted:
+/// `HORCRUX_IDLE_POWER_FILE` or `/etc/horcrux/idle-power`.
+pub fn setting_file() -> std::path::PathBuf {
+    std::env::var_os("HORCRUX_IDLE_POWER_FILE")
+        .map(Into::into)
+        .unwrap_or_else(|| "/etc/horcrux/idle-power".into())
+}
+
+/// `HORCRUX_IDLE_POWER` forces the loop on (the API cannot turn it off).
+pub fn env_forced() -> bool {
+    std::env::var("HORCRUX_IDLE_POWER").is_ok_and(|v| truthy(&v))
+}
+
+fn file_enabled(path: &std::path::Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|v| truthy(&v))
+}
+
+/// Persist the switch (`on` / `off`).
+pub fn save_enabled(path: &std::path::Path, on: bool) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, if on { "on\n" } else { "off\n" })
+}
+
+/// True when automatic idle power-down is on: forced by the environment, or
+/// switched on through `PUT /api/cluster/power/auto`. Read on every sample, so
+/// the switch takes effect without a restart.
+pub fn enabled() -> bool {
+    env_forced() || file_enabled(&setting_file())
 }
 
 pub fn spawn(state: Arc<AppState>) {
     static STARTED: OnceLock<()> = OnceLock::new();
-    if !enabled() || STARTED.set(()).is_err() {
+    if STARTED.set(()).is_err() {
         return;
     }
     let interval = env_num("HORCRUX_IDLE_POWER_INTERVAL_SECS", 300u64).max(10);
@@ -98,13 +130,20 @@ pub fn spawn(state: Arc<AppState>) {
     );
     let busy_cpu = env_num("HORCRUX_IDLE_POWER_WAKE_CPU", 80.0f32);
     let grace = Duration::from_secs(env_num("HORCRUX_IDLE_POWER_WAKE_GRACE_SECS", 1800u64));
-    tracing::info!("idle power-down enabled: {samples} idle samples, {interval}s apart");
+    tracing::info!(
+        "idle power-down loop ready (active={}): {samples} idle samples, {interval}s apart",
+        enabled()
+    );
     tokio::spawn(async move {
         let mut tracker = IdleTracker::default();
         let mut woken: std::collections::HashMap<String, std::time::Instant> =
             std::collections::HashMap::new();
         loop {
             tokio::time::sleep(Duration::from_secs(interval)).await;
+            if !enabled() {
+                tracker = IdleTracker::default();
+                continue;
+            }
             let (local, snap, _) = crate::api::drain::snapshot(&state).await;
             if crate::api::drain::leader(&snap).as_deref() != Some(local.as_str()) {
                 tracker = IdleTracker::default();
@@ -245,5 +284,32 @@ mod capacity_wake_tests {
         assert_eq!(pick_capacity_wake(&nodes, &recent).as_deref(), Some("n4"));
         recent.insert("n4".to_string(), std::time::Instant::now());
         assert_eq!(pick_capacity_wake(&nodes, &recent), None);
+    }
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+
+    #[test]
+    fn switch_round_trips_through_the_file() {
+        let dir = std::env::temp_dir().join(format!("hx-idle-power-{}", std::process::id()));
+        let f = dir.join("sub").join("idle-power");
+        assert!(!file_enabled(&f), "missing file means off");
+        save_enabled(&f, true).unwrap();
+        assert!(file_enabled(&f));
+        save_enabled(&f, false).unwrap();
+        assert!(!file_enabled(&f));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn truthy_values() {
+        for v in ["1", "on\n", " YES ", "true"] {
+            assert!(truthy(v), "{v:?}");
+        }
+        for v in ["", "0", "off", "no", "2"] {
+            assert!(!truthy(v), "{v:?}");
+        }
     }
 }
