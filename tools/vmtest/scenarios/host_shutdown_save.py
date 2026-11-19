@@ -43,14 +43,19 @@ def define(args):
         m.phase("install (xfs-luks: the root is encrypted)")
         unattended_install(m, n)
 
-        def unlock_boot(first=False):
-            """Start (first) or let the rebooting host come up, typing the disk passphrase at the initramfs prompt."""
+        def unlock_boot():
+            """The (re)booting host asks for the disk passphrase on the console: type it, then wait for ssh. The prompt is awaited
+            first: ssh still answers while the OLD system runs its shutdown (that is when the guests are saved)."""
+            if not n.q.expect(LUKS_PROMPT, n.T(1500)):
+                raise AssertionError("no disk passphrase prompt: the host never rebooted\n" + n.q.serial_tail(800))
+            time.sleep(1)
+            n.q.send(PW_DISK + "\n")
             end = time.time() + n.T(900)
             while time.time() < end:
-                if n.q.expect(LUKS_PROMPT, 4):
+                if n.q.expect(LUKS_PROMPT, 3):
                     n.q.send(PW_DISK + "\n")
                 try:
-                    n.wait_for_ssh(10)
+                    n.wait_for_ssh(8)
                     return
                 except Exception:
                     if not n.q.alive():
@@ -80,13 +85,14 @@ def define(args):
         try:
             time.sleep(1)
             base = f"http://10.0.2.2:{HTTP_PORT}"
-            for f, dst, mode in (("horcrux-api", "/tmp/horcrux-api.new", "755"), ("cirros.img", "/root/cirros.img", "644"), ("hx_node.py", "/root/hx_node.py", "755"),
+            n.succeed("mkdir -p /var/lib/horcrux/images")
+            for f, dst, mode in (("horcrux-api", "/tmp/horcrux-api.new", "755"), ("cirros.img", "/var/lib/horcrux/images/cirros.img", "644"), ("hx_node.py", "/root/hx_node.py", "755"),
                                  ("horcrux-guests.initd", "/tmp/horcrux-guests.initd", "755"), ("horcrux-guests.service", "/tmp/horcrux-guests.service", "644")):
                 n.succeed(f"curl -sf --retry 3 {base}/{f} -o {dst} && chmod {mode} {dst}", timeout=600)
         finally:
             srv.terminate()
             shutil.rmtree(d, ignore_errors=True)
-        n.succeed("pkill -x horcrux-api || true; true")
+        n.succeed("mkdir -p /var/lib/horcrux/images; pkill -x horcrux-api || true; true")
         n.stop_unit("horcrux-api")
         n.succeed("install -m755 /tmp/horcrux-api.new /usr/bin/horcrux-api")
         # the repo's init script (OpenRC) or unit (systemd): same unit name on both
@@ -97,7 +103,8 @@ def define(args):
         n.start_unit("horcrux-api")
         n.wait_for_unit("horcrux-api", 120)
         n.wait_until(lambda: n.http("web", "/api/health")[0] == 200, 180, 3, "api health")
-        n.succeed("echo __ok__")
+        # a service is only stopped (= its guests saved) at host shutdown when it was started
+        n.start_unit("horcrux-guests")
 
         env = f"HX_USER=hxadmin HX_PASS='{PW}' "
 
@@ -110,13 +117,14 @@ def define(args):
 
         def serial(cfg, cmd):
             sock = cfg["disks"][0]["path"].rsplit(".", 1)[0] + ".serial.sock"
-            return n.succeed(f"{env}python3 /root/hx_node.py serial {sock} \"{cmd}\"", timeout=900).strip().splitlines()[-1]
+            out = n.succeed(f"{env}python3 /root/hx_node.py serial {sock} \"{cmd}\"", timeout=900).strip().splitlines()
+            return out[-1] if out else ""
 
         def create(vm):
             hx("DELETE", f"/vms/{vm}", ok=False)
             hx("POST", "/vms", {"id": vm, "name": vm, "hypervisor": "qemu", "architecture": "x86_64", "cpus": 1, "memory": 256, "disk_size": 1,
                                 "status": "stopped", "display": {"protocol": "none"}, "hardware": {}})
-            hx("POST", f"/vms/{vm}/import-disk", {"source": "/root/cirros.img"})
+            hx("POST", f"/vms/{vm}/import-disk", {"source": "/var/lib/horcrux/images/cirros.img"})
             hx("POST", f"/vms/{vm}/start")
 
         def wait_status(vm, want, secs=300):
@@ -142,8 +150,8 @@ def define(args):
         time.sleep(20)
         c0 = int(serial(cfgA, "cat /dev/shm/cnt").split()[-1])
         up0 = float(serial(cfgA, "cut -d' ' -f1 /proc/uptime").split()[-1])
-        m.note("counter-before", f"{c0} (uptime {up0}s, pid {pid})")
-        n.succeed("python3 - <<'EOF'\nimport sqlite3, glob\np = [x for x in glob.glob('/var/lib/horcrux/*.db')][0]\nc = sqlite3.connect(p)\n"
+        m.note("counter-before", True, f"{c0} (uptime {up0}s, pid {pid})")
+        n.succeed("python3 - <<'EOF'\nimport sqlite3, glob\np = [x for x in glob.glob('/var/lib/horcrux/*.db') if sqlite3.connect(x).execute(\"select count(*) from sqlite_master where name='vms'\").fetchone()[0]][0]\nc = sqlite3.connect(p)\n"
                   "c.execute(\"UPDATE vms SET hardware = json_set(coalesce(hardware,'{}'), '$.hostpci', json('[{\\\"device\\\":\\\"0000:ff:ff.0\\\"}]')) WHERE id='vmP'\")\nc.commit()\nEOF")
         n.stop_unit("horcrux-api")
         n.start_unit("horcrux-api")
@@ -183,12 +191,11 @@ def define(args):
         c1 = int(serial(cfgA, "cat /dev/shm/cnt").split()[-1])
         up1 = float(serial(cfgA, "cut -d' ' -f1 /proc/uptime").split()[-1])
         m.check("counter-continued-not-restarted", c1 >= c0 and up1 >= up0 and up1 < up0 + 900, f"counter {c0} -> {c1}, uptime {up0} -> {up1}")
-        mf = json.loads(n.succeed("cat /var/lib/horcrux/saved-state/running.json"))
-        outc = {o["id"]: o for o in mf["outcomes"]}
+        outc = {o["id"]: o for o in (hx("GET", "/nodes/guest-power")["body"].get("last_stop") or {}).get("outcomes", [])}
         m.check("manifest-vmA-saved", outc.get("vmA", {}).get("action") == "saved", json.dumps(outc.get("vmA")))
         m.check("manifest-vmP-shutdown-with-reason", outc.get("vmP", {}).get("action") == "shutdown" and "passthrough" in (outc["vmP"].get("message") or ""), json.dumps(outc.get("vmP")))
         m.check("saved-memory-deleted-after-resume", n.succeed("ls /var/lib/horcrux/saved-state/data 2>/dev/null | wc -l").strip() == "0", "")
-        wait_status("vmP", "running", 600)   # it was running: started again after its clean shutdown
+        # (vmP owns a fake device, so it rightly cannot start again on this host)
 
         m.phase("a save that exceeds its timeout falls back to a clean shutdown")
         node = hx("GET", "/nodes/guest-power")["body"]["node"]

@@ -153,6 +153,18 @@ fn running_path(state: &AppState) -> PathBuf {
     root(state).join("running.json")
 }
 
+/// What the last host shutdown did to each guest. `running.json` is
+/// refreshed every 20 s once the host is up again (the crash fallback), so
+/// the outcomes - which guests were saved, which fell back and why - live in
+/// their own file until the next host shutdown replaces them.
+fn last_stop_path(state: &AppState) -> PathBuf {
+    root(state).join("last-stop.json")
+}
+
+pub fn read_last_stop(state: &AppState) -> Option<Manifest> {
+    serde_json::from_str(&std::fs::read_to_string(last_stop_path(state)).ok()?).ok()
+}
+
 fn boot_marker_path(state: &AppState) -> PathBuf {
     root(state).join("boot-pass.json")
 }
@@ -934,16 +946,20 @@ pub async fn stop_all(state: &Arc<AppState>) -> Report {
     }
     let local_outcomes = outcomes.len();
     outcomes.extend(moved);
-    write_manifest(
-        state,
-        &Manifest {
-            boot_id: boot_id(),
-            written_at: chrono::Utc::now().to_rfc3339(),
-            clean: true,
-            guests: manifest_guests,
-            outcomes: outcomes.clone(),
-        },
-    );
+    let done = Manifest {
+        boot_id: boot_id(),
+        written_at: chrono::Utc::now().to_rfc3339(),
+        clean: true,
+        guests: manifest_guests,
+        outcomes: outcomes.clone(),
+    };
+    write_manifest(state, &done);
+    if let Err(e) = write_atomic(
+        &last_stop_path(state),
+        serde_json::to_string_pretty(&done).unwrap().as_bytes(),
+    ) {
+        warn!("cannot write {}: {e}", last_stop_path(state).display());
+    }
     let saved = outcomes.iter().filter(|o| o.action == "saved").count();
     Report {
         message: format!(

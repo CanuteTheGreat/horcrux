@@ -115,7 +115,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Result<Json<Overview>, 
         node,
         capabilities: engine::capabilities().await,
         guests: engine::guest_views(&state).await,
-        last_stop: engine::read_manifest(&state),
+        last_stop: engine::read_last_stop(&state).or_else(|| engine::read_manifest(&state)),
     }))
 }
 

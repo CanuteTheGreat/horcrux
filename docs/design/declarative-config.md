@@ -49,6 +49,19 @@ vms:                  # key = name
     display: {protocol: none}
     image: null       # LXD/Incus instance image
     power: running    # running | stopped | (absent = leave alone)
+
+guest_power:          # what guests do when the HOST shuts down / restarts
+  node:               # node defaults; every key optional, documented defaults apply
+    host_shutdown_action: save     # save (default) | shutdown | poweroff | none
+    save_fallback: shutdown        # shutdown | poweroff, when a state cannot be saved
+    save_encryption: require       # require (encrypted storage only) | allow_unencrypted
+    save_timeout_secs: 300
+    shutdown_timeout_secs: 120
+    max_parallel: 4
+    start_action: resume_if_running
+    save_dir: null                 # default: <data dir>/saved-state/data
+  vms:                # per-VM overrides by VM name (same keys as the power policy API)
+    app1: {host_shutdown_action: shutdown, start_order: 10}
 ```
 
 Notes:
@@ -58,6 +71,8 @@ Notes:
 - Subnet ids are derived (`<vnet>-<net>-<prefix>`); the spec does not set them.
 - VMs match by **name**; storage pools by **name**; zones/vnets by **id**;
   subnets by derived id.
+- `guest_power` is planned as kind `guest_power` (`(node defaults)` and one entry
+  per VM override); with `prune`, overrides the spec does not list are removed.
 - Keys for later phases (`containers`, `users`, `acl`, `firewall`,
   `backup_jobs`, `ha_groups`, `nodes`) are *rejected* with "not supported
   yet" rather than ignored, so a spec never half-applies without saying so.
