@@ -26,15 +26,15 @@ use pages::{
     CertificatesPage, CloneList, ClusterDashboard, ClusterManagementPage, ConfigMapsPage,
     ContainerCreate, ContainerEventsPage, ContainerExecPage, ContainerList, ContainerLogsPage,
     ContainerNetworksPage, Dashboard, DashboardsPage, DeploymentsPage, DiskManagementPage,
-    GpuManagement, HaDashboard, HaFailoverPage, HaGroupsPage, HelmChartsPage, HelmReleasesPage,
-    HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login, LxcContainerPage,
-    LxcTemplatesPage, MaintenancePage, MetricServersPage, MetricsExplorerPage, MfaPage,
-    MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage, ObservabilityPage,
-    PermissionsPage, PodsPage, RealmsPage, ReplicationList, RetentionPoliciesPage, RolesPage,
-    SecretsPage, ServicesPage, SessionsPage, SmartMonitoringPage, SnapshotList,
-    SnapshotManagerPage, StacksPage, StorageManagement, TemplateManagerPage, UserMenu, UsersPage,
-    VmConsole, VmCreate, VmImportEsxiPage, VmImportLibvirtPage, VmImportOvfPage, VmList,
-    VolumesPage,
+    GamingVmWizard, GpuManagement, HaDashboard, HaFailoverPage, HaGroupsPage, HelmChartsPage,
+    HelmReleasesPage, HelmRepositoriesPage, ImagesPage, IngressesPage, KubernetesManagement, Login,
+    LxcContainerPage, LxcTemplatesPage, MaintenancePage, MetricServersPage, MetricsExplorerPage,
+    MfaPage, MigrationCenterPage, Monitoring, NetworkManagement, NotificationsPage,
+    ObservabilityPage, PermissionsPage, PodsPage, RealmsPage, ReplicationList,
+    RetentionPoliciesPage, RolesPage, SecretsPage, ServicesPage, SessionsPage, SmartMonitoringPage,
+    SnapshotList, SnapshotManagerPage, StacksPage, StorageManagement, TemplateManagerPage,
+    UserMenu, UsersPage, VmConsole, VmCreate, VmImportEsxiPage, VmImportLibvirtPage,
+    VmImportOvfPage, VmList, VolumesPage,
 };
 
 /// Pages mount only for a signed-in browser. Without this, a first visit rendered the dashboard,
@@ -228,6 +228,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/" view=Dashboard/>
                     <Route path="/vms" view=VmList/>
                     <Route path="/vms/create" view=VmCreate/>
+                    <Route path="/vms/gaming/new" view=GamingVmWizard/>
                     <Route path="/vms/import-ovf" view=VmImportOvfPage/>
                     <Route path="/vms/import-libvirt" view=VmImportLibvirtPage/>
                     <Route path="/vms/import-esxi" view=VmImportEsxiPage/>

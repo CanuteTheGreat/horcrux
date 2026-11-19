@@ -559,6 +559,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::sdn_zones::routes(&state))
         .merge(api::sdn_ovs::routes(&state))
         .merge(api::vm_hw::routes())
+        .merge(api::gaming::routes())
         .merge(api::vm_devices::routes())
         .merge(api::mdev::routes())
         .merge(api::metric_servers::routes(&state))
@@ -1916,6 +1917,14 @@ async fn start_vm(
     #[cfg(feature = "cluster")]
     ha_user_intent(&state, &id, ha::HaState::Started).await;
     emit_vm_state(&state, &vm, &old_status).await;
+    // A gaming VM still installing Windows: its answer disc goes once the
+    // installed guest's agent answers.
+    if let Some(d) = vm.disks.first().map(|d| std::path::PathBuf::from(&d.path)) {
+        if crate::vm::qemu::unattend_iso(&d).exists() {
+            let poll = api::gaming::load_settings(&state).await.unattend_poll_secs;
+            api::gaming::spawn_unattend_cleanup(state.clone(), id.clone(), d, poll);
+        }
+    }
 
     // Broadcast VM status change
     state

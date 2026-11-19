@@ -49,6 +49,7 @@ fn exact(path: &str) -> Option<&'static str> {
         "/login" => "Sign in",
         "/vms" => "VMs",
         "/vms/create" => "Create VM",
+        "/vms/gaming/new" => "New Gaming VM",
         "/vms/import-ovf" => "Import OVF",
         "/vms/import-libvirt" => "Import from libvirt",
         "/vms/import-esxi" => "Import from ESXi",
