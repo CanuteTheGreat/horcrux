@@ -1394,6 +1394,7 @@ jobs:
           NOVNC_DUMP=/tmp/novnc.html cargo test -p horcrux-vm --lib novnc_page_dump
           test -s /tmp/novnc.html
           /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/console_overlay_e2e.py /tmp/novnc.html
+          /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/console_paste_e2e.py /tmp/novnc.html
 
       - name: Start horcrux-api serving the built UI
         run: |

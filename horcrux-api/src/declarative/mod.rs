@@ -718,7 +718,7 @@ pub fn export(live: &Live) -> Spec {
             cpus: v.cpus,
             architecture: Some(v.architecture.clone()),
             disks: v.disks.iter().map(|d| disk_of(d, &live.pools)).collect(),
-            display: (v.display != VmDisplay::default()).then_some(v.display),
+            display: (v.display != VmDisplay::default()).then_some(v.display.clone()),
             hardware: (v.hardware != VmHardware::default()).then(|| v.hardware.clone()),
             image: None,
             power: match v.status {

@@ -421,6 +421,7 @@ impl DatabaseAuditLogger {
             "FirewallRuleAdded" => AuditEventType::FirewallRuleAdded,
             "FirewallRuleDeleted" => AuditEventType::FirewallRuleDeleted,
             "SuspiciousActivity" => AuditEventType::SuspiciousActivity,
+            "ConsolePaste" => AuditEventType::ConsolePaste,
             "BruteForceDetected" => AuditEventType::BruteForceDetected,
             _ => AuditEventType::SuspiciousActivity, // Default fallback
         }

@@ -565,6 +565,8 @@ mod tests {
             video: horcrux_common::VideoDevice::Qxl,
             sound: horcrux_common::SoundDevice::IntelHda,
             relative_mouse: false,
+            keyboard_layout: None,
+            clipboard_agent: false,
         };
         db.create_vm(&vm).await.unwrap();
         let got = db.get_vm("disk-vm").await.unwrap();

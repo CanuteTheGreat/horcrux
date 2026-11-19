@@ -122,7 +122,7 @@ impl VmCloneManager {
             status: VmStatus::Stopped,
             architecture: source_vm.architecture.clone(),
             disks: cloned_disks,
-            display: source_vm.display,
+            display: source_vm.display.clone(),
             // Same NICs/ISO/boot order; the clone gets new MAC addresses.
             hardware: source_vm.hardware.for_clone(),
         };

@@ -810,6 +810,7 @@ fn vm_routes() -> Router<Arc<AppState>> {
         .route("/api/console/:vm_id/vnc", post(create_vnc_console))
         .route("/api/console/:vm_id/websocket", get(get_vnc_websocket))
         .route("/api/console/:vm_id/novnc", get(get_novnc_page))
+        .route("/api/console/:vm_id/paste-audit", post(console_paste_audit))
         .route("/api/console/:vm_id/serial", post(create_serial_console))
         .route("/api/console/ticket/:ticket_id", get(verify_console_ticket))
         .route("/api/console/ws/:ticket_id", get(vnc_websocket_handler))
@@ -3661,9 +3662,55 @@ async fn get_novnc_page(
     // Path-only WebSocket URL; the noVNC page resolves it against its own
     // origin (ws/wss + host:port). A hardcoded `ws://localhost:8006` broke the
     // console for every browser not running on the API host itself.
-    let html =
-        console::novnc::get_novnc_html(&info.ticket, &info.ws_path, info.password.as_deref());
+    let vm = state.vm_manager.get_vm(&vm_id).await?;
+    let paste = console::novnc::PasteSettings::new(
+        &state.config.console,
+        vm.display.keyboard_layout.as_deref(),
+    );
+    let html = console::novnc::get_novnc_html(
+        &info.ticket,
+        &info.ws_path,
+        info.password.as_deref(),
+        &paste,
+    );
     Ok(axum::response::Html(html))
+}
+
+#[derive(serde::Deserialize)]
+struct PasteAuditBody {
+    chars: u32,
+    #[serde(default)]
+    mode: String,
+}
+
+/// The web console reports that it pasted text into a VM. Only the number of
+/// characters and the mode are recorded: the text may be a password.
+async fn console_paste_audit(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
+    Json(body): Json<PasteAuditBody>,
+) -> StatusCode {
+    let mode = match body.mode.as_str() {
+        m @ ("type" | "clipboard" | "both") => m,
+        _ => "type",
+    };
+    state
+        .audit_logger
+        .log(crate::audit::AuditEvent {
+            timestamp: chrono::Utc::now(),
+            event_type: crate::audit::AuditEventType::ConsolePaste,
+            severity: crate::audit::AuditSeverity::Info,
+            user: auth_user.map(|u| u.username.clone()),
+            source_ip: None,
+            resource: Some(vm_id),
+            action: format!("paste {} chars", body.chars),
+            result: crate::audit::AuditResult::Success,
+            details: Some(format!("mode={mode}")),
+            session_id: None,
+        })
+        .await;
+    StatusCode::NO_CONTENT
 }
 
 async fn vnc_websocket_handler(

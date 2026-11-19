@@ -1126,7 +1126,7 @@ pub enum SoundDevice {
 }
 
 /// Per-VM display settings.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct VmDisplay {
     #[serde(default)]
     pub protocol: DisplayProtocol,
@@ -1140,6 +1140,20 @@ pub struct VmDisplay {
     /// USB HID support.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub relative_mouse: bool,
+    /// Keyboard layout of the VM, as a QEMU keymap name (`en-us` when unset,
+    /// `de`, `fr`, `en-gb`, `de-ch`, ...). The VNC server turns the keysyms
+    /// the web console sends (including the console's typed "Paste") into
+    /// the keys of this layout, so it should match the layout the guest OS
+    /// is set to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyboard_layout: Option<String>,
+    /// Add a clipboard agent channel (QEMU `qemu-vdagent` with clipboard
+    /// sharing on) to a VNC display, so the console can set the guest's
+    /// clipboard. Needs `spice-vdagent` (Linux) or the SPICE guest tools /
+    /// virtio-win guest tools (Windows) inside the guest. SPICE displays
+    /// always carry the agent channel.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clipboard_agent: bool,
 }
 
 impl VmDisplay {
@@ -1150,6 +1164,17 @@ impl VmDisplay {
         }
         if self.sound != SoundDevice::None && *arch != VmArchitecture::X86_64 {
             return Err("Emulated sound cards are only offered for x86_64 guests".into());
+        }
+        if let Some(l) = &self.keyboard_layout {
+            let ok = (2..=8).contains(&l.len())
+                && l.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+                && !l.starts_with('-')
+                && !l.ends_with('-');
+            if !ok {
+                return Err(format!(
+                    "Invalid keyboard layout '{l}': use a QEMU keymap name such as en-us, de, fr or en-gb"
+                ));
+            }
         }
         if self.protocol != DisplayProtocol::None && self.video == VideoDevice::None {
             return Err("A graphical console needs a video card (or set protocol to none)".into());

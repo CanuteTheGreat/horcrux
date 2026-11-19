@@ -106,6 +106,34 @@ pub fn DisplaySettingsFields(display: RwSignal<VmDisplay>) -> impl IntoView {
                 " Relative mouse only (no USB tablet; for old guests without USB support)"
             </label>
         </div>
+        <div class="form-group">
+            <label for="disp-keyboard-layout">"Keyboard layout"</label>
+            <input id="disp-keyboard-layout" type="text" placeholder="en-us"
+                prop:value=move || display.get().keyboard_layout.unwrap_or_default()
+                on:input=move |ev| {
+                    let v = event_target_value(&ev).trim().to_lowercase();
+                    display.update(|d| d.keyboard_layout = if v.is_empty() { None } else { Some(v) });
+                }/>
+            <p class="form-help">
+                "QEMU keymap name (en-us, en-gb, de, de-ch, fr, es, it, sv, ...). Match the layout the guest OS uses: the console's Paste types the text as key presses and the VM turns each one into the key of this layout. Blank = en-us. Applies at the next start."
+            </p>
+        </div>
+        {move || (display.get().protocol == DisplayProtocol::Vnc).then(|| view! {
+            <div class="form-group">
+                <label>
+                    <input id="disp-clipboard-agent" type="checkbox"
+                        prop:checked=move || display.get().clipboard_agent
+                        on:change=move |ev| {
+                            let on = event_target_checked(&ev);
+                            display.update(|d| d.clipboard_agent = on);
+                        }/>
+                    " Clipboard agent channel (lets the console set the guest's clipboard)"
+                </label>
+                <p class="form-help" id="disp-clipboard-agent-help">
+                    "Needs an agent inside the guest: spice-vdagent on Linux, or the SPICE guest tools / virtio-win guest tools on Windows. Without it, Paste still works: it types the text as key presses, including in BIOS, boot loader, installer and disk-unlock prompts."
+                </p>
+            </div>
+        })}
     }
 }
 

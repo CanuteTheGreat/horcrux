@@ -28,9 +28,52 @@ pub struct HorcruxConfig {
     /// Authentication settings
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Web console settings (paste behaviour)
+    #[serde(default)]
+    pub console: ConsoleConfig,
     /// GPU / PCI passthrough and VM tuning (gaming VMs)
     #[serde(default)]
     pub passthrough: PassthroughConfig,
+}
+
+/// Web console settings (`[console]`).
+///
+/// Every value has a default; a node overrides any of them in
+/// `/etc/horcrux/config.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ConsoleConfig {
+    /// What the console's Paste button does: `type` (send the text as key
+    /// presses; works everywhere, including BIOS, boot loader, installer and
+    /// disk-unlock prompts), `clipboard` (set the guest clipboard; needs a
+    /// clipboard agent in the guest) or `both`.
+    pub paste_mode: String,
+    /// Pause after each typed key, in milliseconds (guests drop keys that
+    /// arrive faster than they poll the keyboard).
+    pub paste_delay_ms: u32,
+    /// Extra pause after each line break, in milliseconds.
+    pub paste_line_delay_ms: u32,
+    /// Refuse to paste more than this many characters.
+    pub paste_max_chars: u32,
+    /// Ask for confirmation before typing more than this many characters
+    /// (0 = never ask).
+    pub paste_confirm_chars: u32,
+    /// Try characters outside Latin-1 with X11 Unicode keysyms; the VNC
+    /// server types them only when the VM's keyboard layout has the key.
+    pub paste_unicode_keysyms: bool,
+}
+
+impl Default for ConsoleConfig {
+    fn default() -> Self {
+        Self {
+            paste_mode: "type".into(),
+            paste_delay_ms: 20,
+            paste_line_delay_ms: 50,
+            paste_max_chars: 20000,
+            paste_confirm_chars: 500,
+            paste_unicode_keysyms: true,
+        }
+    }
 }
 
 /// GPU / PCI passthrough and VM tuning settings (`[passthrough]`).

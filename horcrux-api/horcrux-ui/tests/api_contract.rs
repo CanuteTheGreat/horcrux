@@ -416,6 +416,8 @@ async fn ui_types_read_real_api_responses() {
         video: horcrux_common::VideoDevice::Qxl,
         sound: horcrux_common::SoundDevice::Ich9IntelHda,
         relative_mouse: false,
+        keyboard_layout: None,
+        clipboard_agent: false,
     };
     let r = c
         .put(format!("{}/vms/{vm}/display", api_base()))

@@ -69,6 +69,8 @@ pub enum AuditEventType {
     FirewallRuleAdded,
     FirewallRuleDeleted,
     SuspiciousActivity,
+    /// Text pasted into a VM from the web console (count only, never the text)
+    ConsolePaste,
     BruteForceDetected,
 }
 

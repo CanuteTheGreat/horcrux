@@ -38,6 +38,7 @@ export default class RFB {
   addEventListener(n, f) { (this.l[n] = this.l[n] || []).push(f); }
   sendCtrlAltDel() { window.__cad = (window.__cad || 0) + 1; }
   clipboardPasteFrom(t) { window.__paste = t; }
+  sendKey(k, c, d) { (window.__keys = window.__keys || []).push(k); }
 }
 """
 STUB_FIT = """
@@ -144,7 +145,7 @@ with sync_playwright() as p:
         pg.evaluate("document.getElementById('console-frame').contentWindow.postMessage("
                     "{horcruxConsole:'ctrl-alt-del'}, location.origin)")
         pg.evaluate("document.getElementById('console-frame').contentWindow.postMessage("
-                    "{horcruxConsole:'paste', text:'hello'}, location.origin)")
+                    "{horcruxConsole:'paste', text:'hello', mode:'both'}, location.origin)")
         f.wait_for_function("window.__cad === 1 && window.__paste === 'hello'")
         check(True, f"[{name}] embedded: parent toolbar drives Ctrl+Alt+Del and paste")
         pg.close()

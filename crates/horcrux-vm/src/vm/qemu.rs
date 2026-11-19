@@ -59,7 +59,7 @@ impl QemuVm {
             status: self.status.clone(),
             architecture: self.architecture.clone(),
             disks: self.all_disks(),
-            display: self.display,
+            display: self.display.clone(),
             hardware: self.hardware.clone(),
         }
     }
@@ -1221,7 +1221,7 @@ impl QemuManager {
             _pid: None,
             hypervisor: VmHypervisor::Qemu,
             architecture: config.architecture.clone(),
-            display: config.display,
+            display: config.display.clone(),
             hardware: config.hardware.clone(),
             disks,
         })
@@ -1252,7 +1252,7 @@ impl QemuManager {
             _pid: None,
             hypervisor: config.hypervisor.clone(),
             architecture: config.architecture.clone(),
-            display: config.display,
+            display: config.display.clone(),
             hardware: config.hardware.clone(),
             disks: config.disks.clone(),
         }
@@ -1759,8 +1759,10 @@ mod tests {
             video: VideoDevice::Qxl,
             sound: SoundDevice::IntelHda,
             relative_mouse: false,
+            keyboard_layout: None,
+            clipboard_agent: false,
         };
-        let v = vm(VmArchitecture::X86_64, d);
+        let v = vm(VmArchitecture::X86_64, d.clone());
         let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &d).unwrap();
         let (bin, args) = qemu_command(&v, &rt, true, None);
         let a = args.join(" ");

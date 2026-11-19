@@ -196,6 +196,21 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
             let port = rt.vnc_port.unwrap_or(5900);
             let spec = format!("127.0.0.1:{},password=on", port.saturating_sub(5900));
             push(&["-vnc", &spec]);
+            if let Some(layout) = display.keyboard_layout.as_deref() {
+                push(&["-k", layout]);
+            }
+            if display.clipboard_agent {
+                // Clipboard sharing with the guest (spice-vdagent / SPICE
+                // guest tools inside it); the VNC server relays ClientCutText.
+                push(&[
+                    "-device",
+                    "virtio-serial-pci,id=spice-vs",
+                    "-chardev",
+                    "qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off",
+                    "-device",
+                    "virtserialport,bus=spice-vs.0,chardev=vdagent,name=com.redhat.spice.0",
+                ]);
+            }
         }
         DisplayProtocol::Spice => {
             // Ticketing stays on (no disable-ticketing) and no password is
@@ -382,8 +397,10 @@ mod tests {
             video: VideoDevice::Qxl,
             sound: SoundDevice::Ich9IntelHda,
             relative_mouse: false,
+            keyboard_layout: None,
+            clipboard_agent: false,
         };
-        let a = joined(d, DisplayProtocol::Spice);
+        let a = joined(d.clone(), DisplayProtocol::Spice);
         assert!(a.contains("-spice port=61002,addr=127.0.0.1"), "{a}");
         assert!(
             !a.contains("password") && !a.contains("disable-ticketing"),
@@ -399,11 +416,45 @@ mod tests {
         let ac97 = joined(
             VmDisplay {
                 sound: SoundDevice::Ac97,
-                ..d
+                ..d.clone()
             },
             DisplayProtocol::Spice,
         );
         assert!(ac97.contains("-device AC97,audiodev=snd0"));
+    }
+
+    #[test]
+    fn vnc_layout_and_clipboard_agent() {
+        let plain = qemu_args(
+            &VmDisplay::default(),
+            &VmArchitecture::X86_64,
+            &rt(DisplayProtocol::Vnc),
+        )
+        .join(" ");
+        assert!(
+            !plain.contains(" -k ") && !plain.contains("qemu-vdagent"),
+            "{plain}"
+        );
+        let d = VmDisplay {
+            keyboard_layout: Some("de".into()),
+            clipboard_agent: true,
+            ..Default::default()
+        };
+        let a = qemu_args(&d, &VmArchitecture::X86_64, &rt(DisplayProtocol::Vnc)).join(" ");
+        assert!(a.contains(" -k de"), "{a}");
+        assert!(
+            a.contains("-chardev qemu-vdagent,id=vdagent,name=vdagent,clipboard=on"),
+            "{a}"
+        );
+        assert!(a.contains("virtserialport,bus=spice-vs.0,chardev=vdagent,name=com.redhat.spice.0"));
+        assert!(d.validate(&VmArchitecture::X86_64).is_ok());
+        for bad in ["", "x", "../etc", "EN-US", "de;rm", "-de", "toolongname"] {
+            let b = VmDisplay {
+                keyboard_layout: Some(bad.into()),
+                ..Default::default()
+            };
+            assert!(b.validate(&VmArchitecture::X86_64).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -413,6 +464,8 @@ mod tests {
             video: VideoDevice::None,
             sound: SoundDevice::None,
             relative_mouse: false,
+            keyboard_layout: None,
+            clipboard_agent: false,
         };
         let a = joined(d, DisplayProtocol::None);
         assert!(a.contains("-vga none") && !a.contains("-vnc") && !a.contains("-spice"));

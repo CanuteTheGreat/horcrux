@@ -81,7 +81,7 @@ pub fn VmConsole() -> impl IntoView {
                             }
                         },
                     );
-                    display_edit.set(config.display);
+                    display_edit.set(config.display.clone());
                     set_vm.set(Some(config));
                     set_error_message.set(None);
                 }
@@ -92,6 +92,9 @@ pub fn VmConsole() -> impl IntoView {
 
     // Connection indicator of the embedded noVNC page (it posts its state to
     // this window; same origin only).
+    let (pasting, set_pasting) = create_signal(false);
+    let (paste_note, set_paste_note) = create_signal(String::new());
+    let paste_mode = create_rw_signal(String::new());
     let (vnc_state, set_vnc_state) =
         create_signal(("connecting".to_string(), "Connecting...".to_string()));
     let on_message = Closure::wrap(Box::new(move |e: MessageEvent| {
@@ -105,7 +108,14 @@ pub fn VmConsole() -> impl IntoView {
                 .ok()
                 .and_then(|v| v.as_string())
         };
-        if get("horcruxConsole").as_deref() == Some("status") {
+        if get("horcruxConsole").as_deref() == Some("paste-state") {
+            let typing = js_sys::Reflect::get(&data, &JsValue::from_str("typing"))
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            set_pasting.set(typing);
+            set_paste_note.set(get("note").unwrap_or_default());
+        } else if get("horcruxConsole").as_deref() == Some("status") {
             set_vnc_state.set((
                 get("state").unwrap_or_default(),
                 get("text").unwrap_or_default(),
@@ -131,11 +141,14 @@ pub fn VmConsole() -> impl IntoView {
 
     // The console buttons live in this page's toolbar; they drive the noVNC
     // iframe by message so nothing is drawn on top of the guest's screen.
-    let frame_action = move |action: &str, text: Option<String>| {
+    let frame_action = move |action: &str, text: Option<String>, mode: Option<String>| {
         let msg = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&msg, &"horcruxConsole".into(), &action.into());
         if let Some(t) = text {
             let _ = js_sys::Reflect::set(&msg, &"text".into(), &t.into());
+        }
+        if let Some(m) = mode.filter(|m| !m.is_empty()) {
+            let _ = js_sys::Reflect::set(&msg, &"mode".into(), &m.into());
         }
         let win = web_sys::window();
         let frame = win
@@ -153,14 +166,45 @@ pub fn VmConsole() -> impl IntoView {
             }
         }
     };
-    let send_cad = move |_| frame_action("ctrl-alt-del", None);
+    let send_cad = move |_| frame_action("ctrl-alt-del", None, None);
+    // Paste types the clipboard text into the guest as key presses (the noVNC
+    // page does the typing: it works in BIOS menus, boot loaders, installers
+    // and unlock prompts, which have no clipboard agent). A click while it is
+    // typing cancels. The browser clipboard is read here, where the click
+    // happened; a plain prompt is the fallback where reading is not allowed.
     let paste_text = move |_| {
-        if let Some(t) = web_sys::window()
-            .and_then(|w| w.prompt_with_message("Paste text:").ok())
-            .flatten()
-        {
-            frame_action("paste", Some(t));
+        if pasting.get_untracked() {
+            frame_action("paste-cancel", None, None);
+            return;
         }
+        let mode = paste_mode.get_untracked();
+        spawn_local(async move {
+            let mut text = String::new();
+            if let Some(nav) = web_sys::window().map(|w| w.navigator()) {
+                if let Ok(cb) = js_sys::Reflect::get(&nav, &"clipboard".into()) {
+                    if let Ok(f) = js_sys::Reflect::get(&cb, &"readText".into())
+                        .and_then(|f| f.dyn_into::<js_sys::Function>())
+                    {
+                        if let Ok(p) = f.call0(&cb) {
+                            if let Ok(v) =
+                                wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(p)).await
+                            {
+                                text = v.as_string().unwrap_or_default();
+                            }
+                        }
+                    }
+                }
+            }
+            if text.is_empty() {
+                text = web_sys::window()
+                    .and_then(|w| w.prompt_with_message("Text to type into the guest:").ok())
+                    .flatten()
+                    .unwrap_or_default();
+            }
+            if !text.is_empty() {
+                frame_action("paste", Some(text), Some(mode));
+            }
+        });
     };
     // Fullscreen shows only the noVNC page: its own auto-hiding bar (pointer
     // at the top edge) takes over the toolbar's buttons there.
@@ -179,7 +223,7 @@ pub fn VmConsole() -> impl IntoView {
     // our button: whatever changes the window or fullscreen state, tell the
     // noVNC page to re-fit the guest to its new size.
     let on_refit = Closure::wrap(Box::new(move |_: JsValue| {
-        frame_action("refit", None);
+        frame_action("refit", None, None);
     }) as Box<dyn FnMut(JsValue)>);
     if let Some(w) = web_sys::window() {
         let _ = w.add_event_listener_with_callback("resize", on_refit.as_ref().unchecked_ref());
@@ -236,9 +280,24 @@ pub fn VmConsole() -> impl IntoView {
                         <button id="console-cad" class="btn btn-secondary" title="Send Ctrl+Alt+Del" on:click=send_cad>
                             "Ctrl+Alt+Del"
                         </button>
-                        <button id="console-paste" class="btn btn-secondary" title="Send text to the guest" on:click=paste_text>
-                            "Paste"
+                        <button id="console-paste" class="btn btn-secondary"
+                            title="Type the clipboard text into the guest as key presses (works in BIOS, boot loader, installer and unlock prompts)"
+                            on:click=paste_text>
+                            {move || if pasting.get() { "Cancel paste" } else { "Paste" }}
                         </button>
+                        <select id="console-paste-mode" title="What Paste does"
+                            on:change=move |ev| paste_mode.set(event_target_value(&ev))>
+                            <option value="">"Paste: default"</option>
+                            <option value="type">"Paste: type keys"</option>
+                            <option value="clipboard">"Paste: guest clipboard"</option>
+                            <option value="both">"Paste: both"</option>
+                        </select>
+                        {move || {
+                            let n = paste_note.get();
+                            (!n.is_empty()).then(|| view! {
+                                <span id="console-paste-note" class="form-help">{n}</span>
+                            })
+                        }}
                         <button id="console-fullscreen" class="btn btn-secondary" on:click=toggle_fullscreen>
                             "Fullscreen"
                         </button>
