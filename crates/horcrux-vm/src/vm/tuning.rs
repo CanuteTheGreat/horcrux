@@ -178,6 +178,30 @@ pub fn nested_kvm_problem(sys: &Path) -> Option<String> {
     Some("KVM (kvm_intel / kvm_amd) is not loaded on this host, so nested virtualisation is not available".into())
 }
 
+/// The CPUID "hypervisor" bit is set: this host is itself a virtual machine.
+pub fn host_is_virtual() -> bool {
+    cpuinfo_says_virtual(&std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default())
+}
+
+fn cpuinfo_says_virtual(cpuinfo: &str) -> bool {
+    cpuinfo
+        .lines()
+        .find(|l| l.starts_with("flags"))
+        .is_some_and(|l| l.split_whitespace().any(|f| f == "hypervisor"))
+}
+
+#[cfg(test)]
+#[test]
+fn the_hypervisor_cpu_flag_marks_a_virtual_host() {
+    assert!(cpuinfo_says_virtual(
+        "vendor_id\t: GenuineIntel\nflags\t\t: fpu vme vmx hypervisor lahf_lm\n"
+    ));
+    assert!(!cpuinfo_says_virtual(
+        "vendor_id\t: AuthenticAMD\nflags\t\t: fpu svm hypervisor_x lahf_lm\n"
+    ));
+    assert!(!cpuinfo_says_virtual(""));
+}
+
 /// `GenuineIntel` / `AuthenticAMD` (from /proc/cpuinfo), cached.
 pub fn host_cpu_vendor() -> &'static str {
     static V: OnceLock<String> = OnceLock::new();

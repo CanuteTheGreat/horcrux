@@ -179,6 +179,13 @@ check(hw["adv"].get("nested_virt") is True, "plan: nested virtualisation for VBS
 check(hw["adv"]["smbios"]["manufacturer"] == settings["smbios_manufacturer"], "plan: Horcrux SMBIOS identity")
 check(any(w.startswith("Valorant: blocked in VMs") for w in plan["warnings"]), "plan warns: Valorant blocked by its publisher")
 check("password" not in json.dumps(plan["unattend"]), "plan never echoes the password")
+host_is_vm = " hypervisor" in open("/proc/cpuinfo").read()
+if host_is_vm:
+    check(any("third level" in w for w in plan["warnings"]), "plan warns: VBS on a host that is itself a VM")
+    no_vbs = dict(req, vbs=None)
+    _, p2 = call("POST", "/vms/gaming", no_vbs, ok=(200,))
+    check(p2["config"]["hardware"]["adv"].get("nested_virt") is False,
+          "VBS stays off by default when the host is itself a VM")
 st, _ = call("GET", "/vms/ci-gaming", ok=None)
 check(st == 404, "dry run created nothing")
 
