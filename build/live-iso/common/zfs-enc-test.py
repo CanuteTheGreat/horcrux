@@ -219,6 +219,16 @@ class ZRun(qt.Runner):
         except OSError:
             pass
         err += dbg
+        rs = getattr(vm, "reset_state", "")
+        if rs:
+            print("[DIAG] guest-vanished CPU state (QEMU held paused by -no-shutdown, registers read over HMP):\n" + rs[-6000:], flush=True)
+            self.res["reset_state"] = rs
+            for m in re.finditer(r"^RIP=([0-9a-f]{16})", rs, flags=re.M):
+                tr = self.res.get("text_runtime")
+                if tr:
+                    off = (int(m.group(1), 16) - int(tr, 16)) & (2**64 - 1)
+                    self.res.setdefault("rip_offsets", []).append(f"{off:x}")
+            err += f" | runstate/regs: {' '.join(rs.split()[:60])}"
         tail = qt.serial_tail(vm, 40)
         msg = f"{label}: QEMU exited during the command (exit status {rc}); qemu stderr: {err!r}; cgroup memory.events: {ev}{tail}"
         print("[DIAG] " + msg, flush=True)
@@ -750,7 +760,11 @@ class ZRun(qt.Runner):
         # boot again: ONE passphrase; the kernel resumes the saved memory BEFORE the pool is imported
         qt.pflash_vars(nvars)
         self.resume_boot = True
-        vm = qt.VM("5-boot4-resume", self.qemu_args(None, True, nvars), a.out)
+        qt.VM.HOLD_ON_RESET = True      # keep a guest that resets after the resume paused so its registers can be read (vm_death_report)
+        try:
+            vm = qt.VM("5-boot4-resume", self.qemu_args(None, True, nvars), a.out)
+        finally:
+            qt.VM.HOLD_ON_RESET = False
         self.resume_boot = False
         try:
             _ok, ok = self.type_passphrase_usb(vm, "passphrase-prompt-resume-boot")
@@ -758,6 +772,11 @@ class ZRun(qt.Runner):
             # diagnostics (runs 3963/3964: the resumed guest resets seconds later and says nothing): the quiet kernel prints nothing on the serial line, so
             # stream every kernel message to it from the first command on; an oops/VERIFY/panic before the reset then lands in the serial tail of the report
             self.sh("dmesg -n 8; nohup sh -c 'dmesg -w > /dev/ttyS0' </dev/null >/dev/null 2>&1 & sleep 1; echo streaming", timeout=15)
+            # runtime address of the kernel text of the RESUMED kernel (its KASLR base): a register dump of a vanished guest is turned into a symbol
+            # by resume_postmortem (RIP minus this, looked up in the postmortem boot's own kallsyms)
+            rc, o = self.sh("sysctl -qw kernel.kptr_restrict=0 2>/dev/null; grep -m1 -E ' [Tt] _text$' /proc/kallsyms", timeout=30)
+            m = re.search(r"^([0-9a-f]{16}) [Tt] _text$", o, flags=re.M)
+            self.res["text_runtime"] = m.group(1) if m else ""
             rc, o = self.sh("echo BOOT_NOW=$(cat /proc/sys/kernel/random/boot_id); echo BOOT_BEFORE=$(cat /dev/shm/boot_id_before 2>/dev/null); "
                             "echo GUEST_DATE=$(date -u +%FT%TZ); echo MARKER=$(cat /dev/shm/marker 2>/dev/null); echo C1=$(cat /dev/shm/counter 2>/dev/null); "
                             "p=$(cat /dev/shm/counter.pid 2>/dev/null); kill -0 $p 2>/dev/null && echo PROC=ALIVE || echo PROC=DEAD; sleep 3; "
@@ -813,7 +832,13 @@ class ZRun(qt.Runner):
                 if not up:
                     print("[DIAG] resume-postmortem: the disk did not come back after one passphrase", flush=True)
                     return
-                rc, o = self.sh(self.POSTMORTEM_CMD, timeout=120)
+                sym = ""
+                for off in self.res.get("rip_offsets", [])[:4]:     # hex of RIP - _text of the vanished guest (resumed kernel) -> symbol in this boot's kallsyms
+                    if re.fullmatch(r"[0-9a-f]{1,16}", off):
+                        sym += (f"; echo ---RIP-SYMBOL-{off}; T=$(grep -m1 -E ' [Tt] _text$' /proc/kallsyms | cut -d' ' -f1); "
+                                f"tg=$(printf '%016x' $((0x$T + 0x{off}))); echo target $tg; "
+                                "awk -v tg=$tg '($1 \"\") <= (tg \"\") {last=$0} ($1 \"\") > (tg \"\") {print last; exit}' /proc/kallsyms")
+                rc, o = self.sh(self.POSTMORTEM_CMD + sym, timeout=120)
                 self.res["resume_postmortem"] = o
                 open(f"{a.out}/resume-postmortem.txt", "w").write(o)
                 print("[DIAG] resume-postmortem (what the guest logged before it died after the resume):\n" + o[-14000:], flush=True)

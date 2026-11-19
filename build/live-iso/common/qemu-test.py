@@ -320,10 +320,15 @@ def sock_paths(out, name):
 
 
 class VM:
+    # a VM built while this is True keeps QEMU alive (paused) after a guest reset/poweroff (-no-reboot + -no-shutdown) so alive() can read the CPU
+    # registers (HMP `info registers`) at the moment the guest vanished: with KVM a triple fault, a CF9/ACPI reset and a clean reboot all end as
+    # "QEMU exit 0" with an empty -d cpu_reset log, only the registers tell them apart (runs 3963/3964/4033: zfs-enc hibernate resume)
+    HOLD_ON_RESET = False
     LUKS_UNLOCK = None         # set to the disk passphrase when the installed root is xfs-luks (see _rd)
 
     def __init__(self, name, args, out):
         self.name, self.out = name, out
+        self.hold, self.reset_state = bool(VM.HOLD_ON_RESET), ""
         self.luks_tail, self.luks_t, self.luks_n = b"", 0.0, 0
         self.log = open(f"{out}/{name}-serial.log", "wb")
         self.vt = VT()
@@ -343,6 +348,8 @@ class VM:
                        "-chardev", f"socket,id=ser0,path={self.ser_path},server=on,wait=off", "-serial", "chardev:ser0",
                        "-display", "none",
                        "-d", "cpu_reset", "-D", f"{out}/{name}-qemu-debug.log"]     # why QEMU ended: CPU reset / triple fault dump
+        if self.hold:
+            full += ["-no-shutdown"]
         self.sock = None
         self.last_rx = time.time()
         self.poke = False          # serial TUI runs: send Ctrl-L when the line has been silent (see expect_screen)
@@ -469,7 +476,62 @@ class VM:
         return False
 
     def alive(self):
-        return self.p.poll() is None
+        if self.p.poll() is not None:
+            return False
+        if self.hold and self._held():
+            return False
+        return True
+
+    def qmp_ret(self, cmd, **kw):
+        """one QMP command, skipping event lines; returns the parsed reply object"""
+        s = socket.socket(socket.AF_UNIX)
+        s.connect(self.qmp_path)
+        s.settimeout(15)
+        f = s.makefile("rw")
+        try:
+            f.readline()
+            f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n")
+            f.flush()
+            f.readline()
+            f.write(json.dumps({"execute": cmd, "arguments": kw}) + "\n")
+            f.flush()
+            while True:
+                line = f.readline()
+                if not line:
+                    return {}
+                r = json.loads(line)
+                if "return" in r or "error" in r:
+                    return r
+        finally:
+            s.close()
+
+    def _held(self):
+        """QEMU is still up but the guest reset/powered off (held by -no-shutdown): read the registers, then end QEMU"""
+        try:
+            st = (self.qmp_ret("query-status").get("return") or {}).get("status")
+        except Exception:
+            return False
+        if st not in ("shutdown", "guest-panicked"):
+            return False
+        out = [f"runstate={st}"]
+        for hmp in ("info registers -a", "x/8i $rip", "info cpus"):
+            try:
+                o = (self.qmp_ret("human-monitor-command", **{"command-line": hmp}).get("return") or "")
+            except Exception as e:
+                o = f"({hmp} failed: {e!r})"
+            o = "\n".join(l for l in str(o).replace("\r", "").splitlines() if not re.match(r"^(FPR|XMM|YMM|ZMM|FCW|DR\d|K\d)", l.strip()))
+            out.append(f"## {hmp}\n{o}")
+        self.reset_state = "\n".join(out)
+        try:
+            open(f"{self.out}/{self.name}-reset-state.txt", "w").write(self.reset_state)
+        except OSError:
+            pass
+        self.p.kill()
+        try:
+            self.p.wait(timeout=20)
+        except Exception:
+            pass
+        return True
 
     def qmp(self, cmd, **kw):
         s = socket.socket(socket.AF_UNIX)
