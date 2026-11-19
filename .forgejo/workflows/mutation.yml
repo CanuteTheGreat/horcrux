@@ -108,7 +108,7 @@ jobs:
         if: env.MUT_MODE != 'skip'
         run: |
           if ! command -v node >/dev/null 2>&1; then
-            sudo apt-get update -qq && sudo apt-get install -y nodejs
+            bash "$GITHUB_WORKSPACE/ci/apt-install.sh" nodejs
           fi
 
       - name: Install Rust toolchain
@@ -137,7 +137,15 @@ jobs:
 
       - name: Install cargo-mutants
         if: env.MUT_MODE != 'skip'
-        run: command -v cargo-mutants || cargo install cargo-mutants --locked
+        run: |
+          # crates.io fetches are the flaky part: retry the install only, never the mutation run.
+          command -v cargo-mutants && exit 0
+          for n in 1 2 3 4; do
+            cargo install cargo-mutants --locked && exit 0
+            echo "cargo install attempt $n failed, retrying in $((n * 20)) s" >&2
+            sleep $((n * 20))
+          done
+          exit 1
 
       - name: Run cargo-mutants on ${{ matrix.group }}
         if: env.MUT_MODE != 'skip'
