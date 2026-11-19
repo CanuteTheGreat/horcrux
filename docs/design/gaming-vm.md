@@ -276,6 +276,13 @@ external monitor output from the guest, AMD reset behaviour, Intel Arc.
 `quirks_files`. Per VM: `hostpci[].managed`, `hostpci[].allow_display_loss`,
 `adv.cpu_pinning`, `adv.hugepages`, `adv.hyperv`, `adv.evdev`.
 
+Protected/confidential tier (`[protected]`, section 12): `protected_tier`,
+`confidential_tier`, `required_lockdown`, `lockdown_path`, `cmdline_path`,
+`ptrace_scope_path`, `sev_status_path`, `cpuinfo_path`, `tpm_pcr_dir`,
+`attested_pcrs`, `attestation_key_path`, `vmm_binary_path` — every detection
+source and the attestation key path is a config key with a default, so a
+different TPM/measured-boot layout needs no rebuild.
+
 ## 10. Native viewer and streaming (no third-party viewers)
 
 No Looking Glass, Sunshine/Moonlight, Parsec or similar in the user's path;
@@ -321,25 +328,91 @@ against Horcrux's licence; Looking Glass is GPL-2.0 and its code is not copied
 
 ## 12. Protected gaming VMs (attestation basis)
 
-- **Hardware confidential computing:** AMD SEV-SNP (EPYC 3rd gen+) and Intel
-  TDX (Xeon 4th/5th gen+) encrypt and integrity-protect guest memory and attest
-  the launch state. Consumer Core Ultra / Ryzen parts don't offer them (SME/TSME
-  and TME only encrypt DRAM against physical attacks; they don't isolate a VM
-  from the host). Windows confidential guests exist (Azure lists Windows 11 and
-  Windows Server for SEV-SNP/TDX), but passing a gaming GPU into one needs PCIe
-  TDISP/IDE (AMD SEV-TIO spec 0.92, Aug 2026) or vendor confidential-GPU modes
-  (datacenter H100/Blackwell only): nothing works for gaming GPUs today. Opt-in
-  tier where the hardware allows; the UI shows why it isn't available otherwise.
-- **On consumer CPUs ("protected gaming VM"):** guest RAM in KVM guest_memfd
-  private memory (not mapped in host userspace; `KVM_X86_SW_PROTECTED_VM` type,
-  in-place conversion work in kvm-x86 2026), kernel lockdown=confidentiality,
-  no ptrace/process_vm_readv of the VMM, QMP memory dumps and gdbstub disabled,
-  seccomp-confined VMM, IMA/EVM, measured boot of firmware/bootloader/kernel/
-  cmdline/lockdown/VMM into TPM PCRs, and a Horcrux attestation report
-  ("unmodified, locked-down Horcrux host; nothing outside the VM can read its
-  memory"). Weaker than SEV-SNP/TDX against a malicious host kernel or physical
-  access; the threat-model table states it. A test proves that reads of guest
-  RAM from host userspace fail.
+Two honest ways to keep game memory out of the host's reach, strongest first.
+Neither hides or spoofs anything; both are an opt-in tier the UI offers only
+where the hardware/kernel supports it, and explains why when it can't
+(`GET /api/gpu/pci/protected-check`, `crates/horcrux-vm/src/vm/protected.rs`).
+
+### 12.1 Threat model (what each layer actually stops)
+
+| Adversary | Ordinary VM | Protected VM (consumer CPU) | Confidential VM (SEV-SNP / TDX) |
+|---|---|---|---|
+| **Host userspace** (the QEMU process, another local process reading the VMM via `ptrace`/`process_vm_readv`, QMP `dump-guest-memory`, the gdbstub) | reads guest RAM freely | **blocked**: guest RAM is in a `guest_memfd` never mapped into host userspace; VMM is `lockdown`-protected from ptrace, QMP memory dump + gdbstub disabled, seccomp-confined | **blocked**: guest memory is encrypted with a key the host never has |
+| **Host kernel** (a compromised or malicious kernel, `/dev/mem`, kcore, BPF, kexec, hibernation image) | reads guest RAM | *partially* — `lockdown=confidentiality` closes the standard read paths and measured boot detects a tampered kernel, but a kernel that is both malicious **and** unmeasured could still reach `guest_memfd` pages; **not cryptographically excluded** | **blocked**: the CPU denies the host hypervisor plaintext access; integrity protection (SNP RMP / TDX) detects remapping/replay |
+| **Physical / DMA** (cold-boot, a malicious PCIe device doing DMA, an interposer) | reads DRAM | *partially* — only if the platform has SME/TSME (AMD) or TME (Intel) enabled, which encrypt DRAM against a bus/cold-boot attacker (not against the host OS); IOMMU limits rogue-DMA | **blocked**: guest DRAM is always ciphertext; SEV-SNP/TDX add integrity |
+| **Malicious admin** (root on the host deliberately dumping a tenant's VM) | reads guest RAM | *deterred, not prevented* — every read path is closed and the act would change the measured/audited host state, but root is inside the protected tier's TCB | **blocked**: root is outside the guest TCB; the attestation report proves the host could not read the VM |
+
+The attestation report (12.3) states the tier honestly so a verifier (an
+anti-cheat vendor) can see exactly which adversaries are excluded.
+
+### 12.2 Hardware confidential computing (the confidential tier)
+
+AMD SEV-SNP (EPYC 7003 "Milan" and newer) and Intel TDX (Xeon Scalable 5th
+gen "Emerald Rapids" and newer; some 4th-gen "Sapphire Rapids" SKUs) encrypt
+and integrity-protect guest memory and attest the launch state; even the host
+hypervisor cannot read guest RAM. Arm CCA (Realms) is the equivalent, not yet
+in shipping silicon. Consumer **Core Ultra / Ryzen** parts do **not** offer
+these — AMD SME/TSME and Intel TME encrypt whole-DRAM against a *physical*
+attacker only and never isolate a VM from the host OS, so Horcrux never counts
+them as a confidential tier (detected separately as `memory_encryption`).
+
+Windows confidential guests exist (Azure offers Windows 11 and Windows Server
+as SEV-SNP and TDX confidential VMs), so the Windows gaming guest is not the
+blocker. **Passing a gaming GPU into a confidential VM is** — it needs PCIe
+TDISP/IDE (AMD SEV-TIO; Intel TDX Connect) or a vendor confidential-GPU mode
+(NVIDIA H100/Blackwell CC mode, datacenter only). No consumer gaming GPU
+supports it today, so `confidential_gpu_passthrough` is always reported
+`false` and the UI says a confidential VM would have to run the GPU emulated
+(not useful for gaming). The confidential tier is therefore real for the
+*compute/headless* case and a documented future for gaming GPUs.
+
+### 12.3 Protected gaming VM (consumer CPUs) — built and proven
+
+Layers, each a config key with a default (nothing hard-coded, `[protected]`):
+
+- **Private guest memory** — guest RAM in a KVM `guest_memfd` (`KVM_CAP_GUEST_MEMFD`,
+  Linux 6.8) under the `KVM_X86_SW_PROTECTED_VM` machine type. These pages are
+  never mapped into host userspace, so the VMM process and anything reading it
+  cannot see guest RAM. **Proven on this project's kernel (6.8):** the ignored
+  test `crates/horcrux-vm/tests/protected_memfd.rs` creates a sw-protected VM +
+  `guest_memfd` and asserts that `mmap` of it from host userspace is **refused
+  (`ENODEV`)** — see `ci/protected-vm-e2e.sh` and the `protected-vm-e2e`
+  workflow on the `kvm-x86_64` runner. (SW_PROTECTED_VM runs the guest with
+  emulated/paravirt memory today; wiring it under the running gaming guest is a
+  follow-up — phase 6 proves the private-memory property and ships the
+  detection, report, API, UI and attestation.)
+- **Locked-down host** — `lockdown=confidentiality` (no `/dev/mem`, kcore,
+  kprobes/BPF memory reads, kexec, hibernation), Secure Boot + signed kernel,
+  no `ptrace`/`process_vm_readv` of the VMM (Yama ptrace scope), KVM QMP
+  `dump-guest-memory` and the gdbstub disabled, seccomp-confined VMM, IMA/EVM
+  for host binaries.
+- **Platform memory encryption where present** (Intel TME / AMD SME/TSME) —
+  reported, counted only against the physical/DMA adversary, never as isolation.
+- **Measured boot** — firmware, bootloader, kernel, cmdline, lockdown state and
+  the VMM binary hash measured into TPM PCRs.
+
+### 12.4 Horcrux attestation report
+
+`GET /api/gpu/pci/attestation` returns a signed report: the measured-boot PCR
+values, kernel cmdline, lockdown level and VMM SHA-256, a SHA-256 digest over
+the canonical measurement block, an ECDSA P-256 signature by a per-node
+attestation key, and the report bound to the node's TLS fingerprint. It states
+the tier and its caveats honestly ("host userspace cannot read guest RAM; a
+malicious host *kernel* is not cryptographically excluded as it would be with
+SEV-SNP/TDX"). On consumer hardware this report is the evidence behind the
+anti-cheat allow-listing proposal (section 5, step 4); on SEV-SNP/TDX hosts a
+hardware attestation quote is added (future phase). The TPM quote (PCRs signed
+by the TPM's attestation key) is the cryptographic root and is wired next.
+
+Sources (checked 2026-11-18): Linux KVM `Documentation/virt/kvm/api.rst`
+(`KVM_CAP_GUEST_MEMFD`, `KVM_CREATE_GUEST_MEMFD`, `KVM_X86_SW_PROTECTED_VM`,
+merged 6.8); kernel `admin-guide/hw-vuln` and `security/self-protection` +
+`Documentation/admin-guide/kernel-parameters` (`lockdown=`); AMD SEV-SNP ABI
+and SEV-TIO/TDISP spec; Intel TDX module/`tdx` kernel docs and TDX Connect;
+QEMU `confidential-guest-support` / `sev-snp-guest` / `tdx-guest` docs; EDK2
+OVMF `AmdSev`/`IntelTdx` packages; Microsoft Azure confidential-VM Windows
+support; NVIDIA H100 confidential-computing documentation.
+
 
 ## 13. VM on one machine, GPU on another (later)
 
@@ -378,5 +451,11 @@ NVIDIA support answer 5223. Measured Horcrux numbers are added as phases land.
 4. Remote streaming (WebRTC, relay, adaptive bitrate) + web/desktop clients,
    latency tests per path.
 5. HA placement and failover for GPU VMs; GPU pool, sessions, quotas.
-6. Protected gaming VM + attestation; confidential tier where hardware allows.
+6. **Prototyped (this phase):** protected gaming VM + attestation. Host
+   capability detection (SEV-SNP/TDX vs guest_memfd + lockdown), the
+   `protected-check` / `attestation` APIs and UI tier, a signed attestation
+   report, and a real-kernel test proving host userspace cannot read guest_memfd
+   RAM (refused with `ENODEV` on 6.8). Still to wire: the gaming guest actually
+   launched under `guest_memfd`, a TPM quote as the cryptographic root, and the
+   confidential tier once a gaming GPU supports TDISP.
 7. GPU lending across nodes (compute follows the GPU); remote-GPU research.

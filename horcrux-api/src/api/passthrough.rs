@@ -33,6 +33,8 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/gpu/pci/status", get(status))
         .route("/api/gpu/pci/gaming-check", get(gaming_check))
+        .route("/api/gpu/pci/protected-check", get(protected_check))
+        .route("/api/gpu/pci/attestation", get(attestation))
         .route("/api/gpu/pci/devices", get(list))
         .route("/api/gpu/pci/devices/:addr/bind-vfio", post(bind))
         .route("/api/gpu/pci/devices/:addr/unbind-vfio", post(unbind))
@@ -82,6 +84,43 @@ async fn gaming_check() -> Result<Json<crate::vm::handoff::GamingReport>, ApiErr
     })
     .await
     .map_err(|e| Error::System(format!("gaming check: {e}")))?;
+    Ok(Json(r))
+}
+
+/// Can this host run a *protected* or *confidential* gaming VM, and why not if
+/// it can't (docs/design/gaming-vm.md section 12). Opens /dev/kvm read-only to
+/// prove whether a guest_memfd region is unreadable from host userspace.
+async fn protected_check() -> Result<Json<crate::vm::protected::ProtectedReport>, ApiError> {
+    let r = tokio::task::spawn_blocking(|| {
+        let cfg = &horcrux_core::config::HorcruxConfig::load().protected;
+        let probe = crate::vm::protected::probe_guest_memfd(std::path::Path::new("/dev/kvm"));
+        crate::vm::protected::host_report(cfg, Some(&probe))
+    })
+    .await
+    .map_err(|e| Error::System(format!("protected check: {e}")))?;
+    Ok(Json(r))
+}
+
+/// The host's signed attestation report (measured boot + lockdown + VMM hash),
+/// bound to this node's TLS identity. This is the evidence behind the honest
+/// anti-cheat argument on consumer hardware.
+async fn attestation(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<crate::vm::protected::AttestationReport>, ApiError> {
+    let fp = state
+        .tls_manager
+        .ensure_certificate()
+        .map(|i| i.fingerprint_sha256)
+        .unwrap_or_default();
+    let r = tokio::task::spawn_blocking(move || {
+        let cfg = &horcrux_core::config::HorcruxConfig::load().protected;
+        let probe = crate::vm::protected::probe_guest_memfd(std::path::Path::new("/dev/kvm"));
+        let tier = crate::vm::protected::host_report(cfg, Some(&probe)).tier;
+        crate::vm::protected::attestation_report(cfg, tier, &fp, Some(&probe))
+    })
+    .await
+    .map_err(|e| Error::System(format!("attestation: {e}")))?
+    .map_err(|e| Error::System(format!("attestation: {e}")))?;
     Ok(Json(r))
 }
 

@@ -31,6 +31,10 @@ pub struct HorcruxConfig {
     /// GPU / PCI passthrough and VM tuning (gaming VMs)
     #[serde(default)]
     pub passthrough: PassthroughConfig,
+    /// Protected / confidential gaming VM and host attestation
+    /// (docs/design/gaming-vm.md section 12).
+    #[serde(default)]
+    pub protected: ProtectedConfig,
 }
 
 /// GPU / PCI passthrough and VM tuning settings (`[passthrough]`).
@@ -90,6 +94,64 @@ impl Default for PassthroughConfig {
                 PathBuf::from("/usr/share/horcrux/gpu-quirks.toml"),
                 PathBuf::from("/etc/horcrux/gpu-quirks.toml"),
             ],
+        }
+    }
+}
+
+/// Protected / confidential gaming VM and host attestation (`[protected]`,
+/// docs/design/gaming-vm.md section 12). Every value has a default; nothing
+/// about the mechanism is hard-coded, so an operator can point the attestation
+/// at a different TPM, key or measured-boot layout without a rebuild.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ProtectedConfig {
+    /// Offer the "protected gaming VM" tier (guest_memfd private memory +
+    /// locked-down host) where the kernel supports it. Off hides the tier.
+    pub protected_tier: bool,
+    /// Offer the "confidential gaming VM" tier (AMD SEV-SNP / Intel TDX) where
+    /// the CPU and kernel support it.
+    pub confidential_tier: bool,
+    /// Kernel lockdown level required before the host counts as "locked down"
+    /// for the protected tier: `none`, `integrity` or `confidentiality`.
+    pub required_lockdown: String,
+    /// sysfs file reporting the current kernel lockdown state.
+    pub lockdown_path: PathBuf,
+    /// procfs file holding the booted kernel command line (measured).
+    pub cmdline_path: PathBuf,
+    /// Yama ptrace-scope file; a non-zero scope keeps other host processes
+    /// from ptracing the VMM.
+    pub ptrace_scope_path: PathBuf,
+    /// sysfs directory exposing the AMD SEV state (`/sys/module/kvm_amd` etc).
+    pub sev_status_path: PathBuf,
+    /// cpuinfo flags file (SME/TSME/TME/SEV/TDX feature detection).
+    pub cpuinfo_path: PathBuf,
+    /// TPM sysfs PCR directory (per-bank), e.g. sha256 PCRs for measured boot.
+    pub tpm_pcr_dir: PathBuf,
+    /// TPM PCR indexes recorded in the attestation report (firmware, bootloader,
+    /// kernel, cmdline, IMA by the usual UEFI/IMA PCR assignment).
+    pub attested_pcrs: Vec<u32>,
+    /// ed25519/ECDSA attestation key; generated on first use if absent. The
+    /// attestation report is signed with it and bound to the node TLS identity.
+    pub attestation_key_path: PathBuf,
+    /// Path of the running VMM binary, hashed into the attestation report.
+    pub vmm_binary_path: PathBuf,
+}
+
+impl Default for ProtectedConfig {
+    fn default() -> Self {
+        Self {
+            protected_tier: true,
+            confidential_tier: true,
+            required_lockdown: "confidentiality".into(),
+            lockdown_path: PathBuf::from("/sys/kernel/security/lockdown"),
+            cmdline_path: PathBuf::from("/proc/cmdline"),
+            ptrace_scope_path: PathBuf::from("/proc/sys/kernel/yama/ptrace_scope"),
+            sev_status_path: PathBuf::from("/sys/module/kvm_amd/parameters/sev"),
+            cpuinfo_path: PathBuf::from("/proc/cpuinfo"),
+            tpm_pcr_dir: PathBuf::from("/sys/class/tpm/tpm0/pcr-sha256"),
+            attested_pcrs: vec![0, 1, 2, 3, 4, 5, 7, 8, 9, 10],
+            attestation_key_path: PathBuf::from("/var/lib/horcrux/attestation/ak-ed25519.pem"),
+            vmm_binary_path: PathBuf::from("/usr/bin/qemu-system-x86_64"),
         }
     }
 }

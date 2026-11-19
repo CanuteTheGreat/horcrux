@@ -12,6 +12,7 @@ fn is_blocked(d: &pt::PciDevice) -> bool {
 pub fn GpuManagement() -> impl IntoView {
     let (status, set_status) = create_signal(None::<pt::PciStatus>);
     let (gaming, set_gaming) = create_signal(None::<pt::GamingReport>);
+    let (protected, set_protected) = create_signal(None::<pt::ProtectedReport>);
     let (devices, set_devices) = create_signal(Vec::<pt::PciDevice>::new());
     let (types, set_types) = create_signal(Vec::<pt::MdevType>::new());
     let (mdevs, set_mdevs) = create_signal(Vec::<pt::MdevDevice>::new());
@@ -34,6 +35,9 @@ pub fn GpuManagement() -> impl IntoView {
             match pt::gaming_check().await {
                 Ok(g) => set_gaming.set(Some(g)),
                 Err(e) => set_error.set(Some(format!("Gaming VM check: {}", e.message))),
+            }
+            if let Ok(p) = pt::protected_check().await {
+                set_protected.set(Some(p));
             }
             if let Ok(t) = pt::mdev_types().await {
                 set_types.set(t);
@@ -244,6 +248,54 @@ pub fn GpuManagement() -> impl IntoView {
                             </table>
                             <p class="form-help">
                                 "Add a usable GPU to a VM on its Hardware page and tick \"hand over at start\": the GPU moves to the VM when it starts and comes back when it shuts down. Some online games refuse to run in any VM; see the Gaming VM guide."
+                            </p>
+                        }.into_view()
+                    }
+                }}
+            </div>
+
+            <h3>"Protected / confidential VM tier"</h3>
+            <div id="protected-check">
+                {move || match protected.get() {
+                    None => view! { <p class="form-help">"Checking..."</p> }.into_view(),
+                    Some(p) => {
+                        let tier_label = match p.tier.as_str() {
+                            "confidential" => "Confidential VM (hardware-encrypted memory: SEV-SNP / TDX)",
+                            "protected" => "Protected VM (host userspace cannot read guest RAM)",
+                            _ => "Not available on this host (ordinary VM only)",
+                        };
+                        let proven = p.layers.host_read_refused == Some(true);
+                        view! {
+                            <ul class="protected-host" id="protected-host">
+                                <li id="protected-tier" class={format!("protected-tier tier-{}", p.tier)}>{tier_label}</li>
+                                <li id="protected-memfd">{format!(
+                                    "Private guest memory (guest_memfd): {}",
+                                    if p.layers.guest_memfd {
+                                        if proven { "yes - verified: host userspace mapping refused" }
+                                        else { "yes (kernel supports it)" }
+                                    } else { "no (needs Linux 6.8+ KVM guest_memfd)" }
+                                )}</li>
+                                <li id="protected-lockdown">{format!(
+                                    "Kernel lockdown: {}{}",
+                                    p.layers.lockdown,
+                                    if p.layers.lockdown_ok { " (meets the protected-tier requirement)" } else { " (below requirement)" }
+                                )}</li>
+                                <li id="protected-hw">{format!(
+                                    "CPU confidential computing: {}",
+                                    if p.hardware.sev_snp { "AMD SEV-SNP".to_string() }
+                                    else if p.hardware.tdx { "Intel TDX".to_string() }
+                                    else if p.hardware.memory_encryption { format!("memory encryption only ({}), not VM isolation", p.hardware.vendor) }
+                                    else { "none".to_string() }
+                                )}</li>
+                                {(!p.confidential_gpu_passthrough).then(|| view! {
+                                    <li id="protected-gpu" class="form-help">"GPU passthrough into a confidential (encrypted-memory) VM is not possible on gaming GPUs today (needs PCIe TDISP/IDE or a vendor confidential-GPU mode: datacenter only)."</li>
+                                })}
+                            </ul>
+                            <ul class="protected-reasons">
+                                {p.reasons.iter().map(|r| view! { <li>{r.clone()}</li> }).collect_view()}
+                            </ul>
+                            <p class="form-help">
+                                "The protected tier keeps the host's own userspace from reading game memory and attests the host's locked-down boot state - the honest basis for asking anti-cheat vendors to allow-list Horcrux VMs. It does not evade or hide anything."
                             </p>
                         }.into_view()
                     }

@@ -16,6 +16,7 @@ pub mod lxd;
 pub mod mdev;
 pub mod migrate;
 pub mod pci;
+pub mod protected;
 /// Virtual machine management module
 /// Handles QEMU/KVM, LXD, and Incus virtual machine lifecycle
 pub mod qemu;

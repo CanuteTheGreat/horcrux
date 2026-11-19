@@ -95,6 +95,46 @@ pub async fn gaming_check() -> Result<GamingReport, ApiError> {
     fetch_json("/gpu/pci/gaming-check").await
 }
 
+/// `GET /api/gpu/pci/protected-check` (horcrux-vm `protected::ProtectedReport`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProtectedReport {
+    pub hardware: ConfidentialHw,
+    pub layers: ProtectedLayers,
+    pub tier: String,
+    pub confidential_enabled: bool,
+    pub protected_enabled: bool,
+    pub reasons: Vec<String>,
+    pub confidential_gpu_passthrough: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfidentialHw {
+    pub vendor: String,
+    pub sev: bool,
+    pub sev_es: bool,
+    pub sev_snp: bool,
+    pub tdx: bool,
+    pub memory_encryption: bool,
+    pub memory_encryption_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProtectedLayers {
+    pub lockdown: String,
+    pub lockdown_ok: bool,
+    pub ptrace_scope: i32,
+    pub ima: bool,
+    pub evm: bool,
+    pub secure_boot: bool,
+    pub guest_memfd: bool,
+    pub sw_protected_vm: bool,
+    pub host_read_refused: Option<bool>,
+}
+
+pub async fn protected_check() -> Result<ProtectedReport, ApiError> {
+    fetch_json("/gpu/pci/protected-check").await
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MdevType {
     pub parent: String,

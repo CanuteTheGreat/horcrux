@@ -1,0 +1,64 @@
+name: Protected gaming VM (guest_memfd private memory)
+
+# Real-kernel proof for docs/design/gaming-vm.md section 12: a protected gaming
+# VM's RAM lives in a KVM guest_memfd that host userspace cannot map. The
+# ignored `protected_memfd` test creates a KVM_X86_SW_PROTECTED_VM + guest_memfd
+# and asserts the host-userspace mmap is refused. Needs /dev/kvm on a Linux 6.8+
+# kernel with KVM_CAP_GUEST_MEMFD: rw-man-01's kvm-x86_64 runner.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/horcrux-vm/src/vm/protected.rs'
+      - 'crates/horcrux-vm/tests/protected_memfd.rs'
+      - 'crates/horcrux-core/src/config.rs'
+      - 'ci/protected-vm-e2e.sh'
+      - '.forgejo/workflows/protected-vm-e2e.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: "replace:${{ github.workflow }}@${{ github.ref }}"
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  protected-vm-e2e:
+    name: guest_memfd private memory (real KVM)
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libvirt-dev libpam0g-dev
+          ls -l /dev/kvm
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-protected-vm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-protected-vm-
+
+      - name: Build the protected-memfd test binary
+        run: |
+          set -o pipefail
+          cargo test -p horcrux-vm --test protected_memfd --no-run 2>&1 | tee build.log
+          bin=$(sed -n 's/.*Executable tests\/protected_memfd.rs (\(.*\))/\1/p' build.log | tail -1)
+          test -x "$bin"
+          cp "$bin" protected_memfd.bin
+
+      - name: Prove host userspace cannot read guest RAM
+        run: bash ci/protected-vm-e2e.sh protected_memfd.bin
