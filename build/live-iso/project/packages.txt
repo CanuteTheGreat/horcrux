@@ -1,6 +1,9 @@
 # Horcrux = KVM/containers hypervisor
 app-emulation/qemu
 app-emulation/libvirt
+# Windows 11 VMs (Gaming VM wizard): TPM 2.0 emulator and the answer-file disc builder
+app-crypt/swtpm
+dev-libs/libisoburn
 app-containers/podman
 app-containers/docker
 app-containers/docker-cli

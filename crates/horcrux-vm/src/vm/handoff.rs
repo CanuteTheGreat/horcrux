@@ -84,6 +84,16 @@ pub struct HandoffRecord {
     /// IOMMU groups the VM holds (`/dev/vfio/N`).
     pub groups: Vec<String>,
     pub stopped_services: Vec<String>,
+    /// Single-GPU passthrough: display services stopped for the VM.
+    #[serde(default)]
+    pub display_services: Vec<String>,
+    /// Single-GPU passthrough: vtconsoles detached (`vtcon1`).
+    #[serde(default)]
+    pub vtconsoles: Vec<String>,
+    /// Single-GPU passthrough: (platform driver, device) of detached boot
+    /// framebuffers (`efi-framebuffer`, `efi-framebuffer.0`).
+    #[serde(default)]
+    pub framebuffers: Vec<(String, String)>,
 }
 
 pub fn record_file(disk: &Path) -> PathBuf {
@@ -353,30 +363,149 @@ pub fn preflight(
     Ok((funcs, groups))
 }
 
+/// Does handing these devices over take the host's only screen (single-GPU
+/// passthrough, allowed with `allow_display_loss`)?
+pub fn takes_only_display(host: &Host, devices: &[(String, bool)]) -> bool {
+    let displays = host.connected_displays();
+    let mut funcs: Vec<String> = Vec::new();
+    for (addr, allow) in devices {
+        if !allow {
+            continue;
+        }
+        if let Ok((_, f)) = host.group_functions(addr) {
+            funcs.extend(f);
+        }
+    }
+    let here = displays.iter().any(|(a, _)| funcs.contains(a));
+    let elsewhere = displays.iter().any(|(a, _)| !funcs.contains(a));
+    here && !elsewhere
+}
+
+/// Detach the kernel's framebuffer console from the GPU (single-GPU
+/// hand-off): unbind every vtconsole that is a framebuffer console, then
+/// the boot framebuffer devices (EFI/simple/VESA). Records what it did.
+fn unbind_consoles(host: &Host, rec: &mut HandoffRecord) {
+    let vt = host.sys.join("class/vtconsole");
+    if let Ok(rd) = std::fs::read_dir(&vt) {
+        let mut names: Vec<String> = rd.flatten().map(|e| base(&e.path())).collect();
+        names.sort();
+        for n in names {
+            let d = vt.join(&n);
+            if read(&d.join("name")).contains("frame buffer") && read(&d.join("bind")) == "1" {
+                match std::fs::write(d.join("bind"), "0") {
+                    Ok(()) => {
+                        info!("hand-off: console {n} detached");
+                        rec.vtconsoles.push(n);
+                    }
+                    Err(e) => warn!("hand-off: detaching console {n}: {e}"),
+                }
+            }
+        }
+    }
+    for drv in ["efi-framebuffer", "simple-framebuffer", "vesa-framebuffer"] {
+        let d = host.sys.join("bus/platform/drivers").join(drv);
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        let prefix = format!("{drv}.");
+        let mut devs: Vec<String> = rd
+            .flatten()
+            .map(|e| base(&e.path()))
+            .filter(|n| n.starts_with(&prefix))
+            .collect();
+        devs.sort();
+        for dev in devs {
+            match std::fs::write(d.join("unbind"), &dev) {
+                Ok(()) => {
+                    info!("hand-off: {dev} detached from {drv}");
+                    rec.framebuffers.push((drv.to_string(), dev));
+                }
+                Err(e) => warn!("hand-off: detaching {dev}: {e}"),
+            }
+        }
+    }
+}
+
+/// Undo [`unbind_consoles`].
+fn rebind_consoles(host: &Host, rec: &HandoffRecord) {
+    for (drv, dev) in &rec.framebuffers {
+        let f = host.sys.join("bus/platform/drivers").join(drv).join("bind");
+        if let Err(e) = std::fs::write(&f, dev) {
+            warn!("hand-off: re-attaching {dev} to {drv}: {e}");
+        }
+    }
+    for n in &rec.vtconsoles {
+        let f = host.sys.join("class/vtconsole").join(n).join("bind");
+        if let Err(e) = std::fs::write(&f, "1") {
+            warn!("hand-off: re-attaching console {n}: {e}");
+        }
+    }
+}
+
 /// Move a VM's managed devices to vfio-pci (see the module docs).
 pub async fn acquire(host: &Host, disk: &Path, hostpci: &[VmHostPci]) -> Result<()> {
+    let cfg = tuning::config().clone();
+    acquire_with(host, disk, hostpci, &cfg, services()).await
+}
+
+/// [`acquire`] with explicit settings and init backend (tests).
+pub async fn acquire_with(
+    host: &Host,
+    disk: &Path,
+    hostpci: &[VmHostPci],
+    cfg: &PassthroughConfig,
+    svc: Option<&dyn HostServices>,
+) -> Result<()> {
     let devices = managed(hostpci);
     if devices.is_empty() {
         return Ok(());
     }
-    let cfg = tuning::config().clone();
     // Cheap checks first (no service touched yet).
-    let (funcs, groups) = preflight(host, &devices, &cfg, true)?;
+    let (funcs, groups) = preflight(host, &devices, cfg, true)?;
     let mut rec = HandoffRecord {
         groups,
         ..Default::default()
     };
-    // Helper services that keep the GPU open.
     let needs_driver_move = funcs
         .iter()
         .any(|f| link_base(&host.devdir(f).join("driver")).as_deref() != Some("vfio-pci"));
+    // Single-GPU passthrough: the local desktop lets go of the GPU first
+    // (display manager stopped through the init system, framebuffer
+    // console detached); all of it comes back when the VM stops.
+    if needs_driver_move && takes_only_display(host, &devices) {
+        if let Some(s) = svc {
+            for name in &cfg.handoff_display_services {
+                if s.is_active(name).await {
+                    if let Err(e) = s.stop(name).await {
+                        give_back_with(host, &rec, cfg, svc).await;
+                        return Err(Error::System(format!("stopping {name}: {e}")));
+                    }
+                    info!("hand-off: stopped {name} (single-GPU passthrough)");
+                    rec.display_services.push(name.clone());
+                }
+            }
+        }
+        // the compositor and its helpers take a moment to exit
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(cfg.handoff_display_release_secs);
+        while !host.holders(&host.device_nodes(&funcs)).is_empty()
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        if cfg.handoff_unbind_consoles {
+            unbind_consoles(host, &mut rec);
+        }
+    }
+    // Helper services that keep the GPU open.
     if needs_driver_move {
-        if let Some(s) = services() {
+        if let Some(s) = svc {
             for name in &cfg.handoff_stop_services {
                 if s.is_active(name).await {
-                    s.stop(name)
-                        .await
-                        .map_err(|e| Error::System(format!("stopping {name}: {e}")))?;
+                    if let Err(e) = s.stop(name).await {
+                        give_back_with(host, &rec, cfg, svc).await;
+                        return Err(Error::System(format!("stopping {name}: {e}")));
+                    }
                     rec.stopped_services.push(name.clone());
                 }
             }
@@ -386,7 +515,7 @@ pub async fn acquire(host: &Host, disk: &Path, hostpci: &[VmHostPci]) -> Result<
     if cfg.handoff_refuse_when_held {
         let held = host.holders(&host.device_nodes(&funcs));
         if !held.is_empty() {
-            restart_services(&rec.stopped_services).await;
+            give_back_with(host, &rec, cfg, svc).await;
             return Err(Error::Conflict(format!(
                 "the GPU is still in use on the host by {}. Close those programs (a desktop session keeps every GPU open unless the GPU is marked for passthrough; see the Gaming VM guide) and start the VM again",
                 holders_message(&held)
@@ -406,7 +535,7 @@ pub async fn acquire(host: &Host, disk: &Path, hostpci: &[VmHostPci]) -> Result<
         if let Err(e) = r {
             // undo what is done so far
             let partial = rec.clone();
-            give_back(host, &partial, &cfg).await;
+            give_back_with(host, &partial, cfg, svc).await;
             return Err(e);
         }
         info!(
@@ -417,14 +546,14 @@ pub async fn acquire(host: &Host, disk: &Path, hostpci: &[VmHostPci]) -> Result<
     }
     let body = serde_json::to_vec_pretty(&rec).unwrap_or_default();
     if let Err(e) = std::fs::write(record_file(disk), body) {
-        give_back(host, &rec, &cfg).await;
+        give_back_with(host, &rec, cfg, svc).await;
         return Err(Error::System(format!("recording the hand-off: {e}")));
     }
     Ok(())
 }
 
-async fn restart_services(names: &[String]) {
-    if let Some(s) = services() {
+async fn restart_services(svc: Option<&dyn HostServices>, names: &[String]) {
+    if let Some(s) = svc {
         for n in names {
             if let Err(e) = s.start(n).await {
                 warn!("hand-off: starting {n} again failed: {e}");
@@ -434,6 +563,15 @@ async fn restart_services(names: &[String]) {
 }
 
 async fn give_back(host: &Host, rec: &HandoffRecord, cfg: &PassthroughConfig) {
+    give_back_with(host, rec, cfg, services()).await
+}
+
+async fn give_back_with(
+    host: &Host,
+    rec: &HandoffRecord,
+    cfg: &PassthroughConfig,
+    svc: Option<&dyn HostServices>,
+) {
     for (addr, before) in &rec.devices {
         let pci = host.pci();
         let a = addr.clone();
@@ -455,7 +593,10 @@ async fn give_back(host: &Host, rec: &HandoffRecord, cfg: &PassthroughConfig) {
             Err(e) => warn!("hand-off: {e}"),
         }
     }
-    restart_services(&rec.stopped_services).await;
+    restart_services(svc, &rec.stopped_services).await;
+    // single-GPU: the console first, then the desktop
+    rebind_consoles(host, rec);
+    restart_services(svc, &rec.display_services).await;
 }
 
 /// Give a VM's managed devices back once QEMU no longer holds them. Waits
@@ -571,6 +712,14 @@ pub struct GpuCheck {
     pub functions: Vec<String>,
     /// Monitors connected to this GPU right now.
     pub displays: Vec<String>,
+    /// Every display connector of this GPU (connected or not), from DRM.
+    pub connectors: Vec<String>,
+    /// Does the GPU have display outputs? `false` for "3D controllers"
+    /// (datacenter/compute cards, muxless laptop GPUs) and cards whose
+    /// driver lists no connectors; `None` when unknown (no DRM driver bound).
+    /// Without outputs the picture can only reach the player through the
+    /// Horcrux viewer with a virtual display in the guest.
+    pub has_outputs: Option<bool>,
     /// Is a monitor connected to some other GPU (the host keeps a screen)?
     pub host_keeps_display: bool,
     pub reset_methods: Vec<String>,
@@ -594,6 +743,63 @@ pub struct GamingReport {
     /// (page KiB, total, free)
     pub hugepages: Vec<(u64, u64, u64)>,
     pub gpus: Vec<GpuCheck>,
+    /// Nested virtualisation is on in the host's KVM module (Windows VBS /
+    /// Memory Integrity and Hyper-V inside the guest need it).
+    pub nested_virt: bool,
+    /// Why not, and how to turn it on (empty when available).
+    pub nested_virt_problem: String,
+    /// The Secure Boot build of OVMF (with Microsoft keys) is installed.
+    pub secure_boot_firmware: bool,
+    /// swtpm (the emulated TPM 2.0) is installed.
+    pub swtpm: bool,
+    /// Program that builds the answer-file disc (xorriso, genisoimage or
+    /// mkisofs); empty = none installed.
+    pub iso_tool: String,
+}
+
+/// The ISO 9660 builder on this host (xorriso, genisoimage, mkisofs).
+pub fn iso_tool() -> Option<&'static str> {
+    ["xorriso", "genisoimage", "mkisofs"]
+        .into_iter()
+        .find(|t| in_path(t))
+}
+
+fn in_path(prog: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d.join(prog).is_file()))
+        .unwrap_or(false)
+}
+
+/// DRM connectors of a PCI device (`card1-HDMI-A-1` -> `HDMI-A-1`), and
+/// whether it has a DRM card at all.
+fn connectors_of(host: &Host, addr: &str) -> (bool, Vec<String>) {
+    let mut out = Vec::new();
+    let mut has_card = false;
+    let Ok(rd) = std::fs::read_dir(host.sys.join("class/drm")) else {
+        return (false, out);
+    };
+    let mut names: Vec<String> = rd.flatten().map(|e| base(&e.path())).collect();
+    names.sort();
+    for n in names {
+        let Some((card, conn)) = n.split_once('-') else {
+            if n.starts_with("card")
+                && link_base(&host.sys.join("class/drm").join(&n).join("device")).as_deref()
+                    == Some(addr)
+            {
+                has_card = true;
+            }
+            continue;
+        };
+        if !card.starts_with("card") {
+            continue;
+        }
+        if link_base(&host.sys.join("class/drm").join(card).join("device")).as_deref() == Some(addr)
+        {
+            has_card = true;
+            out.push(conn.to_string());
+        }
+    }
+    (has_card, out)
 }
 
 /// Build the report (pure over the given roots, plus the quirks tables).
@@ -604,6 +810,13 @@ pub fn host_report(host: &Host, quirks: &[Quirk]) -> GamingReport {
     let cpus = HostCpus::read(&host.sys);
     let suggested_vcpus = if cpus.hybrid() {
         cpus.performance.len() as u32
+    } else if cpus.multi_l3() {
+        // one CCD/CCX (the best one): no cross-die latency in the guest
+        cpus.l3_order()
+            .first()
+            .map(|g| g.iter().filter(|c| cpus.online.contains(c)).count() as u32)
+            .unwrap_or(1)
+            .max(1)
     } else {
         (cpus.online.len() as u32).saturating_sub(1).max(1)
     };
@@ -622,6 +835,15 @@ pub fn host_report(host: &Host, quirks: &[Quirk]) -> GamingReport {
             .map(|(_, c)| c.clone())
             .collect();
         let host_keeps_display = displays.iter().any(|(a, _)| !functions.contains(a));
+        let (has_card, connectors) = connectors_of(host, &d.address);
+        // PCI class 0302xx = 3D controller: no display engine wired out
+        let has_outputs = if d.class.trim_start_matches("0x").starts_with("0302") {
+            Some(false)
+        } else if has_card {
+            Some(!connectors.is_empty())
+        } else {
+            None
+        };
         let reset_methods: Vec<String> = read(&host.devdir(&d.address).join("reset_method"))
             .split_whitespace()
             .map(str::to_string)
@@ -675,6 +897,11 @@ pub fn host_report(host: &Host, quirks: &[Quirk]) -> GamingReport {
                 holders_message(&holders)
             ));
         }
+        if has_outputs == Some(false) {
+            reasons.push(
+                "no display outputs (compute/datacenter card or muxless laptop GPU): the guest renders into a virtual display and is shown through the Horcrux viewer (guest tools, phase 3); no monitor or dummy plug needed".into(),
+            );
+        }
         if matches!(d.driver.as_deref(), Some("i915") | Some("xe")) {
             reasons.push(
                 "integrated GPU: keep it for the host desktop and pass the discrete GPU".into(),
@@ -706,6 +933,8 @@ pub fn host_report(host: &Host, quirks: &[Quirk]) -> GamingReport {
             iommu_group: d.iommu_group.clone(),
             functions,
             displays: mine,
+            connectors,
+            has_outputs,
             host_keeps_display,
             reset_methods,
             holders,
@@ -723,6 +952,11 @@ pub fn host_report(host: &Host, quirks: &[Quirk]) -> GamingReport {
         hugepages: tuning::hugepage_pools(&host.sys),
         cpus,
         gpus,
+        nested_virt_problem: tuning::nested_kvm_problem(&host.sys).unwrap_or_default(),
+        nested_virt: tuning::nested_kvm_problem(&host.sys).is_none(),
+        secure_boot_firmware: super::firmware::find_ovmf_for(true).is_some(),
+        swtpm: in_path("swtpm"),
+        iso_tool: iso_tool().unwrap_or_default().to_string(),
     }
 }
 
@@ -1007,6 +1241,184 @@ mod tests {
             );
         }
         assert_eq!(read(&s.join("bus/pci/drivers_probe")), "0000:02:00.1");
+    }
+
+    /// Init backend double: records stop/start; stopping `kills` removes a
+    /// fake process (the compositor exiting with its display manager).
+    struct MockSvc {
+        active: Vec<String>,
+        kills: Option<PathBuf>,
+        log: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl HostServices for MockSvc {
+        async fn is_active(&self, name: &str) -> bool {
+            self.active.iter().any(|a| a == name)
+        }
+        async fn stop(&self, name: &str) -> std::result::Result<(), String> {
+            self.log.lock().unwrap().push(format!("stop {name}"));
+            if let Some(p) = &self.kills {
+                let _ = fs::remove_dir_all(p);
+            }
+            Ok(())
+        }
+        async fn start(&self, name: &str) -> std::result::Result<(), String> {
+            self.log.lock().unwrap().push(format!("start {name}"));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn single_gpu_handoff_stops_the_desktop_detaches_the_console_and_restores_both() {
+        let fx = laptop();
+        let h = fx.host();
+        let s = fx.sys();
+        // a desktop with one GPU in use: the panel is off, the monitor is on
+        // the dGPU, and the compositor has the card open
+        fs::write(s.join("class/drm/card0-eDP-1/status"), "disconnected").unwrap();
+        fx.connector("card1", "0000:02:00.0", "HDMI-A-1", "connected");
+        fx.open_by(4242, "gnome-shell", &fx.t.path().join("dev/dri/card1"));
+        for (n, name, bind) in [
+            ("vtcon0", "(S) dummy device", "1"),
+            ("vtcon1", "(M) frame buffer device", "1"),
+        ] {
+            let d = s.join("class/vtconsole").join(n);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("name"), name).unwrap();
+            fs::write(d.join("bind"), bind).unwrap();
+        }
+        let fb = s.join("bus/platform/drivers/efi-framebuffer");
+        fs::create_dir_all(fb.join("efi-framebuffer.0")).unwrap();
+        fs::write(fb.join("unbind"), "").unwrap();
+        fs::write(fb.join("bind"), "").unwrap();
+
+        let hp = |allow: bool| {
+            vec![VmHostPci {
+                device: "02:00.0".into(),
+                managed: true,
+                allow_display_loss: allow,
+                ..Default::default()
+            }]
+        };
+        let devices = managed(&hp(true));
+        assert!(takes_only_display(&h, &devices));
+        let cfg = PassthroughConfig {
+            handoff_display_release_secs: 2,
+            ..Default::default()
+        };
+        let svc = MockSvc {
+            active: vec!["display-manager".into()],
+            kills: Some(fx.t.path().join("proc/4242")),
+            log: Default::default(),
+        };
+        let disk = fx.t.path().join("win.qcow2");
+        // without allow_display_loss: refused, nothing stopped
+        let e = acquire_with(&h, &disk, &hp(false), &cfg, Some(&svc))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("only connected display"), "{e}");
+        assert!(svc.log.lock().unwrap().is_empty());
+
+        acquire_with(&h, &disk, &hp(true), &cfg, Some(&svc))
+            .await
+            .unwrap();
+        assert_eq!(*svc.log.lock().unwrap(), vec!["stop display-manager"]);
+        assert_eq!(read(&s.join("class/vtconsole/vtcon1/bind")), "0");
+        assert_eq!(read(&s.join("class/vtconsole/vtcon0/bind")), "1");
+        assert_eq!(read(&fb.join("unbind")), "efi-framebuffer.0");
+        assert_eq!(
+            read(&s.join("devices/pci/0000:02:00.0/driver_override")),
+            "vfio-pci"
+        );
+        let rec: HandoffRecord =
+            serde_json::from_slice(&fs::read(record_file(&disk)).unwrap()).unwrap();
+        assert_eq!(rec.display_services, vec!["display-manager"]);
+        assert_eq!(rec.vtconsoles, vec!["vtcon1"]);
+        assert_eq!(
+            rec.framebuffers,
+            vec![(
+                "efi-framebuffer".to_string(),
+                "efi-framebuffer.0".to_string()
+            )]
+        );
+
+        // the VM is gone: GPU back, then console, then the desktop
+        give_back_with(&h, &rec, &cfg, Some(&svc)).await;
+        assert_eq!(
+            read(&s.join("devices/pci/0000:02:00.0/driver_override")),
+            ""
+        );
+        assert_eq!(read(&s.join("class/vtconsole/vtcon1/bind")), "1");
+        assert_eq!(read(&fb.join("bind")), "efi-framebuffer.0");
+        assert_eq!(
+            *svc.log.lock().unwrap(),
+            vec!["stop display-manager", "start display-manager"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_desktop_that_keeps_the_gpu_undoes_the_single_gpu_steps() {
+        let fx = laptop();
+        let h = fx.host();
+        let s = fx.sys();
+        fs::write(s.join("class/drm/card0-eDP-1/status"), "disconnected").unwrap();
+        fx.connector("card1", "0000:02:00.0", "HDMI-A-1", "connected");
+        // a program that does not exit with the display manager
+        fx.open_by(5150, "obs", &fx.t.path().join("dev/dri/card1"));
+        let cfg = PassthroughConfig {
+            handoff_display_release_secs: 1,
+            ..Default::default()
+        };
+        let svc = MockSvc {
+            active: vec!["display-manager".into()],
+            kills: None,
+            log: Default::default(),
+        };
+        let hp = vec![VmHostPci {
+            device: "02:00.0".into(),
+            managed: true,
+            allow_display_loss: true,
+            ..Default::default()
+        }];
+        let disk = fx.t.path().join("win.qcow2");
+        let e = acquire_with(&h, &disk, &hp, &cfg, Some(&svc))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("obs (pid 5150"), "{e}");
+        // the desktop came back, the GPU never moved
+        assert_eq!(
+            *svc.log.lock().unwrap(),
+            vec!["stop display-manager", "start display-manager"]
+        );
+        assert_eq!(
+            read(&s.join("devices/pci/0000:02:00.0/driver_override")),
+            "(null)"
+        );
+        assert!(!record_file(&disk).exists());
+    }
+
+    #[test]
+    fn gpus_without_outputs_are_recognised() {
+        let fx = laptop();
+        // a datacenter card: 3D controller class
+        fx.dev(
+            "0000:05:00.0",
+            "0x030200",
+            "10de",
+            "27b8",
+            Some("nvidia"),
+            "20",
+        );
+        let r = host_report(&fx.host(), &[]);
+        let l4 = r.gpus.iter().find(|g| g.address == "0000:05:00.0").unwrap();
+        assert_eq!(l4.has_outputs, Some(false));
+        assert!(l4.reasons.iter().any(|x| x.contains("no display outputs")));
+        let dgpu = r.gpus.iter().find(|g| g.address == "0000:02:00.0").unwrap();
+        assert_eq!(dgpu.has_outputs, Some(true));
+        assert_eq!(dgpu.connectors, vec!["HDMI-A-1", "eDP-2"]);
     }
 
     #[tokio::test]

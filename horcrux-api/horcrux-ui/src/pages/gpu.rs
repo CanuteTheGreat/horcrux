@@ -3,6 +3,7 @@
 //! (vGPU profiles: create, delete). VMs get a device on their Hardware page.
 use crate::api::passthrough as pt;
 use leptos::*;
+use leptos_router::A;
 
 fn is_blocked(d: &pt::PciDevice) -> bool {
     d.class_name == "bridge"
@@ -245,6 +246,7 @@ pub fn GpuManagement() -> impl IntoView {
                             <p class="form-help">
                                 "Add a usable GPU to a VM on its Hardware page and tick \"hand over at start\": the GPU moves to the VM when it starts and comes back when it shuts down. Some online games refuse to run in any VM; see the Gaming VM guide."
                             </p>
+                            <A href="/vms/gaming/new" class="btn btn-primary" id="gaming-wizard-link">"New Gaming VM..."</A>
                         }.into_view()
                     }
                 }}

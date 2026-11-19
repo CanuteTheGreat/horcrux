@@ -192,6 +192,7 @@ pub fn VmList() -> impl IntoView {
             <div class="page-header">
                 <h1>"Virtual Machines"</h1>
                 <A href="/vms/create" class="btn btn-primary">"Create VM"</A>
+                <A href="/vms/gaming/new" class="btn" id="vm-new-gaming">"New Gaming VM"</A>
                 <A href="/vms/import-ovf" class="btn">"Import OVF / OVA"</A>
                 <A href="/vms/import-esxi" class="btn">"Import from ESXi"</A>
                 <A href="/vms/import-libvirt" class="btn">"Import from libvirt"</A>
