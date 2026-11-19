@@ -5,6 +5,7 @@ pub mod cross_node_clone;
 pub mod devices;
 pub mod display;
 pub mod firmware;
+pub mod gpucap;
 pub mod handoff;
 pub mod hardware;
 pub mod hold;
@@ -24,6 +25,7 @@ pub mod savestate;
 pub mod snapshot;
 pub mod snapshot_quota;
 pub mod snapshot_scheduler;
+pub mod sriov;
 pub mod tuning;
 
 pub use qemu::{QemuManager, QemuVm};

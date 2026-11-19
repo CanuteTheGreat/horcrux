@@ -134,6 +134,8 @@ pub fn GpuManagement() -> impl IntoView {
             })}
             {move || notice.get().map(|n| view! { <div class="alert alert-success" id="pci-notice">{n}</div> })}
 
+            <super::gpu_slicing::GpuSlicing/>
+
             <h3>"PCI devices"</h3>
             <div class="form-row">
                 <label for="pci-class">"Show "</label>
@@ -298,7 +300,7 @@ pub fn GpuManagement() -> impl IntoView {
                     <li>"Enable the IOMMU in the BIOS (Intel VT-d / AMD-Vi) and on the kernel command line (" <code>"intel_iommu=on"</code> " / " <code>"amd_iommu=on"</code> "), reboot."</li>
                     <li>"Bind the device (and every other non-bridge device of its IOMMU group) to vfio-pci above."</li>
                     <li>"Add it on the VM's Hardware page under \"Host PCI devices\"."</li>
-                    <li>"A running VM with such a device cannot be live-migrated or have its state saved; HA only restarts it on a node that has the same device bound to vfio-pci."</li>
+                    <li>"A running VM with a whole device cannot be live-migrated or have its state saved; HA only restarts it on a node that has the same device bound to vfio-pci. SR-IOV virtual functions and vGPU devices whose VFIO driver supports migration can be saved on host shutdown (see GPU capabilities above)."</li>
                 </ol>
             </div>
         </div>

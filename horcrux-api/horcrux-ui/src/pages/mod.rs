@@ -18,6 +18,7 @@ pub mod dashboard;
 mod dhcp_networks;
 mod firewall_objects;
 mod gpu;
+mod gpu_slicing;
 pub mod ha;
 mod host_bridges;
 mod iso_library;

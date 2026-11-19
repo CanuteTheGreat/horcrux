@@ -180,6 +180,10 @@ pub async fn run() -> anyhow::Result<()> {
     // Initialize CORS config
     let cors_config = middleware::cors::CorsConfig::default();
 
+    // Create the configured SR-IOV virtual functions before anything that
+    // can autostart a VM uses them.
+    api::gpu_slice::apply_on_boot().await;
+
     // Initialize GPU manager and scan for devices
     let gpu_manager = Arc::new(gpu::GpuManager::new());
     match gpu_manager.scan_devices().await {
@@ -557,6 +561,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::vm_hw::routes())
         .merge(api::vm_devices::routes())
         .merge(api::mdev::routes())
+        .merge(api::gpu_slice::routes())
         .merge(api::metric_servers::routes(&state))
         .merge(api::passthrough::routes())
         .merge(api::ovf::routes())

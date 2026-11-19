@@ -4303,6 +4303,17 @@ async fn passthrough_metric_servers_and_alert_silence_read_into_ui_types() {
     println!("contract: {} PCI devices", pci.len());
     let _: Vec<pt::MdevType> = fetch(&c, &token, "/gpu/mdev/types").await;
     let _: Vec<pt::MdevDevice> = fetch(&c, &token, "/gpu/mdev/devices").await;
+    // hardware GPU slicing: capabilities, SR-IOV config, plan, generations
+    let caps: Vec<pt::GpuCapability> = fetch(&c, &token, "/gpu/capabilities").await;
+    println!("contract: {} GPU capability rows", caps.len());
+    let cfg: pt::SriovConfig = fetch(&c, &token, "/gpu/sriov/config").await;
+    let _: Vec<pt::SriovGeneration> = fetch(&c, &token, "/gpu/sriov/generations").await;
+    let (status, body) = post(&c, &token, "/gpu/sriov/plan", json!({ "config": cfg })).await;
+    assert_eq!(status, 200, "{body}");
+    let _: pt::SriovPlan = serde_json::from_value(body).expect("plan reads into the UI type");
+    let (status, body) = post(&c, &token, "/gpu/sriov/apply", json!({ "dry_run": true })).await;
+    assert_eq!(status, 200, "{body}");
+    let _: pt::SriovReport = serde_json::from_value(body).expect("report reads into the UI type");
 
     // metric server: create (secrets masked), list, test refusal, delete
     let (status, body) = post(

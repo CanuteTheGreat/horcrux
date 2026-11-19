@@ -7,7 +7,21 @@ use horcrux_common::{VmHardware, VmHostPci};
 use leptos::*;
 
 #[component]
-pub fn HostPciPanel(hardware: RwSignal<VmHardware>, running: Signal<bool>) -> impl IntoView {
+pub fn HostPciPanel(
+    hardware: RwSignal<VmHardware>,
+    running: Signal<bool>,
+    #[prop(into)] vm_id: Signal<String>,
+) -> impl IntoView {
+    // How the VM's stored host devices affect saving it on host shutdown.
+    let (save, set_save) = create_signal(None::<pt::VmDeviceSave>);
+    spawn_local(async move {
+        let id = vm_id.get_untracked();
+        if !id.is_empty() {
+            if let Ok(s) = pt::vm_device_save(&id).await {
+                set_save.set(Some(s));
+            }
+        }
+    });
     let (pci, set_pci) = create_signal(Vec::<pt::PciDevice>::new());
     let (mdevs, set_mdevs) = create_signal(Vec::<pt::MdevDevice>::new());
     let pick = create_rw_signal(String::new());
@@ -92,6 +106,16 @@ pub fn HostPciPanel(hardware: RwSignal<VmHardware>, running: Signal<bool>) -> im
             {move || hardware.get().hostpci.is_empty().then(|| view! {
                 <p class="form-help" id="vm-hostpci-none">"No host devices assigned."</p>
             })}
+            {move || save.get().filter(|s| !s.devices.is_empty()).map(|s| view! {
+                <p class="form-help vm-hostpci-save" id="vm-hostpci-save" data-host-save=s.host_save.to_string()>
+                    <strong>"Save method on host shutdown: "</strong>{s.summary.clone()}
+                    {s.devices.iter().map(|d| view! {
+                        <span class="vm-hostpci-save-dev" data-device=d.device.clone()>
+                            {format!(" [{} {}: {}]", d.kind, d.device, d.migration.label())}
+                        </span>
+                    }).collect_view()}
+                </p>
+            })}
             <div class="form-row">
                 <select id="vm-hostpci-pick" prop:value=pick on:change=move |ev| pick.set(event_target_value(&ev))>
                     <option value="">"device on this node..."</option>
@@ -119,7 +143,7 @@ pub fn HostPciPanel(hardware: RwSignal<VmHardware>, running: Signal<bool>) -> im
             <small class="form-help">
                 "Devices bound to vfio-pci and GPUs (handed over at each start) appear in the list (bind others under "
                 <a href="/gpu">"Infrastructure > GPU Passthrough"</a>
-                "). Takes effect at the next start. A VM with passthrough hardware cannot be live-migrated or have its state saved."
+                "). Takes effect at the next start. A VM with a whole passthrough device cannot be live-migrated or have its state saved on the host; one that only has SR-IOV virtual functions or vGPU devices with VFIO migration support can."
             </small>
         </fieldset>
     }
