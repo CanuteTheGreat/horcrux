@@ -1884,8 +1884,28 @@ async fn emit_vm_state(state: &Arc<AppState>, vm: &VmConfig, old: &str) {
     }
 }
 
+/// Show a finished VM power action in the Tasks log (the empty-state text on
+/// that page promises it).
+fn record_vm_task(
+    user: Option<&axum::Extension<middleware::auth::AuthUser>>,
+    task_type: &str,
+    vm: &VmConfig,
+    verb: &str,
+) {
+    let who = user
+        .map(|u| u.username.clone())
+        .unwrap_or_else(|| "system".to_string());
+    api::tasks::record_done(
+        task_type,
+        &vm.name,
+        &who,
+        &Ok(format!("VM {} {verb}", vm.name)),
+    );
+}
+
 async fn start_vm(
     State(state): State<Arc<AppState>>,
+    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
     Path(id): Path<String>,
 ) -> Result<Json<VmConfig>, ApiError> {
     let old_status = state
@@ -1906,6 +1926,7 @@ async fn start_vm(
     };
     #[cfg(feature = "cluster")]
     ha_user_intent(&state, &id, ha::HaState::Started).await;
+    record_vm_task(auth_user.as_ref(), "vm-start", &vm, "started");
     emit_vm_state(&state, &vm, &old_status).await;
 
     // Broadcast VM status change
@@ -1918,6 +1939,7 @@ async fn start_vm(
 
 async fn stop_vm(
     State(state): State<Arc<AppState>>,
+    auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
     Path(id): Path<String>,
 ) -> Result<Json<VmConfig>, ApiError> {
     let old_status = state
@@ -1944,6 +1966,7 @@ async fn stop_vm(
             return Err(e.into());
         }
     };
+    record_vm_task(auth_user.as_ref(), "vm-stop", &vm, "stopped");
     emit_vm_state(&state, &vm, &old_status).await;
 
     // Broadcast VM status change

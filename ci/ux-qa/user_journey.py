@@ -618,6 +618,10 @@ def main():
                                "the Timezone list (hundreds of zones) has no search box")
                     else:
                         finding("j8-settings", "timezone-select", "System Configuration has no #cfg-timezone select")
+                if name == "tasks":
+                    # the empty state promises that starting/stopping a guest records a task; the journey started and stopped a VM
+                    expect("j8-settings", "tasks-record-vm-power", re.search(r"vm-start|vm-stop", t) is not None,
+                           "the Tasks page lists nothing for the VM that was just started and stopped (its empty state says that records a task)")
                 if name == "updates":
                     expect("j8-settings", "updates-actionable", re.search(r"check|update|upgrade|refresh", t, re.I) is not None, "the updates page offers no way to check for / install updates")
             j.go("/")
