@@ -298,7 +298,7 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                                         </div>
                                         <div class="info-item">
                                             <span class="label">Type</span>
-                                            <span class="value">{disk.disk_type.to_uppercase()} ({disk.interface.clone()})</span>
+                                            <span class="value">{format!("{} ({})", disk.disk_type.to_uppercase(), disk.interface)}</span>
                                         </div>
                                         <div class="info-item">
                                             <span class="label">Capacity</span>

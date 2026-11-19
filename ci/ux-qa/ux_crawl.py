@@ -289,7 +289,7 @@ def main():
     forbidden = [re.compile(p, re.I) for p in cfg["forbidden_names"]]
     pfail = [re.compile(p, re.I) for p in cfg["private_fail"]]
     pwarn = [re.compile(p, re.I) for p in cfg["private_warn"]]
-    bad_text = re.compile(r"\bundefined\b|\bNaN\b|\[object Object\]|missing field|panicked at|Traceback \(most|RUST_BACKTRACE|\{\{|\}\}|\.get\(\)\s*(\|\||&&|[<>!=]=)", re.I)
+    bad_text = re.compile(r"\bundefined\b|\bNaN\b|\[object Object\]|missing field|panicked at|Traceback \(most|RUST_BACKTRACE|\{\{|\}\}|\{\w+(\.\w+)+\([^)]*\)\}|\.(clone|len|to_string|to_uppercase)\(\)|\.get\(\)\s*(\|\||&&|[<>!=]=)", re.I)
     # A bare "404" is a number too (a 404 GB disk, 404 MiB free on the runner), so only the
     # error-shaped forms count: "HTTP 404", "404 Not Found", "Error 404", a lone "404" line.
     notfound = re.compile(
