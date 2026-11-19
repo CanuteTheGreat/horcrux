@@ -262,8 +262,8 @@ quirks_files = ["/usr/share/horcrux/gpu-quirks.toml", "/etc/horcrux/gpu-quirks.t
 Anti-cheat: Horcrux does not hide the hypervisor. Games whose anti-cheat
 refuses VMs (Valorant, League of Legends, Call of Duty, Battlefield 6, ARC
 Raiders, BattlEye titles such as Rainbow Six Siege, PUBG and Tarkov) will not run
-in the VM; several of them run on the Horcrux host itself through Steam/Proton,
-the rest need Windows on bare metal. The table is in the design document.
+in the VM unless their publishers allow it; several of them run on the Horcrux
+host itself through Steam/Proton. The per-game table is in the design document.
 
 ## vGPU / mediated devices (NVIDIA vGPU, Intel GVT-g, AMD MxGPU)
 

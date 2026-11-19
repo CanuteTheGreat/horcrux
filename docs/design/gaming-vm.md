@@ -1,17 +1,27 @@
 # Gaming VM: Windows with a real GPU on Horcrux
 
-Status: phase 1 (research, design, host tuning + managed GPU hand-off) implemented;
-phases 2-4 below are the build plan. Owner idea, 2026-11-18: install Windows for
+Status: phase 1 (research, design, host tuning + managed GPU hand-off) implemented
+and proven on a real kernel (section 8); phases 2-7 (section 15) are the build plan. Owner idea, 2026-11-18: install Windows for
 gaming, with a virtualized/passed-through graphics card, able to play current
 FPS games.
 
 This document is honest about limits: a VM can give Windows a whole discrete GPU
 at near-native speed, but several popular competitive games refuse to run in a
 VM by design (section 4). Horcrux will **not** hide the hypervisor from
-anti-cheat software: doing so breaks the games' terms of service and puts the
-player's accounts at risk. For those games the supported routes are Steam/Proton
-on the Horcrux host (when the game allows Linux) or Windows on bare metal next
-to Horcrux (dual boot, phase 4).
+anti-cheat software, patch anti-cheat or fake hardware IDs: doing so breaks the
+games' terms of service and puts the player's accounts at risk. Instead Horcrux
+makes the VM an honest, secure, modern PC (TPM 2.0, Secure Boot, VBS-capable,
+stable identity), tells the user per game what works before they buy or launch,
+and builds the technical basis (measured boot, attestation, protected memory) for
+publishers to allow Horcrux VMs (sections 4 and 12). Windows runs only as a VM:
+Horcrux does not install Windows next to itself.
+
+The feature is generic: any Horcrux install (desktop, server, cluster node), any
+GPU vendor (NVIDIA, AMD, Intel), laptops and desktops, one GPU or several, GPUs
+with or without monitors or display outputs. Hardware detection decides what is
+possible on each machine and the UI says why when something is not. The picture
+reaches the player through Horcrux's own viewer and streaming (section 10), on
+the same machine, on the LAN, or over the internet, with no third-party viewer.
 
 ## 1. GPU options, with evidence
 
@@ -46,13 +56,13 @@ mode, the typical layout is:
 So on such a laptop: **yes**, the dGPU can go to Windows while the host keeps the
 internal panel on the iGPU; Windows' picture is shown either on an external
 monitor plugged into the laptop's HDMI/USB-C ports (driven natively by the
-passed-through GPU) or in a window on the laptop panel through Looking Glass
-(phase 2). The firmware must stay in hybrid mode (dGPU-only/MUX-to-dGPU mode
+passed-through GPU) or in a window on the laptop panel through the Horcrux
+viewer (section 10). The firmware must stay in hybrid mode (dGPU-only/MUX-to-dGPU mode
 moves the panel to the dGPU and the host would lose it).
 
 Muxless laptops (dGPU shows as "3D controller" with no outputs) can still pass the
-dGPU through, but only Looking Glass (with its Indirect Display Driver) can show
-the picture; some need the vBIOS supplied from ACPI `_ROM` (romfile) and a fake
+dGPU through, but only the Horcrux viewer (with the guest tools' virtual display)
+can show the picture; some need the vBIOS supplied from ACPI `_ROM` (romfile) and a fake
 battery for the NVIDIA driver.
 
 ## 2. What runs on the host while the VM runs
@@ -114,29 +124,29 @@ parts are affected is not documented either way. Consequences built in:
 "VM" = Windows in KVM/QEMU with a passed-through GPU, no hiding. "Host" = Steam
 on Horcrux (Proton or native).
 
-| Game | Anti-cheat | In a Horcrux VM | On the host (Proton/native) | Route |
+| Game | Anti-cheat | In a Horcrux VM | On the host (Proton/native) | Horcrux shows |
 |---|---|---|---|---|
-| Valorant | Riot Vanguard | **Blocked** (Riot: VMs not supported, error VAN 138) | Denied | Bare-metal Windows |
-| League of Legends | Riot Vanguard | **Blocked** | Broken | Bare-metal Windows |
-| Call of Duty BO6 / BO7 / Warzone | RICOCHET + Secure Boot/TPM remote attestation | Unsupported (attestation-based; only "works" with hiding) | Broken | Bare-metal Windows |
-| Battlefield 6 / REDSEC, BF2042 | EA Javelin, Secure Boot required (BF6) | Unsupported (EA names VMs as a threat) | Broken | Bare-metal Windows |
-| EA Sports FC | EA Javelin | Unsupported (same family) | Broken | Bare-metal Windows |
+| Valorant | Riot Vanguard | **Blocked** (Riot: VMs not supported, error VAN 138) | Denied | Blocked by publisher: warn before buy/launch |
+| League of Legends | Riot Vanguard | **Blocked** | Broken | Blocked by publisher: warn before buy/launch |
+| Call of Duty BO6 / BO7 / Warzone | RICOCHET + Secure Boot/TPM remote attestation | Unsupported (attestation-based; only "works" with hiding) | Broken | Blocked by publisher: warn before buy/launch |
+| Battlefield 6 / REDSEC, BF2042 | EA Javelin, Secure Boot required (BF6) | Unsupported (EA names VMs as a threat) | Broken | Blocked by publisher: warn before buy/launch |
+| EA Sports FC | EA Javelin | Unsupported (same family) | Broken | Blocked by publisher: warn before buy/launch |
 | ARC Raiders | Denuvo Anti-Cheat | **Blocked, ban risk** (Embark: "VMs are disallowed") | **Works** | Host |
 | The Finals | EAC + Denuvo AC | Unknown, same studio as ARC Raiders | **Works** | Host |
-| Fortnite | Easy Anti-Cheat | Kicks reported | Denied (Epic working on "EAC Linux v2") | Bare-metal Windows |
-| Apex Legends | EAC | Unknown | Broken (Linux blocked Oct 2024) | Bare-metal Windows |
-| Rainbow Six Siege X | BattlEye | Kicks reported | Denied | Bare-metal Windows |
-| PUBG | BattlEye | Unsupported (support reply, reported) | Broken | Bare-metal Windows |
-| Escape from Tarkov | BattlEye | Blocks launch | Broken | Bare-metal Windows |
-| Destiny 2 | BattlEye | Reported to work | Broken (Bungie blocks Linux) | VM (reported) / bare metal |
-| GTA Online | BattlEye | Unknown | Single-player only | Bare-metal Windows |
+| Fortnite | Easy Anti-Cheat | Kicks reported | Denied (Epic working on "EAC Linux v2") | Blocked by publisher: warn before buy/launch |
+| Apex Legends | EAC | Unknown | Broken (Linux blocked Oct 2024) | Blocked by publisher: warn before buy/launch |
+| Rainbow Six Siege X | BattlEye | Kicks reported | Denied | Blocked by publisher: warn before buy/launch |
+| PUBG | BattlEye | Unsupported (support reply, reported) | Broken | Blocked by publisher: warn before buy/launch |
+| Escape from Tarkov | BattlEye | Blocks launch | Broken | Blocked by publisher: warn before buy/launch |
+| Destiny 2 | BattlEye | Reported to work | Broken (Bungie blocks Linux) | VM (reported), Secure Boot + TPM on |
+| GTA Online | BattlEye | Unknown | Single-player only | Blocked by publisher: warn before buy/launch |
 | Counter-Strike 2 | VAC | Works (reported, no policy) | **Works, native** | Host |
 | Deadlock | VAC | Works (reported) | **Works** | Host |
 | Marvel Rivals | NetEase NEAC | Unknown | **Works** | Host |
 | Overwatch 2 | Blizzard | Works (reported) | Works (community) | Host or VM |
 | Halo Infinite | EAC | Unknown | **Supported** | Host |
 | Splitgate 2 | RedKard | Unknown | **Works** | Host |
-| Delta Force | Tencent ACE | Unknown | SteamOS only | Bare-metal Windows |
+| Delta Force | Tencent ACE | Unknown | SteamOS only | Blocked by publisher: warn before buy/launch |
 
 Sources: Riot support (error VAN 138), Embark help centre (ARC Raiders anti-cheat
 FAQ), EA Battlefield 6 Secure Boot page, Activision RICOCHET Season 05 posts,
@@ -149,28 +159,38 @@ the wizard reads them from a data file (`gaming-compat.toml`, phase 2) with a
 Summary for "latest FPS games": in a VM, expect CS2, Deadlock, Overwatch 2 and
 most single-player/DRM-only games to work; the big competitive shooters with
 kernel anti-cheat (Valorant, CoD, Battlefield, R6, Tarkov, PUBG, Fortnite, Apex,
-ARC Raiders) do not. Several of them (ARC Raiders, The Finals, Marvel Rivals,
-CS2, Deadlock, Halo Infinite, Splitgate 2) run on Horcrux itself through Steam.
+ARC Raiders) do not, until their publishers allow VMs. Several of them (ARC
+Raiders, The Finals, Marvel Rivals, CS2, Deadlock, Halo Infinite, Splitgate 2)
+run on Horcrux itself through Steam; the UI says so.
 
-## 5. Bare-metal Windows next to Horcrux (phase 4)
+## 5. Honest anti-cheat support (no evasion)
 
-For the games above that need real Windows: Windows on its own disk (preferred)
-or partition, with its own ESP entry, chosen from the Horcrux boot menu.
+What Horcrux does so that games which allow VMs work, and nobody is surprised
+by the ones that don't:
 
-- Installer: "keep/add Windows" option that leaves a chosen disk untouched and
-  adds a GRUB `chainloader /EFI/Microsoft/Boot/bootmgfw.efi` entry next to the
-  boot-environment entries; `horcrux-be` keeps it when regenerating grub.cfg.
-- Secure Boot: Windows needs it on for BF6/CoD/Valorant. GRUB must then be
-  shim-signed or Horcrux must enroll its own keys; until that exists the
-  firmware's boot menu (F12) is the documented way to start Windows with Secure
-  Boot on. BitLocker binds to PCR7 (Secure Boot state): changing Secure Boot
-  settings triggers BitLocker recovery, so the recovery key must be saved first.
-- Windows Fast Startup hibernates the NTFS volumes: turned off in the guide;
-  the Horcrux side never mounts Windows partitions read-write.
-- Clock: Horcrux keeps the RTC in UTC; the guide sets Windows'
-  `RealTimeIsUniversal=1`.
-- Never boot the physical Windows install inside the VM (activation and
-  BitLocker recovery trouble).
+1. **A normal, secure modern PC, honestly.** Per-VM persistent TPM 2.0
+   (swtpm), UEFI Secure Boot with Microsoft keys (OVMF `secboot` + MS vars),
+   Windows 11 requirements met without bypasses, VBS/HVCI (Memory Integrity) and
+   Hyper-V inside the guest (nested virtualisation, `vmx`/`svm` exposed), IOMMU
+   DMA protection on the host, and a **stable** hardware identity per VM
+   (SMBIOS UUID/serial generated once and kept, never randomised, never copied
+   from a real vendor model). Hyper-V enlightenments stay on: the guest knows it
+   is a VM.
+2. **Per-game compatibility data** (`gaming-compat.toml`, shipped as data,
+   refreshed on a schedule from public sources and our own test results, each row
+   with source and `checked_on`): title, anti-cheat, VM status (`works`,
+   `works-if` + the setting, `blocked-by-publisher`, `unknown`). Shown in the UI
+   and by the guest tools, which detect installed launchers/games and warn
+   **before** a purchase/install/launch of a blocked title.
+3. **One-click legitimate settings** per game ("this game requires Secure Boot +
+   TPM: turned on"; "requires VBS: turned on").
+4. **Publisher allow-listing (a project decision; nothing is sent yet).** A
+   proposal to EAC/Epic, BattlEye, Riot and Activision to allow Horcrux VMs on
+   verifiable evidence: measured boot of host and VM, a TPM-signed attestation
+   report, and protected guest memory (section 12). The technical basis is built;
+   the outreach itself is decided separately.
+5. **Bans/false positives:** guidance to contact the publisher; Horcrux never
+   ships unban tooling.
 
 ## 6. Gaming VM wizard (phase 2)
 
@@ -182,31 +202,32 @@ UI page "New gaming VM" + `POST /api/vms/gaming` composing an ordinary VM config
    holding it, reset methods, known issues, verdict (`ready`,
    `ready-with-warnings`, `single-gpu`, `blocked`).
 2. Choices with defaults from the check: GPU, vCPUs (all P-cores), memory
-   (half of RAM, max 32 GB), disk (zvol), display (external monitor / Looking
-   Glass), keyboard+mouse (evdev or USB controller).
+   (half of RAM, max 32 GB), disk (zvol), display (monitor on the GPU, or the
+   Horcrux viewer/stream with a virtual display when no monitor or output exists),
+   keyboard+mouse (evdev, USB controller, or the viewer's raw input).
 3. Media: Windows 11 ISO (user-provided or Microsoft's download page; the
    90-day Enterprise evaluation ISO for testing), virtio-win ISO from
    fedorapeople stable-virtio; both go to the ISO library.
 4. Unattended install: generated `autounattend.xml` on a small ISO (locale,
-   user, virtio storage/net drivers from the virtio-win ISO, guest tools,
-   Looking Glass host, Fast Startup off); TPM 2.0 + Secure Boot OVMF so no
-   requirement bypass is needed. The licence key is the user's.
-5. Looking Glass: KVMFR module (`app-emulation/looking-glass` in GURU has the
-   client; Horcrux packages the module + client) with the IDD driver (no dummy
-   plug), shared memory sized from the resolution; the client runs in the user's
-   desktop session (Wayland supported).
+   user, virtio storage/net drivers from the virtio-win ISO, Horcrux guest
+   tools, Fast Startup off); TPM 2.0 + Secure Boot OVMF so no requirement bypass
+   is needed. The licence key is the user's. Proven: section 8.
+5. Viewer: Horcrux guest tools (virtual display, capture, encode, input) and the
+   Horcrux viewer (section 10); no third-party viewer.
 6. One-click Start/Shut down; Start does the hand-off, Shut down gives the GPU
    back; the VM page shows who holds the GPU when the start is refused.
 
 ## 7. Compatibility matrix (platforms Horcrux supports)
 
-| Platform | dGPU VFIO | Hand-off | Pinning `auto` | Huge pages | Looking Glass | Notes |
+| Platform | dGPU VFIO | Hand-off | Pinning `auto` | Huge pages | Horcrux viewer | Notes |
 |---|---|---|---|---|---|---|
-| amd64, Intel hybrid (Alder Lake+), iGPU + dGPU desktop | Yes | Yes | P-cores | 2M/1G | phase 2 | Best case |
-| amd64 laptop with MUX/Advanced Optimus (hybrid mode) | Yes | Yes | P-cores | 2M | phase 2 | Panel stays on iGPU; external ports follow the dGPU |
-| amd64 muxless laptop | Yes (romfile/ACPI quirks) | Yes | P-cores | 2M | phase 2 (only way to see the guest) | Not tested on hardware yet |
-| amd64 single-GPU desktop | Yes | `allow_display_loss` (phase 3 finishes DM stop/console) | all but CPU 0 | 2M/1G | n/a | Screen goes to the VM |
-| amd64 AMD Ryzen/EPYC | Yes | Yes | all but CPU 0 (no P/E) | 2M/1G | phase 2 | CCD-aware pinning: phase 3 |
+| amd64, Intel hybrid (Alder Lake+), iGPU + dGPU desktop | Yes | Yes | P-cores | 2M/1G | phase 3 | Best case |
+| amd64 laptop with MUX/Advanced Optimus (hybrid mode) | Yes | Yes | P-cores | 2M | phase 3 | Panel stays on iGPU; external ports follow the dGPU |
+| amd64 muxless laptop | Yes (romfile/ACPI quirks) | Yes | P-cores | 2M | phase 3 (only way to see the guest) | Not tested on hardware yet |
+| amd64 single-GPU desktop | Yes | `allow_display_loss` (phase 2 finishes display-manager stop/console) | all but CPU 0 | 2M/1G | remote only | Screen goes to the VM and back |
+| Headless server / GPU without outputs (NVIDIA L4/A-series, AMD Instinct/Radeon Pro, Intel Flex/Arc Pro) | Yes | Yes | as above | 2M/1G | stream (phase 4) | Virtual display in the guest; datacenter NVIDIA graphics needs the vendor's licensed driver (phase 2 research) |
+| HA cluster nodes | Yes | Yes | as above | as above | follows the VM | Cold restart on another GPU node; no live migration with a passed-through GPU |
+| amd64 AMD Ryzen/EPYC | Yes | Yes | all but CPU 0 (no P/E) | 2M/1G | phase 3 | CCD-aware pinning: phase 2 |
 | arm64 hosts | No Windows-on-ARM gaming target | Code path neutral | Yes | x86 guests only | No | Out of scope for gaming |
 | OpenRC / systemd | Same code; services stopped through the init abstraction | | | | | Both |
 | T2 Macs (Intel) | Single-GPU or iGPU-only machines; no supported dGPU passthrough | - | - | - | - | Not a gaming target |
@@ -219,15 +240,28 @@ possible): group collection, display/holder refusal, record + release ordering
 layout + `auto` pinning, real `sched_setaffinity` on test threads, huge-page
 pool accounting, quirks table.
 
-Nested spike (vmtest, phase 1): a Linux guest with an emulated IOMMU
-(`intel-iommu`) hands an emulated PCI display device from its host driver to
-`vfio-pci`, runs a nested QEMU with it, and gets it back on stop.
+Real-kernel spike (`ci/gaming-handoff-e2e.sh`, workflow
+`gaming-handoff-e2e.yml`, passed 2026-11-18 on rw-man-01): a Debian 13 VM with an
+emulated IOMMU (`intel-iommu`) and a spare PCI display on bochs-drm runs the
+`handoff_e2e` test as root. Results: verdict `ready`; hand-off refused while a
+program held `/dev/dri/card1` (the error names it); device moved
+bochs-drm -> vfio-pci with the record written; 128 x 2 MiB huge pages reserved
+and used by a nested QEMU started with the device, `-cpu host` + all Hyper-V
+flags; vCPU threads pinned to their CPUs and QEMU's own threads to the rest;
+release waited while QEMU held the VFIO group; after QEMU exited the device was
+back on bochs-drm with its device nodes, and the huge pages were returned.
+
+Windows spike (2026-11-18, rw-man-01, no GPU): Windows 11 Enterprise evaluation
+installed unattended with the gaming configuration (q35 + SMM, Secure Boot OVMF
+with Microsoft keys, swtpm TPM 2.0, `-cpu host` + Hyper-V flags, virtio-blk/net
+drivers from virtio-win in windowsPE, guest agent). See section 8.1 for the
+result.
 
 Only provable on a host with a real discrete GPU (planned on a
 hybrid laptop with a discrete NVIDIA GPU): NVIDIA driver unbind/rebind under a live
 GNOME session (mutter ignore tag), the Blackwell reset behaviour after guest
-shutdown, Windows frame rates/latency with pinning, Looking Glass on the
-panel, external monitor output from the guest.
+shutdown, Windows frame rates/latency with pinning, the viewer on the panel,
+external monitor output from the guest, AMD reset behaviour, Intel Arc.
 
 ## 9. Settings added (all with defaults, `[passthrough]` in /etc/horcrux/config.toml)
 
@@ -235,3 +269,108 @@ panel, external monitor output from the guest.
 `handoff_refuse_when_held`, `handoff_timeout_secs`, `hugepages_release_on_stop`,
 `quirks_files`. Per VM: `hostpci[].managed`, `hostpci[].allow_display_loss`,
 `adv.cpu_pinning`, `adv.hugepages`, `adv.hyperv`, `adv.evdev`.
+
+## 10. Native viewer and streaming (no third-party viewers)
+
+No Looking Glass, Sunshine/Moonlight, Parsec or similar in the user's path;
+Horcrux ships its own. Standard building blocks underneath are fine
+(ivshmem, VFIO, codec SDKs via FFmpeg, WebRTC libraries) after a licence check
+against Horcrux's licence; Looking Glass is GPL-2.0 and its code is not copied
+(clean-room design).
+
+- **Horcrux guest tools** (signed MSI, delivered into the VM by the wizard):
+  an Indirect Display Driver (virtual monitor, configurable resolution/refresh up
+  to 4K/5K and 240-360 Hz, used automatically for GPUs without a monitor or
+  without outputs; a dummy plug is only an optional fallback), capture (IDD
+  swap-chain / DXGI Desktop Duplication), hardware encode (NVENC, AMF, QSV;
+  software fallback), audio capture (WASAPI loopback), input injection (raw
+  mouse, keyboard, gamepads via a virtual HID), clipboard, cursor channel,
+  health. Built with the Windows Driver Kit in CI, signed.
+- **Same host:** a Horcrux-managed ivshmem shared-memory device carries raw
+  frames into the host; the Horcrux viewer window on the host desktop (and the
+  console in the Horcrux UI) shows them with no encode step.
+- **LAN/WAN:** Horcrux's own low-latency streaming: hardware-encoded video (AV1,
+  HEVC, H.264, picked by client), Opus audio, input back; WebRTC transport
+  (ICE with a Horcrux-hosted relay through the cluster for NAT, no third-party
+  service), adaptive bitrate/resolution, FEC/NACK for loss, encrypted (DTLS-SRTP),
+  authenticated with Horcrux accounts/RBAC/2FA and audited. Clients: the Horcrux
+  web UI in a browser, the Horcrux desktop app (Linux/Windows/macOS), later
+  Android/Android TV and iOS/Apple TV.
+- **Latency budget (target, to be measured per path in tests):** same host <
+  8 ms frame-to-viewer; LAN < 20 ms click-to-photon at 120+ fps; WAN = LAN + RTT
+  + jitter buffer. Tests publish measured numbers per path.
+
+## 11. HA clusters and remote players
+
+- GPU nodes advertise GPUs (vendor, model, VRAM, outputs, free/used) to the
+  cluster. Placement and HA restarts target only nodes with a compatible free
+  GPU. Node failure = cold restart elsewhere (a passed-through GPU cannot be
+  live-migrated; the UI says so; migratable vGPU/SR-IOV is used where a vendor
+  offers it). Disks on replicated/shared storage, so a restart loses nothing.
+  Same GPU model preferred; a different model shows a driver warning.
+- Players connect to the cluster name/VIP, never a node; the stream endpoint
+  follows the VM and clients reconnect after failover.
+- Tests: vmtest multi-VM HA scenarios (no lab-laptop reboots); real-GPU failover
+  only where two GPU nodes exist (listed as unproven until then).
+
+## 12. Protected gaming VMs (attestation basis)
+
+- **Hardware confidential computing:** AMD SEV-SNP (EPYC 3rd gen+) and Intel
+  TDX (Xeon 4th/5th gen+) encrypt and integrity-protect guest memory and attest
+  the launch state. Consumer Core Ultra / Ryzen parts don't offer them (SME/TSME
+  and TME only encrypt DRAM against physical attacks; they don't isolate a VM
+  from the host). Windows confidential guests exist (Azure lists Windows 11 and
+  Windows Server for SEV-SNP/TDX), but passing a gaming GPU into one needs PCIe
+  TDISP/IDE (AMD SEV-TIO spec 0.92, Aug 2026) or vendor confidential-GPU modes
+  (datacenter H100/Blackwell only): nothing works for gaming GPUs today. Opt-in
+  tier where the hardware allows; the UI shows why it isn't available otherwise.
+- **On consumer CPUs ("protected gaming VM"):** guest RAM in KVM guest_memfd
+  private memory (not mapped in host userspace; `KVM_X86_SW_PROTECTED_VM` type,
+  in-place conversion work in kvm-x86 2026), kernel lockdown=confidentiality,
+  no ptrace/process_vm_readv of the VMM, QMP memory dumps and gdbstub disabled,
+  seccomp-confined VMM, IMA/EVM, measured boot of firmware/bootloader/kernel/
+  cmdline/lockdown/VMM into TPM PCRs, and a Horcrux attestation report
+  ("unmodified, locked-down Horcrux host; nothing outside the VM can read its
+  memory"). Weaker than SEV-SNP/TDX against a malicious host kernel or physical
+  access; the threat-model table states it. A test proves that reads of guest
+  RAM from host userspace fail.
+
+## 13. VM on one machine, GPU on another (later)
+
+Practical form first: compute follows the GPU. The VM's disk lives on node A or
+shared storage; the VM runs on GPU node B with its disk over NVMe-oF/TCP or
+replicated ZFS, so any machine can lend its GPU (same VM, same viewer endpoint).
+True remote GPU (CPU/RAM on A, GPU on B) would need API remoting (Vulkan
+command streams over RDMA; DirectX through DXVK/vkd3d-proton in the guest);
+PCIe over the network doesn't exist for commodity GPUs. Expected to serve
+slower-paced games at best, not FPS; prototyped only if measurements justify it.
+
+## 14. Compared with GeForce NOW (published specs, Nov 2026)
+
+| | GeForce NOW Ultimate | Horcrux target |
+|---|---|---|
+| GPU | RTX 5080-class servers | User's own GPU (any vendor) |
+| Max stream | 5K 120 fps; 1440p 240 fps; 1080p 360 fps | Same where GPU/encoder/link allow; 4K120, 1440p240 |
+| Codecs | H.264, HEVC, AV1; 10-bit HDR; 4:4:4 (cinematic mode) | Same set, picked per client |
+| Bandwidth | 55 Mbit/s for 240/360 fps, 65 Mbit/s for 5K120 | Fits the link; WAN capped by the home upload |
+| Latency | < 80 ms to a data centre required, < 40 ms recommended; "under 30 ms" claimed for 1080p360 + Reflex | LAN < 20 ms click-to-photon target, measured |
+| Anti-cheat | Publisher agreements | No agreements yet: per-game data, attestation proposal |
+| Clients | Windows, macOS, browser, Chromebook, Steam Deck, TV, mobile | Browser, desktop app; TV/mobile later |
+
+Sources: NVIDIA GeForce NOW system requirements and premium membership pages,
+NVIDIA support answer 5223. Measured Horcrux numbers are added as phases land.
+
+## 15. Phases
+
+1. **Done:** research, design, managed GPU hand-off, pinning, huge pages,
+   Hyper-V, evdev, readiness API/UI, real-kernel e2e, Windows unattended spike.
+2. Gaming VM wizard + `POST /api/vms/gaming`, unattended Windows install with
+   TPM/Secure Boot/VBS/stable SMBIOS, `gaming-compat.toml` + UI warnings,
+   single-GPU display-manager hand-over, AMD CCD pinning, MSI/latency checks.
+3. Horcrux guest tools (IDD, capture, encode, input) + same-host shared-memory
+   viewer.
+4. Remote streaming (WebRTC, relay, adaptive bitrate) + web/desktop clients,
+   latency tests per path.
+5. HA placement and failover for GPU VMs; GPU pool, sessions, quotas.
+6. Protected gaming VM + attestation; confidential tier where hardware allows.
+7. GPU lending across nodes (compute follows the GPU); remote-GPU research.
