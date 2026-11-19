@@ -2809,7 +2809,7 @@ mod tests {
         assert!(!process_matches(b"", "kworker/0:1", "silo"));
         assert!(!process_matches(b"", "", "silo"));
         // a different program is not the server
-        assert!(!process_matches(b"/bin/sleep\0100\0", "sleep", "silo"));
+        assert!(!process_matches(b"/bin/sleep\x00100\x00", "sleep", "silo"));
     }
 
     #[tokio::test]
