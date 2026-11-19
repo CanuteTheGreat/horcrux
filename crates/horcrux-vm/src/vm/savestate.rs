@@ -140,10 +140,65 @@ fn stamps_of(vm: &QemuVm) -> Vec<FileStamp> {
     files.iter().filter_map(|f| FileStamp::of(f)).collect()
 }
 
+/// A QMP command that can never block the shutdown pass: QEMU's monitor
+/// answers late when its migration thread is stuck writing to a wedged
+/// target.
+async fn qmp_bounded(sock: &Path, cmd: serde_json::Value) -> Option<serde_json::Value> {
+    tokio::time::timeout(Duration::from_secs(20), qmp_command(sock, cmd))
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+}
+
+/// Direct children of `pid` (the `exec:` migration helper `sh`/`cat` is one).
+fn child_pids(pid: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir("/proc") else {
+        return out;
+    };
+    for e in rd.flatten() {
+        let Ok(child) = e.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        // /proc/PID/stat: "PID (comm) S PPID ..." (comm may contain spaces)
+        let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else {
+            continue;
+        };
+        let ppid = stat
+            .rsplit_once(')')
+            .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+            .and_then(|p| p.parse::<u32>().ok());
+        if ppid == Some(pid) {
+            out.push(child);
+        }
+    }
+    out
+}
+
+/// The save timed out: the writer of the state file is stuck (a stopped or
+/// wedged target). QEMU cannot cancel a migration whose thread is blocked in
+/// write(), so end the helper process; QEMU then sees a broken pipe, the
+/// migration fails and the guest can be continued.
+async fn kill_exec_helpers(vm_id: &str) {
+    let Some(pid) = tokio::fs::read_to_string(qemu::pidfile(vm_id))
+        .await
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    else {
+        return;
+    };
+    for c in child_pids(pid) {
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(c as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+}
+
 /// A failed save: continue the guest where it was, drop the partial file.
 async fn undo(sock: &Path, tmp: &Path, was_running: bool, msg: String) -> Error {
     if was_running {
-        let _ = qmp_command(sock, json!({"execute": "cont"})).await;
+        let _ = qmp_bounded(sock, json!({"execute": "cont"})).await;
     }
     let _ = tokio::fs::remove_file(tmp).await;
     Error::System(msg)
@@ -241,9 +296,19 @@ impl VmManager {
         }
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            let m = match qmp_command(&sock, json!({"execute": "query-migrate"})).await {
-                Ok(m) => m,
-                Err(e) => {
+            // QEMU answers late (or not at all) while its migration thread is
+            // blocked writing to a wedged target: never wait past the deadline.
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now())
+                + Duration::from_secs(2);
+            let asked = tokio::time::timeout(
+                left,
+                qmp_command(&sock, json!({"execute": "query-migrate"})),
+            )
+            .await;
+            let m = match asked {
+                Err(_) => json!({"status": "unresponsive"}),
+                Ok(Ok(m)) => m,
+                Ok(Err(e)) => {
                     return Err(undo(
                         &sock,
                         &tmp,
@@ -268,7 +333,8 @@ impl VmManager {
                 _ => {}
             }
             if tokio::time::Instant::now() >= deadline {
-                let _ = qmp_command(&sock, json!({"execute": "migrate_cancel"})).await;
+                kill_exec_helpers(&vm.id).await;
+                let _ = qmp_bounded(&sock, json!({"execute": "migrate_cancel"})).await;
                 return Err(undo(
                     &sock,
                     &tmp,
@@ -464,6 +530,19 @@ mod tests {
         assert!(err.contains("MB are free"), "{err}");
         check_free_space(dir.path(), 1).unwrap();
         assert!(free_space(&dir.path().join("absent")).is_err());
+    }
+
+    #[test]
+    fn child_pids_finds_the_exec_helper() {
+        let mut c = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let kids = child_pids(std::process::id());
+        let found = kids.contains(&c.id());
+        c.kill().unwrap();
+        c.wait().unwrap();
+        assert!(found, "{kids:?} should contain {}", c.id());
     }
 
     #[test]

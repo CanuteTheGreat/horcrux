@@ -211,6 +211,10 @@ check(guest(v1, f"test -d /proc/{sp3} && echo alive").split()[-1] == "alive", "s
 up_after = uptime(v1)
 check(up_after >= up_before and up_after < up_before + 900, f"uptime continued across the host reboot: {up_before} -> {up_after}")
 check(index_files() == "", "saved states consumed by the boot")
+time.sleep(25)   # the 20 s running-guests snapshot has rewritten running.json by now
+_ls = {o["id"]: o for o in (power().get("last_stop") or {}).get("outcomes", [])}
+check(_ls.get("gs-save", {}).get("action") == "saved" and _ls.get("gs-shut", {}).get("action") == "shutdown",
+      f"the last host shutdown's outcomes are kept after the boot: {sorted((k, v['action']) for k, v in _ls.items())}")
 v2 = vm_get("gs-shut")
 check(guest(v2, "cat /home/cirros/d2").split()[-1] == "disk2", "gs-shut: disk data present after its clean shutdown + boot")
 check(guest(v2, "cat /dev/shm/m2 2>/dev/null || echo none").split()[-1] == "none", "gs-shut: rebooted (RAM marker gone), as a Shut down guest should")
@@ -293,6 +297,10 @@ check(g["host_stop_action"] == "shutdown" and "passthrough" in (g["host_stop_rea
 out = guests_cmd("stop")
 check("shutdown vm gs-pt" in out and "passthrough" in out, f"host stop shut the passthrough VM down: {out[-300:]}")
 check(not qemu_running("gs-pt"), "its QEMU is gone")
+reboot_host()   # boot pass: resumes what was saved, starts what was shut down
+# (gs-pt owns a fake device and rightly cannot start again on this host)
+for vm in ("gs-save", "gs-always"):
+    check(wait_status(vm, "running", 300), f"{vm} is running again after the boot")
 
 # ------------------------------------------------ 8. save timeout -> fallback
 log("== 8. a save that exceeds its timeout falls back to a clean shutdown")
