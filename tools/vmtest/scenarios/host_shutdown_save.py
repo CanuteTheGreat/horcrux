@@ -75,7 +75,8 @@ def define(args):
         d = tempfile.mkdtemp(prefix="hxsrv-")
         for src, name in ((binary, "horcrux-api"), (cirros, "cirros.img"), (os.path.join(repo, "horcrux-api/tests/hx_node.py"), "hx_node.py"),
                           (os.path.join(repo, "deploy/openrc/horcrux-guests"), "horcrux-guests.initd"),
-                          (os.path.join(repo, "deploy/systemd/horcrux-guests.service"), "horcrux-guests.service")):
+                          (os.path.join(repo, "deploy/systemd/horcrux-guests.service"), "horcrux-guests.service"),
+                          (os.path.join(repo, "gentoo/app-emulation/horcrux-bin/files/horcrux-api.service"), "horcrux-api.service")):
             try:
                 os.link(src, os.path.join(d, name))
             except OSError:
@@ -87,7 +88,8 @@ def define(args):
             base = f"http://10.0.2.2:{HTTP_PORT}"
             n.succeed("mkdir -p /var/lib/horcrux/images")
             for f, dst, mode in (("horcrux-api", "/tmp/horcrux-api.new", "755"), ("cirros.img", "/var/lib/horcrux/images/cirros.img", "644"), ("hx_node.py", "/root/hx_node.py", "755"),
-                                 ("horcrux-guests.initd", "/tmp/horcrux-guests.initd", "755"), ("horcrux-guests.service", "/tmp/horcrux-guests.service", "644")):
+                                 ("horcrux-guests.initd", "/tmp/horcrux-guests.initd", "755"), ("horcrux-guests.service", "/tmp/horcrux-guests.service", "644"),
+                                 ("horcrux-api.service", "/tmp/horcrux-api.service", "644")):
                 n.succeed(f"curl -sf --retry 3 {base}/{f} -o {dst} && chmod {mode} {dst}", timeout=600)
         finally:
             srv.terminate()
@@ -97,6 +99,7 @@ def define(args):
         n.succeed("install -m755 /tmp/horcrux-api.new /usr/bin/horcrux-api")
         # the repo's init script (OpenRC) or unit (systemd): same unit name on both
         n.succeed("if [ -d /run/systemd/system ]; then install -m644 /tmp/horcrux-guests.service /etc/systemd/system/horcrux-guests.service; "
+                  "install -m644 /tmp/horcrux-api.service /etc/systemd/system/horcrux-api.service; "
                   "else install -m755 /tmp/horcrux-guests.initd /etc/init.d/horcrux-guests; fi")
         n.reload_units()
         n.enable_unit("horcrux-guests")
@@ -168,7 +171,8 @@ def define(args):
             g = gview("vmA")
             m.check(f"refused-{where}", g["can_save"] is False and "encrypted" in (g["save_blocker"] or ""), str(g["save_blocker"])[:200])
             r = hx("POST", "/vms/vmA/save-state", ok=False)
-            m.check(f"manual-save-409-{where}", r["status"] == 409 and "encrypted" in json.dumps(r["body"]), str(r["status"]))
+            good = r["status"] == 409 and "encrypted" in json.dumps(r["body"])
+            m.check(f"manual-save-409-{where}", good, f"{r['status']} {json.dumps(r['body'])[:300]}" + ("" if good else "\n" + n.unit_log("horcrux-api", 60)[-3000:]))
         hx("PUT", "/nodes/guest-power", {**node, "save_dir": None})
         m.check("vm-kept-running-after-refusals", hx("GET", "/vms/vmA")["body"]["status"] == "running", "")
 

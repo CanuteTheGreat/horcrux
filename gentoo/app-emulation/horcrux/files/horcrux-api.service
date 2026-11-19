@@ -6,6 +6,10 @@ After=network.target podman.socket docker.service
 Type=simple
 User=root
 ExecStart=/usr/bin/horcrux-api
+# The guests (QEMU processes, container runtimes) are not this unit's to kill: stopping or restarting the manager (package upgrade,
+# autoupdate) must never end a running VM, exactly like the OpenRC script. At host shutdown the horcrux-guests unit (ordered after
+# this one, so it stops first) saves or shuts the guests down before this unit goes.
+KillMode=process
 Restart=on-failure
 RestartSec=5s
 
