@@ -263,7 +263,7 @@ jobs:
   test:
     name: Test
     runs-on: linux-cross-x86_64
-    timeout-minutes: 90  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h; green Test ~40 min)
+    timeout-minutes: 120  # a hung job must fail, not hold the serialized main queue (run 15251: Test hung 2.5 h). Green Test now takes 72-83 min (runs 3908-3948 list); 90 clipped two healthy runs at 90 min
     # Pin to a multi-arch tag (not a single-platform sha256 digest) so
     # this job succeeds regardless of which x86_64-labeled runner picks
     # it up. Confirmed 2026-10-04: a second runner registered under the
