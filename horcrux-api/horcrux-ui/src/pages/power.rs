@@ -139,6 +139,26 @@ pub fn GuestPowerPage() -> impl IntoView {
                 }
             })}
 
+            {move || ov.get().and_then(|o| o.last_stop).map(|m| {
+                let when = m["written_at"].as_str().unwrap_or("").get(..16).unwrap_or("").replace('T', " ");
+                let rows = m["outcomes"].as_array().cloned().unwrap_or_default();
+                view! {
+                    <h2>"Last host shutdown"</h2>
+                    <p class="form-help" id="power-last-stop">{format!("{when} UTC: what happened to each guest")}</p>
+                    <table class="vm-table" id="power-last-stop-table">
+                        <thead><tr><th>"Guest"</th><th>"Result"</th><th>"Why"</th></tr></thead>
+                        <tbody>{rows.into_iter().map(|o| {
+                            let action = o["action"].as_str().unwrap_or("?").to_string();
+                            view! { <tr class=if action == "saved" || action == "migrated" { "last-stop-ok" } else { "last-stop-fallback" }>
+                                <td>{o["name"].as_str().unwrap_or("?").to_string()}</td>
+                                <td>{match action.as_str() { "saved" => "State saved".to_string(), "shutdown" => "Shut down cleanly".to_string(), "poweroff" => "Powered off".to_string(), "migrated" => "Moved to another node".to_string(), "left" => "Left alone".to_string(), other => other.to_string() }}</td>
+                                <td>{o["message"].as_str().unwrap_or("").to_string()}</td>
+                            </tr> }
+                        }).collect_view()}</tbody>
+                    </table>
+                }
+            })}
+
             <h2>"Node defaults"</h2>
             {move || node.get().map(|n| view! {
                 <form id="power-node-form" class="form-row" on:submit=move |ev| ev.prevent_default()>
