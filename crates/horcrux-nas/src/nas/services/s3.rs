@@ -2797,7 +2797,11 @@ mod tests {
     #[test]
     fn a_process_caught_inside_exec_still_counts_as_the_server() {
         // normal: the command line names the server
-        assert!(process_matches(b"/usr/local/bin/silo\0server\0/data\0", "silo", "silo"));
+        assert!(process_matches(
+            b"/usr/local/bin/silo\0server\0/data\0",
+            "silo",
+            "silo"
+        ));
         // inside execve: cmdline empty, comm already the new name
         assert!(process_matches(b"", "silo", "silo"));
         assert!(process_matches(b"", "minio", "minio"));
