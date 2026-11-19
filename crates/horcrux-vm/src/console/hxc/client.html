@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Horcrux Console</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d1014; color: #d8dee6; font: 13px system-ui, sans-serif; }
+  #bar { display: flex; gap: .5rem; align-items: center; padding: .35rem .6rem; background: #161b22; border-bottom: 1px solid #2a313b; }
+  #bar button, #bar a { background: #222a35; color: #d8dee6; border: 1px solid #36404d; border-radius: 4px; padding: .2rem .6rem; font: inherit; cursor: pointer; text-decoration: none; }
+  #bar button:hover, #bar a:hover { background: #2c3644; }
+  #status { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #stats { color: #8b96a5; font-variant-numeric: tabular-nums; }
+  #wrap { position: absolute; top: 37px; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; }
+  #screen { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; outline: none; background: #000; }
+  #msg { position: absolute; inset: 37px 0 0 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 2rem; }
+  #msg.show { display: flex; }
+  #msg div { max-width: 40rem; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <strong>Horcrux Console</strong>
+  <span id="status" data-state="starting">Connecting...</span>
+  <span id="stats"></span>
+  <button id="btn-cad" title="Send Ctrl+Alt+Del">Ctrl+Alt+Del</button>
+  <button id="btn-full" title="Full screen">Full screen</button>
+  <a id="classic" href="#" title="VNC, SPICE or serial console">Classic console</a>
+</div>
+<div id="wrap"><video id="screen" autoplay muted playsinline tabindex="0"></video></div>
+<div id="msg"><div id="msgtext"></div></div>
+<script>
+"use strict";
+(() => {
+  const VM = __VM_ID__;
+  const API = "/api/console/" + encodeURIComponent(VM) + "/hxc";
+  const statusEl = document.getElementById("status");
+  const statsEl = document.getElementById("stats");
+  const video = document.getElementById("screen");
+  const msg = document.getElementById("msg");
+  document.getElementById("classic").href = "/vms/" + encodeURIComponent(VM) + "/console?classic=1";
+  document.getElementById("classic").target = "_top";
+
+  // State exposed for diagnostics and automated tests.
+  const hxc = window.hxc = {
+    state: "starting", hello: null, guest: { width: 0, height: 0 }, codec: null,
+    framesDecoded: 0, rttMs: null, inputToFrameMs: [], lastError: null, denied: [],
+    server: null,
+  };
+  function setState(s, text) {
+    hxc.state = s; statusEl.dataset.state = s; statusEl.textContent = text;
+  }
+  function fail(text) {
+    hxc.lastError = text; setState("failed", "Not connected");
+    document.getElementById("msgtext").textContent = text; msg.classList.add("show");
+  }
+
+  async function status() {
+    const r = await fetch(API + "/status", { credentials: "same-origin" });
+    if (!r.ok) throw new Error("status " + r.status + ": " + (await r.text()));
+    return r.json();
+  }
+
+  function openSignalling() {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/ws");
+      const pending = new Map();
+      ws.onopen = () => ws.send(JSON.stringify({ type: "console.hello" }));
+      ws.onerror = () => reject(new Error("signalling connection failed"));
+      ws.onclose = () => { if (hxc.state === "connected") return; reject(new Error("signalling connection closed")); };
+      ws.onmessage = (ev) => {
+        let m; try { m = JSON.parse(ev.data); } catch { return; }
+        if (m.type === "ConsoleHello") resolve({ ws, connId: m.data.conn_id, pending });
+        else if (m.type === "ConsoleAnswer" || m.type === "ConsoleError") {
+          const p = pending.get("offer"); if (p) { pending.delete("offer"); p(m); }
+        }
+      };
+    });
+  }
+
+  async function ticket(connId) {
+    const r = await fetch(API + "/ticket", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conn_id: connId }),
+    });
+    if (!r.ok) throw new Error("ticket: " + r.status + " " + (await r.text()));
+    return r.json();
+  }
+
+  function waitIce(pc, ms) {
+    if (pc.iceGatheringState === "complete") return Promise.resolve();
+    return new Promise((res) => {
+      const t = setTimeout(res, ms);
+      pc.addEventListener("icegatheringstatechange", () => {
+        if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); }
+      });
+    });
+  }
+
+  // ---- frame change detection (input-to-picture latency) ----
+  const probe = document.createElement("canvas"); probe.width = 64; probe.height = 36;
+  const pctx = probe.getContext("2d", { willReadFrequently: true });
+  let lastHash = 0, inputAt = null;
+  function frameHash() {
+    try {
+      pctx.drawImage(video, 0, 0, probe.width, probe.height);
+      const d = pctx.getImageData(0, 0, probe.width, probe.height).data;
+      let h = 2166136261;
+      for (let i = 0; i < d.length; i += 4) { h ^= (d[i] >> 3) | ((d[i + 1] >> 3) << 5) | ((d[i + 2] >> 3) << 10); h = Math.imul(h, 16777619); }
+      return h >>> 0;
+    } catch { return 0; }
+  }
+  function onFrame(now) {
+    hxc.framesDecoded++;
+    const h = frameHash();
+    if (h !== lastHash) {
+      lastHash = h; hxc.lastChangeAt = now;
+      if (inputAt !== null) {
+        const ms = now - inputAt; inputAt = null;
+        hxc.inputToFrameMs.push(ms);
+        if (hxc.inputToFrameMs.length > 50) hxc.inputToFrameMs.shift();
+        send("ctl", JSON.stringify({ t: "report", input_to_frame_ms: ms, rtt_ms: hxc.rttMs }));
+      }
+    }
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(onFrame);
+  }
+
+  // ---- data channels ----
+  const ch = {};
+  function send(name, data) { const c = ch[name]; if (c && c.readyState === "open") c.send(data); }
+  let seq = 0;
+  function motion(kind, x, y) {
+    const b = new ArrayBuffer(13), v = new DataView(b);
+    v.setUint8(0, kind); v.setUint32(1, (seq++) >>> 0, true); v.setInt32(5, x, true); v.setInt32(9, y, true);
+    send("input", b);
+  }
+  function guestXY(e) {
+    const r = video.getBoundingClientRect();
+    const gw = hxc.guest.width || video.videoWidth, gh = hxc.guest.height || video.videoHeight;
+    if (!gw || !gh) return null;
+    const s = Math.min(r.width / gw, r.height / gh);
+    const ox = r.left + (r.width - gw * s) / 2, oy = r.top + (r.height - gh * s) / 2;
+    const x = Math.round((e.clientX - ox) / s), y = Math.round((e.clientY - oy) / s);
+    return [Math.max(0, Math.min(gw - 1, x)), Math.max(0, Math.min(gh - 1, y))];
+  }
+  function markInput() { if (inputAt === null) inputAt = performance.now(); }
+  function key(e, down) {
+    e.preventDefault();
+    if (down) markInput();
+    send("keys", JSON.stringify({ t: down ? "down" : "up", code: e.code }));
+  }
+  hxc.sendKey = (code, down) => { if (down) markInput(); send("keys", JSON.stringify({ t: down ? "down" : "up", code })); };
+  hxc.click = (x, y, button = 0) => {
+    markInput(); motion(1, x, y);
+    send("keys", JSON.stringify({ t: "btn", b: button, down: true }));
+    send("keys", JSON.stringify({ t: "btn", b: button, down: false }));
+  };
+  hxc.move = (x, y) => { markInput(); motion(1, x, y); };
+  hxc.press = (x, y, button = 0) => { markInput(); motion(1, x, y); send("keys", JSON.stringify({ t: "btn", b: button, down: true })); };
+  hxc.release = (button = 0) => { markInput(); send("keys", JSON.stringify({ t: "btn", b: button, down: false })); };
+  video.addEventListener("keydown", (e) => key(e, true));
+  video.addEventListener("keyup", (e) => key(e, false));
+  video.addEventListener("mousemove", (e) => { const p = guestXY(e); if (p) motion(1, p[0], p[1]); });
+  video.addEventListener("mousedown", (e) => { video.focus(); e.preventDefault(); const p = guestXY(e); if (p) motion(1, p[0], p[1]); markInput(); send("keys", JSON.stringify({ t: "btn", b: e.button, down: true })); });
+  video.addEventListener("mouseup", (e) => { e.preventDefault(); send("keys", JSON.stringify({ t: "btn", b: e.button, down: false })); });
+  video.addEventListener("contextmenu", (e) => e.preventDefault());
+  video.addEventListener("wheel", (e) => { e.preventDefault(); send("keys", JSON.stringify({ t: "wheel", dx: Math.sign(e.deltaX), dy: Math.sign(e.deltaY) })); }, { passive: false });
+  document.getElementById("btn-cad").onclick = () => {
+    for (const c of ["ControlLeft", "AltLeft", "Delete"]) hxc.sendKey(c, true);
+    for (const c of ["Delete", "AltLeft", "ControlLeft"]) hxc.sendKey(c, false);
+    video.focus();
+  };
+  document.getElementById("btn-full").onclick = () => { (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {}); };
+
+  function cursorMsg(m) {
+    if (m.t === "shape") {
+      const bytes = Uint8Array.from(atob(m.bgra), (c) => c.charCodeAt(0));
+      const c = document.createElement("canvas"); c.width = m.w; c.height = m.h;
+      const x = c.getContext("2d"), img = x.createImageData(m.w, m.h);
+      for (let i = 0; i + 3 < bytes.length && i < img.data.length; i += 4) {
+        img.data[i] = bytes[i + 2]; img.data[i + 1] = bytes[i + 1]; img.data[i + 2] = bytes[i]; img.data[i + 3] = bytes[i + 3];
+      }
+      x.putImageData(img, 0, 0);
+      hxc.cursor = "url(" + c.toDataURL() + ") " + m.hx + " " + m.hy + ", default";
+      video.style.cursor = hxc.cursor;
+    } else if (m.t === "pos") {
+      hxc.cursorPos = { x: m.x, y: m.y, on: m.on };
+      video.style.cursor = m.on ? (hxc.cursor || "default") : "none";
+    }
+  }
+
+  function ctlMsg(m) {
+    if (m.t === "hello") {
+      hxc.hello = m; hxc.codec = m.codec;
+      if (m.width) hxc.guest = { width: m.width, height: m.height };
+      setState("connected", "Connected: " + (m.codec || "?") + " via " + (m.encoder || "?") + ", " + m.profile + (m.input ? "" : " (view only)"));
+    } else if (m.t === "layout") {
+      hxc.guest = { width: m.width, height: m.height };
+    } else if (m.t === "pong") {
+      const sent = pings.get(m.id); if (sent !== undefined) { pings.delete(m.id); hxc.rttMs = performance.now() - sent; }
+    } else if (m.t === "stats") {
+      hxc.server = m;
+      const last = hxc.inputToFrameMs.length ? hxc.inputToFrameMs[hxc.inputToFrameMs.length - 1].toFixed(0) + " ms input-to-picture, " : "";
+      statsEl.textContent = (m.width ? m.width + "x" + m.height + ", " : "") + last + (hxc.rttMs !== null ? hxc.rttMs.toFixed(1) + " ms RTT, " : "") + "encode " + (m.encode_ms || 0).toFixed(1) + " ms";
+    } else if (m.t === "denied") {
+      hxc.denied.push(m); statusEl.textContent += " - input needs " + m.privilege;
+    } else if (m.t === "disabled") {
+      statsEl.textContent = "display off";
+    } else if (m.t === "error") {
+      fail(m.message);
+    }
+  }
+
+  const pings = new Map(); let pingId = 0;
+  setInterval(() => { const id = ++pingId; pings.set(id, performance.now()); send("ctl", JSON.stringify({ t: "ping", id })); if (pings.size > 20) pings.clear(); }, 1000);
+
+  async function run() {
+    const st = await status();
+    hxc.status = st;
+    if (!st.available) { fail(st.reason || "The Horcrux Console is not available for this VM"); return; }
+    const sig = await openSignalling();
+    hxc.connId = sig.connId;
+    const t = await ticket(sig.connId);
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    hxc.pc = pc;
+    pc.addTransceiver("video", { direction: "recvonly" });
+    const mk = (name, opts) => { const c = pc.createDataChannel(name, opts); c.binaryType = "arraybuffer"; ch[name] = c; return c; };
+    mk("ctl", { ordered: true }).onmessage = (e) => { try { ctlMsg(JSON.parse(e.data)); } catch {} };
+    mk("keys", { ordered: true });
+    mk("input", { ordered: false, maxRetransmits: 0 });
+    mk("cursor", { ordered: true }).onmessage = (e) => { try { cursorMsg(JSON.parse(e.data)); } catch {} };
+    pc.ontrack = (e) => {
+      // interactive console: play frames as soon as they decode
+      try { e.receiver.jitterBufferTarget = 0; } catch {}
+      try { e.receiver.playoutDelayHint = 0; } catch {}
+      video.srcObject = e.streams[0] || new MediaStream([e.track]);
+      video.play().catch(() => {});
+      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(onFrame);
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") fail("Connection " + pc.connectionState);
+      if (pc.connectionState === "disconnected") setState("reconnecting", "Connection interrupted...");
+    };
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIce(pc, 1500);
+    const answer = await new Promise((res) => {
+      sig.pending.set("offer", res);
+      sig.ws.send(JSON.stringify({ type: "console.offer", ticket: t.ticket, sdp: pc.localDescription.sdp }));
+    });
+    if (answer.type === "ConsoleError") { fail(answer.data.message); return; }
+    hxc.session = answer.data.session;
+    await pc.setRemoteDescription({ type: "answer", sdp: answer.data.sdp });
+    setState("connecting", "Connecting media...");
+    video.focus();
+  }
+  run().catch((e) => fail(String(e && e.message || e)));
+})();
+</script>
+</body>
+</html>

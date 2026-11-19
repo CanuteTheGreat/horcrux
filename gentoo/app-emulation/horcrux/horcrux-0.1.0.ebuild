@@ -77,6 +77,7 @@ REQUIRED_USE="
 RDEPEND="
 	qemu? (
 		app-emulation/qemu[spice,usbredir,virtfs,vnc]
+		media-video/ffmpeg[vpx,x264]
 		app-emulation/libvirt
 	)
 	lxc? (

@@ -1,3 +1,5 @@
 # owned by app-emulation/horcrux-bin: the manager's VM console needs SPICE (and USB redirection / virtiofs shares for guests); QEMU is
 # built with it on every Horcrux server image and, through this file, on every machine that installs the manager.
 app-emulation/qemu spice usbredir virtfs vnc zstd
+# the Horcrux Console encoder (ffmpeg child process): H.264 (x264) and VP8 (libvpx)
+media-video/ffmpeg vpx x264

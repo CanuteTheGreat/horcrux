@@ -256,3 +256,42 @@ fn immutable_network_and_pool_changes_are_blocked_not_silently_dropped() {
     );
     assert!(!actions(&p).iter().any(|a| a.contains("storage_pool")));
 }
+
+#[test]
+fn console_settings_are_planned_validated_and_exported() {
+    use horcrux_common::console::{ConsoleProfile, ConsoleSettings};
+    let live = Live::default();
+    // absent section: unmanaged
+    assert!(plan(&Spec::default(), &live, false).in_sync());
+    // same as live: in sync
+    let mut s = Spec {
+        console: Some(ConsoleSettings::default()),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).in_sync());
+    // a change is one update with key-level details
+    let mut want = ConsoleSettings::default();
+    want.default_profile = ConsoleProfile::Gaming;
+    want.desktop.max_fps = 60;
+    s.console = Some(want.clone());
+    let p = plan(&s, &live, false);
+    assert_eq!(p.changes.len(), 1);
+    assert_eq!(p.changes[0].kind, "console");
+    assert_eq!(p.changes[0].action, Action::Update);
+    let d = p.changes[0].details.join("\n");
+    assert!(
+        d.contains("default_profile: \"desktop\" -> \"gaming\""),
+        "{d}"
+    );
+    assert!(d.contains("desktop.max_fps: 30 -> 60"), "{d}");
+    // invalid values are plan errors, not changes
+    want.codecs = vec!["mpeg2".into()];
+    s.console = Some(want);
+    assert!(plan(&s, &live, false).errors[0].contains("mpeg2"));
+    // export carries the live settings and round-trips through YAML
+    let e = export(&live);
+    let y = serde_yaml::to_string(&e).unwrap();
+    assert!(y.contains("console:"), "{y}");
+    let back: Spec = serde_yaml::from_str(&y).unwrap();
+    assert!(plan(&back, &live, false).in_sync());
+}

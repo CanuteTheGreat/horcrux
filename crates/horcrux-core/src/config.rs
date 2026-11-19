@@ -31,6 +31,11 @@ pub struct HorcruxConfig {
     /// GPU / PCI passthrough and VM tuning (gaming VMs)
     #[serde(default)]
     pub passthrough: PassthroughConfig,
+    /// Horcrux Console (`[console]`): node defaults for the remote display
+    /// (docs/design/horcrux-console.md section 9). The API and the
+    /// declarative spec store changes in `<data_dir>/console.json`.
+    #[serde(default)]
+    pub console: horcrux_common::console::ConsoleSettings,
 }
 
 /// GPU / PCI passthrough and VM tuning settings (`[passthrough]`).

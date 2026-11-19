@@ -48,6 +48,10 @@ pub struct Spec {
     pub networks: Option<NetworksSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vms: Option<Vec<VmSpec>>,
+    /// Horcrux Console node settings (`[console]`, design
+    /// docs/design/horcrux-console.md section 9). Absent = unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console: Option<horcrux_common::console::ConsoleSettings>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
@@ -297,6 +301,7 @@ pub struct Live {
     pub vnets: Vec<VNet>,
     pub subnets: Vec<Subnet>,
     pub vms: Vec<VmConfig>,
+    pub console: horcrux_common::console::ConsoleSettings,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -592,10 +597,24 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // Horcrux Console settings: one node-wide object.
+    if let Some(w) = &spec.console {
+        if let Err(e) = w.validate() {
+            p.errors.push(format!("console: {e}"));
+        } else if *w != live.console {
+            creates.push(ch(
+                "console",
+                "settings",
+                Action::Update,
+                console_diff(&live.console, w),
+            ));
+        }
+    }
+
     // Creates/updates run dependency-first (pools, zones, vnets, subnets,
     // VMs); deletes run in the opposite order (VMs first, pools last).
     let rank = |k: &str| {
-        ["storage_pool", "zone", "vnet", "subnet", "vm"]
+        ["console", "storage_pool", "zone", "vnet", "subnet", "vm"]
             .iter()
             .position(|x| *x == k)
             .unwrap_or(9)
@@ -605,6 +624,37 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
     p.changes = creates;
     p.changes.extend(deletes);
     p
+}
+
+/// Changed console settings, key by key (`desktop.max_fps: 30 -> 60`).
+fn console_diff(
+    live: &horcrux_common::console::ConsoleSettings,
+    want: &horcrux_common::console::ConsoleSettings,
+) -> Vec<String> {
+    fn walk(prefix: &str, a: &serde_json::Value, b: &serde_json::Value, out: &mut Vec<String>) {
+        match (a, b) {
+            (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
+                for (k, bv) in y {
+                    let key = if prefix.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{prefix}.{k}")
+                    };
+                    walk(&key, x.get(k).unwrap_or(&serde_json::Value::Null), bv, out);
+                }
+            }
+            _ if a != b => out.push(format!("{prefix}: {a} -> {b}")),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(
+        "",
+        &serde_json::to_value(live).unwrap_or_default(),
+        &serde_json::to_value(want).unwrap_or_default(),
+        &mut out,
+    );
+    out
 }
 
 /// Differences between a spec VM and the live one, limited to what the spec
@@ -739,6 +789,7 @@ pub fn export(live: &Live) -> Spec {
             subnets: Some(subnets),
         }),
         vms: Some(vms),
+        console: Some(live.console.clone()),
         extra: BTreeMap::new(),
     }
 }

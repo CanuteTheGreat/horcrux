@@ -1,0 +1,957 @@
+//! One Horcrux Console viewer session: QEMU D-Bus display -> host encoder
+//! -> WebRTC (str0m) to the client, and input back from the client's data
+//! channels into the guest.
+//!
+//! Tasks per session:
+//! * the **compositor** keeps the guest framebuffer (Scanout/Update from
+//!   the D-Bus listener), paces frames at the profile's rate (damage-driven,
+//!   plus an idle refresh) into the encoder and forwards cursor changes;
+//! * the **transport loop** owns the `str0m::Rtc` (sans-IO), the UDP
+//!   sockets (one per host candidate address) and writes encoded frames as
+//!   RTP; data-channel messages are decoded here;
+//! * the **input** task turns client input into D-Bus keyboard/mouse calls,
+//!   only when the session holds `VM.Console.Input`.
+//!
+//! Wire format of the data channels: docs/design/horcrux-console.md
+//! section 4 (`ctl` JSON, `keys` JSON, `input` binary, `cursor` JSON).
+use super::encode::{self, EncodeParams, EncodedFrame, Encoder, PixelFormat, VideoCodec};
+use super::keymap;
+use super::qemu_dbus::{DbusDisplay, DisplayEvent};
+use base64::Engine as _;
+use horcrux_common::console::{ConsoleProfile, ConsoleSettings};
+use serde::Serialize;
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use str0m::change::SdpOffer;
+use str0m::channel::ChannelId;
+use str0m::format::Codec;
+use str0m::media::{MediaKind, MediaTime, Mid, Pt};
+use str0m::net::{Protocol, Receive};
+use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
+use tokio::net::UdpSocket;
+use tokio::sync::{mpsc, watch};
+
+/// Everything a session needs to start.
+pub struct SessionRequest {
+    pub session_id: String,
+    pub vm_id: String,
+    pub user: String,
+    pub profile: ConsoleProfile,
+    pub allow_input: bool,
+    pub settings: ConsoleSettings,
+    pub qmp_socket: PathBuf,
+    pub candidate_ips: Vec<IpAddr>,
+    pub offer_sdp: String,
+    pub encoder_caps: encode::EncoderCaps,
+}
+
+/// Live numbers of a session (GET .../sessions, ctl `stats`).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SessionStats {
+    pub connected: bool,
+    pub codec: Option<VideoCodec>,
+    pub encoder: Option<encode::EncoderBackend>,
+    pub guest_width: u32,
+    pub guest_height: u32,
+    pub frames_sent: u64,
+    pub bytes_sent: u64,
+    /// Mean time from handing a frame to the encoder until it is on the
+    /// wire (ms, last 60 frames).
+    pub encode_ms_avg: f64,
+    pub keys_in: u64,
+    pub pointer_in: u64,
+    pub input_denied: u64,
+    /// Data-channel round trip measured by the client's pings (ms).
+    pub client_rtt_ms: Option<f64>,
+    /// Last client-reported input-to-picture latency (ms).
+    pub client_input_to_frame_ms: Option<f64>,
+    pub end_reason: Option<String>,
+}
+
+pub struct SessionHandle {
+    pub id: String,
+    pub vm_id: String,
+    pub user: String,
+    pub profile: ConsoleProfile,
+    pub started: chrono::DateTime<chrono::Utc>,
+    pub stats: Arc<Mutex<SessionStats>>,
+    stop: watch::Sender<bool>,
+    pub done: watch::Receiver<bool>,
+}
+
+impl SessionHandle {
+    pub fn stop(&self) {
+        let _ = self.stop.send(true);
+    }
+    pub fn finished(&self) -> bool {
+        *self.done.borrow()
+    }
+}
+
+/// What the transport loop is told by the other tasks.
+enum ToRtc {
+    Frame(EncodedFrame, Instant),
+    Ctl(String),
+    Cursor(String),
+}
+
+/// What the compositor is told.
+enum ToCompositor {
+    KeyframeRequest,
+}
+
+/// Client input, decoded from the data channels.
+#[derive(Debug, PartialEq)]
+pub enum InputEvent {
+    Key { code: String, down: bool },
+    Button { button: u8, down: bool },
+    Abs { x: u32, y: u32 },
+    Rel { dx: i32, dy: i32 },
+    Wheel { dx: i32, dy: i32 },
+}
+
+/// `keys` channel JSON: `{"t":"down"|"up","code":"KeyA"}`,
+/// `{"t":"btn","b":0,"down":true}`, `{"t":"wheel","dx":0,"dy":-1}`.
+pub fn parse_keys(text: &str) -> Option<InputEvent> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    match v.get("t")?.as_str()? {
+        t @ ("down" | "up") => Some(InputEvent::Key {
+            code: v.get("code")?.as_str()?.chars().take(32).collect(),
+            down: t == "down",
+        }),
+        "btn" => Some(InputEvent::Button {
+            button: v.get("b")?.as_u64()?.min(255) as u8,
+            down: v.get("down")?.as_bool()?,
+        }),
+        "wheel" => Some(InputEvent::Wheel {
+            dx: v.get("dx").and_then(|x| x.as_i64()).unwrap_or(0).signum() as i32,
+            dy: v.get("dy").and_then(|x| x.as_i64()).unwrap_or(0).signum() as i32,
+        }),
+        _ => None,
+    }
+}
+
+/// `input` channel binary: kind u8 (1 = absolute, 2 = relative), seq u32
+/// LE, then x and y as i32 LE (guest framebuffer pixels for absolute).
+pub fn parse_motion(b: &[u8]) -> Option<InputEvent> {
+    if b.len() < 13 {
+        return None;
+    }
+    let x = i32::from_le_bytes(b[5..9].try_into().ok()?);
+    let y = i32::from_le_bytes(b[9..13].try_into().ok()?);
+    match b[0] {
+        1 => Some(InputEvent::Abs {
+            x: x.max(0) as u32,
+            y: y.max(0) as u32,
+        }),
+        2 => Some(InputEvent::Rel {
+            dx: x.clamp(-4096, 4096),
+            dy: y.clamp(-4096, 4096),
+        }),
+        _ => None,
+    }
+}
+
+/// Our video payload type: the first codec in the node's preference list
+/// that the encoder can produce and the client offered. For H.264 the
+/// browser's non-interleaved (packetization-mode 1) constrained-baseline
+/// entry is preferred, since that is what the encoders produce.
+fn choose_pt(
+    rtc: &mut Rtc,
+    mid: Mid,
+    prefs: &[String],
+    caps: &encode::EncoderCaps,
+) -> Option<(Pt, VideoCodec)> {
+    let writer = rtc.writer(mid)?;
+    let params: Vec<_> = writer.payload_params().cloned().collect();
+    let available = caps.codecs();
+    for name in prefs {
+        let Some(codec) = VideoCodec::parse(name) else {
+            continue;
+        };
+        if !available.contains(&codec) {
+            continue;
+        }
+        let want = match codec {
+            VideoCodec::H264 => Codec::H264,
+            VideoCodec::Vp8 => Codec::Vp8,
+        };
+        let mut best: Option<(i32, Pt)> = None;
+        for p in &params {
+            let spec = p.spec();
+            if spec.codec != want {
+                continue;
+            }
+            let mut score = 0;
+            if codec == VideoCodec::H264 {
+                if spec.format.packetization_mode == Some(1) {
+                    score += 2;
+                }
+                if spec
+                    .format
+                    .profile_level_id
+                    .map(|id| id >> 16 == 0x42)
+                    .unwrap_or(false)
+                {
+                    score += 1;
+                }
+            }
+            if best.map(|(s, _)| score > s).unwrap_or(true) {
+                best = Some((score, p.pt()));
+            }
+        }
+        if let Some((_, pt)) = best {
+            return Some((pt, codec));
+        }
+    }
+    None
+}
+
+/// Bind one UDP socket per candidate address, each on the first free port
+/// of the configured range.
+async fn bind_sockets(ips: &[IpAddr], min: u16, max: u16) -> Result<Vec<Arc<UdpSocket>>, String> {
+    let mut out = Vec::new();
+    for ip in ips {
+        let mut bound = None;
+        for port in min..=max {
+            if let Ok(s) = UdpSocket::bind(SocketAddr::new(*ip, port)).await {
+                bound = Some(s);
+                break;
+            }
+        }
+        match bound {
+            Some(s) => out.push(Arc::new(s)),
+            None => tracing::warn!("console: no free UDP port {min}-{max} on {ip}"),
+        }
+    }
+    if out.is_empty() {
+        return Err(format!(
+            "no free UDP port in {min}-{max} on any console address (settings udp_port_min/max)"
+        ));
+    }
+    Ok(out)
+}
+
+fn install_crypto() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        str0m::crypto::from_feature_flags().install_process_default();
+    });
+}
+
+/// Start a session: returns its handle and the SDP answer for the client.
+pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), String> {
+    install_crypto();
+    let offer = SdpOffer::from_sdp_string(&req.offer_sdp).map_err(|e| format!("bad offer: {e}"))?;
+    let sockets = bind_sockets(
+        &req.candidate_ips,
+        req.settings.udp_port_min,
+        req.settings.udp_port_max,
+    )
+    .await?;
+
+    let caps = &req.encoder_caps;
+    let mut cfg = Rtc::builder().set_ice_lite(true).clear_codecs();
+    for name in &req.settings.codecs {
+        match VideoCodec::parse(name) {
+            Some(VideoCodec::H264) if caps.codecs().contains(&VideoCodec::H264) => {
+                cfg = cfg.enable_h264(true)
+            }
+            Some(VideoCodec::Vp8) if caps.codecs().contains(&VideoCodec::Vp8) => {
+                cfg = cfg.enable_vp8(true)
+            }
+            _ => {}
+        }
+    }
+    let mut rtc = cfg.build(Instant::now());
+    for s in &sockets {
+        let addr = s.local_addr().map_err(|e| e.to_string())?;
+        let c = Candidate::host(addr, "udp").map_err(|e| format!("candidate {addr}: {e}"))?;
+        rtc.add_local_candidate(c);
+    }
+    let answer = rtc
+        .sdp_api()
+        .accept_offer(offer)
+        .map_err(|e| format!("offer not acceptable: {e}"))?;
+    let answer_sdp = answer.to_sdp_string();
+
+    // The connection to the guest's display is made before answering, so
+    // a VM without the D-Bus display fails the request, not the session.
+    let (disp_tx, disp_rx) = mpsc::channel::<DisplayEvent>(64);
+    let display = DbusDisplay::connect(&req.qmp_socket, &req.session_id, disp_tx, false).await?;
+
+    let stats = Arc::new(Mutex::new(SessionStats::default()));
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let (done_tx, done_rx) = watch::channel(false);
+    let handle = SessionHandle {
+        id: req.session_id.clone(),
+        vm_id: req.vm_id.clone(),
+        user: req.user.clone(),
+        profile: req.profile,
+        started: chrono::Utc::now(),
+        stats: stats.clone(),
+        stop: stop_tx,
+        done: done_rx,
+    };
+
+    let (to_rtc_tx, to_rtc_rx) = mpsc::channel::<ToRtc>(8);
+    let (to_comp_tx, to_comp_rx) = mpsc::channel::<ToCompositor>(4);
+    let (input_tx, input_rx) = mpsc::channel::<InputEvent>(256);
+
+    let absolute = display.absolute;
+    let ctx = Ctx {
+        req,
+        stats: stats.clone(),
+    };
+    let ctx = Arc::new(ctx);
+    tokio::spawn(input_task(display, input_rx, stats.clone()));
+    tokio::spawn(compositor(
+        ctx.clone(),
+        disp_rx,
+        to_comp_rx,
+        to_rtc_tx.clone(),
+        stop_rx.clone(),
+    ));
+    tokio::spawn(async move {
+        let reason = transport(
+            ctx.clone(),
+            rtc,
+            sockets,
+            to_rtc_rx,
+            to_comp_tx,
+            input_tx,
+            stop_rx,
+            absolute,
+        )
+        .await;
+        if let Ok(mut s) = ctx.stats.lock() {
+            s.end_reason = Some(reason);
+            s.connected = false;
+        }
+        let _ = done_tx.send(true);
+    });
+    Ok((handle, answer_sdp))
+}
+
+struct Ctx {
+    req: SessionRequest,
+    stats: Arc<Mutex<SessionStats>>,
+}
+
+impl Ctx {
+    fn profile(&self) -> &horcrux_common::console::ProfileSettings {
+        self.req.settings.profile(self.req.profile)
+    }
+}
+
+async fn input_task(
+    display: DbusDisplay,
+    mut rx: mpsc::Receiver<InputEvent>,
+    stats: Arc<Mutex<SessionStats>>,
+) {
+    // Last pointer position the client asked for: when the guest's current
+    // pointer is relative (PS/2 before a tablet driver runs, firmware), an
+    // absolute move becomes the difference to it. QEMU switches between
+    // the two at run time, so every move tries absolute first.
+    let mut last: Option<(u32, u32)> = None;
+    while let Some(ev) = rx.recv().await {
+        let r = match ev {
+            InputEvent::Key { code, down } => match keymap::qnum(&code) {
+                Some(q) if down => display.keyboard.press(q).await,
+                Some(q) => display.keyboard.release(q).await,
+                None => Ok(()),
+            },
+            InputEvent::Button { button, down } => match keymap::mouse_button(button) {
+                Some(b) if down => display.mouse.press(b).await,
+                Some(b) => display.mouse.release(b).await,
+                None => Ok(()),
+            },
+            InputEvent::Abs { x, y } => {
+                let prev = last.replace((x, y));
+                match display.mouse.set_abs_position(x, y).await {
+                    Ok(()) => Ok(()),
+                    Err(_) => match prev {
+                        Some((px, py)) => {
+                            display
+                                .mouse
+                                .rel_motion(x as i32 - px as i32, y as i32 - py as i32)
+                                .await
+                        }
+                        None => Ok(()),
+                    },
+                }
+            }
+            InputEvent::Rel { dx, dy } => display.mouse.rel_motion(dx, dy).await,
+            InputEvent::Wheel { dx, dy } => {
+                let mut r = Ok(());
+                for b in [
+                    (dy < 0).then_some(keymap::WHEEL_UP),
+                    (dy > 0).then_some(keymap::WHEEL_DOWN),
+                    (dx < 0).then_some(keymap::WHEEL_LEFT),
+                    (dx > 0).then_some(keymap::WHEEL_RIGHT),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    r = display.mouse.press(b).await;
+                    if r.is_ok() {
+                        r = display.mouse.release(b).await;
+                    }
+                }
+                r
+            }
+        };
+        if let Err(e) = r {
+            tracing::debug!("console input: {e}");
+        }
+    }
+    drop(stats);
+    // Dropping the display closes the D-Bus connections; QEMU unregisters
+    // the listener.
+    drop(display);
+}
+
+/// Guest framebuffer in the scanout's own pixel format, tightly packed.
+struct Framebuffer {
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    pixels: Vec<u8>,
+}
+
+impl Framebuffer {
+    fn scanout(width: u32, height: u32, stride: u32, format: PixelFormat, data: &[u8]) -> Self {
+        let bpp = format.bytes_per_pixel();
+        let row = width as usize * bpp;
+        let mut pixels = vec![0u8; row * height as usize];
+        for y in 0..height as usize {
+            let src = y * stride as usize;
+            if src + row <= data.len() {
+                pixels[y * row..(y + 1) * row].copy_from_slice(&data[src..src + row]);
+            }
+        }
+        Self {
+            width,
+            height,
+            format,
+            pixels,
+        }
+    }
+
+    fn update(&mut self, x: i32, y: i32, w: i32, h: i32, stride: u32, data: &[u8]) {
+        let bpp = self.format.bytes_per_pixel();
+        let (x, y) = (x.max(0) as usize, y.max(0) as usize);
+        let w = (w.max(0) as usize).min((self.width as usize).saturating_sub(x));
+        let h = (h.max(0) as usize).min((self.height as usize).saturating_sub(y));
+        let row = self.width as usize * bpp;
+        for r in 0..h {
+            let src = r * stride as usize;
+            let dst = (y + r) * row + x * bpp;
+            let n = w * bpp;
+            if src + n <= data.len() && dst + n <= self.pixels.len() {
+                self.pixels[dst..dst + n].copy_from_slice(&data[src..src + n]);
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct CursorShape<'a> {
+    t: &'a str,
+    w: i32,
+    h: i32,
+    hx: i32,
+    hy: i32,
+    /// Little-endian ARGB32 (bytes B, G, R, A), base64.
+    bgra: String,
+}
+
+async fn compositor(
+    ctx: Arc<Ctx>,
+    mut disp: mpsc::Receiver<DisplayEvent>,
+    mut ctl: mpsc::Receiver<ToCompositor>,
+    to_rtc: mpsc::Sender<ToRtc>,
+    mut stop: watch::Receiver<bool>,
+) {
+    let settings = &ctx.req.settings;
+    let profile = ctx.profile().clone();
+    let mut fb: Option<Framebuffer> = None;
+    let mut encoder: Option<Encoder> = None;
+    let (enc_tx, mut enc_rx) = mpsc::channel::<EncodedFrame>(8);
+    let mut submitted: VecDeque<(u64, Instant)> = VecDeque::new();
+    let mut dirty = false;
+    let mut last_sent = Instant::now() - Duration::from_secs(3600);
+    let frame_gap = Duration::from_secs_f64(1.0 / profile.max_fps.max(1) as f64);
+    let idle_gap = (profile.idle_refresh_fps > 0)
+        .then(|| Duration::from_secs_f64(1.0 / profile.idle_refresh_fps as f64));
+    let mut tick = tokio::time::interval(frame_gap);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut codec: Option<(VideoCodec, encode::EncoderBackend)> = None;
+    let mut last_keyframe_restart = Instant::now() - Duration::from_secs(60);
+
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            ev = disp.recv() => {
+                let Some(ev) = ev else { break };
+                match ev {
+                    DisplayEvent::Scanout { width, height, stride, format, data } => {
+                        let Some(pf) = PixelFormat::from_pixman(format) else {
+                            tracing::warn!("console: unsupported pixel format {format:#x}");
+                            continue;
+                        };
+                        let resized = fb.as_ref().map(|f| (f.width, f.height, f.format) != (width, height, pf)).unwrap_or(true);
+                        fb = Some(Framebuffer::scanout(width, height, stride, pf, &data));
+                        if resized {
+                            encoder = None;
+                            submitted.clear();
+                            if let Ok(mut s) = ctx.stats.lock() {
+                                s.guest_width = width;
+                                s.guest_height = height;
+                            }
+                            let msg = serde_json::json!({"t": "layout", "width": width, "height": height}).to_string();
+                            let _ = to_rtc.send(ToRtc::Ctl(msg)).await;
+                        }
+                        dirty = true;
+                    }
+                    DisplayEvent::Update { x, y, width, height, stride, format, data } => {
+                        if let Some(f) = fb.as_mut() {
+                            if PixelFormat::from_pixman(format) == Some(f.format) {
+                                f.update(x, y, width, height, stride, &data);
+                                dirty = true;
+                            }
+                        }
+                    }
+                    DisplayEvent::Disable => {
+                        let _ = to_rtc.send(ToRtc::Ctl(r#"{"t":"disabled"}"#.into())).await;
+                    }
+                    DisplayEvent::CursorDefine { width, height, hot_x, hot_y, data } => {
+                        if width > 0 && height > 0 && width <= 256 && height <= 256 {
+                            let msg = CursorShape {
+                                t: "shape", w: width, h: height, hx: hot_x, hy: hot_y,
+                                bgra: base64::engine::general_purpose::STANDARD.encode(&data),
+                            };
+                            if let Ok(s) = serde_json::to_string(&msg) {
+                                let _ = to_rtc.send(ToRtc::Cursor(s)).await;
+                            }
+                        }
+                    }
+                    DisplayEvent::MouseSet { x, y, on } => {
+                        let msg = serde_json::json!({"t": "pos", "x": x, "y": y, "on": on != 0}).to_string();
+                        let _ = to_rtc.try_send(ToRtc::Cursor(msg));
+                    }
+                    _ => {}
+                }
+            }
+            c = ctl.recv() => {
+                match c {
+                    Some(ToCompositor::KeyframeRequest) => {
+                        // FFmpeg's CLI can't be asked for an IDR mid-stream;
+                        // a fresh encoder starts with one. Rate-limited.
+                        if last_keyframe_restart.elapsed() > Duration::from_millis(500) {
+                            last_keyframe_restart = Instant::now();
+                            encoder = None;
+                            submitted.clear();
+                            dirty = true;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            out = enc_rx.recv() => {
+                let Some(frame) = out else { continue };
+                let mut at = Instant::now();
+                while let Some((seq, t)) = submitted.front().copied() {
+                    if seq <= frame.seq { submitted.pop_front(); }
+                    if seq == frame.seq { at = t; break; }
+                    if seq > frame.seq { break; }
+                }
+                if to_rtc.send(ToRtc::Frame(frame, at)).await.is_err() { break; }
+            }
+            _ = tick.tick() => {
+                if to_rtc.is_closed() { break; }
+                let Some(f) = fb.as_ref() else { continue };
+                let idle_due = idle_gap.map(|g| last_sent.elapsed() >= g).unwrap_or(false);
+                if !dirty && !idle_due { continue; }
+                if encoder.as_mut().map(|e| !e.alive()).unwrap_or(false) {
+                    encoder = None;
+                }
+                if encoder.is_none() {
+                    // pick codec/backend once the transport knows the PT
+                    let chosen = ctx.stats.lock().ok().and_then(|s| s.codec.zip(s.encoder));
+                    let Some((c, b)) = chosen.or(codec) else { continue };
+                    codec = Some((c, b));
+                    let params = EncodeParams::new(c, b, f.width, f.height, f.format, &profile, settings);
+                    match Encoder::spawn(&settings.ffmpeg_path, params, enc_tx.clone()) {
+                        Ok(e) => encoder = Some(e),
+                        Err(e) => {
+                            tracing::warn!("console: encoder did not start: {e}");
+                            let msg = serde_json::json!({"t": "error", "message": format!("encoder did not start: {e}")}).to_string();
+                            let _ = to_rtc.send(ToRtc::Ctl(msg)).await;
+                            break;
+                        }
+                    }
+                }
+                if let Some(e) = encoder.as_mut() {
+                    if let Some(seq) = e.submit(f.pixels.clone()) {
+                        submitted.push_back((seq, Instant::now()));
+                        if submitted.len() > 120 { submitted.pop_front(); }
+                        dirty = false;
+                        last_sent = Instant::now();
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn transport(
+    ctx: Arc<Ctx>,
+    mut rtc: Rtc,
+    sockets: Vec<Arc<UdpSocket>>,
+    mut from_tasks: mpsc::Receiver<ToRtc>,
+    to_comp: mpsc::Sender<ToCompositor>,
+    input: mpsc::Sender<InputEvent>,
+    mut stop: watch::Receiver<bool>,
+    absolute: bool,
+) -> String {
+    let (net_tx, mut net_rx) = mpsc::channel::<(Vec<u8>, SocketAddr, SocketAddr)>(256);
+    let mut readers = Vec::new();
+    for s in &sockets {
+        let s = s.clone();
+        let tx = net_tx.clone();
+        readers.push(tokio::spawn(async move {
+            let local = match s.local_addr() {
+                Ok(a) => a,
+                Err(_) => return,
+            };
+            let mut buf = vec![0u8; 2048];
+            while let Ok((n, src)) = s.recv_from(&mut buf).await {
+                if tx.send((buf[..n].to_vec(), src, local)).await.is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+    let by_addr: HashMap<SocketAddr, Arc<UdpSocket>> = sockets
+        .iter()
+        .filter_map(|s| s.local_addr().ok().map(|a| (a, s.clone())))
+        .collect();
+    let settings = &ctx.req.settings;
+    let idle_timeout = Duration::from_secs(settings.session_idle_timeout_secs as u64);
+    let mut last_rx = Instant::now();
+    let mut video: Option<(Mid, Pt, VideoCodec)> = None;
+    let mut channels: HashMap<String, ChannelId> = HashMap::new();
+    let mut labels: HashMap<ChannelId, String> = HashMap::new();
+    let mut pending_ctl: Vec<String> = Vec::new();
+    let mut pending_cursor: Option<String> = None;
+    let start = Instant::now();
+    let mut enc_lat: VecDeque<f64> = VecDeque::new();
+    let mut stats_tick = tokio::time::interval(Duration::from_secs(2));
+    let allow_input = ctx.req.allow_input;
+    let mut denied_reported = false;
+
+    let reason = loop {
+        // Drain str0m's output until it asks for a timeout.
+        let timeout = loop {
+            match rtc.poll_output() {
+                Ok(Output::Timeout(t)) => break t,
+                Ok(Output::Transmit(t)) => {
+                    let sock = by_addr.get(&t.source).or_else(|| sockets.first());
+                    if let Some(s) = sock {
+                        let _ = s.try_send_to(&t.contents, t.destination);
+                    }
+                }
+                Ok(Output::Event(e)) => match e {
+                    Event::Connected => {
+                        if let Ok(mut s) = ctx.stats.lock() {
+                            s.connected = true;
+                        }
+                    }
+                    Event::IceConnectionStateChange(IceConnectionState::Disconnected) => {
+                        rtc.disconnect();
+                    }
+                    Event::MediaAdded(m) if m.kind == MediaKind::Video && video.is_none() => {
+                        let caps = &ctx.req.encoder_caps;
+                        if let Some((pt, codec)) =
+                            choose_pt(&mut rtc, m.mid, &settings.codecs, caps)
+                        {
+                            let backend = match codec {
+                                VideoCodec::H264 => caps
+                                    .h264_backend(settings.encoder)
+                                    .unwrap_or(encode::EncoderBackend::Software),
+                                VideoCodec::Vp8 => encode::EncoderBackend::Software,
+                            };
+                            video = Some((m.mid, pt, codec));
+                            if let Ok(mut s) = ctx.stats.lock() {
+                                s.codec = Some(codec);
+                                s.encoder = Some(backend);
+                            }
+                        }
+                    }
+                    Event::KeyframeRequest(_) => {
+                        let _ = to_comp.try_send(ToCompositor::KeyframeRequest);
+                    }
+                    Event::ChannelOpen(id, label) => {
+                        channels.insert(label.clone(), id);
+                        labels.insert(id, label.clone());
+                        if label == "ctl" {
+                            let (codec, backend, w, h) = ctx
+                                .stats
+                                .lock()
+                                .map(|s| (s.codec, s.encoder, s.guest_width, s.guest_height))
+                                .unwrap_or_default();
+                            let hello = serde_json::json!({
+                                "t": "hello", "v": 1,
+                                "session": ctx.req.session_id,
+                                "vm": ctx.req.vm_id,
+                                "profile": ctx.req.profile,
+                                "codec": codec, "encoder": backend,
+                                "width": w, "height": h,
+                                "input": allow_input,
+                                "absolute": absolute,
+                                // C2 (guest tools) adds clipboard/resize/audio.
+                                "clipboard": false,
+                                "audio": false,
+                            });
+                            pending_ctl.insert(0, hello.to_string());
+                        }
+                        // A new viewer needs a keyframe.
+                        let _ = to_comp.try_send(ToCompositor::KeyframeRequest);
+                    }
+                    Event::ChannelData(d) => {
+                        let label = labels.get(&d.id).map(String::as_str).unwrap_or("");
+                        let ev = match label {
+                            "keys" => std::str::from_utf8(&d.data).ok().and_then(parse_keys),
+                            "input" => parse_motion(&d.data),
+                            "ctl" => {
+                                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&d.data)
+                                {
+                                    match v.get("t").and_then(|t| t.as_str()) {
+                                        Some("ping") => {
+                                            let pong =
+                                                serde_json::json!({"t": "pong", "id": v.get("id")});
+                                            pending_ctl.push(pong.to_string());
+                                        }
+                                        Some("report") => {
+                                            if let Ok(mut s) = ctx.stats.lock() {
+                                                s.client_rtt_ms = v
+                                                    .get("rtt_ms")
+                                                    .and_then(|x| x.as_f64())
+                                                    .or(s.client_rtt_ms);
+                                                s.client_input_to_frame_ms = v
+                                                    .get("input_to_frame_ms")
+                                                    .and_then(|x| x.as_f64())
+                                                    .or(s.client_input_to_frame_ms);
+                                            }
+                                        }
+                                        Some("keyframe") => {
+                                            let _ = to_comp.try_send(ToCompositor::KeyframeRequest);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                None
+                            }
+                            _ => None,
+                        };
+                        if let Some(ev) = ev {
+                            if allow_input {
+                                if let Ok(mut s) = ctx.stats.lock() {
+                                    match ev {
+                                        InputEvent::Key { .. } | InputEvent::Button { .. } => {
+                                            s.keys_in += 1
+                                        }
+                                        _ => s.pointer_in += 1,
+                                    }
+                                }
+                                let _ = input.try_send(ev);
+                            } else {
+                                if let Ok(mut s) = ctx.stats.lock() {
+                                    s.input_denied += 1;
+                                }
+                                if !denied_reported {
+                                    denied_reported = true;
+                                    pending_ctl.push(r#"{"t":"denied","what":"input","privilege":"VM.Console.Input"}"#.into());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                Err(e) => {
+                    tracing::debug!("console rtc: {e}");
+                    rtc.disconnect();
+                    break Instant::now();
+                }
+            }
+        };
+        if !rtc.is_alive() {
+            break "connection closed".to_string();
+        }
+        // Queued data-channel messages (one mutation per drain).
+        if !pending_ctl.is_empty() {
+            if let Some(id) = channels.get("ctl").copied() {
+                let msg = pending_ctl.remove(0);
+                if let Some(mut ch) = rtc.channel(id) {
+                    let _ = ch.write(false, msg.as_bytes());
+                }
+                continue;
+            }
+        }
+        if let Some(msg) = pending_cursor.take() {
+            if let Some(id) = channels.get("cursor").copied() {
+                if let Some(mut ch) = rtc.channel(id) {
+                    let _ = ch.write(false, msg.as_bytes());
+                }
+                continue;
+            }
+            pending_cursor = Some(msg);
+        }
+        if last_rx.elapsed() > idle_timeout {
+            break "client went silent (session_idle_timeout_secs)".to_string();
+        }
+        let wait = timeout
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(250));
+        tokio::select! {
+            _ = stop.changed() => break "stopped".to_string(),
+            _ = tokio::time::sleep(wait) => {
+                let _ = rtc.handle_input(Input::Timeout(Instant::now()));
+            }
+            pkt = net_rx.recv() => {
+                let Some((data, source, destination)) = pkt else { break "sockets closed".into() };
+                last_rx = Instant::now();
+                if let Ok(contents) = data.as_slice().try_into() {
+                    let input = Input::Receive(Instant::now(), Receive { proto: Protocol::Udp, source, destination, contents });
+                    if rtc.accepts(&input) {
+                        if let Err(e) = rtc.handle_input(input) {
+                            tracing::debug!("console rtc input: {e}");
+                        }
+                    }
+                }
+            }
+            _ = stats_tick.tick() => {
+                if !ctx.req.qmp_socket.exists() {
+                    break "the VM stopped".to_string();
+                }
+                if let Ok(s) = ctx.stats.lock() {
+                    let msg = serde_json::json!({"t": "stats", "frames": s.frames_sent, "bytes": s.bytes_sent,
+                        "encode_ms": s.encode_ms_avg, "codec": s.codec, "encoder": s.encoder,
+                        "width": s.guest_width, "height": s.guest_height});
+                    pending_ctl.push(msg.to_string());
+                }
+                let _ = rtc.handle_input(Input::Timeout(Instant::now()));
+            }
+            m = from_tasks.recv() => {
+                match m {
+                    Some(ToRtc::Frame(frame, at)) => {
+                        if let Some((mid, pt, _)) = video {
+                            let now = Instant::now();
+                            let rtp = MediaTime::new(
+                                (now - start).as_micros() as u64 * 90 / 1000,
+                                str0m::media::Frequency::NINETY_KHZ,
+                            );
+                            let len = frame.data.len();
+                            if let Some(w) = rtc.writer(mid) {
+                                if let Err(e) = w.write(pt, now, rtp, frame.data) {
+                                    tracing::debug!("console video write: {e}");
+                                }
+                            }
+                            enc_lat.push_back((now - at).as_secs_f64() * 1000.0);
+                            if enc_lat.len() > 60 { enc_lat.pop_front(); }
+                            if let Ok(mut s) = ctx.stats.lock() {
+                                s.frames_sent += 1;
+                                s.bytes_sent += len as u64;
+                                // median: encoder (re)starts take ~1 s and
+                                // would dominate a mean
+                                let mut v: Vec<f64> = enc_lat.iter().copied().collect();
+                                v.sort_by(|a, b| a.total_cmp(b));
+                                s.encode_ms_avg = v[v.len() / 2];
+                            }
+                        }
+                    }
+                    Some(ToRtc::Ctl(m)) => pending_ctl.push(m),
+                    Some(ToRtc::Cursor(m)) => {
+                        // Only the newest cursor state matters, except that
+                        // a pending shape is never replaced by a position.
+                        let keep_shape = pending_cursor
+                            .as_deref()
+                            .map(|p| p.contains("\"shape\""))
+                            .unwrap_or(false)
+                            && !m.contains("\"shape\"");
+                        if !keep_shape {
+                            pending_cursor = Some(m);
+                        }
+                    }
+                    None => break "session ended".into(),
+                }
+            }
+        }
+    };
+    for r in readers {
+        r.abort();
+    }
+    reason
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_channel() {
+        assert_eq!(
+            parse_keys(r#"{"t":"down","code":"KeyA"}"#),
+            Some(InputEvent::Key {
+                code: "KeyA".into(),
+                down: true
+            })
+        );
+        assert_eq!(
+            parse_keys(r#"{"t":"btn","b":2,"down":false}"#),
+            Some(InputEvent::Button {
+                button: 2,
+                down: false
+            })
+        );
+        assert_eq!(
+            parse_keys(r#"{"t":"wheel","dy":-120}"#),
+            Some(InputEvent::Wheel { dx: 0, dy: -1 })
+        );
+        assert_eq!(parse_keys("not json"), None);
+        assert_eq!(parse_keys(r#"{"t":"paste","text":"x"}"#), None);
+    }
+
+    #[test]
+    fn motion_channel() {
+        let mut b = vec![1u8];
+        b.extend_from_slice(&7u32.to_le_bytes());
+        b.extend_from_slice(&100i32.to_le_bytes());
+        b.extend_from_slice(&(-5i32).to_le_bytes());
+        assert_eq!(parse_motion(&b), Some(InputEvent::Abs { x: 100, y: 0 }));
+        b[0] = 2;
+        assert_eq!(parse_motion(&b), Some(InputEvent::Rel { dx: 100, dy: -5 }));
+        assert_eq!(parse_motion(&b[..12]), None);
+    }
+
+    #[test]
+    fn framebuffer_updates_land_in_place() {
+        // 4x2 BGRX, stride 20 (padded rows)
+        let mut data = vec![0u8; 40];
+        data[20] = 9; // row 1, pixel 0, blue
+        let mut fb = Framebuffer::scanout(4, 2, 20, PixelFormat::Bgrx, &data);
+        assert_eq!(fb.pixels.len(), 32);
+        assert_eq!(fb.pixels[16], 9);
+        // 1x1 update at (3,1)
+        fb.update(3, 1, 1, 1, 4, &[1, 2, 3, 4]);
+        assert_eq!(&fb.pixels[28..32], &[1, 2, 3, 4]);
+        // out-of-range updates are clipped, not panics
+        fb.update(3, 1, 10, 10, 40, &[7u8; 400]);
+        fb.update(-5, -5, 2, 2, 8, &[7u8; 16]);
+    }
+}

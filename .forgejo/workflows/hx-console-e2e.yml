@@ -1,0 +1,92 @@
+name: Horcrux Console e2e (real QEMU, WebRTC, KVM)
+
+# Phase C1 of docs/design/horcrux-console.md on a single standalone node:
+# real QEMU guests started through the API with the D-Bus display, viewed
+# in headless Chromium through the node's WebRTC client page
+# (horcrux-api/tests/hx_console_e2e.sh): a Linux desktop VM (pre-OS boot
+# loader + X desktop, keyboard and mouse round trip), a Windows VM (Windows
+# Setup, no guest tools) when the runner has the Windows ISO cache, RBAC
+# (view-only, no access, ticket binding), audit, settings API + UI, classic
+# console still working. Latency numbers are printed as LATENCY lines.
+on:
+  push:
+    paths:
+      - 'crates/horcrux-vm/src/console/**'
+      - 'crates/horcrux-vm/src/vm/display.rs'
+      - 'crates/horcrux-vm/src/vm/qemu.rs'
+      - 'crates/horcrux-auth/src/websocket.rs'
+      - 'horcrux-api/src/api/hx_console.rs'
+      - 'horcrux-api/horcrux-ui/src/pages/console.rs'
+      - 'horcrux-api/horcrux-ui/src/pages/system/console_settings.rs'
+      - 'horcrux-common/src/console.rs'
+      - 'horcrux-api/tests/hx_console_e2e.*'
+      - '.forgejo/workflows/hx-console-e2e.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: "replace:${{ github.workflow }}@${{ github.ref }}"
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: "3"
+
+jobs:
+  hx-console-e2e:
+    name: Horcrux Console (Linux + Windows guests, headless WebRTC client)
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-26.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install tools
+        run: |
+          for i in 1 2 3; do
+            sudo apt-get update -qq || true
+            apt-cache policy ffmpeg | grep -q 'Candidate: [0-9]' && break
+            sleep 15
+          done
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            build-essential clang libvirt-dev libpam0g-dev qemu-system-x86 qemu-utils \
+            qemu-system-modules-opengl ffmpeg ovmf python3-venv curl
+          ls -l /dev/kvm
+          qemu-system-x86_64 -display help | grep -x dbus
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-hx-console-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-hx-console-
+
+      - name: Build horcrux-api (all features) and the web UI
+        run: |
+          cargo build -p horcrux-api --all-features
+          if ! command -v trunk >/dev/null; then
+            curl -fsSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | sudo tar xz -C /usr/local/bin trunk
+          fi
+          (cd horcrux-api/horcrux-ui && trunk build --release)
+
+      - name: Windows ISO (runner cache volume hxc-win-iso, optional)
+        run: |
+          if docker volume inspect hxc-win-iso >/dev/null 2>&1; then
+            docker run --rm -v hxc-win-iso:/c:ro debian:bookworm cat /c/win11-eval.iso > /tmp/win11-eval.iso || rm -f /tmp/win11-eval.iso
+          fi
+          ls -l /tmp/win11-eval.iso || echo "no Windows ISO cache on this runner: the Windows guest is skipped"
+
+      - name: Horcrux Console e2e
+        run: |
+          set -o pipefail
+          [ -s /tmp/win11-eval.iso ] && export HXC_WIN_ISO=/tmp/win11-eval.iso
+          HXC_OUT=/tmp/hxc-e2e bash horcrux-api/tests/hx_console_e2e.sh target/debug/horcrux-api horcrux-api/horcrux-ui/dist 2>&1 | tee /tmp/hxc-e2e.log
+          grep -E '^(LATENCY|RESULTS)' /tmp/hxc-e2e.log || true

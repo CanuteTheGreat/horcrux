@@ -167,6 +167,22 @@ pub fn uses_ovmf(vm: &QemuVm) -> bool {
         && vm.hardware.firmware == horcrux_common::Firmware::Ovmf
 }
 
+/// Start this VM with QEMU's D-Bus display for the Horcrux Console?
+#[cfg(feature = "qemu")]
+async fn console_dbus_display(vm: &QemuVm) -> bool {
+    vm.display.video != horcrux_common::VideoDevice::None
+        && crate::console::hxc_settings::get().enabled
+        && crate::console::hxc::qemu_dbus::qemu_has_dbus_display(
+            qemu_binary_and_machine(&vm.architecture).0,
+        )
+        .await
+}
+
+#[cfg(not(feature = "qemu"))]
+async fn console_dbus_display(_vm: &QemuVm) -> bool {
+    false
+}
+
 /// The complete QEMU command line for `vm`: binary plus every argument.
 ///
 /// This is the ONE place QEMU arguments are assembled; `start_vm` only
@@ -1378,6 +1394,11 @@ impl QemuManager {
             return Err(e);
         }
         let kvm = tokio::fs::metadata("/dev/kvm").await.is_ok();
+        // Horcrux Console: the D-Bus display when the node has it turned on,
+        // the VM has a framebuffer and this QEMU ships the module; the
+        // classic consoles stay as they are either way.
+        let mut runtime = runtime;
+        runtime.dbus_display = console_dbus_display(vm).await;
         let (binary, mut args) = qemu_command(vm, &runtime, kvm, ovmf.as_ref());
         if incoming {
             args = with_incoming(args);

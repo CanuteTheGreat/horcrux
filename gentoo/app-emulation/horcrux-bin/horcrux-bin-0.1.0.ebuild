@@ -35,6 +35,8 @@ LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="amd64 arm64 riscv"
 
+# ffmpeg[vpx,x264]: the Horcrux Console encodes guest screens with an ffmpeg child process (H.264, VP8 fallback);
+# QEMU's D-Bus display (gio + gdbus-codegen, always on in the Gentoo ebuild) is its frame source.
 # qemu[zstd]: qcow2 images with zstd compression (libvirt / virt-manager default on some distros) are imported with qemu-img; without
 # USE=zstd qemu-img answers "unknown compression type: 1" and the VM importer cannot read the disk (owner-ws 2026-11-12).
 RDEPEND="
@@ -43,6 +45,7 @@ RDEPEND="
 	app-arch/zstd
 	app-emulation/libvirt[qemu]
 	app-emulation/qemu[spice,usbredir,virtfs,vnc,zstd]
+	media-video/ffmpeg[vpx,x264]
 	net-dns/dnsmasq
 	net-fs/nfs-utils
 	net-misc/bridge-utils

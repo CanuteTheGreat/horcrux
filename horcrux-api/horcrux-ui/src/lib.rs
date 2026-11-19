@@ -142,6 +142,7 @@ pub fn App() -> impl IntoView {
                             <A href="/system/power" class="dropdown-item">"Guest Power (Save State)"</A>
                             <A href="/system/health" class="dropdown-item">"Node Health"</A>
                             <A href="/system/config" class="dropdown-item">"Node Configuration"</A>
+                            <A href="/system/console" class="dropdown-item">"Horcrux Console"</A>
                             <A href="/system/services" class="dropdown-item">"Node Services"</A>
                             <A href="/system/shell" class="dropdown-item">"Node Shell"</A>
                             <A href="/audit" class="dropdown-item">"Audit Log"</A>
@@ -244,6 +245,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/system/power" view=crate::pages::GuestPowerPage/>
                     <Route path="/system/health" view=crate::pages::system::health::SystemHealthPage/>
                     <Route path="/system/config" view=crate::pages::system::configuration::SystemConfigurationPage/>
+                    <Route path="/system/console" view=crate::pages::system::console_settings::ConsoleSettingsPage/>
                     <Route path="/system/services" view=crate::pages::system::services::ServicesPage/>
                     <Route path="/system/shell" view=crate::pages::system::shell::NodeShellPage/>
                     <Route path="/audit" view=crate::pages::AuditLogPage/>

@@ -40,6 +40,11 @@ pub struct DisplayRuntime {
     pub serial_socket: PathBuf,
     pub serial_log: PathBuf,
     pub qmp_socket: PathBuf,
+    /// Started with `-display dbus,p2p=yes` for the Horcrux Console
+    /// (set by the start path when the console is enabled and QEMU has
+    /// the D-Bus display; see console::hxc).
+    #[serde(default)]
+    pub dbus_display: bool,
 }
 
 impl DisplayRuntime {
@@ -89,6 +94,7 @@ impl DisplayRuntime {
             serial_socket: Self::serial_socket(disk),
             serial_log: Self::serial_log(disk),
             qmp_socket: Self::qmp_socket(disk),
+            dbus_display: false,
         })
     }
 
@@ -177,7 +183,13 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
     push(&["-qmp", &qmp]);
 
     // No local window, ever: graphical consoles are network protocols.
-    push(&["-display", "none"]);
+    // The Horcrux Console reads the display over peer-to-peer D-Bus
+    // (connections are handed to QEMU through QMP add_client).
+    if rt.dbus_display {
+        push(&["-display", "dbus,p2p=yes"]);
+    } else {
+        push(&["-display", "none"]);
+    }
 
     // Video card.
     match (display.video, pc) {
@@ -352,11 +364,32 @@ mod tests {
             serial_socket: "/vms/a.serial.sock".into(),
             serial_log: "/vms/a.serial.log".into(),
             qmp_socket: "/vms/a.qmp.sock".into(),
+            dbus_display: false,
         }
     }
 
     fn joined(d: VmDisplay, p: DisplayProtocol) -> String {
         qemu_args(&d, &VmArchitecture::X86_64, &rt(p)).join(" ")
+    }
+
+    #[test]
+    fn dbus_display_for_the_horcrux_console() {
+        let mut r = rt(DisplayProtocol::Vnc);
+        let a = qemu_args(&VmDisplay::default(), &VmArchitecture::X86_64, &r).join(" ");
+        assert!(a.contains("-display none") && !a.contains("dbus"), "{a}");
+        r.dbus_display = true;
+        let a = qemu_args(&VmDisplay::default(), &VmArchitecture::X86_64, &r).join(" ");
+        assert!(
+            a.contains("-display dbus,p2p=yes") && !a.contains("-display none"),
+            "{a}"
+        );
+        // the classic console keeps working next to it
+        assert!(a.contains("-vnc 127.0.0.1:3,password=on"), "{a}");
+        // old state files without the field still load
+        let old = r#"{"protocol":"vnc","vnc_port":5900,"spice_port":null,"spice_listen":null,
+            "password":null,"serial_socket":"/a","serial_log":"/b","qmp_socket":"/c"}"#;
+        let back: DisplayRuntime = serde_json::from_str(old).unwrap();
+        assert!(!back.dbus_display);
     }
 
     #[test]

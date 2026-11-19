@@ -300,6 +300,8 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "console" => match arg(1) {
             // ticket redemption: the ticket was minted under VM.Console
             "ticket" | "ws" => Requirement::Authenticated,
+            // Horcrux Console node settings ([console] in config.toml)
+            "settings" => read_write(m, P::SysAudit, P::SysModify, "/"),
             "" => need(P::SysAudit, "/"),
             vm => need(P::VmConsole, format!("/vms/{}", vm)),
         },
@@ -522,6 +524,9 @@ pub fn builtin_roles() -> Vec<(&'static str, &'static str, Vec<Privilege>)> {
             vec![
                 P::VmAudit,
                 P::VmConsole,
+                P::VmConsoleInput,
+                P::VmConsoleClipboard,
+                P::VmConsoleAudioMic,
                 P::VmConfig,
                 P::VmPowerMgmt,
                 P::VmAllocate,
@@ -534,7 +539,15 @@ pub fn builtin_roles() -> Vec<(&'static str, &'static str, Vec<Privilege>)> {
         (
             "VMUser",
             "View, console, power and back up VMs and containers",
-            vec![P::VmAudit, P::VmConsole, P::VmPowerMgmt, P::VmBackup],
+            vec![
+                P::VmAudit,
+                P::VmConsole,
+                P::VmConsoleInput,
+                P::VmConsoleClipboard,
+                P::VmConsoleAudioMic,
+                P::VmPowerMgmt,
+                P::VmBackup,
+            ],
         ),
         (
             "DatastoreAdmin",

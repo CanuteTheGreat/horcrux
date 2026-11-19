@@ -532,6 +532,7 @@ pub async fn run() -> anyhow::Result<()> {
     let protected_routes = Router::new()
         .merge(vm_routes())
         .merge(vm_console_api::routes())
+        .merge(api::hx_console::routes())
         .merge(api::vm_import::routes(&state))
         .merge(container_routes())
         .merge(api::container_runtimes::routes())

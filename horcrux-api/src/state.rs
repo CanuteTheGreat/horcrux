@@ -92,4 +92,10 @@ impl websocket::WsStateSource for AppState {
     fn ws_state(&self) -> &Arc<websocket::WsState> {
         &self.ws_state
     }
+
+    /// Horcrux Console signalling (`console.*` messages).
+    #[cfg(feature = "qemu")]
+    fn ws_side_channel(&self) -> Option<Arc<dyn websocket::WsSideChannel>> {
+        Some(crate::api::hx_console::side_channel(self))
+    }
 }

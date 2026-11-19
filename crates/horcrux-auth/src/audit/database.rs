@@ -422,6 +422,9 @@ impl DatabaseAuditLogger {
             "FirewallRuleDeleted" => AuditEventType::FirewallRuleDeleted,
             "SuspiciousActivity" => AuditEventType::SuspiciousActivity,
             "BruteForceDetected" => AuditEventType::BruteForceDetected,
+            "ConsoleSessionStarted" => AuditEventType::ConsoleSessionStarted,
+            "ConsoleSessionEnded" => AuditEventType::ConsoleSessionEnded,
+            "ConsoleAccessDenied" => AuditEventType::ConsoleAccessDenied,
             _ => AuditEventType::SuspiciousActivity, // Default fallback
         }
     }

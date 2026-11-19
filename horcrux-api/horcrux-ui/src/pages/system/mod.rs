@@ -1,6 +1,7 @@
 pub mod about;
 pub mod boot_environments;
 pub mod configuration;
+pub mod console_settings;
 pub mod diagnostics;
 pub mod health;
 pub mod logs;

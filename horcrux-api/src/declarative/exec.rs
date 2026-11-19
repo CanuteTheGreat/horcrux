@@ -20,6 +20,7 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         vnets: sdn::list_vnets(State(state.clone())).await.0,
         subnets: sdn::list_subnets(State(state.clone())).await.0,
         vms: state.vm_manager.list_vms().await,
+        console: crate::console::hxc_settings::get(),
     }
 }
 
@@ -100,6 +101,16 @@ async fn run_change(
     let api = api_msg;
     match (c.kind.as_str(), c.action) {
         (_, Action::Blocked) => Err(c.details.join("; ")),
+
+        ("console", Action::Update) => {
+            let w = spec.console.clone().ok_or("not in spec")?;
+            crate::console::hxc_settings::set(w)?;
+            Ok(Some(
+                "applies to new console sessions; enabling/disabling the D-Bus display \
+                 takes effect at each VM's next start"
+                    .into(),
+            ))
+        }
 
         ("storage_pool", Action::Create) => {
             let w = spec

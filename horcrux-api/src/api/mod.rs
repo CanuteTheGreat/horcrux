@@ -26,6 +26,7 @@ pub mod ha_loop;
 #[cfg(feature = "kubernetes")]
 pub mod helm;
 pub mod host_net;
+pub mod hx_console;
 #[cfg(feature = "cluster")]
 pub mod idle_power;
 pub mod import_cleanup;

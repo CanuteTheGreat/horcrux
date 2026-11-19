@@ -688,10 +688,28 @@ impl WsState {
     }
 }
 
+/// Request/response protocols carried on the API WebSocket besides the
+/// broadcast events. Horcrux Console signalling uses it: messages whose
+/// `type` starts with `console.` go to the side channel, together with the
+/// authenticated user and this connection's id (console tickets are bound
+/// to both), and its answer is sent back on the same connection.
+pub trait WsSideChannel: Send + Sync + 'static {
+    fn handle(
+        &self,
+        user: AuthUser,
+        conn_id: String,
+        message: serde_json::Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<serde_json::Value>> + Send>>;
+}
+
 /// What the WebSocket endpoint needs from the server state (implemented
 /// by `horcrux_api::AppState`).
 pub trait WsStateSource: Send + Sync + 'static {
     fn ws_state(&self) -> &Arc<WsState>;
+    /// Handler of `console.*` messages, if the node has one.
+    fn ws_side_channel(&self) -> Option<Arc<dyn WsSideChannel>> {
+        None
+    }
 }
 
 /// WebSocket handler
@@ -706,13 +724,65 @@ pub async fn ws_handler<S: WsStateSource>(
     );
 
     let ws_state = state.ws_state().clone();
-    ws.on_upgrade(move |socket| handle_socket(socket, ws_state, auth_user))
+    let side = state.ws_side_channel();
+    ws.on_upgrade(move |socket| handle_socket(socket, ws_state, auth_user, side))
+}
+
+/// Should `event` go to a client subscribed to `topics`?
+fn wants(event: &WsEvent, topics: &[String]) -> bool {
+    let topics = topics.to_vec();
+    match event {
+        WsEvent::VmStatusChanged { .. } => topics.contains(&TOPIC_VM_STATUS.to_string()),
+        WsEvent::VmMetrics { .. } => topics.contains(&TOPIC_VM_METRICS.to_string()),
+        WsEvent::NodeMetrics { .. } => topics.contains(&TOPIC_NODE_METRICS.to_string()),
+        WsEvent::VmCreated { .. } | WsEvent::VmDeleted { .. } => {
+            topics.contains(&TOPIC_VM_EVENTS.to_string())
+        }
+        WsEvent::BackupCompleted { .. } => topics.contains(&TOPIC_BACKUPS.to_string()),
+        WsEvent::MigrationStarted { .. }
+        | WsEvent::MigrationProgress { .. }
+        | WsEvent::MigrationCompleted { .. } => topics.contains(&TOPIC_MIGRATIONS.to_string()),
+        WsEvent::AlertTriggered { .. } | WsEvent::AlertResolved { .. } => {
+            topics.contains(&TOPIC_ALERTS.to_string())
+        }
+        WsEvent::ContainerStatusChanged { .. } | WsEvent::ContainerDeleted { .. } => {
+            topics.contains(&TOPIC_VM_STATUS.to_string()) // Reuse VM status topic for containers
+        }
+        WsEvent::Notification { .. } => topics.contains(&TOPIC_NOTIFICATIONS.to_string()),
+        // Kubernetes events
+        WsEvent::K8sPodStatusChanged { .. } => topics.contains(&TOPIC_K8S_PODS.to_string()),
+        WsEvent::K8sDeploymentScaled { .. } => topics.contains(&TOPIC_K8S_DEPLOYMENTS.to_string()),
+        WsEvent::K8sEvent { .. } => topics.contains(&TOPIC_K8S_EVENTS.to_string()),
+        WsEvent::K8sPodLogLine { .. } => topics.contains(&TOPIC_K8S_LOGS.to_string()),
+        WsEvent::K8sExecOutput { .. } => topics.contains(&TOPIC_K8S_LOGS.to_string()),
+        WsEvent::K8sNodeStatusChanged { .. } => topics.contains(&TOPIC_K8S_NODES.to_string()),
+        WsEvent::K8sClusterConnected { .. } | WsEvent::K8sClusterDisconnected { .. } => {
+            topics.contains(&TOPIC_K8S_CLUSTERS.to_string())
+        }
+        WsEvent::HelmReleaseStatusChanged { .. } => topics.contains(&TOPIC_HELM.to_string()),
+        // Always send these
+        WsEvent::Ping { .. } | WsEvent::Subscribed { .. } | WsEvent::Error { .. } => true,
+    }
+}
+
+/// What the client sent first.
+enum Opened {
+    Subscribed(Vec<String>),
+    Console,
 }
 
 /// Handle WebSocket connection
-async fn handle_socket(socket: WebSocket, ws_state: Arc<WsState>, auth_user: AuthUser) {
+async fn handle_socket(
+    socket: WebSocket,
+    ws_state: Arc<WsState>,
+    auth_user: AuthUser,
+    side: Option<Arc<dyn WsSideChannel>>,
+) {
     let (sender, receiver) = socket.split();
     let sender = Arc::new(tokio::sync::Mutex::new(sender));
+    // Identifies this connection to the console broker (tickets are bound
+    // to it), never to other users.
+    let conn_id = uuid::Uuid::new_v4().simple().to_string();
 
     // Create subscription for broadcast events
     let rx = ws_state.tx.subscribe();
@@ -738,24 +808,59 @@ async fn handle_socket(socket: WebSocket, ws_state: Arc<WsState>, auth_user: Aut
         }
     }
 
-    let username = auth_user.username.clone();
-
-    // Spawn task to handle incoming messages from client
+    // Incoming messages for the whole life of the connection: topic
+    // subscriptions (also later changes) and console signalling.
+    let (opened_tx, opened_rx) = tokio::sync::mpsc::channel::<Opened>(4);
+    let recv_sender = sender.clone();
+    let recv_user = auth_user.clone();
+    let recv_conn = conn_id.clone();
+    let recv_topics = subscribed_topics.clone();
     let recv_task = tokio::spawn(async move {
         let mut receiver = receiver;
         while let Some(Ok(msg)) = receiver.next().await {
             match msg {
                 Message::Text(text) => {
-                    debug!(user = %username, "Received text message: {}", text);
-
-                    // Try to parse subscription request
-                    if let Ok(sub) = serde_json::from_str::<WsSubscription>(&text) {
-                        return Some(sub.topics);
+                    debug!(user = %recv_user.username, "Received text message: {}", text);
+                    let value: serde_json::Value = match serde_json::from_str(&text) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let kind = value
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if kind.starts_with("console.") {
+                        let _ = opened_tx.try_send(Opened::Console);
+                        let reply = if kind == "console.hello" {
+                            Some(serde_json::json!({"type": "ConsoleHello",
+                                "data": {"conn_id": recv_conn}}))
+                        } else if let Some(side) = side.clone() {
+                            side.handle(recv_user.clone(), recv_conn.clone(), value)
+                                .await
+                        } else {
+                            Some(serde_json::json!({"type": "ConsoleError",
+                                "data": {"message": "console signalling is not available"}}))
+                        };
+                        if let Some(r) = reply {
+                            if recv_sender
+                                .lock()
+                                .await
+                                .send(Message::Text(r.to_string()))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    } else if let Ok(sub) = serde_json::from_value::<WsSubscription>(value) {
+                        *recv_topics.lock().await = sub.topics.clone();
+                        let _ = opened_tx.try_send(Opened::Subscribed(sub.topics));
                     }
                 }
                 Message::Close(_) => {
-                    info!(user = %username, "Client closed connection");
-                    return None;
+                    info!(user = %recv_user.username, "Client closed connection");
+                    break;
                 }
                 Message::Ping(_) => {
                     // Pong is sent automatically by axum
@@ -763,12 +868,10 @@ async fn handle_socket(socket: WebSocket, ws_state: Arc<WsState>, auth_user: Aut
                 _ => {}
             }
         }
-        None
     });
 
     let sender_clone = sender.clone();
     let subscribed_topics_clone = subscribed_topics.clone();
-    let _username_clone = auth_user.username.clone();
 
     // Spawn task to send broadcast events to client
     let send_task = tokio::spawn(async move {
@@ -797,63 +900,7 @@ async fn handle_socket(socket: WebSocket, ws_state: Arc<WsState>, auth_user: Aut
                 // Broadcast events
                 event = rx.recv() => {
                     if let Ok(event) = event {
-                        let topics = subscribed_topics.lock().await;
-
-                        // Check if user is subscribed to this event type
-                        let should_send = match &event {
-                            WsEvent::VmStatusChanged { .. } => topics.contains(&TOPIC_VM_STATUS.to_string()),
-                            WsEvent::VmMetrics { .. } => topics.contains(&TOPIC_VM_METRICS.to_string()),
-                            WsEvent::NodeMetrics { .. } => topics.contains(&TOPIC_NODE_METRICS.to_string()),
-                            WsEvent::VmCreated { .. } | WsEvent::VmDeleted { .. } => {
-                                topics.contains(&TOPIC_VM_EVENTS.to_string())
-                            }
-                            WsEvent::BackupCompleted { .. } => topics.contains(&TOPIC_BACKUPS.to_string()),
-                            WsEvent::MigrationStarted { .. }
-                            | WsEvent::MigrationProgress { .. }
-                            | WsEvent::MigrationCompleted { .. } => {
-                                topics.contains(&TOPIC_MIGRATIONS.to_string())
-                            }
-                            WsEvent::AlertTriggered { .. } | WsEvent::AlertResolved { .. } => {
-                                topics.contains(&TOPIC_ALERTS.to_string())
-                            }
-                            WsEvent::ContainerStatusChanged { .. } | WsEvent::ContainerDeleted { .. } => {
-                                topics.contains(&TOPIC_VM_STATUS.to_string()) // Reuse VM status topic for containers
-                            }
-                            WsEvent::Notification { .. } => topics.contains(&TOPIC_NOTIFICATIONS.to_string()),
-                            // Kubernetes events
-                            WsEvent::K8sPodStatusChanged { .. } => {
-                                topics.contains(&TOPIC_K8S_PODS.to_string())
-                            }
-                            WsEvent::K8sDeploymentScaled { .. } => {
-                                topics.contains(&TOPIC_K8S_DEPLOYMENTS.to_string())
-                            }
-                            WsEvent::K8sEvent { .. } => {
-                                topics.contains(&TOPIC_K8S_EVENTS.to_string())
-                            }
-                            WsEvent::K8sPodLogLine { .. } => {
-                                topics.contains(&TOPIC_K8S_LOGS.to_string())
-                            }
-                            WsEvent::K8sExecOutput { .. } => {
-                                topics.contains(&TOPIC_K8S_LOGS.to_string())
-                            }
-                            WsEvent::K8sNodeStatusChanged { .. } => {
-                                topics.contains(&TOPIC_K8S_NODES.to_string())
-                            }
-                            WsEvent::K8sClusterConnected { .. }
-                            | WsEvent::K8sClusterDisconnected { .. } => {
-                                topics.contains(&TOPIC_K8S_CLUSTERS.to_string())
-                            }
-                            WsEvent::HelmReleaseStatusChanged { .. } => {
-                                topics.contains(&TOPIC_HELM.to_string())
-                            }
-                            // Always send these
-                            WsEvent::Ping { .. }
-                            | WsEvent::Subscribed { .. }
-                            | WsEvent::Error { .. } => true,
-                        };
-
-                        drop(topics);
-
+                        let should_send = wants(&event, &subscribed_topics.lock().await);
                         if should_send {
                             if let Ok(msg) = serde_json::to_string(&event) {
                                 if sender.lock().await.send(Message::Text(msg)).await.is_err() {
@@ -867,35 +914,37 @@ async fn handle_socket(socket: WebSocket, ws_state: Arc<WsState>, auth_user: Aut
         }
     });
 
-    // Wait for subscription from client or timeout
-    tokio::select! {
-        topics = recv_task => {
-            if let Ok(Some(topics)) = topics {
-                *subscribed_topics.lock().await = topics.clone();
-
-                // Send subscription confirmation
+    // Wait for a subscription (or console signalling) from the client
+    let mut opened_rx = opened_rx;
+    let opened = tokio::time::timeout(tokio::time::Duration::from_secs(10), opened_rx.recv()).await;
+    match opened {
+        Ok(Some(first)) => {
+            if let Opened::Subscribed(topics) = first {
                 let subscribed = WsEvent::Subscribed {
                     topics: topics.clone(),
                     timestamp: chrono::Utc::now().to_rfc3339(),
                 };
-
                 if let Ok(msg) = serde_json::to_string(&subscribed) {
                     let _ = sender.lock().await.send(Message::Text(msg)).await;
                 }
-
                 info!(
                     user = %auth_user.username,
                     topics = ?topics,
                     "Client subscribed to topics"
                 );
-
-                // Continue with send task
-                let _ = send_task.await;
-            } else {
-                send_task.abort();
+            }
+            // Runs until the client goes away (or the broadcast side fails).
+            let mut recv_task = recv_task;
+            let mut send_task = send_task;
+            tokio::select! {
+                _ = &mut recv_task => send_task.abort(),
+                _ = &mut send_task => recv_task.abort(),
             }
         }
-        _ = tokio::time::sleep(tokio::time::Duration::from_secs(10)) => {
+        Ok(None) => {
+            send_task.abort();
+        }
+        Err(_) => {
             error!(user = %auth_user.username, "Timeout waiting for subscription");
 
             let error_event = WsEvent::Error {
@@ -909,6 +958,7 @@ async fn handle_socket(socket: WebSocket, ws_state: Arc<WsState>, auth_user: Aut
             }
 
             send_task.abort();
+            recv_task.abort();
         }
     }
 

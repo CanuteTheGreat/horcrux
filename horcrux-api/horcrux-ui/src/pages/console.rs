@@ -23,9 +23,30 @@ use web_sys::{BinaryType, MessageEvent, WebSocket};
 /// Console access types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConsoleType {
+    /// Horcrux Console: QEMU D-Bus display + host encode + WebRTC.
+    Horcrux,
     Vnc,
     Spice,
     Serial,
+}
+
+/// `GET /api/console/:vm/hxc/status` (the fields the page needs).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct HxcStatus {
+    #[serde(default)]
+    available: bool,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    prefer_classic: bool,
+}
+
+/// `?classic=1` (the Horcrux Console's "Classic console" link).
+fn classic_requested() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .map(|s| s.contains("classic=1"))
+        .unwrap_or(false)
 }
 
 /// Console page for one VM.
@@ -44,6 +65,7 @@ pub fn VmConsole() -> impl IntoView {
             .unwrap_or(false)
     };
     let (error_message, set_error_message) = create_signal(None::<String>);
+    let (hxc, set_hxc) = create_signal(None::<HxcStatus>);
     let display_edit = create_rw_signal(horcrux_common::VmDisplay::default());
     let (display_notice, set_display_notice) = create_signal(None::<String>);
     let save_display = move |_| {
@@ -82,8 +104,24 @@ pub fn VmConsole() -> impl IntoView {
                         },
                     );
                     display_edit.set(config.display);
+                    let qemu_vm = config.hypervisor == horcrux_common::VmHypervisor::Qemu;
                     set_vm.set(Some(config));
                     set_error_message.set(None);
+                    // The Horcrux Console opens first when this VM has it
+                    // (node setting prefer_classic / ?classic=1 keep the
+                    // classic console).
+                    if qemu_vm {
+                        let st = api::fetch_json::<HxcStatus>(&format!(
+                            "/console/{}/hxc/status",
+                            urlencoding::encode(&id)
+                        ))
+                        .await
+                        .unwrap_or_default();
+                        if st.available && !st.prefer_classic && !classic_requested() {
+                            set_console_type.set(ConsoleType::Horcrux);
+                        }
+                        set_hxc.set(Some(st));
+                    }
                 }
                 Err(e) => set_error_message.set(Some(format!("Failed to load VM: {}", e))),
             }
@@ -215,11 +253,17 @@ pub fn VmConsole() -> impl IntoView {
                     <A href="/vms" class="btn btn-secondary">"Back to VMs"</A>
                     <select id="console-type" on:change=move |ev| {
                         match event_target_value(&ev).as_str() {
+                            "horcrux" => set_console_type.set(ConsoleType::Horcrux),
                             "serial" => set_console_type.set(ConsoleType::Serial),
                             "spice" => set_console_type.set(ConsoleType::Spice),
                             _ => set_console_type.set(ConsoleType::Vnc),
                         }
                     }>
+                        {move || (!instance_vm()).then(|| view! {
+                            <option value="horcrux" selected=move || console_type.get() == ConsoleType::Horcrux>
+                                "Horcrux Console"
+                            </option>
+                        })}
                         {move || (!instance_vm()).then(|| view! {
                             <option value="vnc" selected=move || console_type.get() == ConsoleType::Vnc>
                                 "VNC (graphical)"
@@ -297,6 +341,29 @@ pub fn VmConsole() -> impl IntoView {
                         return view! { <p>"Loading..."</p> }.into_view();
                     }
                     match console_type.get() {
+                        ConsoleType::Horcrux => {
+                            let st = hxc.get().unwrap_or_default();
+                            if !st.available {
+                                return view! {
+                                    <div class="error-banner" id="hxc-unavailable">
+                                        "The Horcrux Console is not available for this VM: "
+                                        {st.reason.unwrap_or_else(|| "checking...".into())}
+                                        " Choose a classic console (VNC, SPICE or Serial) above."
+                                    </div>
+                                }
+                                .into_view();
+                            }
+                            view! {
+                                <iframe
+                                    id="hxc-frame"
+                                    class="console-iframe"
+                                    src=format!("/api/console/{}/hxc", urlencoding::encode(&id))
+                                    allow="fullscreen; autoplay"
+                                    allowfullscreen=true
+                                />
+                            }
+                            .into_view()
+                        }
                         ConsoleType::Vnc if instance_vm() => view! {
                             <SpiceConsole vm_id=id instance=true/>
                         }

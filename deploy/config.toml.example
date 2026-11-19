@@ -279,17 +279,37 @@ sdn_enabled = true
 # max_concurrent = 1
 
 [console]
-# VNC configuration
-vnc_enabled = true
-vnc_port_range = "5900-5999"
-
-# SPICE configuration (alternative to VNC)
-# spice_enabled = false
-# spice_port_range = "3128-3227"
-
-# NoVNC web console
-# novnc_enabled = true
-# novnc_port = 6080
+# Horcrux Console: one remote display for every VM (QEMU D-Bus display ->
+# host encoder -> WebRTC in the browser). The classic VNC/SPICE/serial
+# consoles stay available on every VM; their ports are per VM (display
+# settings). Every key below is optional and shows its default. Changes made
+# in the UI (System > Horcrux Console), PUT /api/console/settings or a
+# declarative `console:` section are kept in <data_dir>/console.json and win
+# over this section. See docs/design/horcrux-console.md section 9.
+# enabled = true                 # start VMs with the D-Bus display
+# default_profile = "desktop"    # desktop | console | gaming
+# prefer_classic = false         # open the classic console first in the UI
+# ticket_lifetime_secs = 60
+# max_sessions_per_guest = 4
+# codecs = ["h264", "vp8"]       # in order of preference
+# encoder = "auto"               # auto | software | vaapi | nvenc
+# vaapi_device = "/dev/dri/renderD128"
+# ffmpeg_path = "ffmpeg"
+# x264_preset = "ultrafast"
+# udp_port_min = 61200           # WebRTC media ports (open them in the firewall)
+# udp_port_max = 61299
+# candidate_addresses = []       # addresses offered to clients; empty = automatic
+# audio = true
+# max_width = 3840
+# max_height = 2160
+# session_idle_timeout_secs = 30
+# audit_sessions = true
+# [console.desktop]              # also [console.console] and [console.gaming]
+# max_fps = 30
+# bitrate_kbps = 4000
+# max_bitrate_kbps = 12000
+# keyframe_interval_secs = 4
+# idle_refresh_fps = 1
 
 [security]
 # Enable firewall

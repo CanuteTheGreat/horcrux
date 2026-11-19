@@ -38,6 +38,10 @@ pub enum AuditEventType {
     VmRestarted,
     VmMigrated,
     VmConfigChanged,
+    // Horcrux Console sessions (start/stop, path, denied input)
+    ConsoleSessionStarted,
+    ConsoleSessionEnded,
+    ConsoleAccessDenied,
 
     // Storage Operations
     StoragePoolCreated,

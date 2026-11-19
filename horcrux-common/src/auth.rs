@@ -103,7 +103,13 @@ pub enum Privilege {
     #[serde(rename = "VM.Audit", alias = "VmAudit")]
     VmAudit, // View VM
     #[serde(rename = "VM.Console", alias = "VmConsole")]
-    VmConsole, // Access console
+    VmConsole, // Access console (view)
+    #[serde(rename = "VM.Console.Input", alias = "VmConsoleInput")]
+    VmConsoleInput, // Send keyboard/mouse input through a console
+    #[serde(rename = "VM.Console.Clipboard", alias = "VmConsoleClipboard")]
+    VmConsoleClipboard, // Exchange clipboard contents through a console
+    #[serde(rename = "VM.Console.Audio.Mic", alias = "VmConsoleAudioMic")]
+    VmConsoleAudioMic, // Send the client's microphone into the guest
     #[serde(rename = "VM.Config", alias = "VmConfig")]
     VmConfig, // Modify config
     #[serde(rename = "VM.PowerMgmt", alias = "VmPowerMgmt")]
@@ -156,9 +162,12 @@ pub enum Privilege {
 
 impl Privilege {
     /// Every privilege, in a stable order.
-    pub const ALL: [Privilege; 21] = [
+    pub const ALL: [Privilege; 24] = [
         Privilege::VmAudit,
         Privilege::VmConsole,
+        Privilege::VmConsoleInput,
+        Privilege::VmConsoleClipboard,
+        Privilege::VmConsoleAudioMic,
         Privilege::VmConfig,
         Privilege::VmPowerMgmt,
         Privilege::VmAllocate,
@@ -185,6 +194,9 @@ impl Privilege {
         match self {
             Privilege::VmAudit => "VM.Audit",
             Privilege::VmConsole => "VM.Console",
+            Privilege::VmConsoleInput => "VM.Console.Input",
+            Privilege::VmConsoleClipboard => "VM.Console.Clipboard",
+            Privilege::VmConsoleAudioMic => "VM.Console.Audio.Mic",
             Privilege::VmConfig => "VM.Config",
             Privilege::VmPowerMgmt => "VM.PowerMgmt",
             Privilege::VmAllocate => "VM.Allocate",

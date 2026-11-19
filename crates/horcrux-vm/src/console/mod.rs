@@ -10,6 +10,10 @@
 //! module used to hand out VNC/SPICE ports and a serial socket path that
 //! QEMU was never told about, so no console could ever connect.)
 
+/// Horcrux Console (QEMU D-Bus display + WebRTC), phase C1.
+#[cfg(feature = "qemu")]
+pub mod hxc;
+pub mod hxc_settings;
 #[cfg(any(feature = "lxd", feature = "incus"))]
 pub mod lxd;
 pub mod novnc;
