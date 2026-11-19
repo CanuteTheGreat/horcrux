@@ -33,11 +33,14 @@ fn create_client() -> Client {
         .expect("Failed to create HTTP client")
 }
 
-/// Client for the stack tests that drive the runner host's shared Docker
-/// daemon. `docker rm`/`stop` latency belongs to that daemon, not to Horcrux:
-/// on a busy runner (other jobs' containers, the host's disk-guard cleanup)
-/// a stack removal took 87 s and the 30 s client of `create_client` timed
-/// out. `test_stack_stop_is_concurrent` uses it too and asserts concurrency on elapsed time instead.
+/// Client for every test that drives the runner host's shared Docker daemon
+/// (stacks and `test_container_lifecycle`). Daemon latency belongs to that
+/// daemon, not to Horcrux: on a busy runner (other jobs' containers, the
+/// host's disk-guard cleanup) a stack removal took 87 s, and in run 4008 the
+/// daemon answered no `create` for 60 s (five creates from four tests all
+/// returned in the same second), so the 30 s client of `create_client` timed
+/// out. `test_stack_stop_is_concurrent` asserts concurrency on the
+/// containers' own exit times, never on elapsed wall time.
 fn create_stack_client() -> Client {
     Client::builder()
         .timeout(Duration::from_secs(240))
@@ -2067,7 +2070,7 @@ fn docker_inspect(name: &str) -> serde_json::Value {
 /// came back, so it passed on 401s).
 #[tokio::test]
 async fn test_container_lifecycle() {
-    let client = create_client();
+    let client = create_stack_client();
     let token = admin_token(&client).await;
     let id = "it-ct-1";
     let clone_id = "it-ct-1-clone";
@@ -2418,18 +2421,33 @@ async fn test_stack_stop_is_concurrent() {
         .expect("stopping a 3-service stack must answer");
     let took = started.elapsed();
     assert!(r.status().is_success(), "stop: {}", r.status());
-    // sequential = 3 x 10 s grace = 30 s+; concurrent = ~10 s plus daemon latency
-    assert!(
-        took < Duration::from_secs(27),
-        "3 services must stop concurrently (~10 s), took {took:?}"
-    );
+    let mut finished = Vec::new();
     for svc in services {
+        let ct = format!("{name}_{svc}");
         assert_eq!(
-            docker_state(&format!("{name}_{svc}")).as_deref(),
+            docker_state(&ct).as_deref(),
             Some("exited"),
             "{svc} stopped"
         );
+        let at = docker_inspect(&ct)["State"]["FinishedAt"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let at = chrono::DateTime::parse_from_rfc3339(&at)
+            .unwrap_or_else(|e| panic!("{svc}: FinishedAt {at:?}: {e}"));
+        finished.push(at);
     }
+    // `sleep` as PID 1 ignores SIGTERM, so each stop runs out the 10 s grace.
+    // Sequential stops leave the containers' exit times >= 20 s apart;
+    // concurrent stops end them together. The exit times come from the
+    // daemon itself, so a slow shared daemon (run 4008: all three stops sent
+    // in the same millisecond, answered together 33 s later) cannot fail this
+    // the way a wall-clock bound did.
+    let spread = *finished.iter().max().unwrap() - *finished.iter().min().unwrap();
+    assert!(
+        spread < chrono::Duration::seconds(8),
+        "3 services must stop concurrently: exit times {finished:?} are {spread} apart (request took {took:?})"
+    );
 
     let r = client
         .delete(format!("{}/stacks/{}", API_BASE, name))
