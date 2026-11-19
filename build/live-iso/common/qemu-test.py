@@ -897,6 +897,55 @@ def answer_toml(a, pubkey, pwhash):
     return "\n".join(lines) + "\n"
 
 
+GRUB_COUNTDOWN = rb"executed automatically in \d+s"
+GRUB_BOOTING = rb"Booting `([^'\r\n]*)'"
+
+
+def grub_serial_keys(vm, keys, want, tries=4, settle=1.6, quiet=30):
+    """Drive the GRUB menu over the serial line: `keys[:-1]` are menu hotkeys typed while the countdown runs (e.g. 's' = the
+    serial-console submenu), `keys[-1]` is the hotkey of the entry to boot (its title must match `want`). Returns (ok, detail).
+    Run 2319 (uefi-usb-auto-openconsole): GRUB never saw the single 's' + '4' sent over the UART, the countdown ran out and the
+    default Graphical install booted, so the automated installer never started (AUTOINSTALL-START timeout). Now:
+    - a menu key is re-sent until the countdown stops (no further 'executed automatically in Ns' line within `settle` s);
+    - the entry hotkey is re-sent only after `quiet` s without a single byte from GRUB (taking it redraws/clears the screen; a
+      submenu has no countdown, so a lost key just leaves GRUB waiting there);
+    - a "Booting `<title>'" line (GRUB prints it only when the countdown boots the default) for any other entry is final."""
+    want_rx = re.compile(want.encode() if isinstance(want, str) else want)
+    with vm.lock:
+        vm.raw = b""                                            # countdown lines from before the first key are not evidence
+
+    def wrong_entry(m):
+        b = re.match(GRUB_BOOTING, m.group(0)) if m else None
+        return b and not want_rx.search(b.group(1)), (b.group(1).decode("utf-8", "replace") if b else "")
+
+    for k in keys[:-1]:
+        for _ in range(tries):
+            vm.send(k)
+            m = vm.expect_raw(GRUB_COUNTDOWN + b"|" + GRUB_BOOTING, settle)
+            if m is None:
+                break                                           # countdown stopped: GRUB took the key
+            bad, title = wrong_entry(m if re.match(GRUB_BOOTING, m.group(0)) else vm.expect_raw(GRUB_BOOTING, 0.3, consume=False))
+            if bad:
+                return False, f"GRUB booted '{title}' (the countdown ran out: {k!r} was never taken)"
+        else:
+            return False, f"GRUB countdown kept running after {tries} x {k!r}"
+    k = keys[-1]
+    for n in range(tries):
+        end = time.time() + 15                                  # the submenu redraw is not an answer to this key: let the line go
+        while time.time() < end and vm.expect_raw(rb"[\s\S]+", 0.7) is not None:   # quiet, then drop what is left
+            pass
+        with vm.lock:
+            vm.raw = b""
+        vm.send(k)
+        if vm.expect_raw(rb"[\s\S]", quiet) is not None:
+            m = vm.expect_raw(GRUB_BOOTING, 2, consume=False)
+            bad, title = wrong_entry(m)
+            if bad:
+                return False, f"GRUB booted '{title}' instead of /{want}/"
+            return True, f"keys {keys} taken" + (f" ({n} re-send(s) of {k!r})" if n else "")
+    return False, f"GRUB silent after {tries} x {k!r}"
+
+
 def serial_tail(vm, n=12):
     """last lines of the guest's serial output, one line: a bare `timeout` told nothing about WHERE an install hung (aarch64 ZFS, run 8771)"""
     try:
@@ -1200,9 +1249,11 @@ class Runner:
                 # boot menu hotkeys (common/boot/gen-grub-cfg.sh): s = serial-console submenu, 2 = text install, 4 = automated
                 if a.flow == "gui":
                     self.shots.append((f"{vm.name}-grub-menu.png", "Boot menu (default entry: Graphical install)"))
-                vm.send("s")                        # the serial-console submenu: same entries, kernel console on the UART too
-                time.sleep(1.5)
-                vm.send({"tui": "2", "auto": "4", "gui": "1"}[a.flow])
+                # s = the serial-console submenu (same entries, kernel console on the UART too), then the flow's hotkey; each key is
+                # re-sent until GRUB shows it took it (a lost key let the countdown boot the graphical installer: run 2319)
+                key, want = {"tui": ("2", r"Install \(text mode\)"), "auto": ("4", r"Automated install"), "gui": ("1", r"Graphical install")}[a.flow]
+                ok, why = grub_serial_keys(vm, ["s", key], want)
+                self.step("grub-entry-chosen", ok, why)
                 self.step("kernel-boot-started", vm.expect_raw(init_cmds.BOOT_RE, 90))
             if a.flow == "auto":
                 ok = vm.expect_raw(r"AUTOINSTALL-START", 420)
@@ -1243,9 +1294,8 @@ class Runner:
         try:
             self.step("grub-menu-reached", vm.expect_raw(r"Serial console \(" + re.escape(ARCHS[a.arch]["serial"]), 120))
             time.sleep(2)
-            vm.send("s")                                    # serial-console submenu, then 4 = automated install
-            time.sleep(1.5)
-            vm.send("4")
+            ok, why = grub_serial_keys(vm, ["s", "4"], r"Automated install")   # serial-console submenu, then 4 = automated install
+            self.step("grub-entry-chosen", ok, why)
             self.step("no-answer-file-detected", vm.expect_raw(r"No answer file found[^\n]*", 480),
                       "the automated entry refuses to install without an answer file")
             self.step("falls-back-to-guided-installer", vm.expect_raw(r"INSTALLER-FALLBACK-INTERACTIVE", 60))
