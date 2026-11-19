@@ -203,6 +203,9 @@ class Wiring(unittest.TestCase):
         self.assertIn('fail publish "RELEASE_SIGNING_KEY is not set', s)
         self.assertIn("SBOM=$SBOM_FILE bash \"$HERE/publish-github.sh\"", s)
         self.assertIn('fail sbom "SBOM generation failed', s)
+        # Patronus gitignores Cargo.lock: the SBOM step must generate one instead of failing on a missing file
+        self.assertIn("cargo generate-lockfile", s)
+        self.assertIn('--cargo-lock "$lock"', s)
 
     def test_every_live_iso_workflow_passes_the_key(self):
         wf = os.path.join(REPO, ".forgejo", "workflows")

@@ -241,16 +241,21 @@ if [ "$result" = pass ]; then
   echo "::group::SBOM"
   REPO_ROOT=$(cd "$HERE/../../.." && pwd)
   SBOM_FILE=$OUT/$(basename "$ISO" .iso).cdx.json
-  meta=$OUT/cargo-metadata.json; rm -f "$meta"
+  meta=$OUT/cargo-metadata.json; lock=$REPO_ROOT/Cargo.lock; gen_lock=""; rm -f "$meta"
+  # A workspace may gitignore Cargo.lock (Patronus does): the container then resolves one the same way the image build does and
+  # hands it back with the metadata, as a tar stream (no bind mounts: the runner's docker may be a different filesystem).
+  sbomx=$OUT/sbom-cargo; rm -rf "$sbomx"; mkdir -p "$sbomx"
   if command -v docker >/dev/null && ( cd "$REPO_ROOT" && git archive --format=tar HEAD ) | timeout 900 docker run --rm -i -v live-iso-sbom-cargo:/usr/local/cargo/registry \
-       rust:1-bookworm sh -c 'mkdir -p /s && cd /s && tar xf - && cargo metadata --format-version 1 --locked' > "$meta" 2> "$EVI/cargo-metadata.log"; then
-    echo "cargo metadata: $(stat -c %s "$meta") bytes"
+       rust:1-bookworm sh -c 'mkdir -p /s && cd /s && tar xf - && { [ -f Cargo.lock ] || cargo generate-lockfile >&2; } && cargo metadata --format-version 1 --locked > /tmp/meta.json && tar cf - -C /tmp meta.json -C /s Cargo.lock' 2> "$EVI/cargo-metadata.log" | tar xf - -C "$sbomx" \
+     && [ -s "$sbomx/meta.json" ]; then
+    mv "$sbomx/meta.json" "$meta"; [ -f "$lock" ] || { lock=$sbomx/Cargo.lock; gen_lock=1; }
+    echo "cargo metadata: $(stat -c %s "$meta") bytes${gen_lock:+ (Cargo.lock generated: not tracked in this repo)}"
   else echo "::warning::cargo metadata failed (Rust components listed without licenses): $(tail -n 2 "$EVI/cargo-metadata.log" 2>/dev/null | tr '\n' ' ')"; rm -f "$meta"; fi
   margs=(); [ -s "$meta" ] && margs=(--cargo-metadata "$meta")
-  python3 "$HERE/sbom.py" --from-iso "$ISO" --cargo-lock "$REPO_ROOT/Cargo.lock" "${margs[@]}" \
+  python3 "$HERE/sbom.py" --from-iso "$ISO" --cargo-lock "$lock" "${margs[@]}" \
       --name "$(basename "$ISO" .iso)" --version "$sha" --project "$PROJECT" -o "$SBOM_FILE" 2>&1 | tee "$EVI/sbom.log" | tail -3
   [ "${PIPESTATUS[0]}" = 0 ] && [ -s "$SBOM_FILE" ] || fail sbom "SBOM generation failed: $(tail -n 1 "$EVI/sbom.log" | cut -c1-200)"
-  rm -f "$meta"
+  rm -rf "$meta" "$sbomx"
   echo "::endgroup::"
 fi
 ACCEL=KVM; [ -e /dev/kvm ] && [ "$ARCH" = "$HOST_ARCH" ] || ACCEL="TCG emulation, no KVM"
