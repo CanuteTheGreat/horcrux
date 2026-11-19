@@ -969,17 +969,36 @@ class Runner:
             os.unlink(sock)
         except OSError:
             pass
-        p = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={d}", "--ctrl", f"type=unixio,path={sock}"],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{d}/swtpm.err", "ab"))
-        if name == "tpm":
-            self.tpm_proc = p
-        else:
-            self.tpm_proc2 = p
-        for _ in range(100):
-            if os.path.exists(sock):
-                return sock
-            time.sleep(0.1)
-        raise SystemExit("swtpm did not create its control socket (is swtpm installed?)")
+        # 2026-11-18 daily 19748: "swtpm did not create its control socket" with no cause. Retry (a slow or briefly contended host, a
+        # stale socket) and say why when it still fails: exit code + swtpm.err tail.
+        why = ""
+        for attempt in range(3):
+            try:
+                os.unlink(sock)
+            except OSError:
+                pass
+            p = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={d}", "--ctrl", f"type=unixio,path={sock}"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(f"{d}/swtpm.err", "ab"))
+            if name == "tpm":
+                self.tpm_proc = p
+            else:
+                self.tpm_proc2 = p
+            for _ in range(150):
+                if os.path.exists(sock):
+                    return sock
+                if p.poll() is not None:
+                    break
+                time.sleep(0.1)
+            try:
+                err = open(f"{d}/swtpm.err", "rb").read()[-300:].decode("utf-8", "replace").strip()
+            except OSError:
+                err = ""
+            why = f"attempt {attempt + 1}: swtpm " + (f"exited rc={p.returncode}" if p.poll() is not None else "alive but no socket after 15 s") + (f" [{err}]" if err else "")
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+            time.sleep(1)
+        raise SystemExit(f"swtpm did not create its control socket (is swtpm installed?) {why}")
 
     def qemu_args(self, iso, installed, nvars):
         a, A = self.a, ARCHS[ARCH]
