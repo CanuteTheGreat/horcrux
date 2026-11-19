@@ -449,7 +449,12 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
                 read_write(m, P::SysAudit, P::SysModify, "/nas")
             }
         }
-        "ws" => need(P::SysAudit, "/"),
+        // The API WebSocket carries two things: broadcast event topics
+        // (node/VM/cluster events, need Sys.Audit on "/": checked by the
+        // handler when the client subscribes) and Horcrux Console signalling
+        // (gated by console tickets minted under VM.Console). A console-only
+        // user must be able to open it for the second.
+        "ws" => Requirement::Authenticated,
         // task logs can carry package/service output
         "tasks" => read_write(m, P::SysAudit, P::SysModify, "/nodes"),
 
@@ -594,6 +599,12 @@ mod tests {
 
     #[test]
     fn vm_actions_map_to_pve_privileges() {
+        // the API WebSocket: open to any authenticated user (console
+        // signalling); its event topics are gated in the handler
+        assert!(matches!(
+            requirement("GET", "/api/ws"),
+            Requirement::Authenticated
+        ));
         assert_eq!(
             priv_of(requirement("POST", "/api/vms/abc/start")),
             (P::VmPowerMgmt, "/vms/abc".into())

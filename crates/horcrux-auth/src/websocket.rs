@@ -717,15 +717,26 @@ pub async fn ws_handler<S: WsStateSource>(
     ws: WebSocketUpgrade,
     State(state): State<Arc<S>>,
     Extension(auth_user): Extension<AuthUser>,
+    principal: Option<Extension<crate::auth::store::Principal>>,
 ) -> impl IntoResponse {
     info!(
         user = %auth_user.username,
         "WebSocket connection request"
     );
 
+    // Any authenticated user may open the socket (console signalling is
+    // gated by its own tickets); broadcast event topics need Sys.Audit on
+    // "/". No principal (the RBAC layer did not run) means no events.
+    let events_allowed = may_receive_events(principal.as_ref().map(|p| &p.0));
     let ws_state = state.ws_state().clone();
     let side = state.ws_side_channel();
-    ws.on_upgrade(move |socket| handle_socket(socket, ws_state, auth_user, side))
+    ws.on_upgrade(move |socket| handle_socket(socket, ws_state, auth_user, side, events_allowed))
+}
+
+/// Broadcast event topics (node, VM, cluster events) are an audit view of
+/// the whole node: Sys.Audit on "/".
+fn may_receive_events(principal: Option<&crate::auth::store::Principal>) -> bool {
+    principal.is_some_and(|p| p.has(horcrux_common::auth::Privilege::SysAudit, "/"))
 }
 
 /// Should `event` go to a client subscribed to `topics`?
@@ -777,6 +788,7 @@ async fn handle_socket(
     ws_state: Arc<WsState>,
     auth_user: AuthUser,
     side: Option<Arc<dyn WsSideChannel>>,
+    events_allowed: bool,
 ) {
     let (sender, receiver) = socket.split();
     let sender = Arc::new(tokio::sync::Mutex::new(sender));
@@ -854,6 +866,25 @@ async fn handle_socket(
                             }
                         }
                     } else if let Ok(sub) = serde_json::from_value::<WsSubscription>(value) {
+                        if !events_allowed {
+                            let refused = WsEvent::Error {
+                                code: "FORBIDDEN".to_string(),
+                                message: "event topics need Sys.Audit on /".to_string(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            };
+                            if let Ok(msg) = serde_json::to_string(&refused) {
+                                if recv_sender
+                                    .lock()
+                                    .await
+                                    .send(Message::Text(msg))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
                         *recv_topics.lock().await = sub.topics.clone();
                         let _ = opened_tx.try_send(Opened::Subscribed(sub.topics));
                     }
@@ -968,6 +999,45 @@ async fn handle_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn principal(
+        acl: Vec<(&str, &str)>,
+        roles: Vec<(&str, Vec<horcrux_common::auth::Privilege>)>,
+    ) -> crate::auth::store::Principal {
+        crate::auth::store::Principal {
+            user_id: "u1".into(),
+            groups: vec![],
+            acl: acl
+                .into_iter()
+                .map(|(path, role)| crate::auth::acl::AclEntry {
+                    id: 0,
+                    path: path.into(),
+                    subject_type: "user".into(),
+                    subject: "u1".into(),
+                    role: role.into(),
+                    propagate: true,
+                })
+                .collect(),
+            roles: roles.into_iter().map(|(n, p)| (n.to_string(), p)).collect(),
+        }
+    }
+
+    #[test]
+    fn event_topics_need_sys_audit_on_root() {
+        use horcrux_common::auth::Privilege as P;
+        // console-only user: may open the socket (signalling), gets no events
+        let viewer = principal(
+            vec![("/vms", "V")],
+            vec![("V", vec![P::VmAudit, P::VmConsole])],
+        );
+        assert!(!may_receive_events(Some(&viewer)));
+        let auditor = principal(vec![("/", "A")], vec![("A", vec![P::SysAudit])]);
+        assert!(may_receive_events(Some(&auditor)));
+        // Sys.Audit below "/" only (one VM) is not the node-wide view
+        let narrow = principal(vec![("/vms/1", "A")], vec![("A", vec![P::SysAudit])]);
+        assert!(!may_receive_events(Some(&narrow)));
+        assert!(!may_receive_events(None));
+    }
 
     #[test]
     fn test_ws_state_creation() {
