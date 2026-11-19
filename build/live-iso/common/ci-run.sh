@@ -172,6 +172,14 @@ if [ "$result" = pass ]; then
     for attempt in 1 2; do
       with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$n" "$@" 2>&1 | tee "$EVI/test-$n.log" | tail -60
       rc=${PIPESTATUS[0]}
+      # `| tail -60` above keeps only the end of the log, which on a hibernate/resume death is the post-mortem boot's kernel messages and
+      # hides the [DIAG] lines saying HOW QEMU ended (exit status, stderr, `-d cpu_reset` dump, serial tail, guest clock after the resume;
+      # runs 3963/3964 failed with those cut off). Print every [DIAG] block and [FAIL] line from the full log, uncut, in its own group.
+      if [ "$rc" != 0 ] && grep -aqE '^\[(DIAG|FAIL)\]' "$EVI/test-$n.log" 2>/dev/null; then
+        echo "::group::full [DIAG]/[FAIL] output of $n (rc $rc)"
+        grep -a -A30 -E '^\[(DIAG|FAIL)\]' "$EVI/test-$n.log" | grep -av '^--$' | cut -c1-6000 | head -400 || true
+        echo "::endgroup::"
+      fi
       [ "$rc" = 137 ] || return 0
       echo "::warning::qemu-$n attempt $attempt was SIGKILLed from outside the harness (rc 137, no [FAIL] line): $(uptime | sed 's/.*load/load/'); memory.events: $(tr '\n' ' ' < /sys/fs/cgroup/memory.events 2>/dev/null) memory.peak: $(cat /sys/fs/cgroup/memory.peak 2>/dev/null)"
       rm -rf "$EVI/$n"; pkill -x qemu-system-x86_64 2>/dev/null; sleep 5
