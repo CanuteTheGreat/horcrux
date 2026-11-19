@@ -295,12 +295,14 @@ pub fn migration_of(paths: &HostPaths, probe: &dyn MigrationProbe, key: &str) ->
     }
     if !is_mdev {
         match link_name(&devdir.join("driver")) {
-            None => return remembered(paths, key).unwrap_or_else(|| {
-                MigrationInfo::unknown(
+            None => {
+                return remembered(paths, key).unwrap_or_else(|| {
+                    MigrationInfo::unknown(
                     "not bound to a VFIO driver: bind it to vfio-pci (or the vendor VFIO driver, \
                          e.g. xe-vfio-pci) so its migration support can be read",
                 )
-            }),
+                })
+            }
             Some(d) if !d.contains("vfio") => {
                 return remembered(paths, key).unwrap_or_else(|| {
                     MigrationInfo::unknown(format!(

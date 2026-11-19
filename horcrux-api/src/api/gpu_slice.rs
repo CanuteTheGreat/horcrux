@@ -41,15 +41,13 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/vms/:id/host-device-save", get(vm_host_device_save))
 }
 
-fn blocking<T: Send + 'static>(
+async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, Error> + Send + 'static,
-) -> impl std::future::Future<Output = Result<T, ApiError>> {
-    async move {
-        tokio::task::spawn_blocking(f)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?
-            .map_err(ApiError::from)
-    }
+) -> Result<T, ApiError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(ApiError::from)
 }
 
 /// VF address / mdev uuid -> (vm id, running) for every VM hostpci entry.

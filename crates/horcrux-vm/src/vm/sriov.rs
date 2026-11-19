@@ -993,7 +993,7 @@ mod tests {
         // lower to 1 while VF 2 belongs to a stopped VM: refused
         let mut u = Usage::default();
         u.assigned.insert("0000:03:00.2".into(), "vm2".into());
-        let pl = plan(&cfg(1), &[o.clone()], &u);
+        let pl = plan(&cfg(1), std::slice::from_ref(&o), &u);
         assert!(
             pl.errors[0].contains("assigned to VM vm2"),
             "{:?}",
@@ -1003,7 +1003,7 @@ mod tests {
         let mut u = Usage::default();
         u.assigned.insert("0000:03:00.1".into(), "vm1".into());
         u.running.insert("0000:03:00.1".into());
-        let pl = plan(&cfg(2), &[o.clone()], &u);
+        let pl = plan(&cfg(2), std::slice::from_ref(&o), &u);
         assert!(pl.errors[0].contains("running VM vm1"), "{:?}", pl.errors);
         // same with the VM stopped: allowed, recreate
         u.running.clear();

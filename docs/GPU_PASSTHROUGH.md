@@ -413,3 +413,11 @@ dmesg | grep vfio
 3. **vGPU Security**: Each vGPU instance is isolated
 4. **Driver Updates**: Keep GPU drivers updated
 5. **Reset Issues**: Some GPUs require host reboot after VM shutdown
+
+## GPU capabilities, SR-IOV virtual functions and the save method
+
+The Host Devices page (Infrastructure > GPU Passthrough) starts with **GPU capabilities**: for every GPU which modes exist here (whole-device passthrough, SR-IOV virtual functions, vendor vGPU mediated devices) and, for each mode that does not, the reason (for example a GPU whose driver exposes no SR-IOV, or no IOMMU). `GET /api/gpu/capabilities` returns the same.
+
+SR-IOV GPUs (Intel Arc Pro B-series and other platforms driven by the `xe` PF driver on Linux 6.17+; datacenter cards whose vendor driver enables SR-IOV) list their virtual functions with VRAM per VF where the driver exposes it. The form under each such GPU sets the number of VFs, the VRAM per VF (`xe`), and the VFIO driver the VFs are bound to; Plan shows the steps or the refusal reasons, Apply carries them out, and every apply is a generation that Roll back can return to. The same config (`PUT /api/gpu/sriov/config`, `apply_on_boot` on by default) is applied each time the API starts, before VMs autostart, on OpenRC and systemd alike. VFs are bound to `xe-vfio-pci` when it is loaded (it carries VFIO migration), else `vfio-pci`, and are never given to a host driver (`sriov_drivers_autoprobe` off).
+
+Assign a VF or vGPU device to a VM like any PCI device (VM Hardware page > Host PCI devices). The page then shows the VM's **save method on host shutdown**: `host save (VFIO migration supported)` when every device reports VFIO migration (read from the device itself), otherwise `not saveable: <device>: <reason>`. A whole passthrough device is never host-saveable.
