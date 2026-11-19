@@ -422,11 +422,38 @@ device for the pool.
 | Phase | Scope | Exit criterion |
 |---|---|---|
 | **A (now)** | Hardware slicing: Intel xe SR-IOV VFs (provisioning, assignment, VFIO migration capability), NVIDIA vGPU with user licence, AMD VFs; per-GPU capability view; save method per VM shown | a VF assigned to a Linux and a Windows guest on supported Intel hardware; save/migrate of a VF VM where xe-vfio-pci reports migration support |
-| **B1** | Linux guests on 3D virtio-gpu (Venus + virgl) as a supported VM option: render node selection, `hostmem`, memfd backend, QEMU blockers surfaced; save order resolves to shutdown with the reason | Venus guest created from the UI/API on Intel, AMD and NVIDIA hosts; vkQuake/vkmark fps recorded per host; OpenRC and systemd |
+| **B1** (done on Intel; AMD/NVIDIA unproven) | Linux guests on 3D virtio-gpu (Venus + virgl) as a supported VM option: render node selection, `hostmem`, memfd backend, QEMU blockers surfaced; save order resolves to shutdown with the reason | Venus guest created from the UI/API on Intel, AMD and NVIDIA hosts; vkQuake/vkmark fps recorded per host; OpenRC and systemd. **Status 2026-11-19:** shipped as `video: virtio-3d` + `display.gpu3d` (docs/GPU_3D_VIRTIO.md). Proven on an Intel Iris Plus (Ice Lake) lab laptop through the API; AMD and NVIDIA hosts: no hardware, listed as unproven (see B1 result) |
 | **B2** | `horcrux-gpud` as vhost-user-gpu back end (Venus decoder on virglrenderer as a library first), per-VM process, VRAM budget, submission weights, pool placement, feature levels | two VMs on one GPU with enforced VRAM budgets and a measured fairness split; same guest image on Intel, AMD, NVIDIA |
 | **B3** | State ledger + save/restore through the migration stream; same-GPU first, then cross-GPU, then cross-node live migration | a running Vulkan game saved and resumed (same GPU), moved iGPU <-> dGPU, live-migrated between nodes; downtime and fps recorded |
 | **B4** | Remote GPU over the cluster network + Console encode on the GPU node | a desktop/CAD workload and an RPG-class game playable from node A on node B's GPU at measured latency |
 | **C** | Windows guest driver stack | gates in 7.4 |
+
+### B1 result (2026-11-19)
+
+Real-effect test, Intel Iris Plus Graphics (ICL GT2) lab laptop (Horcrux dev manager built from this branch,
+run in an Arch container with QEMU 11.1.3, virglrenderer 1.3.0, Mesa 26.3.1; guest Arch, kernel 7.3.4,
+Mesa 26.3.1). A VM was created through the API (`PUT /api/vms/:id/display` with `video: virtio-3d`),
+started, and driven over its serial console:
+
+| check | result |
+|---|---|
+| `GET /api/gpu/3d` | ready; QEMU 11.1.3 with `virtio-vga-gl`, `egl-headless`, `venus`; GPU `/dev/dri/renderD128` i915, Vulkan driver exports dma-bufs |
+| Venus guest | `vulkaninfo`: "Virtio-GPU Venus (Intel(R) Iris(R) Plus Graphics (ICL GT2))", Vulkan 1.4.334; dmesg `+virgl +resource_blob +host_visible`, host memory window 2 GiB |
+| vkmark 1920x1080 headless | guest score 2698-2702 (3431 fps vertex, 4190 fps clear) vs host 5811 on the same GPU = 46 % (vkmark is a per-frame-overhead micro-benchmark; vkQuake timedemo in the spike measured 83 % of host fps) |
+| virgl-only guest (`venus: false`) | OpenGL 4.3 core, renderer "virgl (Mesa Intel(R) Iris(R) Plus Graphics (ICL GT2))"; no Vulkan device (correct) |
+| VNC console with egl-headless | console endpoint answers (`POST /api/console/:id/vnc` 200) |
+| save | `POST /api/vms/:id/save-state` 409 and the power overview `can_save=false` with "QEMU cannot save 3D virtio-gpu state; guest hibernation is refused by the guest driver; will shut down cleanly" |
+| boot to login | 20 s |
+
+QEMU 11 has no `virgl` on/off switch on `virtio-vga-gl`: virgl stays on (the host check records
+`virgl_switch=false` and the VM's effective runtime shows virgl on). Image packages: QEMU
+`opengl virgl`, virglrenderer `venus`, libglvnd `X`, Mesa `vulkan` are in the image, role and
+`horcrux-bin` package sets (stable Gentoo resolves qemu 10.2.3 + virglrenderer 1.2.0, no keyword changes;
+the headless core gate allow-lists the GL/Vulkan client libraries this adds).
+
+Unproven: AMD (radeonsi/RADV) and NVIDIA (proprietary or NVK) hosts; multi-GPU hosts (render-node
+selection is unit-tested only); OpenRC vs systemd on a real image (the change is package-set only, no
+service involved); Windows guests (phase C); vkQuake fps on this laptop (vkmark only).
 
 ## 11. Settings (all configurable, declarative, with defaults)
 
@@ -436,7 +463,7 @@ per VM (none = share), `vram_overcommit` (false), `weight` per VM (100),
 `priority` (normal | interactive), `gpu_quiesce_timeout_s` (10),
 `hostmem_mib` (2048), `remote_transport` (quic | rdma), `remote_max_rtt_us`
 (200, refuse remote placement above it), `expose_host_identity` (false),
-`pipeline_cache_dir`, `render_nodes` (allow-list, empty = all). No GPU, node
+`pipeline_cache_dir`, `render_nodes` (allow-list, empty = all). B1 implements `hostmem_mib` and `render_nodes` (plus `dri_dir`, `drm_sysfs_dir`, `ignore_drivers`, `vulkaninfo`, `probe_timeout_secs`, `probe_cache_secs`) in `[vgpu]`. No GPU, node
 or path is hard-coded.
 
 ## 12. Reproducing the spike

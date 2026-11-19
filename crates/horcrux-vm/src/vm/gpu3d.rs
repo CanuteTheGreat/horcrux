@@ -518,17 +518,13 @@ pub fn plan(cfg: &VgpuConfig, g: &Gpu3d, host: &Host3d) -> Result<Runtime3d> {
             hint: i.hint.clone(),
         });
     }
-    if !g.virgl && !host.qemu.virgl_switch {
-        return Err(Error::Validation(
-            "This QEMU cannot turn virgl off for the 3D virtio-gpu".into(),
-        ));
-    }
     let node = select_node(&host.gpus, g.render_node.as_deref())?;
     Ok(Runtime3d {
         render_node: node.path.clone(),
         hostmem_mib: g.hostmem_mib.unwrap_or(cfg.hostmem_mib),
         venus: g.venus,
-        virgl: g.virgl,
+        // Newer QEMU has no switch: the 3D device always offers virgl.
+        virgl: g.virgl || !host.qemu.virgl_switch,
         device_select: device_select(node),
     })
 }
