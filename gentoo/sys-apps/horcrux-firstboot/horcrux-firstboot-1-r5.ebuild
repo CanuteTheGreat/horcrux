@@ -26,3 +26,11 @@ src_install() {
 	systemd_dounit "${FILESDIR}"/horcrux-firstboot.service
 	keepdir /usr/libexec/horcrux-firstboot.d /var/lib/horcrux
 }
+
+pkg_postinst() {
+	# Installed onto a host that is already set up (converted in place; the Horcrux database exists): there is no first boot to run.
+	# Mark it done so neither the OpenRC script nor the systemd unit starts it and the "first boot finished" invariant holds.
+	# Never during an image build (ROOT set): the image's own first boot must still run.
+	[[ -n ${ROOT} && ${ROOT} != / ]] && return 0
+	"${EROOT:-}"/usr/libexec/horcrux-firstboot --adopt
+}

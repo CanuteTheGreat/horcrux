@@ -8,6 +8,19 @@
 # Machine hooks: executable files in /usr/libexec/horcrux-firstboot.d/ (a machine layer ships its own, e.g. a remote hand-off); run in name
 # order after the network is up, a failing hook is logged and does not stop the sync. Core knows no machine.
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+STATE_DIR=${FIRSTBOOT_STATE_DIR:-/var/lib/horcrux}
+DONE_MARKER=${FIRSTBOOT_DONE_MARKER:-$STATE_DIR/firstboot-done}
+# --adopt (package postinst): a host that is already initialised (Horcrux database present, i.e. converted in place or the package was
+# added later) never had a "first boot": mark it done and leave nothing half-started. A fresh install has no database yet and is left alone.
+if [ "${1:-}" = "--adopt" ]; then
+	[ -e "$DONE_MARKER" ] && exit 0
+	if [ -e "${FIRSTBOOT_DB:-$STATE_DIR/horcrux.db}" ]; then
+		mkdir -p "$(dirname "$DONE_MARKER")"
+		{ date -u; echo "adopted: host was already initialised when horcrux-firstboot was installed"; } > "$DONE_MARKER"
+		echo "horcrux-firstboot: host already initialised, first boot marked done"
+	fi
+	exit 0
+fi
 PIDFILE=/run/horcrux-firstboot.pid
 echo $$ > "$PIDFILE"; trap 'rm -f "$PIDFILE"' EXIT
 echo "== horcrux-firstboot $(date -u)"
@@ -81,6 +94,6 @@ done
 if command -v eix-update >/dev/null 2>&1; then
 	echo "== eix cache"; eix-update -q || echo "== eix-update failed (run it by hand)"
 fi
-mkdir -p /var/lib/horcrux; { date -u; [ -n "${partial:-}" ] && echo "partial: tree sync failed with a network"; } > /var/lib/horcrux/firstboot-done
+mkdir -p "$(dirname "$DONE_MARKER")"; { date -u; [ -n "${partial:-}" ] && echo "partial: tree sync failed with a network"; } > "$DONE_MARKER"
 echo "== done"
 exit 0
