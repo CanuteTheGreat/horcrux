@@ -341,15 +341,335 @@ against Horcrux's licence; Looking Glass is GPL-2.0 and its code is not copied
   access; the threat-model table states it. A test proves that reads of guest
   RAM from host userspace fail.
 
-## 13. VM on one machine, GPU on another (later)
+## 13. VM on one machine, GPU on another (phase 7 research, 2026-11-19)
 
-Practical form first: compute follows the GPU. The VM's disk lives on node A or
-shared storage; the VM runs on GPU node B with its disk over NVMe-oF/TCP or
-replicated ZFS, so any machine can lend its GPU (same VM, same viewer endpoint).
-True remote GPU (CPU/RAM on A, GPU on B) would need API remoting (Vulkan
-command streams over RDMA; DirectX through DXVK/vkd3d-proton in the guest);
-PCIe over the network doesn't exist for commodity GPUs. Expected to serve
-slower-paced games at best, not FPS; prototyped only if measurements justify it.
+Two different things hide behind "VM here, GPU there". They get different answers.
+
+1. **Compute follows the GPU (build this).** The VM's disk stays on node A or on
+   shared storage; the VM itself runs on GPU node B. Any Horcrux machine can
+   "lend" its GPU, and the viewer/stream endpoint follows the VM (section 11).
+2. **True remote GPU (do not build now).** The VM's CPU and RAM stay on A and its
+   GPU is on B, with the GPU API carried over the network.
+
+PCIe cannot be extended over commodity Ethernet for a consumer GPU. Composable
+PCIe fabrics (GigaIO FabreX, Liqid and similar) exist, but they need their own
+PCIe switch hardware and cabling, not an Ethernet NIC (product knowledge, not
+re-checked in this phase). So option 2 can only mean API remoting.
+
+### 13.1 Measured: game-like disk load over NVMe/TCP vs a local disk
+
+**What was measured.** The available build hosts cannot reach each other (network
+rules isolate them), so there was no real 10/25 GbE wire between two machines and
+the network is modelled on one host:
+
+- Host: an AWS m8i.2xlarge (8 vCPU Xeon 6975P-C, kernel 7.0.0-1014-aws, ENA).
+- Target: kernel `nvmet` + `nvmet-tcp`, 8 GiB RAM-backed block device (`brd`),
+  so the media is not the limit and only protocol + link show. Initiator: kernel
+  `nvme-tcp` over `127.0.0.1`. Local baseline: the same RAM device read directly.
+- Link: `tc netem` (rate + delay, per direction) on the loopback for TCP port
+  4420 only. Profiles are modelled values, not wires: 25 GbE/10 GbE RTT 0.1 ms,
+  2.5 GbE RTT 0.15 ms, 1 GbE RTT 0.2 ms, plus 10 GbE with RTT 0.5 ms and 2 ms
+  and 1 GbE with RTT 2 ms for "far away" cases.
+- Workloads (fio, `direct=1`, libaio): **load** = 6 GiB of random reads, block
+  sizes 4 KiB 20% / 64 KiB 30% / 256 KiB 30% / 1 MiB 20%, QD16 x 2 jobs (a level
+  load; DirectStorage's own guidance is that NVMe reads top out at 64 KiB);
+  **QD1** = 4 KiB random reads at queue depth 1 (a read the frame is waiting
+  on); **stutter** = that QD1 job while a 1 MiB QD4 asset stream runs in the
+  background; **small** = 4 KiB QD32 x 4 jobs.
+- Harness and raw results: `tools/lending-bench/` (`lending-bench.sh`,
+  `lending-bench-qos.sh`, `analyze.py`, `results/`). Both scripts are settings-
+  driven (`PROFILES`, `OUT`, `IMG`, `RDKB`) and clean up the modules, qdiscs
+  and configfs entries they create.
+
+| link (modelled) | 6 GiB load | throughput | 4 KiB QD1 p50 / p99 / p99.9 | stutter fg p50 / p99 / p99.99 (bulk stream running) |
+|---|---|---|---|---|
+| local device | 1.5 s | 7.9 GiB/s | 1.9 / 2.7 / 17 us | 1.9 us / 2.8 us / 22 us |
+| NVMe/TCP, loopback, no shaping | 2.8 s | 4.3 GiB/s | 12 / 24 / 39 us | 9 us / 23 us / 138 us |
+| 25 GbE | 6.4 s | 1.9 GiB/s (*) | 138 / 226 / 1483 us | 0.5 ms / 4.1 ms / 8.7 ms |
+| 10 GbE | 10.3 s | 1.16 GiB/s | 142 / 192 / 510 us | 2.5 ms / 4.1 ms / 7.5 ms |
+| 2.5 GbE | 41 s | 0.29 GiB/s | 202 / 277 / 1614 us | 10 ms / 13 ms / 16 ms |
+| 1 GbE | 103 s | 0.12 GiB/s | 272 / 391 / 1729 us | 25 ms / 34 ms / 92 ms |
+| 10 GbE, RTT 0.5 ms | 10.5 s | 1.14 GiB/s | 545 us / 2.9 ms / 4.1 ms | 2.5 ms / 6.5 ms / 13 ms |
+| 10 GbE, RTT 2 ms | 11.8 s | 1.01 GiB/s | 2.1 / 4.5 / 6.9 ms | 3.3 ms / 7.5 ms / 64 ms |
+| 1 GbE, RTT 2 ms | 103 s | 0.12 GiB/s | 2.1 / 2.9 / 5.1 ms | 25 ms / 34 ms / 42 ms |
+
+(*) 25 GbE is a floor. The netem shaper plus the target, initiator and fio all
+sharing 8 vCPUs gave 1.9 GiB/s where the wire would give 2.9 GiB/s; the
+unshaped loopback ceiling on this VM is 4.3 GiB/s. No 25/100 GbE hardware was
+available, so those speeds are extrapolated from the 10 GbE rows and from
+published numbers, not measured on a wire.
+
+Repeat runs (a second run of the 10 GbE profile on the parameterised scripts)
+agreed within about 5% on load time (10.8 s vs 10.3 s). Tail numbers (p99.9 and
+up) move by a factor of 2 between runs; read them as orders of magnitude. Each
+cell is a single 10-20 s run.
+
+**What the numbers say.**
+
+- The 4 KiB QD1 penalty is about 140 us at 10 GbE and above (the modelled 0.1 ms
+  RTT plus about 12 us of NVMe/TCP stack, which matches published results: a
+  thesis measured NVMe/TCP over 100 GbE adding 22.5 us (27%) to a local SSD's
+  83.5 us). A local gen-4 NVMe answers a QD1 read in about 80 us, so a remote
+  one at 10 GbE costs roughly three times as long per read. At 60 fps (16.7 ms
+  frames) that is invisible for any read the game overlaps, and visible only for
+  a game that blocks the frame on tens of serial small reads.
+- Load time is link-bound, as expected: a 6 GiB level takes about 10 s at
+  10 GbE (SATA-SSD class), 41 s at 2.5 GbE and 103 s at 1 GbE (slower than a
+  hard disk). Intel's published DirectStorage BulkLoad demo (9.14 GB in 1.34 s
+  on a local NVMe, uncompressed) is the case remote disks are worst at.
+- **Stutter comes from queueing behind bulk reads, not from distance.** With a
+  1 MiB asset stream running, small reads wait behind it: p50 25 ms at 1 GbE,
+  10 ms at 2.5 GbE, even though the idle RTT is 0.2 ms. Distance adds only its
+  RTT (10 GbE with RTT 2 ms: QD1 p50 2.1 ms).
+- **Separating latency-class I/O fixes most of it.** Second experiment
+  (`lending-bench-qos.sh`): a second NVMe/TCP connection (own port, own
+  controller) for the game's small reads, with strict priority over the bulk
+  connection on one shared link (an htb class pair; on real gear a DSCP/802.1p
+  class or a per-queue egress priority):
+
+| link | foreground reads share the bulk connection | foreground reads on a prioritised connection |
+|---|---|---|
+| 1 GbE | p50 17-26 ms, p99.99 58-60 ms | p50 0.34 ms, p99.99 4.8-5.1 ms |
+| 2.5 GbE | p50 0.3 ms, p99 19 ms, p99.99 24 ms | p50 0.19 ms, p99 1.1 ms, p99.99 4.0 ms |
+| 10 GbE | p50 0.16-0.31 ms, p99 5.5-6.1 ms, p99.99 9.6-20 ms | p50 0.16 ms, p99 2.0-3.6 ms, p99.99 4.7-13 ms |
+
+  (Two runs each at 1 GbE and 10 GbE, one at 2.5 GbE. The 16.7 ms frame budget is
+  met at p99.99 on every link only with the split.) The bulk stream keeps 83-100% of its
+  throughput (1 GbE: 0.10 vs 0.12 GiB/s). The 10 GbE shaper model in this experiment (htb) queues less than
+  the netem-rate model in the main table, so the p50 there is better; the 1 GbE
+  and 2.5 GbE conclusion is the same in both models.
+- Everything above is a model of the link, and the target is RAM. A real remote
+  NVMe adds the device's own 80 us and its queueing. Real two-machine runs on
+  10/25 GbE (and RDMA) remain to be done on lab hardware (section 13.5, step 7f).
+
+**Policy that follows (all values are settings, see 13.4):**
+
+1. **Default for lending a GPU: replicate ahead, run local.** The VM's game
+   library disk is a zvol or qcow2 on ZFS; Horcrux's existing snapshot replication
+   (`zfs send` incremental, `crates/horcrux-vm/src/vm/replication.rs`) keeps a
+   copy on every node that may lend its GPU, and a lend session runs on that
+   copy at local speed. Cost in time at full link rate, per 100 GB of changed
+   data (arithmetic, not measured): 1 GbE about 15 min, 2.5 GbE about 6 min,
+   10 GbE about 1.5 min. After the first full copy only changed blocks move.
+2. **On-demand remote disk (NVMe/TCP) only when the link qualifies:** at least
+   10 GbE and RTT at most 0.5 ms by default (measured by a link probe between
+   the two nodes, not assumed), always with a separate latency-class connection
+   for the guest's small reads and a read cache on the GPU node. Below that the
+   UI says why ("link 1 GbE: a 6 GiB level would take about 100 s from the
+   remote disk; replicate the disk first") and offers replication instead.
+3. **iSCSI exists in Horcrux already** (`crates/horcrux-storage/src/storage/iscsi.rs`);
+   NVMe/TCP is a new pool type beside it, not a replacement. NVMe/RDMA (RoCE) is
+   an optional later transport where both NICs support it (published
+   comparisons: RDMA gives clearly better 4 KiB IOPS and CPU use than TCP, while
+   at 1 MiB both hit the link or media ceiling).
+4. **No dirty-state surprises:** a lend session never runs on a replica that is
+   behind unless the user accepts it; at session end the replica's changes are
+   sent back (or the replica becomes primary), same as a planned cold move.
+
+### 13.2 True remote GPU: evaluation
+
+What it would be: the guest sees a Vulkan device, a guest-side driver serialises
+Vulkan calls, a renderer on node B replays them on the real GPU. For Windows:
+DirectX 9-12 goes through DXVK/vkd3d-proton to Vulkan inside the guest, so
+Vulkan is the only API to carry.
+
+**What exists (checked 2026-11-19):**
+
+- **Venus (virtio-gpu Vulkan serialisation, Mesa).** It is designed for a guest
+  and host on the same machine: commands travel over shared-memory rings, GPU
+  memory is shared as blob resources via file descriptors, and the host side
+  is virglrenderer. The vtest server variant uses a Unix socket and needs host
+  file descriptors. As far as I found, nothing in Venus is built for a network between guest and
+  renderer.
+- **Windows guest drivers for Venus** now exist, all alpha: Yttrium's
+  `viogpu3d` WDDM driver (BSD-3-Clause/MPL-2.0) with Mesa's Venus ICD (MIT),
+  D3D12 through vkd3d-proton (LGPL-2.1+) and DXVK (zlib), packaged by third
+  parties (vmlab-win3d, vgpu3d, Venera). They are test-signed and need Secure
+  Boot off, which is the opposite of the anti-cheat posture in section 5, and
+  NVIDIA hosts need a patched QEMU. Useful as same-host virtual GPU (vGPU-like
+  sharing for light 3D), not as a replacement for passthrough.
+- **A standalone Vulkan-over-TCP ICD** (`vulkan_remote`, 2026, GitHub) measured
+  its own cost: 15.8 us round trip on loopback, about 1059 synchronous calls
+  per 16.7 ms frame in the naive protocol, 7.2 ms RTT on a real link; with
+  asynchronous command recording and shadow mapped memory it reaches 2
+  synchronous calls per frame, and `vkcube` over a real link still runs under 7
+  fps. Its author concludes that a real game's thousands of calls per frame
+  make remote rendering a job for shipped frames (video), not API calls.
+- **GPU API remoting research for AI** (Wang et al., arXiv 2401.13354): with
+  asynchronous calls and shadow state, latency of 5-20 us is enough for under 5%
+  overhead; 200 Gbit RDMA at 2-5 us RTT gives at most 6% overhead on AI
+  workloads. The reason it works is that AI kernels run 10-100 ms on the GPU, and
+  a frame of a game is 4-17 ms with thousands of small calls and readbacks.
+- **CUDA remoting** (rCUDA, and others) is compute only; it does not serve a
+  game and is NVIDIA-specific.
+
+**Numbers for a game (derived):**
+
+Blocking round trips a frame can afford if remoting may use at most 25% of the
+frame (frame 16.7 / 8.3 / 4.2 ms for 60 / 120 / 240 fps):
+
+| round-trip time | 60 fps | 120 fps | 240 fps |
+|---|---|---|---|
+| RDMA 3 us (paper: 2-5 us) | 1389 | 694 | 347 |
+| local-socket class 16 us (`vulkan_remote` loopback) | 260 | 130 | 65 |
+| LAN TCP 100 us (modelled above) | 41 | 20 | 10 |
+| TCP stack only, no wire (our loopback QD1 p50, 12 us) | 347 | 173 | 87 |
+
+A naive protocol needs about 1000 per frame (the `vulkan_remote` measurement),
+so even RDMA misses 120 fps. Only an asynchronous protocol that hides almost all
+round trips can work, and that conflicts with what games do (read back query
+results, wait on fences, map host-coherent memory, update descriptors every
+draw).
+
+Bandwidth: textures and buffers the CPU side produces cross the link too. A
+6 GiB level load is the same 10 s at 10 GbE as in 13.1, and modern games stream
+at hundreds of MB/s to GB/s while playing (DirectStorage's stated target is
+50,000 IOPS; previous-generation budgets were about 50 MB/s). If the finished
+frame had to come back to A for display, raw frames are 3.98 GB/s at 4K120
+(31.9 Gbit/s), 3.54 GB/s at 1440p240 (28.3 Gbit/s), 0.50 GB/s at 1080p60
+(4.0 Gbit/s); with encode on B (the normal Horcrux path) frames never cross the
+A-B link, and then the only thing true remote GPU buys over lending is that
+CPU/RAM/disk stay on A.
+
+**Game types it could serve:** turn-based, strategy, visual novels, 30 fps
+cinematic games, on 25-100 GbE or RDMA with an asynchronous protocol. Not
+competitive shooters, racing or anything at 120 fps+ on TCP.
+
+### 13.3 Decision
+
+- **Phase 7 builds compute-follows-GPU** (13.1 policy and the pool in 13.4).
+- **No prototype of true remote GPU.** The numbers do not justify it: a game
+  frame needs hundreds to thousands of call round trips against a 4-17 ms budget
+  and a LAN RTT of 100 us at best (3 us with RDMA only), the Windows Venus
+  drivers are alpha and test-signed, nothing carries Venus over a network, and
+  Horcrux ends up streaming encoded frames from B anyway. Remote CUDA is out of
+  scope for gaming and third-party remoting products are out by owner rule.
+- **Revisit when all three hold:** a Windows Venus-class driver is signed for
+  Secure Boot; an asynchronous remoting protocol shows under 10 blocking calls
+  per frame on a DXVK or vkd3d-proton trace of a real game; and an RDMA link
+  exists in lab hardware to measure on. Until then the question stays closed.
+
+### 13.4 GPU pool: cluster scheduler design
+
+Goal: every Horcrux node can contribute GPUs to a pool; sessions (gaming VMs,
+later other GPU guests) are placed on a free GPU anywhere in the cluster, with
+the disk handled by the policy in 13.1. A single node is a pool of one and
+needs none of the cluster parts.
+
+Phase 5 builds the pool for GPUs inside one cluster with shared or local disks;
+the parts below that are specific to lending (link probe, disk modes, lender
+priority, seeding) are phase 7 steps 7b-7d on top of it.
+
+**Inventory (existing code to extend).** `NodeResources.available_passthrough_devices`
+(`crates/horcrux-cluster/src/cluster/balancer.rs`) lists free passthrough
+devices by vendor:device id, and `find_best_node` already filters on it, on
+architecture, weight and labels. Add a richer, advertised record per physical
+GPU, `GpuUnit`: node, PCI address, vendor/model/device id, VRAM, display outputs
+present (headless flag), IOMMU group clean, reset method (flr, bus, none: from
+the quirks table), driver class (for the "same model preferred" warning),
+encoder capabilities (NVENC/AMF/QSV, AV1/HEVC/H.264), state (`free`, `held_by_host`,
+`reserved`, `in_session`, `lent`, `disabled`), and the node's `lendable` policy.
+Nodes publish it with the usage report they already send (`cluster::usage`).
+
+**Request.** A session asks for a `GpuRequest`: vendor (any/specific), minimum
+VRAM, encoder codecs needed, `class` (a named group of models the admin
+declares compatible, for example "rtx50"), count (default 1), and a disk mode
+(`local`, `replicate`, `remote_nvme`, `auto`). `required_passthrough_devices`
+stays the low-level form; the pool translates a request into it.
+
+**Placement, in order (hard filters, then score):**
+
+1. Filters: architecture; GPU matches the request and is `free` (not
+   `held_by_host`, which is a node whose display is on it and the host
+   hand-off would refuse); node is `lendable` for this user and time window;
+   node role/labels/limits as today; for disk mode `auto`/`remote_nvme`, the
+   link from the disk's node passes the thresholds in 13.1 (otherwise only
+   `replicate`/`local` nodes remain); for `replicate`, a replica of the VM's
+   disks exists or can be seeded within `seed_budget_secs`.
+2. Score: prefer the node that already holds the disk (no data movement), then a
+   node with a fresh replica, then the same GPU model as last time (stable driver
+   and hardware identity, which also keeps anti-cheat hardware identity stable),
+   then the lowest link RTT to the user's endpoint, then lowest load; the
+   existing node `priority`/placement weight applies as a tie-breaker.
+3. Result carries a reason list per rejected node (shown in the UI; never a
+   silent "no capacity").
+
+**Sessions and queueing.** States: `queued` -> `placing` (seed/replicate/attach
+disk) -> `starting` (hand-off, VM start) -> `running` -> `stopping` (hand-back,
+sync-back) -> `ended`. A queue per class with FIFO within a user group and
+weighted fair share between groups; `max_queue_wait_secs` then a clear refusal.
+No preemption of a running session. A lender's own use has priority by
+setting: `lender_priority` = `owner` (its local VM or desktop reclaims the GPU
+after a notice of `reclaim_notice_secs`, session is saved/stopped cleanly) or
+`pool` (lending wins). Idle timeout, maximum session length and per-user quota
+(concurrent sessions, GPU hours per period) are settings with defaults; usage is
+audited.
+
+**HA.** A GPU session is a cold-restart guest (a passed-through GPU does not
+live-migrate). On node loss the HA manager re-places it through the same
+scheduler with `reserve_spare_gpus` per class kept free if the admin asks for
+N+1; disk mode `replicate` makes the restart lose at most the replication
+interval. The endpoint (section 11) follows the session.
+
+**Link probe.** Each node pair measures RTT and throughput (a few seconds of
+TCP, on a schedule and on demand, never during a session on that link) and
+publishes a link class; admins can override with a declared speed. This is what
+the disk-mode thresholds read. Without a measurement the pair counts as
+"unknown", and `auto` falls back to `replicate`.
+
+**Settings (`[gpu_pool]` in `/etc/horcrux/config.toml`, declarative, API and UI;
+the values below are defaults, none is baked into code):**
+`enabled`, `lendable` (per node, default false for the node's display GPU),
+`lender_priority` (owner), `reclaim_notice_secs` (60), `min_link_mbps_remote_disk`
+(10000), `max_rtt_us_remote_disk` (500), `disk_mode` (auto),
+`latency_class_connection` (true), `read_cache_size_gib`, `seed_budget_secs`,
+`replication_interval_secs`, `max_queue_wait_secs`, `idle_timeout_secs`,
+`max_session_secs`, `quota_sessions_per_user`, `quota_gpu_hours_per_period`,
+`reserve_spare_gpus`, `link_probe_interval_secs`, `link_probe_secs`,
+`nvmeof_transport` (tcp), `nvmeof_port`, `nvmeof_nqn_prefix`,
+`nvmeof_io_queues`, `compatible_classes` (admin list).
+
+**Surfaces.** Pool management (units, links, queue, policy) lives under
+`/api/gpu/pool/...`, which the existing `gpu` rule in `privileges.rs` already
+maps to Sys.Audit (read) and Sys.Modify (write) on `/nodes`: administrators.
+User-facing session routes (request, queue position, stop) are a NEW area and
+need their own `privileges.rs` rule on the VM path (for example VM.PowerMgmt on
+`/vms/<id>`) plus the route-scan tests, so that a non-admin user can run their
+own sessions. UI: a pool
+page (units with state and reason, link matrix with the measured class, queue,
+active sessions, per-node lend switch), and the gaming VM wizard shows the
+disk mode it will use and why. Audit entries for lend, start, reclaim, stop.
+Metrics: GPU utilisation per unit, queue depth and wait, link RTT/throughput,
+replica lag.
+
+**Code placement.** `horcrux-cluster` gets `gpu_pool` (inventory, scheduler,
+session state machine, link table); `horcrux-storage` gets `nvmeof.rs` (target
+export via configfs with a declarative config generated at boot for both inits,
+initiator connect/disconnect, latency-class second connection, read cache);
+`replication.rs` learns seed/sync-back for lending; `horcrux-api` gets the
+handlers; the wizard calls the pool.
+
+### 13.5 Phase 7 split
+
+| step | content | needs |
+|---|---|---|
+| 7a | `nvmeof.rs` pool type + target/initiator + OpenRC/systemd units, e2e on two vmtest guests with netem | vmtest (Debian 13 guests have nvme-tcp) |
+| 7b | link probe + link matrix API/UI | none |
+| 7c | `GpuUnit` advertisement, `gpu_pool` scheduler + unit tests (many nodes, mixed vendors, filters, scoring, reasons) | none |
+| 7d | replicate-ahead seed/sync-back, `lend session` state machine, reclaim, quotas | ZFS in test guest |
+| 7e | UI pool page + wizard disk-mode explanation | none |
+| 7f | real 10/25 GbE and RDMA two-machine runs of `lending-bench`, real remote NVMe media, a real second GPU node | lab hardware |
+
+### 13.6 Proven here and what is not
+
+Proven (this phase): the NVMe/TCP path works on the real kernel (nvmet-tcp +
+nvme-tcp, kernel 7.0) with the harness above; the load-time, QD1 and stutter
+numbers in 13.1; the effect of a prioritised second connection; the
+derivations in 13.2 from sourced numbers. Not proven: any real wire at 10 GbE or
+faster (modelled), a real SSD behind the target, RDMA, game-level frame pacing
+on a remote disk, and the scheduler itself (design only). Needs real GPU
+hardware: everything in 7d that starts a VM on a lent GPU, and any test of
+hand-back between two GPU nodes.
 
 ## 14. Compared with GeForce NOW (published specs, Nov 2026)
 
@@ -379,4 +699,7 @@ NVIDIA support answer 5223. Measured Horcrux numbers are added as phases land.
    latency tests per path.
 5. HA placement and failover for GPU VMs; GPU pool, sessions, quotas.
 6. Protected gaming VM + attestation; confidential tier where hardware allows.
-7. GPU lending across nodes (compute follows the GPU); remote-GPU research.
+7. **Research and design done (2026-11-19):** GPU lending across nodes (compute follows
+   the GPU, disk by replicate-ahead or NVMe/TCP) with measured numbers, true
+   remote GPU evaluated and rejected for now, GPU pool scheduler design (section
+   13). Build steps 7a-7f are in section 13.5; 7f needs lab hardware.

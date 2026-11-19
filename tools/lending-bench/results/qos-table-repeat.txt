@@ -1,0 +1,4 @@
+10GbE-prio     fg p50     159 p99     2040 p99.9     3490 p99.99     4686 max     6653 us | bulk 1.04 GiB/s
+10GbE-shared   fg p50     309 p99     6062 p99.9     7963 p99.99     9634 max    11176 us | bulk 1.04 GiB/s
+1GbE-prio      fg p50     342 p99     1614 p99.9     3654 p99.99     4817 max    11598 us | bulk 0.10 GiB/s
+1GbE-shared    fg p50   25559 p99    43254 p99.9    58458 p99.99    58458 max    58611 us | bulk 0.12 GiB/s
