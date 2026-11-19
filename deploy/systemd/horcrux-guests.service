@@ -20,8 +20,11 @@ ExecStart=/usr/bin/horcrux-api guests boot
 TimeoutStartSec=infinity
 # Shutdown: save every running guest (bounded parallelism, per-guest timeout,
 # fall back to clean shutdown / power off - see Guest Power in the UI).
+# No fixed limit here: the stop client waits for the node's stop budget, which
+# is computed from the configured save/shutdown timeouts (systemd itself still
+# ends a shutdown job after JobTimeoutSec of the shutdown targets).
 ExecStop=/usr/bin/horcrux-api guests stop
-TimeoutStopSec=1800
+TimeoutStopSec=infinity
 # The guests belong to their own runtimes, never to this unit's cgroup.
 KillMode=none
 

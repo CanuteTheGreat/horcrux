@@ -162,6 +162,20 @@ async fn query_status(sock: &Path) -> Result<String> {
     Ok(s["status"].as_str().unwrap_or("").to_string())
 }
 
+/// Make `dir` root-only and create `file` empty with mode 0600.
+fn private_file(dir: &Path, file: &Path) -> Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| Error::System(format!("cannot restrict {}: {e}", dir.display())))?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(file)
+        .map_err(|e| Error::System(format!("cannot create {}: {e}", file.display())))?;
+    Ok(())
+}
+
 impl VmManager {
     /// Save the running QEMU VM `id` to `dest` and stop it (see the module
     /// docs). On any failure the guest is continued and keeps running.
@@ -192,6 +206,10 @@ impl VmManager {
         let tmp = dest.with_extension("tmp");
         let uri = format!("exec:cat > '{}'", shell_safe(&tmp)?);
         let _ = tokio::fs::remove_file(&tmp).await;
+        // A RAM image holds the guest's secrets: root-only directory, and the
+        // file exists with mode 0600 before QEMU writes the first byte (`cat >`
+        // keeps the mode of an existing file).
+        private_file(dir, &tmp)?;
 
         // Freeze the guest (stays frozen if it already was: a paused VM is
         // saved as paused-then-running like any other).
@@ -446,6 +464,19 @@ mod tests {
         assert!(err.contains("MB are free"), "{err}");
         check_free_space(dir.path(), 1).unwrap();
         assert!(free_space(&dir.path().join("absent")).is_err());
+    }
+
+    #[test]
+    fn saved_state_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("hx-priv-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("vmstate.tmp");
+        private_file(&d, &f).unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&d), 0o700);
+        assert_eq!(mode(&f), 0o600);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

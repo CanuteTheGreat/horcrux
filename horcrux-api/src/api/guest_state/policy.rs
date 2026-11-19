@@ -22,6 +22,35 @@ pub enum StopAction {
     Shutdown,
     /// Power off immediately.
     Poweroff,
+    /// Do not touch the guest: it dies with the host (like libvirt's
+    /// `on_shutdown = ignore`; the guest is started again at boot only if its
+    /// start action says so).
+    None,
+}
+
+/// Where Save falls back to when the state cannot be saved (passthrough
+/// devices, no space, timeout, unencrypted target, ...).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SaveFallback {
+    /// Clean guest shutdown (ACPI + guest agent), then power off after the
+    /// shutdown timeout.
+    #[default]
+    Shutdown,
+    /// Power off at once.
+    Poweroff,
+}
+
+/// Where saved memory may be written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SaveEncryption {
+    /// Only onto encrypted storage (native-encrypted ZFS with its key
+    /// loaded, or LUKS); anything else falls back to the save fallback.
+    #[default]
+    Require,
+    /// Administrator accepts plaintext RAM images on the chosen storage.
+    AllowUnencrypted,
 }
 
 /// What happens to a guest when the host boots.
@@ -39,6 +68,9 @@ pub enum StartAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NodePolicy {
+    /// What happens to running guests when the host goes down or restarts
+    /// (`host_shutdown_action` is accepted as an alias).
+    #[serde(alias = "host_shutdown_action")]
     pub stop_action: StopAction,
     pub start_action: StartAction,
     /// Seconds after the boot pass began before a guest is started.
@@ -58,6 +90,16 @@ pub struct NodePolicy {
     /// How long the shutdown drain may take per move before it gives up on
     /// that guest (which is then saved locally).
     pub drain_timeout_secs: u64,
+    /// What a guest gets when its state cannot be saved.
+    pub save_fallback: SaveFallback,
+    /// Saved memory may hold secrets: require encrypted storage.
+    pub save_encryption: SaveEncryption,
+    /// Seconds between two resumes at boot, on top of each guest's own start
+    /// delay (0 = none).
+    pub resume_stagger_secs: u32,
+    /// Extra seconds added to the computed worst case before the init system
+    /// may give up on the stop pass.
+    pub stop_margin_secs: u64,
 }
 
 impl Default for NodePolicy {
@@ -72,6 +114,10 @@ impl Default for NodePolicy {
             max_parallel: 4,
             drain_on_shutdown: true,
             drain_timeout_secs: 900,
+            save_fallback: SaveFallback::Shutdown,
+            save_encryption: SaveEncryption::Require,
+            resume_stagger_secs: 0,
+            stop_margin_secs: 60,
         }
     }
 }
@@ -93,7 +139,31 @@ impl NodePolicy {
         if !(30..=86400).contains(&self.drain_timeout_secs) {
             return Err("drain_timeout_secs must be 30-86400".into());
         }
+        if self.resume_stagger_secs > 3600 {
+            return Err("resume_stagger_secs must be at most 3600".into());
+        }
+        if self.stop_margin_secs > 86400 {
+            return Err("stop_margin_secs must be at most 86400".into());
+        }
         check_dir(self.save_dir.as_deref())
+    }
+
+    /// Worst-case seconds the host stop pass can take for `guests` running
+    /// guests: waves of `max_parallel`, each bounded by the save timeout plus
+    /// the fallback shutdown timeout (plus the drain when the node drains
+    /// first), and a margin. The stop client's deadline and the UI's
+    /// init-system warning both come from this number.
+    pub fn stop_budget_secs(&self, guests: usize) -> u64 {
+        let par = self.max_parallel.max(1);
+        let waves = guests.div_ceil(par).max(1) as u64;
+        let per_wave = self.save_timeout_secs
+            + self.shutdown_timeout_secs
+            + if self.drain_on_shutdown {
+                self.drain_timeout_secs
+            } else {
+                0
+            };
+        waves * per_wave + self.stop_margin_secs
     }
 }
 
@@ -116,6 +186,7 @@ fn check_dir(d: Option<&str>) -> std::result::Result<(), String> {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GuestOverride {
+    #[serde(alias = "host_shutdown_action")]
     pub stop_action: Option<StopAction>,
     pub start_action: Option<StartAction>,
     pub start_delay_secs: Option<u32>,
@@ -143,6 +214,8 @@ pub struct Effective {
     pub save_dir: PathBuf,
     pub save_timeout_secs: u64,
     pub shutdown_timeout_secs: u64,
+    pub save_fallback: SaveFallback,
+    pub save_encryption: SaveEncryption,
 }
 
 /// Combine node default and override (pure, unit-tested).
@@ -162,6 +235,8 @@ pub fn combine(node: &NodePolicy, o: &GuestOverride, default_dir: PathBuf) -> Ef
             .unwrap_or(default_dir),
         save_timeout_secs: node.save_timeout_secs,
         shutdown_timeout_secs: node.shutdown_timeout_secs,
+        save_fallback: node.save_fallback,
+        save_encryption: node.save_encryption,
     }
 }
 
@@ -284,6 +359,49 @@ mod tests {
             ..Default::default()
         };
         assert!(o.validate().is_err());
+    }
+
+    #[test]
+    fn host_shutdown_action_is_an_alias_and_none_exists() {
+        let n: NodePolicy = serde_json::from_str(r#"{"host_shutdown_action":"none"}"#).unwrap();
+        assert_eq!(n.stop_action, StopAction::None);
+        let o: GuestOverride =
+            serde_json::from_str(r#"{"host_shutdown_action":"shutdown"}"#).unwrap();
+        assert_eq!(o.stop_action, Some(StopAction::Shutdown));
+        assert_eq!(
+            serde_json::to_string(&StopAction::None).unwrap(),
+            "\"none\""
+        );
+    }
+
+    #[test]
+    fn defaults_are_safe() {
+        let n = NodePolicy::default();
+        assert_eq!(n.save_encryption, SaveEncryption::Require);
+        assert_eq!(n.save_fallback, SaveFallback::Shutdown);
+        let e = combine(&n, &GuestOverride::default(), "/d".into());
+        assert_eq!(e.save_encryption, SaveEncryption::Require);
+    }
+
+    #[test]
+    fn stop_budget_grows_with_waves_and_timeouts() {
+        let n = NodePolicy {
+            max_parallel: 2,
+            save_timeout_secs: 100,
+            shutdown_timeout_secs: 50,
+            drain_on_shutdown: false,
+            stop_margin_secs: 10,
+            ..Default::default()
+        };
+        assert_eq!(n.stop_budget_secs(0), 160);
+        assert_eq!(n.stop_budget_secs(2), 160);
+        assert_eq!(n.stop_budget_secs(3), 310);
+        let d = NodePolicy {
+            drain_on_shutdown: true,
+            drain_timeout_secs: 30,
+            ..n
+        };
+        assert_eq!(d.stop_budget_secs(2), 190);
     }
 
     #[test]

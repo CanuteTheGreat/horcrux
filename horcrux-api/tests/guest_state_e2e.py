@@ -126,6 +126,11 @@ def reboot_host():
     sh("bash /hx/start-api.sh")
 
 
+# The test host has no encrypted storage: opt in (the default refuses; the
+# refusal itself is tested in section 9).
+_n = power()["node"]
+api("PUT", "/nodes/guest-power", {**_n, "save_encryption": "allow_unencrypted"})
+
 # ---------------------------------------------------------------- 1. manual
 log("== 1. manual Save state / Resume with a marker in guest RAM")
 v1 = create_vm("gs-save")
@@ -178,7 +183,7 @@ st, _ = api("PUT", "/vms/gs-shut/power-policy", {"stop_action": "shutdown"})
 check(st == 200, "gs-shut: stop action Shut down")
 st, _ = api("PUT", "/vms/gs-always/power-policy", {"start_action": "always", "start_delay_secs": 1, "start_order": 5})
 check(st == 200, "gs-always: start action Always start, delay 1, order 5")
-st, node = api("PUT", "/nodes/guest-power", {**power()["node"], "stop_action": "save", "start_action": "resume_if_running"})
+st, node = api("PUT", "/nodes/guest-power", {**power()["node"], "stop_action": "save", "start_action": "resume_if_running", "save_encryption": "allow_unencrypted"})
 check(st == 200 and node["stop_action"] == "save", "node default: Save state / Resume if it was running")
 marker = f"hx-host-{int(time.time())}"
 v1 = vm_get("gs-save")
@@ -247,6 +252,75 @@ check(index_files() == "", "index removed")
 st, b = api("POST", "/vms/gs-save/start")
 check(st == 200 and wait_status("gs-save", "running"), "the VM starts normally after discarding")
 
+# ---------------------------------------------- 6. encryption of saved memory
+log("== 6. saved memory only goes to encrypted storage (this test host has none)")
+_node = power()["node"]
+st, n = api("PUT", "/nodes/guest-power", {**_node, "save_encryption": "require"})
+check(st == 200 and n["save_encryption"] == "require", "node policy: save_encryption=require")
+g = gview("gs-save")
+check(g["can_save"] is False and "encrypted" in (g["save_blocker"] or ""), f"the guest shows why it cannot be saved: {g['save_blocker']}")
+check(g["host_stop_action"] == "shutdown" and "encrypted" in (g["host_stop_reason"] or ""), "UI plan: will shut down, not save (reason shown)")
+check(power()["save_target"]["encrypted"] is False, "the node reports its save target as not encrypted")
+st, b = api("POST", "/vms/gs-save/save-state")
+check(st == 409 and "encrypted" in json.dumps(b), f"manual save refused on an unencrypted target ({st})")
+check(qemu_running("gs-save") and not index_files(), "the guest keeps running and nothing was written")
+# opted in: private files, deleted after the resume
+api("PUT", "/nodes/guest-power", {**_node, "save_encryption": "allow_unencrypted"})
+st, saved = api("POST", "/vms/gs-save/save-state")
+check(st == 200, f"saved once the node allows it ({st})")
+modes = sh("stat -c %a /var/lib/hx/saved-state/data/vm-gs-save /var/lib/hx/saved-state/data/vm-gs-save/vmstate.bin").split()
+check(modes == ["700", "600"], f"saved memory is root-only: dir/file modes {modes}")
+st, _ = api("POST", "/vms/gs-save/resume-state")
+check(st == 200 and wait_status("gs-save", "running", 120), "resumed")
+check(sh("ls /var/lib/hx/saved-state/data/ 2>/dev/null; true") == "", "the memory image is deleted after the resume")
+# host stop under 'require': the guest is shut down (fallback), reason logged
+api("PUT", "/nodes/guest-power", {**_node, "save_encryption": "require"})
+out = guests_cmd("stop")
+check("shutdown vm gs-save" in out and "encrypted" in out, f"host stop fell back to a clean shutdown with the reason: {out[-300:]}")
+check(not qemu_running("gs-save") and not index_files(), "nothing saved to plaintext disk")
+reboot_host()
+check(wait_status("gs-save", "running", 300), "the shut-down guest is started again at boot (it was running)")
+api("PUT", "/nodes/guest-power", {**_node, "save_encryption": "allow_unencrypted"})
+
+# --------------------------------------- 7. passthrough devices: shut down, not save
+log("== 7. a VM that owns host devices is shut down, never saved")
+create_vm("gs-pt")
+sh("python3 - <<'EOF'\nimport sqlite3\nc = sqlite3.connect('/var/lib/hx/horcrux.db')\nc.execute(\"UPDATE vms SET hardware = json_set(coalesce(hardware,'{}'), '$.hostpci', json('[{\\\"device\\\":\\\"0000:ff:ff.0\\\"}]')) WHERE id='gs-pt'\")\nc.commit()\nEOF")
+sh("bash /hx/start-api.sh")   # reload the config; the running QEMU is untouched
+g = gview("gs-pt")
+check(g["can_save"] is False and "passthrough" in (g["save_blocker"] or ""), f"passthrough VM cannot be saved: {g['save_blocker']}")
+check(g["host_stop_action"] == "shutdown" and "passthrough" in (g["host_stop_reason"] or ""), "UI plan: will shut down, not save")
+out = guests_cmd("stop")
+check("shutdown vm gs-pt" in out and "passthrough" in out, f"host stop shut the passthrough VM down: {out[-300:]}")
+check(not qemu_running("gs-pt"), "its QEMU is gone")
+
+# ------------------------------------------------ 8. save timeout -> fallback
+log("== 8. a save that exceeds its timeout falls back to a clean shutdown")
+api("PUT", "/nodes/guest-power", {**_node, "save_encryption": "allow_unencrypted", "save_timeout_secs": 5, "shutdown_timeout_secs": 90})
+check(wait_status("gs-save", "running", 60), "gs-save is up")
+import threading
+res = {}
+t = threading.Thread(target=lambda: res.update(out=guests_cmd("stop")))
+t.start()
+for _ in range(100):   # stall the writer of the memory image: the migration cannot finish
+    if sh("pgrep -f '[c]at > .*vmstate.tmp' | head -1 | xargs -r kill -STOP; pgrep -f '[c]at > .*vmstate.tmp' || true"):
+        break
+    time.sleep(0.1)
+t.join(300)
+sh("pkill -CONT -f '[c]at > .*vmstate.tmp'; true", ok=False)
+out = res.get("out", "")
+check("shutdown vm gs-save" in out and "did not finish within 5 s" in out, f"timeout -> clean shutdown with the reason: {out[-300:]}")
+check(not qemu_running("gs-save") and not index_files(), "stopped, no half-written state kept")
+api("PUT", "/nodes/guest-power", {**_node, "save_encryption": "allow_unencrypted"})
+st, _ = api("POST", "/vms/gs-save/start")
+check(st == 200 and wait_status("gs-save", "running", 240), "started again")
+st, _ = api("PUT", "/vms/gs-save/power-policy", {"stop_action": "none"})
+out = guests_cmd("stop")
+check("left vm gs-save" in out and qemu_running("gs-save"), f"stop action None leaves the guest alone: {out[-200:]}")
+api("PUT", "/vms/gs-save/power-policy", {})
+
+for vm in ("gs-pt",):
+    api("DELETE", f"/vms/{vm}")
 for vm in ("gs-save", "gs-shut", "gs-always"):
     api("POST", f"/vms/{vm}/stop")
     api("DELETE", f"/vms/{vm}")

@@ -865,6 +865,7 @@ async fn status(
         StopAction::Save => "save",
         StopAction::Shutdown => "shutdown",
         StopAction::Poweroff => "poweroff",
+        StopAction::None => "none",
     };
     let mut gpus: Vec<(String, String)> = Vec::new();
     let mut vgpu = false;

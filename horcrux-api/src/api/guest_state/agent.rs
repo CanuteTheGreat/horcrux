@@ -82,6 +82,7 @@ async fn status(
     Ok(Json(serde_json::json!({
         "boot_id": engine::boot_id(),
         "manifest": engine::read_manifest(&state),
+        "stop_budget_secs": engine::stop_budget(&state).await,
     })))
 }
 
@@ -145,7 +146,30 @@ pub async fn cli_main(args: &[String]) -> i32 {
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
-    let req = client.post(format!("{base}/api/host-agent/{path}"));
+    // The stop pass is bounded by the configured timeouts: the client waits
+    // exactly that long (the node's stop budget) and then lets the shutdown go
+    // on, so a wedged API can never hold the host forever.
+    let budget = if cmd == "stop" {
+        let st = client
+            .post(format!("{base}/api/host-agent/status"))
+            .header(TOKEN_HEADER, token.clone())
+            .send()
+            .await;
+        match st {
+            Ok(r) => r
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|v| v["stop_budget_secs"].as_u64()),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let mut req = client.post(format!("{base}/api/host-agent/{path}"));
+    if let Some(b) = budget {
+        req = req.timeout(std::time::Duration::from_secs(b));
+    }
     let resp = match req.header(TOKEN_HEADER, token).send().await {
         Ok(r) => r,
         Err(e) => {
@@ -209,12 +233,20 @@ mod tests {
         assert!(unit.contains("ExecStart=/usr/bin/horcrux-api guests boot"));
         assert!(unit.contains("KillMode=none"));
         assert!(unit.contains("RemainAfterExit=yes"));
+        // The wait is sized by the stop client from the configured timeouts
+        // (the node's stop budget), never by a number baked into the unit.
         let stop = unit
             .lines()
             .find_map(|l| l.strip_prefix("TimeoutStopSec="))
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap();
-        assert!(stop >= 600, "enough time to save every guest");
+            .expect("TimeoutStopSec=");
+        assert!(
+            stop == "infinity" || stop.parse::<u64>().is_ok_and(|v| v >= 600),
+            "enough time to save every guest"
+        );
+        assert_eq!(
+            stop, "infinity",
+            "the budget comes from the configured timeouts"
+        );
     }
 
     #[test]

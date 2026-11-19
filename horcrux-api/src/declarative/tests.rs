@@ -334,3 +334,61 @@ fn remote_play_settings_are_planned_validated_and_exported() {
     let back: Spec = serde_yaml::from_str(&y).unwrap();
     assert!(plan(&back, &live, false).in_sync());
 }
+
+fn gp_actions(p: &Plan) -> Vec<String> {
+    actions(p)
+        .into_iter()
+        .filter(|a| a.contains("guest_power"))
+        .collect()
+}
+
+#[test]
+fn guest_power_is_planned_exported_and_pruned() {
+    use crate::api::guest_state::{GuestOverride, StopAction};
+    let s = parse(
+        "guest_power:\n  node: {host_shutdown_action: shutdown, save_timeout_secs: 90}\n  vms:\n    app1: {host_shutdown_action: none}\nvms: [{name: app1, memory: 512}]",
+    )
+    .unwrap();
+    let gp = s.guest_power.as_ref().unwrap();
+    assert_eq!(gp.node.stop_action, StopAction::Shutdown);
+    assert_eq!(gp.node.save_timeout_secs, 90);
+    let live = Live {
+        vms: vec![live_vm("app1", VmStatus::Stopped)],
+        ..Default::default()
+    };
+    let p = plan(&s, &live, false);
+    let a = actions(&p);
+    assert!(
+        a.contains(&format!("Update guest_power {NODE_POWER}")),
+        "{a:?}"
+    );
+    assert!(a.contains(&"Update guest_power app1".to_string()), "{a:?}");
+    // an override on a VM the spec no longer lists is only removed with prune
+    let mut live2 = live.clone();
+    live2.power_node = gp.node.clone();
+    live2.power_vms.insert(
+        "app1".into(),
+        GuestOverride {
+            stop_action: Some(StopAction::None),
+            ..Default::default()
+        },
+    );
+    assert!(gp_actions(&plan(&s, &live2, true)).is_empty());
+    let s2 = parse("guest_power: {node: {}}\nvms: [{name: app1, memory: 512}]").unwrap();
+    let mut live3 = live2.clone();
+    live3.power_node = Default::default();
+    assert!(gp_actions(&plan(&s2, &live3, false)).is_empty());
+    assert!(actions(&plan(&s2, &live3, true)).contains(&"Delete guest_power app1".to_string()));
+    // export then plan is a no-op and survives YAML
+    let exp = export(&live2);
+    let back = parse(&serde_yaml::to_string(&exp).unwrap()).unwrap();
+    assert!(plan(&back, &live2, true).in_sync());
+}
+
+#[test]
+fn guest_power_rejects_unknown_vms_and_bad_values() {
+    let s = parse("guest_power: {vms: {ghost: {host_shutdown_action: save}}}").unwrap();
+    assert_eq!(plan(&s, &Live::default(), false).errors.len(), 1);
+    assert!(parse("guest_power: {node: {max_parallel: 0}}").is_err());
+    assert!(parse("guest_power: {vms: {a: {save_dir: relative}}}").is_err());
+}
