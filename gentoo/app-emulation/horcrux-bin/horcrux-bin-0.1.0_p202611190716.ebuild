@@ -28,8 +28,8 @@ HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 # installed. The plain 0.1.0 stays as the fallback for a tree without a stamped ebuild (image builds from a local tarball).
 # The two HORCRUX_MANAGER_SHA256_* values are filled in by the bump script (empty here): a tarball FETCHED by URL must match the build
 # this version was cut for (a replaced daily asset fails loudly instead of installing under the wrong version).
-HORCRUX_MANAGER_SHA256_x86_64="dd81185f6226ebf4996c2c2ff6babf1a35f2ccff62e5416281c48956be0dcc62"
-HORCRUX_MANAGER_SHA256_aarch64="e30e780063a490d0f893877ce878b54ecc06cd98881ec5a515d22727cb26881d"
+HORCRUX_MANAGER_SHA256_x86_64="396531312756000590b796ae2d117b0e1dbaae4a20ab23d8e826c1a443b1d758"
+HORCRUX_MANAGER_SHA256_aarch64="2a1bda6cf32937d8d8d2a906746b71e435b68226e9036c56d0a4399569217c1e"
 RESTRICT="network-sandbox mirror strip"    # tarball fetch at src_unpack; the binaries are already stripped/cross built
 LICENSE="GPL-2"
 SLOT="0"
@@ -120,6 +120,11 @@ pkg_postinst() {
 	local rl=${EROOT}/etc/runlevels/default
 	if [[ -L ${rl}/horcrux-api && ! -e ${rl}/horcrux-ha-fence ]]; then
 		ln -s /etc/init.d/horcrux-ha-fence "${rl}/horcrux-ha-fence" && elog "horcrux-ha-fence enabled in the default runlevel (the manager is)"
+	fi
+	# Guest power: running VMs/containers are saved or shut down cleanly when the host goes down only while horcrux-guests is
+	# started (OpenRC stops only started services); without it QEMU is simply killed at power-off. Enabled wherever the manager is.
+	if [[ -L ${rl}/horcrux-api && ! -e ${rl}/horcrux-guests && -e ${EROOT}/etc/init.d/horcrux-guests ]]; then
+		ln -s /etc/init.d/horcrux-guests "${rl}/horcrux-guests" && elog "horcrux-guests enabled in the default runlevel (the manager is)"
 	fi
 	elog "Horcrux manager installed. It is NOT started by default on a desktop edition (the server profile enables it):"
 	elog "  rc-update add libvirtd default; rc-update add horcrux-api default; rc-service horcrux-api start    # web UI https://<host>:8006"
