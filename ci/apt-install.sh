@@ -7,13 +7,15 @@
 set -u
 [ "$#" -gt 0 ] || { echo "usage: $0 pkg..." >&2; exit 2; }
 probe="$1"
+# Bound a stalled mirror (runs 4056/4051: connects timing out ate 11+ min per apt call).
+APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
 # The runner image carries Launchpad PPAs we never install from; their 404/503s
 # make `apt-get update` fail (Ubuntu 26.04 image, git-core PPA, 2026-11-17).
 sudo rm -f /etc/apt/sources.list.d/*ppa* 2>/dev/null || true
 for attempt in 1 2 3 4 5; do
-  sudo apt-get update -qq -o Acquire::Retries=3 || true
+  sudo timeout 180 apt-get update -qq $APT_OPTS || true
   if apt-cache policy "$probe" | grep -q 'Candidate: [^(]'; then
-    if sudo apt-get install -y "$@"; then exit 0; fi
+    if sudo timeout 600 apt-get install -y $APT_OPTS "$@"; then exit 0; fi
   fi
   echo "apt-install: attempt $attempt failed (mirror unreachable?), retrying in $((attempt * 15)) s" >&2
   sleep $((attempt * 15))

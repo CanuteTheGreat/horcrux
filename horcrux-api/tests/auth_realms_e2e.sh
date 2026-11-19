@@ -140,7 +140,7 @@ docker cp "$TESTBIN" "$ID-run":/usr/local/bin/auth-realms-e2e
 docker cp "$TMP/pebble-ca.pem" "$ID-run":/etc/pebble-ca.pem
 docker exec "$ID-run" bash -c '
 set -e
-(ldconfig -p | grep -q libvirt.so.0 && command -v openssl >/dev/null) || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libvirt0 openssl >/dev/null)
+(ldconfig -p | grep -q libvirt.so.0 && command -v openssl >/dev/null) || (for i in 1 2 3 4; do o="-o Acquire::Retries=5 -o Acquire::http::Timeout=20"; timeout 120 apt-get update -qq $o >/dev/null 2>&1 || true; DEBIAN_FRONTEND=noninteractive timeout 300 apt-get install -y -qq $o libvirt0 openssl >/dev/null && exit 0; sleep $((i * 15)); done; exit 1)
 id pamtester >/dev/null 2>&1 || useradd -m pamtester
 echo "pamtester:pam-host-pass-1" | chpasswd
 groupadd -f horcrux-admin

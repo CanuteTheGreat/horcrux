@@ -343,7 +343,7 @@ jobs:
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
           fi
-          sudo apt-get install -y build-essential clang mold libvirt-dev libpam0g-dev qemu-system-x86 qemu-system-arm qemu-utils qemu-guest-agent zstd $spice_mods
+          sudo apt-get install -y -o Acquire::Retries=5 -o Acquire::http::Timeout=20 build-essential clang mold libvirt-dev libpam0g-dev qemu-system-x86 qemu-system-arm qemu-utils qemu-guest-agent zstd $spice_mods
           # Fail here, not deep in a test, if this QEMU can't do SPICE.
           qemu-system-x86_64 --version
           qemu-system-x86_64 -audiodev help | grep -qx spice || { echo "qemu-system-x86_64 lacks SPICE (no spice audiodev)" >&2; exit 1; }
@@ -1327,7 +1327,7 @@ jobs:
           if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
             spice_mods="qemu-system-modules-spice"
           fi
-          sudo apt-get install -y build-essential clang mold libvirt-dev python3-venv libpam0g-dev libnss3-tools qemu-utils zstd qemu-system-x86 $spice_mods
+          sudo apt-get install -y -o Acquire::Retries=5 -o Acquire::http::Timeout=20 build-essential clang mold libvirt-dev python3-venv libpam0g-dev libnss3-tools qemu-utils zstd qemu-system-x86 $spice_mods
           # the S3 Gateway page drives a real server (ui_e2e.py s3 checks)
           bash ci/install-s3-gateway.sh
 
