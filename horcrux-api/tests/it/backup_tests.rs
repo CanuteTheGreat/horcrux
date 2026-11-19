@@ -533,16 +533,28 @@ async fn docker_container_backup_delete_restore() {
     let env = Env::new().await;
     let mgr = env.manager().await;
     let id = format!("hx-bk-{}", std::process::id());
+    let vol = format!("hx-bk-vol-{}", std::process::id());
     let _ = Command::new("docker").args(["rm", "-f", &id]).output();
+    let _ = Command::new("docker")
+        .args(["volume", "rm", "-f", &vol])
+        .output();
     let cfg: horcrux_common::ContainerConfig = serde_json::from_value(serde_json::json!({
         "id": id, "name": id, "runtime": "docker", "memory": 64, "cpus": 1,
         "rootfs": "busybox:latest", "status": "stopped",
-        "command": ["sleep", "3600"], "env": ["GREETING=hello world"]
+        "command": ["sleep", "3600"], "env": ["GREETING=hello world"],
+        "volumes": [format!("{vol}:/vol")]
     }))
     .unwrap();
     env.containers.create_container(cfg).await.unwrap();
     env.containers.start_container(&id).await.unwrap();
     docker(&["exec", &id, "sh", "-c", "echo precious-data > /data.txt"]);
+    docker(&[
+        "exec",
+        &id,
+        "sh",
+        "-c",
+        "mkdir -p /vol/d && echo volume-data > /vol/d/marker",
+    ]);
 
     // Running container, suspend mode: paused during export, running after.
     let b = mgr
@@ -563,6 +575,8 @@ async fn docker_container_backup_delete_restore() {
     // Destroy the container, restore it from the backup.
     env.containers.stop_container(&id).await.unwrap();
     env.containers.delete_container(&id).await.unwrap();
+    // The named volume is gone too (a restore onto a rebuilt host).
+    docker(&["volume", "rm", "-f", &vol]);
     let r = mgr
         .restore_backup(
             &b.id,
@@ -575,6 +589,11 @@ async fn docker_container_backup_delete_restore() {
         .unwrap();
     assert_eq!(r.target_id, id);
     assert_eq!(docker(&["exec", &id, "cat", "/data.txt"]), "precious-data");
+    // Named-volume data must come back (it used to restore as an empty volume).
+    assert_eq!(
+        docker(&["exec", &id, "cat", "/vol/d/marker"]),
+        "volume-data"
+    );
     assert_eq!(
         docker(&["exec", &id, "sh", "-c", "echo $GREETING"]),
         "hello world"
@@ -583,4 +602,7 @@ async fn docker_container_backup_delete_restore() {
     let image = docker(&["inspect", "-f", "{{.Config.Image}}", &id]);
     let _ = Command::new("docker").args(["rm", "-f", &id]).output();
     let _ = Command::new("docker").args(["rmi", &image]).output();
+    let _ = Command::new("docker")
+        .args(["volume", "rm", "-f", &vol])
+        .output();
 }

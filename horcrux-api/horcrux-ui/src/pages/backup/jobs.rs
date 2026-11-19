@@ -76,7 +76,12 @@ pub fn BackupJobsPage() -> impl IntoView {
             match bk::list_backup_jobs().await {
                 Ok(j) => {
                     set_jobs.set(j);
-                    set_error.set(None);
+                    // Keep an action's error (set just before this reload) on screen.
+                    set_error.update(|e| {
+                        if e.as_deref().is_some_and(|m| m.starts_with("Loading jobs")) {
+                            *e = None;
+                        }
+                    });
                 }
                 Err(e) => set_error.set(Some(format!("Loading jobs: {}", e.message))),
             }

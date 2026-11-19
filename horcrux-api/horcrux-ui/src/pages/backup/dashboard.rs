@@ -36,7 +36,16 @@ pub fn BackupDashboard() -> impl IntoView {
             match bk::list_backups().await {
                 Ok(b) => {
                     set_backups.set(b);
-                    set_error.set(None);
+                    // Only a load error clears itself here: an action's error
+                    // ("Backup of X failed: ...") is set before this reload runs
+                    // and must stay on screen until the next action.
+                    set_error.update(|e| {
+                        if e.as_deref()
+                            .is_some_and(|m| m.starts_with("Loading backups"))
+                        {
+                            *e = None;
+                        }
+                    });
                 }
                 Err(e) => set_error.set(Some(format!("Loading backups: {}", e.message))),
             }

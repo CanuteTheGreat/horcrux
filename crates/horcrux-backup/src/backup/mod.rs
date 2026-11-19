@@ -461,6 +461,8 @@ impl BackupManager {
                             "storage pool '{spec}' is disabled"
                         )));
                     }
+                    self.check_pool_device(&pool.id, &pool.name, Path::new(&pool.path))
+                        .await?;
                     return Ok((pool.id.clone(), PathBuf::from(&pool.path).join("dump")));
                 }
             }
@@ -471,6 +473,44 @@ impl BackupManager {
         Err(Error::Validation(format!(
             "unknown backup storage '{spec}': use 'local', a storage pool id, or an absolute directory"
         )))
+    }
+
+    /// Refuse a pool whose directory is no longer on the disk it was first
+    /// used on. A removable or network disk that is not mounted leaves its
+    /// (empty) mount point on the root filesystem: the pool still looks
+    /// healthy with the root disk's free space, and a backup would be
+    /// written there silently and hidden again by the next mount. The disk
+    /// (`st_dev`) is recorded on first use in `<work dir>/.pool-devices.json`.
+    async fn check_pool_device(&self, id: &str, name: &str, path: &Path) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let file = self.work_dir.join(".pool-devices.json");
+        let mut known: std::collections::HashMap<String, u64> = tokio::fs::read(&file)
+            .await
+            .ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .unwrap_or_default();
+        let dev = tokio::fs::metadata(path).await.ok().map(|m| m.dev());
+        match (known.get(id).copied(), dev) {
+            (Some(was), Some(now)) if was == now => Ok(()),
+            (Some(_), _) => Err(Error::Conflict(format!(
+                "storage pool '{name}' ({}) is not on the disk it was first used on: it may be unmounted or the disk was replaced. Mount it again; to accept a replacement disk, remove the pool and add it again",
+                path.display()
+            ))),
+            (None, Some(now)) => {
+                known.insert(id.to_string(), now);
+                if let Some(dir) = file.parent() {
+                    let _ = tokio::fs::create_dir_all(dir).await;
+                }
+                if let Ok(raw) = serde_json::to_vec(&known) {
+                    let tmp = file.with_extension("json.tmp");
+                    if tokio::fs::write(&tmp, raw).await.is_ok() {
+                        let _ = tokio::fs::rename(&tmp, &file).await;
+                    }
+                }
+                Ok(())
+            }
+            (None, None) => Ok(()),
+        }
     }
 
     async fn detect_target(&self, id: &str) -> Result<TargetType> {
@@ -1015,6 +1055,37 @@ impl BackupManager {
                 )
                 .await?;
                 files.push(payload(&inspect, "inspect").await?);
+                // `export` carries only the container's own filesystem: the
+                // contents of its named volumes go in as volume-N.tar (a
+                // restore without them would start with empty data).
+                let mut seen = HashSet::new();
+                for m in first["Mounts"].as_array().into_iter().flatten() {
+                    if m["Type"].as_str() != Some("volume") {
+                        continue;
+                    }
+                    let (Some(name), Some(src)) = (m["Name"].as_str(), m["Source"].as_str()) else {
+                        continue;
+                    };
+                    if !seen.insert(name.to_string()) {
+                        continue;
+                    }
+                    let file = staging.join(format!("volume-{}.tar", seen.len() - 1));
+                    archive::run_async(
+                        "tar",
+                        vec![
+                            "--numeric-owner".into(),
+                            "-C".into(),
+                            src.into(),
+                            "-cf".into(),
+                            file.to_string_lossy().into(),
+                            ".".into(),
+                        ],
+                    )
+                    .await?;
+                    let mut f = payload(&file, "volume").await?;
+                    f.source = Some(name.to_string());
+                    files.push(f);
+                }
             }
             ContainerRuntime::Lxc => {
                 let dir = rt.lxc_path.join(&c.name);
@@ -1401,6 +1472,65 @@ impl BackupManager {
                     config.options = options_from_inspect(&inspect);
                 }
                 config.rootfs = tag;
+                // Named-volume data. Restoring over the same guest puts the
+                // data back into its volume (created if it is gone; files
+                // in the backup overwrite same-named ones). Restoring as a
+                // different guest never touches a volume that still exists:
+                // it gets a new volume `<volume>-<guest>` and the config
+                // points at that.
+                for f in m.files.iter().filter(|f| f.kind == "volume") {
+                    let Some(orig) = f.source.clone() else {
+                        continue;
+                    };
+                    let exists = archive::run_async(
+                        prog,
+                        vec!["volume".into(), "inspect".into(), orig.clone()],
+                    )
+                    .await
+                    .is_ok();
+                    let vol = if exists && !same {
+                        format!("{orig}-{name}")
+                    } else {
+                        orig.clone()
+                    };
+                    if vol != orig {
+                        for v in config.options.volumes.iter_mut() {
+                            if let Some(rest) = v.strip_prefix(&format!("{orig}:")) {
+                                *v = format!("{vol}:{rest}");
+                            }
+                        }
+                    }
+                    archive::run_async(prog, vec!["volume".into(), "create".into(), vol.clone()])
+                        .await?;
+                    let mp = archive::run_async(
+                        prog,
+                        vec![
+                            "volume".into(),
+                            "inspect".into(),
+                            "--format".into(),
+                            "{{.Mountpoint}}".into(),
+                            vol.clone(),
+                        ],
+                    )
+                    .await?;
+                    let mp = String::from_utf8_lossy(&mp.stdout).trim().to_string();
+                    if mp.is_empty() {
+                        return Err(Error::System(format!(
+                            "{prog} volume {vol} has no mount point to restore into"
+                        )));
+                    }
+                    archive::run_async(
+                        "tar",
+                        vec![
+                            "--numeric-owner".into(),
+                            "-C".into(),
+                            mp,
+                            "-xpf".into(),
+                            dir.join(&f.name).to_string_lossy().into(),
+                        ],
+                    )
+                    .await?;
+                }
                 if existing.is_some() {
                     cm.delete_container(target).await?;
                 }
@@ -2170,5 +2300,30 @@ mod tests {
         j.schedule = "daily".into();
         j.notify = Some("someone@example.com".into());
         assert!(BackupManager::validate_job(&mut j).is_err());
+    }
+    /// A backup pool whose disk is gone (unmounted) is refused instead of
+    /// silently writing to the empty mount point on the root filesystem.
+    #[tokio::test]
+    async fn a_pool_that_left_its_disk_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let mgr = BackupManager::with_restore_dir(t.path().join("restore"));
+        let pool = t.path().join("pool");
+        std::fs::create_dir_all(&pool).unwrap();
+        mgr.check_pool_device("p1", "backup2", &pool).await.unwrap();
+        mgr.check_pool_device("p1", "backup2", &pool).await.unwrap();
+        // Another disk now sits at the path (device number differs).
+        let f = t.path().join("restore/.pool-devices.json");
+        std::fs::write(&f, br#"{"p1": 1}"#).unwrap();
+        let e = mgr
+            .check_pool_device("p1", "backup2", &pool)
+            .await
+            .unwrap_err();
+        assert!(matches!(e, Error::Conflict(_)), "{e:?}");
+        assert!(e.to_string().contains("unmounted"), "{e}");
+        // A pool never seen before is accepted and recorded.
+        mgr.check_pool_device("p2", "other", &pool).await.unwrap();
+        // The directory of a known pool vanishing is refused as well.
+        std::fs::remove_dir(&pool).unwrap();
+        assert!(mgr.check_pool_device("p2", "other", &pool).await.is_err());
     }
 }
