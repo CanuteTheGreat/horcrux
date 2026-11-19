@@ -1,0 +1,4 @@
+{
+  "_comment": "Justified axe false positives only. Entry: {\"rule\": id, \"page\": name or \"*\", \"selector\": css substring or \"\", \"reason\": why axe is wrong}. Empty = nothing allowed.",
+  "entries": []
+}

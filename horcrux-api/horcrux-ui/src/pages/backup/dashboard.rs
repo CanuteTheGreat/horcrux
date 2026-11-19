@@ -216,23 +216,23 @@ pub fn BackupDashboard() -> impl IntoView {
 
             <div class="stats-grid">
                 <a class="stat-card stat-link" href="#backup-archives">
-                    <h3>"Backups"</h3>
+                    <h3 aria-level="2">"Backups"</h3>
                     <div class="stat-value" id="backup-count">{move || backups.get().len()}</div>
                 </a>
                 <a class="stat-card stat-link" href="#backup-archives">
-                    <h3>"Total size"</h3>
+                    <h3 aria-level="2">"Total size"</h3>
                     <div class="stat-value">
                         {move || bk::format_bytes(backups.get().iter().map(|b| b.size).sum())}
                     </div>
                 </a>
                 <div class="stat-card">
-                    <h3>"Jobs"</h3>
+                    <h3 aria-level="2">"Jobs"</h3>
                     <div class="stat-value">
                         <a href="/backup/jobs">{move || jobs.get().len()}</a>
                     </div>
                 </div>
                 <div class="stat-card">
-                    <h3>"Failed jobs"</h3>
+                    <h3 aria-level="2">"Failed jobs"</h3>
                     <div class="stat-value">
                         <a href="/backup/jobs" class:error=has_failed>
                             {failed_jobs}

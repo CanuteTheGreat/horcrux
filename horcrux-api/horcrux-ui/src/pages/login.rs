@@ -271,7 +271,7 @@ pub fn Login() -> impl IntoView {
                     <form on:submit=submit.clone()>
                         <Show when=move || { realms.get().realms.len() > 1 } fallback=|| ()>
                             <div class="form-group">
-                                <label>"Realm"</label>
+                                <label for="login-realm">"Realm"</label>
                                 <select id="login-realm" on:change=move |ev| set_realm.set(event_target_value(&ev))>
                                     {realm_options}
                                 </select>
@@ -279,14 +279,14 @@ pub fn Login() -> impl IntoView {
                         </Show>
                         <Show when=move || selected_type() != "openid" fallback=|| ()>
                             <div class="form-group">
-                                <label>"Username"</label>
+                                <label for="login-username">"Username"</label>
                                 <input type="text" id="login-username" required placeholder="user name"
                                     autocomplete="username"
                                     on:input=move |ev| set_username.set(event_target_value(&ev))
                                     prop:value=username/>
                             </div>
                             <div class="form-group">
-                                <label>"Password"</label>
+                                <label for="login-password">"Password"</label>
                                 <input type="password" id="login-password" required autocomplete="current-password"
                                     on:input=move |ev| set_password.set(event_target_value(&ev))
                                     prop:value=password/>
