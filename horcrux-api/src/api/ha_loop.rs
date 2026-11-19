@@ -1441,7 +1441,14 @@ async fn local_restarts(
             continue;
         }
         match state.ha_manager.handle_vm_failure(&r.vm_id, local).await {
-            Ok(HaAction::Restart) if state.ha_manager.get_resource(&r.vm_id).await.map(|x| x.state) != Some(HaState::Started) => {
+            Ok(HaAction::Restart)
+                if state
+                    .ha_manager
+                    .get_resource(&r.vm_id)
+                    .await
+                    .map(|x| x.state)
+                    != Some(HaState::Started) =>
+            {
                 // the operator stopped the VM between the failure check and the restart
             }
             Ok(HaAction::Restart) => match state.vm_manager.start_vm(&r.vm_id).await {
