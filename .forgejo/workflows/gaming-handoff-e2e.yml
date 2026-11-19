@@ -9,7 +9,9 @@ name: Gaming VM hand-off (real kernel, KVM)
 # nested virtualisation: rw-man-01's kvm-x86_64 runner.
 on:
   push:
-    branches: [main]
+    # every branch: the path filter keeps it to hand-off changes, so a fix is
+    # proven on its branch before ff-merge (main run 3959 was the first run).
+    branches: ['**']
     paths:
       - 'crates/horcrux-vm/src/vm/handoff.rs'
       - 'crates/horcrux-vm/src/vm/tuning.rs'
@@ -61,8 +63,19 @@ jobs:
       - name: Build the e2e test binary
         run: |
           set -o pipefail
-          cargo test -p horcrux-vm --features qemu --test handoff_e2e --no-run 2>&1 | tee build.log
-          bin=$(sed -n 's/.*Executable tests\/handoff_e2e.rs (\(.*\))/\1/p' build.log | tail -1)
+          # Take the binary path from cargo's JSON messages, not the human
+          # "Executable ..." line: that line carries colour codes under
+          # CARGO_TERM_COLOR=always and its path layout changes between cargo
+          # releases (main run 3959 failed on an empty path).
+          cargo test -p horcrux-vm --features qemu --test handoff_e2e --no-run \
+            --message-format=json-render-diagnostics > build.json
+          bin=$(python3 -c 'import json,sys
+          for l in open("build.json"):
+              try: m = json.loads(l)
+              except ValueError: continue
+              if m.get("reason") == "compiler-artifact" and m.get("target", {}).get("name") == "handoff_e2e" and m.get("executable"):
+                  print(m["executable"])')
+          echo "test binary: $bin"
           test -x "$bin"
           cp "$bin" handoff_e2e.bin
 
