@@ -4300,6 +4300,24 @@ async fn passthrough_metric_servers_and_alert_silence_read_into_ui_types() {
     let _: pt::PciStatus = fetch(&c, &token, "/gpu/pci/status").await;
     let g: pt::GamingReport = fetch(&c, &token, "/gpu/pci/gaming-check").await;
     println!("contract: gaming check, {} GPUs", g.gpus.len());
+    let gs: pt::GamingSettings = fetch(&c, &token, "/vms/gaming/settings").await;
+    assert!(gs.min_memory_mb > 0, "{gs:?}");
+    let gc: pt::CompatView = fetch(&c, &token, "/vms/gaming/compat").await;
+    println!("contract: gaming compat, {} games", gc.games.len());
+    // the wizard refuses an incomplete request with a reason (no VM made)
+    let (status, body) = post(
+        &c,
+        &token,
+        "/vms/gaming",
+        json!({"name": "contract-gaming", "dry_run": true}),
+    )
+    .await;
+    assert!(status == 400 || status == 422, "{status} {body}");
+    assert!(
+        gc.games.len() >= 20,
+        "built-in compat table: {}",
+        gc.games.len()
+    );
     let pci: Vec<pt::PciDevice> = fetch(&c, &token, "/gpu/pci/devices").await;
     println!("contract: {} PCI devices", pci.len());
     let _: Vec<pt::MdevType> = fetch(&c, &token, "/gpu/mdev/types").await;
