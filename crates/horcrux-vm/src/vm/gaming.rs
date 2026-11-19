@@ -64,6 +64,11 @@ pub struct GamingSettings {
     /// Turn on VBS / Memory Integrity (HVCI) in the guest (needs nested
     /// virtualisation on the host).
     pub vbs: bool,
+    /// Also turn VBS on by default when this Horcrux host is itself a
+    /// virtual machine (Windows' hypervisor then runs a third level deep;
+    /// many clouds and CPUs can't, and Windows restarts in a loop at boot).
+    #[serde(default)]
+    pub vbs_on_virtual_host: bool,
     /// SMBIOS identity strings of gaming VMs (a Horcrux machine, never a
     /// real vendor's model).
     pub smbios_manufacturer: String,
@@ -104,6 +109,7 @@ impl Default for GamingSettings {
             min_disk_gb: 64,
             hugepages_kb: 2048,
             vbs: true,
+            vbs_on_virtual_host: false,
             smbios_manufacturer: "Horcrux".into(),
             smbios_product: "Horcrux Gaming VM".into(),
             smbios_family: "Virtual Machine".into(),
@@ -538,6 +544,7 @@ pub fn compose(
     }
 
     // ---- VBS / nested virtualisation
+    const VBS_ON_VIRTUAL_HOST: &str = "this Horcrux host is itself a virtual machine, so Windows' own hypervisor (VBS) would run a third level deep; on many clouds and CPUs Windows then restarts in a loop right after the Windows Boot Manager starts.";
     let vbs_wanted = req.vbs.unwrap_or(settings.vbs) || need_vbs;
     let vbs = if vbs_wanted && !report.nested_virt {
         if req.vbs == Some(true) || need_vbs {
@@ -548,6 +555,16 @@ pub fn compose(
             report.nested_virt_problem
         ));
         false
+    } else if vbs_wanted && report.host_is_vm {
+        if req.vbs == Some(true) || need_vbs || settings.vbs_on_virtual_host {
+            warnings.push(VBS_ON_VIRTUAL_HOST.to_string());
+            true
+        } else {
+            warnings.push(format!(
+                "VBS / Memory Integrity stays off by default: {VBS_ON_VIRTUAL_HOST} Turn VBS on for this VM if this host is known to support it."
+            ));
+            false
+        }
     } else {
         vbs_wanted
     };
@@ -1206,6 +1223,7 @@ mod tests {
             ],
             nested_virt: true,
             nested_virt_problem: String::new(),
+            host_is_vm: false,
             secure_boot_firmware: true,
             swtpm: true,
             iso_tool: "xorriso".into(),
@@ -1567,5 +1585,32 @@ mod tests {
         );
         // staging dir cleaned up
         assert_eq!(std::fs::read_dir(t.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn vbs_stays_off_by_default_when_the_host_is_itself_a_vm() {
+        let mut rep = report();
+        rep.host_is_vm = true;
+        let s = GamingSettings::default();
+        let p = compose(&req(), &rep, &host(), &s, &[]).unwrap();
+        assert!(!p.config.hardware.adv.nested_virt && !p.unattend.vbs);
+        assert!(
+            p.warnings.iter().any(|w| w.contains("third level")),
+            "{:?}",
+            p.warnings
+        );
+        // asked for explicitly: on, with the warning
+        let mut r = req();
+        r.vbs = Some(true);
+        let p = compose(&r, &rep, &host(), &s, &[]).unwrap();
+        assert!(p.config.hardware.adv.nested_virt && p.unattend.vbs);
+        assert!(p.warnings.iter().any(|w| w.contains("third level")));
+        // the node setting turns the default back on
+        let s = GamingSettings {
+            vbs_on_virtual_host: true,
+            ..GamingSettings::default()
+        };
+        let p = compose(&req(), &rep, &host(), &s, &[]).unwrap();
+        assert!(p.config.hardware.adv.nested_virt);
     }
 }

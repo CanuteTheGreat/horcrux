@@ -297,6 +297,15 @@ UI page "New gaming VM" + `POST /api/vms/gaming` composing an ordinary VM config
   agent answers, then Secure Boot, TPM 2.0, VBS + Memory Integrity running,
   the visible hypervisor, the SMBIOS identity, virtio drivers and the account
   are checked from inside Windows.
+- A Horcrux host that is itself a virtual machine (CPUID hypervisor bit, e.g.
+  a cloud instance with nested virtualisation) would run Windows' own
+  hypervisor a third level deep when VBS is on. Measured: on an Intel cloud
+  instance (Xeon 6, nested KVM) the installed Windows restarts in a loop about
+  3 s after the Windows Boot Manager starts (the same disk boots with VMX
+  off); on an AMD EPYC VM with nested SVM it boots. So the check reports
+  `host_is_vm`, VBS stays off by default there with the reason in the plan
+  and the wizard, the user can still turn it on per VM, and the node setting
+  `vbs_on_virtual_host` makes it the default on hosts known to work.
 - Needs real GPU hardware (not provable in CI): the hand-over of a real
   display-driving GPU (desktop stop, console detach, frames on the passed-
   through GPU, desktop back), NVIDIA/AMD reset behaviour, CCD pinning on a

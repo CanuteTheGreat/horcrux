@@ -748,6 +748,11 @@ pub struct GamingReport {
     pub nested_virt: bool,
     /// Why not, and how to turn it on (empty when available).
     pub nested_virt_problem: String,
+    /// This host is itself a virtual machine (CPUID hypervisor bit): a VM's
+    /// VBS then runs Windows' hypervisor a third level deep, which many
+    /// clouds and CPUs do not support (Windows restarts in a loop at boot).
+    #[serde(default)]
+    pub host_is_vm: bool,
     /// The Secure Boot build of OVMF (with Microsoft keys) is installed.
     pub secure_boot_firmware: bool,
     /// swtpm (the emulated TPM 2.0) is installed.
@@ -954,6 +959,7 @@ pub fn host_report(host: &Host, quirks: &[Quirk]) -> GamingReport {
         gpus,
         nested_virt_problem: tuning::nested_kvm_problem(&host.sys).unwrap_or_default(),
         nested_virt: tuning::nested_kvm_problem(&host.sys).is_none(),
+        host_is_vm: tuning::host_is_virtual(),
         secure_boot_firmware: super::firmware::find_ovmf_for(true).is_some(),
         swtpm: in_path("swtpm"),
         iso_tool: iso_tool().unwrap_or_default().to_string(),
