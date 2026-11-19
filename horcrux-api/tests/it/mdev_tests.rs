@@ -115,6 +115,23 @@ async fn pci_inventory_routes_answer_and_refuse_bad_requests() {
         v["iommu_enabled"].is_boolean() && v["message"].is_string(),
         "{v}"
     );
+    // gaming-VM readiness: host facts + one row per GPU with a verdict
+    let (s, g) = api.get("/gpu/pci/gaming-check").await;
+    assert_eq!(s, 200, "{g}");
+    assert!(
+        g["kvm"].is_boolean() && g["cpus"]["online"].is_array(),
+        "{g}"
+    );
+    assert!(g["suggested_vcpus"].as_u64().is_some_and(|n| n >= 1), "{g}");
+    for gpu in g["gpus"].as_array().expect("gpus") {
+        assert!(
+            matches!(
+                gpu["verdict"].as_str(),
+                Some("ready" | "ready-with-warnings" | "single-gpu" | "blocked")
+            ),
+            "{gpu}"
+        );
+    }
     let (s, v) = api.get("/gpu/pci/devices").await;
     assert_eq!(s, 200, "{v}");
     let devs = v.as_array().expect("array");

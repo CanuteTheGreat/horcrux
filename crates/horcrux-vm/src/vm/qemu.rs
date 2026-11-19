@@ -213,8 +213,19 @@ pub fn qemu_command(
             "driver=cfi.pflash01,property=secure,value=on".into(),
         ]);
     }
-    match &vm.hardware.cpu_type {
-        Some(cpu) => args.extend(["-cpu".into(), cpu.clone()]),
+    // CPU model; Windows guests (adv.hyperv) get the node's Hyper-V
+    // enlightenments on top (super::tuning).
+    let cpu = if x86 {
+        super::tuning::cpu_arg(
+            vm.hardware.cpu_type.as_deref(),
+            &vm.hardware.adv,
+            super::tuning::config(),
+        )
+    } else {
+        vm.hardware.cpu_type.clone()
+    };
+    match cpu {
+        Some(cpu) => args.extend(["-cpu".into(), cpu]),
         None if !x86 => args.extend(["-cpu".into(), "max".into()]),
         None => {}
     }
@@ -427,6 +438,7 @@ pub fn device_args(hw: &horcrux_common::VmHardware, disk: &std::path::Path) -> V
     for (i, d) in hw.hostpci.iter().enumerate() {
         a.extend(super::mdev::device_args(i, d));
     }
+    a.extend(super::tuning::device_args(&hw.adv));
     a
 }
 
@@ -1298,6 +1310,32 @@ impl QemuManager {
                 )));
             }
         }
+        // Huge pages and the managed device hand-off (gaming VMs) come
+        // before the readiness checks; a failed start undoes them, a
+        // running VM gets its CPU pinning and an exit watcher.
+        if !super::tuning::needs_lifecycle(vm) {
+            return self.start_vm_launch(vm, runtime, incoming).await;
+        }
+        super::tuning::prepare_start(vm).await?;
+        match self.start_vm_launch(vm, runtime, incoming).await {
+            Ok(()) => {
+                super::tuning::after_start(vm).await;
+                Ok(())
+            }
+            Err(e) => {
+                super::tuning::undo_start(vm).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// The part of a start that launches QEMU (see `start_vm_with`).
+    async fn start_vm_launch(
+        &self,
+        vm: &QemuVm,
+        runtime: super::display::DisplayRuntime,
+        incoming: bool,
+    ) -> Result<()> {
         // Passed-through PCI / mediated devices must be ready (vfio-pci,
         // IOMMU group): QEMU's own failure is far less readable.
         for d in &vm.hardware.hostpci {
@@ -1942,10 +1980,12 @@ mod tests {
             VmHostPci {
                 device: "01:00.0".into(),
                 primary_gpu: true,
+                ..Default::default()
             },
             VmHostPci {
                 device: "6b1f3a6e-5d0b-4b5f-9f61-0123456789ab".into(),
                 primary_gpu: false,
+                ..Default::default()
             },
         ];
         let a = qemu_command(&v, &rt, true, None).1.join(" ");

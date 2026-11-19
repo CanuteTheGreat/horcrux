@@ -202,6 +202,7 @@ impl PciManager {
         match (VmHostPci {
             device: addr.to_string(),
             primary_gpu: false,
+            ..Default::default()
         })
         .kind()
         {

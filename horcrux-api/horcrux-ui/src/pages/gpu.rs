@@ -11,6 +11,7 @@ fn is_blocked(d: &pt::PciDevice) -> bool {
 #[component]
 pub fn GpuManagement() -> impl IntoView {
     let (status, set_status) = create_signal(None::<pt::PciStatus>);
+    let (gaming, set_gaming) = create_signal(None::<pt::GamingReport>);
     let (devices, set_devices) = create_signal(Vec::<pt::PciDevice>::new());
     let (types, set_types) = create_signal(Vec::<pt::MdevType>::new());
     let (mdevs, set_mdevs) = create_signal(Vec::<pt::MdevDevice>::new());
@@ -29,6 +30,10 @@ pub fn GpuManagement() -> impl IntoView {
             match pt::list_pci().await {
                 Ok(d) => set_devices.set(d),
                 Err(e) => set_error.set(Some(format!("PCI devices: {}", e.message))),
+            }
+            match pt::gaming_check().await {
+                Ok(g) => set_gaming.set(Some(g)),
+                Err(e) => set_error.set(Some(format!("Gaming VM check: {}", e.message))),
             }
             if let Ok(t) = pt::mdev_types().await {
                 set_types.set(t);
@@ -190,6 +195,60 @@ pub fn GpuManagement() -> impl IntoView {
             {move || (!loading.get() && shown().is_empty()).then(|| view! {
                 <p id="pci-empty" class="form-help">"No PCI devices of this class on this node."</p>
             })}
+
+            <h3>"Gaming VM readiness"</h3>
+            <div id="gaming-check">
+                {move || match gaming.get() {
+                    None => view! { <p class="form-help">"Checking..."</p> }.into_view(),
+                    Some(g) => {
+                        let cpus = if g.cpus.performance.is_empty() {
+                            format!("{} CPUs", g.cpus.online.len())
+                        } else {
+                            format!("{} performance cores + {} efficiency cores", g.cpus.performance.len(), g.cpus.efficiency.len())
+                        };
+                        let pages = g.hugepages.iter()
+                            .map(|(kb, total, free)| format!("{} MiB pages: {free} free of {total}", kb / 1024))
+                            .collect::<Vec<_>>().join("; ");
+                        view! {
+                            <ul class="gaming-host" id="gaming-host">
+                                <li id="gaming-kvm">{if g.kvm { "KVM: available" } else { "KVM: missing (no /dev/kvm)" }}</li>
+                                <li id="gaming-iommu">{format!("IOMMU groups: {}{}", g.iommu_groups, if g.vfio_pci_loaded { "" } else { " (vfio-pci driver not loaded)" })}</li>
+                                <li id="gaming-cpus">{format!("{cpus}; a gaming VM gets {} vCPUs pinned to host CPUs {}", g.suggested_vcpus, g.suggested_pinning)}</li>
+                                <li id="gaming-hugepages">{if pages.is_empty() { "Huge pages: not offered by this kernel".to_string() } else { format!("Huge pages: {pages} (grown at VM start)") }}</li>
+                            </ul>
+                            <table class="data-table" id="gaming-gpus">
+                                <thead><tr><th>"GPU"</th><th>"Verdict"</th><th>"Moves with it"</th><th>"Monitors"</th><th>"Details"</th></tr></thead>
+                                <tbody>
+                                    {g.gpus.into_iter().map(|c| view! {
+                                        <tr class="gaming-gpu" data-addr=c.address.clone() data-verdict=c.verdict.clone()>
+                                            <td><code>{c.address.clone()}</code>{format!(" {} {}:{} ({})", c.vendor_name, c.vendor_id, c.device_id, c.driver.clone().unwrap_or_else(|| "no driver".into()))}</td>
+                                            <td class={format!("gaming-verdict verdict-{}", c.verdict)}>{match c.verdict.as_str() {
+                                                "ready" => "Ready for a gaming VM",
+                                                "ready-with-warnings" => "Usable, see notes",
+                                                "single-gpu" => "Host's only screen (single-GPU passthrough)",
+                                                _ => "Not usable",
+                                            }}</td>
+                                            <td>{c.functions.join(", ")}</td>
+                                            <td>{if c.displays.is_empty() { "none".to_string() } else { c.displays.join(", ") }}</td>
+                                            <td>
+                                                <ul class="gaming-reasons">
+                                                    {c.reasons.iter().map(|r| view! { <li>{r.clone()}</li> }).collect_view()}
+                                                </ul>
+                                                {c.quirks.iter().flat_map(|q| q.links.clone()).map(|l| view! {
+                                                    <a class="gaming-quirk-link" href=l.clone() target="_blank" rel="noopener">{l.clone()}</a>
+                                                }).collect_view()}
+                                            </td>
+                                        </tr>
+                                    }).collect_view()}
+                                </tbody>
+                            </table>
+                            <p class="form-help">
+                                "Add a usable GPU to a VM on its Hardware page and tick \"hand over at start\": the GPU moves to the VM when it starts and comes back when it shuts down. Some online games refuse to run in any VM; see the Gaming VM guide."
+                            </p>
+                        }.into_view()
+                    }
+                }}
+            </div>
 
             <h3>"Mediated devices (vGPU)"</h3>
             <div id="mdev-section">

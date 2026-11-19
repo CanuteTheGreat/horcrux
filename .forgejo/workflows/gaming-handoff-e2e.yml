@@ -1,0 +1,72 @@
+name: Gaming VM hand-off (real kernel, KVM)
+
+# Real-kernel proof of the gaming-VM host plumbing (docs/design/gaming-vm.md):
+# a throw-away Debian VM with an emulated IOMMU and a spare PCI display runs
+# horcrux-vm's ignored `handoff_e2e` test as root: managed hand-off refused
+# while a program holds the card, bochs-drm -> vfio-pci, a nested QEMU with the
+# device + Hyper-V flags + huge-page memory, CPU pinning from QMP thread ids,
+# release waiting for QEMU, device back on its driver. Needs /dev/kvm with
+# nested virtualisation: rw-man-01's kvm-x86_64 runner.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/horcrux-vm/src/vm/handoff.rs'
+      - 'crates/horcrux-vm/src/vm/tuning.rs'
+      - 'crates/horcrux-vm/src/vm/pci.rs'
+      - 'crates/horcrux-vm/src/vm/qemu.rs'
+      - 'crates/horcrux-vm/src/vm/advanced.rs'
+      - 'crates/horcrux-vm/tests/handoff_e2e.rs'
+      - 'ci/gaming-handoff-e2e.sh'
+      - '.forgejo/workflows/gaming-handoff-e2e.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: "replace:${{ github.workflow }}@${{ github.ref }}"
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gaming-handoff-e2e:
+    name: Managed GPU hand-off + tuning in a nested VM (real KVM)
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libvirt-dev libpam0g-dev \
+            qemu-system-x86 qemu-utils openssh-client curl python3
+          ls -l /dev/kvm
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-gaming-handoff-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-gaming-handoff-
+
+      - name: Build the e2e test binary
+        run: |
+          set -o pipefail
+          cargo test -p horcrux-vm --features qemu --test handoff_e2e --no-run 2>&1 | tee build.log
+          bin=$(sed -n 's/.*Executable tests\/handoff_e2e.rs (\(.*\))/\1/p' build.log | tail -1)
+          test -x "$bin"
+          cp "$bin" handoff_e2e.bin
+
+      - name: Run the hand-off in a nested VM
+        run: |
+          mkdir -p /tmp/hx-handoff
+          WORK=/tmp/hx-handoff bash ci/gaming-handoff-e2e.sh handoff_e2e.bin

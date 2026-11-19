@@ -4297,6 +4297,8 @@ async fn passthrough_metric_servers_and_alert_silence_read_into_ui_types() {
     let token = login(&c).await;
 
     let _: pt::PciStatus = fetch(&c, &token, "/gpu/pci/status").await;
+    let g: pt::GamingReport = fetch(&c, &token, "/gpu/pci/gaming-check").await;
+    println!("contract: gaming check, {} GPUs", g.gpus.len());
     let pci: Vec<pt::PciDevice> = fetch(&c, &token, "/gpu/pci/devices").await;
     println!("contract: {} PCI devices", pci.len());
     let _: Vec<pt::MdevType> = fetch(&c, &token, "/gpu/mdev/types").await;

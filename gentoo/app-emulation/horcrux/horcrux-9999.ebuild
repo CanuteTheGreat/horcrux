@@ -332,6 +332,12 @@ src_install() {
 		fi
 	fi
 
+	# Known GPU passthrough issues shown by the Gaming VM check
+	# (node setting passthrough.quirks_files; local additions go in
+	# /etc/horcrux/gpu-quirks.toml)
+	insinto /usr/share/horcrux
+	doins crates/horcrux-vm/data/gpu-quirks.toml
+
 	# Create necessary directories
 	keepdir /etc/horcrux
 	# HTTPS certificate + node-local CA are generated here on first start

@@ -1,0 +1,59 @@
+# Known passthrough issues, shown by the Gaming VM check
+# (GET /api/gpu/pci/gaming-check) and the VM wizard.
+#
+# Installed as /usr/share/horcrux/gpu-quirks.toml. Add local entries in
+# /etc/horcrux/gpu-quirks.toml (same format); the list of files is the node
+# setting passthrough.quirks_files.
+#
+#   vendor         PCI vendor id (hex, no 0x)
+#   device_ranges  inclusive PCI device-id ranges; empty = every device of the vendor
+#   severity       info | warn | block
+#   title          one line shown in the check
+#   detail         longer explanation
+#   links          sources
+
+[[quirk]]
+vendor = "10de"
+# GB202 (RTX 5090 desktop, RTX PRO 6000), GB203 (RTX 5080/5070 Ti and the
+# 5090/5080 laptop GPUs), GB205/GB206/GB207.
+device_ranges = [["2b80", "2bff"], ["2c00", "2cff"], ["2d00", "2dff"], ["2f00", "2fff"]]
+severity = "warn"
+title = "NVIDIA Blackwell (RTX 50): the GPU can fail to reset when the VM stops; recovering it may need a full power-off of the host"
+detail = """
+Reported for the RTX 5090 and RTX PRO 6000 under VFIO since 2025: after the
+guest shuts down, the function-level reset times out ("not ready 65535ms
+after FLR") and the card stays dead until a cold power cycle. NVIDIA called
+it a device firmware defect; a kernel quirk was proposed on linux-pci in
+April 2026 and is not merged. Shut the Windows guest down from inside
+Windows (or with the VM's Shutdown button), never with Stop, and keep the
+GPU's firmware (VBIOS) up to date through the vendor's updates.
+"""
+links = [
+  "https://patchwork.ozlabs.org/project/linux-pci/patch/20260416070707.3242381-1-yuan.gao@ucloud.cn/",
+  "https://forum.level1techs.com/t/do-your-rtx-5090-or-general-rtx-50-series-has-reset-bug-in-vm-passthrough/228549",
+]
+
+[[quirk]]
+vendor = "1002"
+# Navi 31/32/33 (RX 7000)
+device_ranges = [["7440", "748f"]]
+severity = "warn"
+title = "AMD RX 7000 (RDNA3): often does not reset cleanly after a VM stops"
+detail = """
+RDNA3 cards are widely reported to need a host reboot after the first VM run
+(the "AMD reset bug"); vendor-reset does not cover them.
+"""
+links = ["https://github.com/gnif/vendor-reset"]
+
+[[quirk]]
+vendor = "8086"
+# Arrow Lake / Meteor Lake integrated graphics
+device_ranges = [["7d40", "7ddf"]]
+severity = "info"
+title = "Intel integrated GPU: SR-IOV (sharing it with VMs) is not available in the mainline kernel for this generation; keep it for the host desktop"
+detail = """
+The hardware reports SR-IOV, but mainline xe/i915 only enable virtual
+functions on other generations (Tiger Lake/Alder Lake, Panther Lake,
+Battlemage). Out-of-tree drivers exist but are experimental.
+"""
+links = ["https://github.com/strongtz/i915-sriov-dkms"]

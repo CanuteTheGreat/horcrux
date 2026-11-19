@@ -327,6 +327,121 @@ pub struct VmAdvanced {
     /// Executable run around the VM's lifecycle: `<vmid> pre-start|post-start|pre-stop|post-stop`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hookscript: Option<String>,
+    /// Pin the vCPU threads (and QEMU's own threads) to host CPUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_pinning: Option<VmCpuPinning>,
+    /// Back guest memory with huge pages (reserved at start, given back at stop).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hugepages: Option<VmHugePages>,
+    /// Hyper-V enlightenments for Windows guests (the list is the node
+    /// setting `passthrough.hyperv_enlightenments`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hyperv: bool,
+    /// Host keyboards/mice handed to the guest through evdev (`input-linux`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evdev: Vec<VmEvdev>,
+}
+
+/// Most evdev input devices one VM can grab.
+pub const MAX_VM_EVDEV: usize = 4;
+
+/// CPU pinning of a VM (`VmAdvanced::cpu_pinning`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VmCpuPinning {
+    /// Host CPUs for the vCPU threads: a cpu list (`0-7`, `2,4,6-9`) used
+    /// one host CPU per vCPU in order, or `auto` (on a hybrid CPU the
+    /// performance cores, otherwise the highest-numbered CPUs; CPU 0 is left
+    /// to the host when there are enough CPUs).
+    pub vcpus: String,
+    /// Host CPUs for QEMU's own threads (I/O, emulator); None or `auto` =
+    /// the host CPUs not used by the vCPUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emulator: Option<String>,
+}
+
+/// Huge-page backing (`VmAdvanced::hugepages`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VmHugePages {
+    /// Page size in KiB: 2048 (2 MiB) or 1048576 (1 GiB).
+    #[serde(default = "default_hugepage_kb")]
+    pub size_kb: u64,
+}
+
+fn default_hugepage_kb() -> u64 {
+    2048
+}
+
+impl Default for VmHugePages {
+    fn default() -> Self {
+        Self {
+            size_kb: default_hugepage_kb(),
+        }
+    }
+}
+
+/// A host input device handed to the guest (`VmAdvanced::evdev`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VmEvdev {
+    /// `/dev/input/by-id/...-event-kbd` (stable across reboots) or `/dev/input/eventN`.
+    pub path: String,
+    /// Keyboards: also grab the other evdev devices of this VM, so the
+    /// toggle (both Ctrl keys) switches every input between host and guest.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub grab_all: bool,
+}
+
+/// Parse a Linux cpu list (`0-3,8,10-11`) into sorted, unique CPU numbers.
+pub fn parse_cpu_list(s: &str) -> std::result::Result<Vec<u32>, String> {
+    let mut out: Vec<u32> = Vec::new();
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty cpu list".into());
+    }
+    for part in s.split(',') {
+        let part = part.trim();
+        let num = |x: &str| {
+            x.trim()
+                .parse::<u32>()
+                .map_err(|_| format!("bad cpu list {s:?} (expected e.g. 0-7,10)"))
+        };
+        match part.split_once('-') {
+            Some((a, b)) => {
+                let (a, b) = (num(a)?, num(b)?);
+                if a > b || b - a > 4096 {
+                    return Err(format!("bad cpu range {part:?}"));
+                }
+                out.extend(a..=b);
+            }
+            None => out.push(num(part)?),
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
+/// Format CPU numbers as a compact cpu list (`0-3,8`).
+pub fn format_cpu_list(cpus: &[u32]) -> String {
+    let mut v: Vec<u32> = cpus.to_vec();
+    v.sort_unstable();
+    v.dedup();
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < v.len() {
+        let start = v[i];
+        let mut end = start;
+        while i + 1 < v.len() && v[i + 1] == end + 1 {
+            i += 1;
+            end = v[i];
+        }
+        parts.push(if start == end {
+            start.to_string()
+        } else {
+            format!("{start}-{end}")
+        });
+        i += 1;
+    }
+    parts.join(",")
 }
 
 impl VmAdvanced {
@@ -447,6 +562,52 @@ impl VmAdvanced {
         if !self.virtiofs.is_empty() && !x86 {
             return Err("virtiofs is offered for x86_64 guests".into());
         }
+        if let Some(p) = &self.cpu_pinning {
+            let want = u64::from(self.max_cpus.unwrap_or(cpus).max(cpus));
+            if p.vcpus.trim() != "auto" {
+                let list =
+                    parse_cpu_list(&p.vcpus).map_err(|e| format!("cpu_pinning.vcpus: {e}"))?;
+                if (list.len() as u64) < want {
+                    return Err(format!(
+                        "cpu_pinning.vcpus lists {} host CPUs for {want} vCPUs: give one host CPU per vCPU",
+                        list.len()
+                    ));
+                }
+            }
+            if let Some(e) = &p.emulator {
+                if e.trim() != "auto" {
+                    parse_cpu_list(e).map_err(|e| format!("cpu_pinning.emulator: {e}"))?;
+                }
+            }
+        }
+        if let Some(h) = &self.hugepages {
+            if !matches!(h.size_kb, 2048 | 1048576) {
+                return Err("hugepages.size_kb must be 2048 (2 MiB) or 1048576 (1 GiB)".into());
+            }
+            if !x86 {
+                return Err("huge pages are offered for x86_64 guests".into());
+            }
+        }
+        if self.hyperv && !x86 {
+            return Err("Hyper-V enlightenments are for x86_64 guests".into());
+        }
+        if self.evdev.len() > MAX_VM_EVDEV {
+            return Err(format!("at most {MAX_VM_EVDEV} evdev input devices"));
+        }
+        let mut evs: Vec<&String> = Vec::new();
+        for e in &self.evdev {
+            safe_path("evdev device", &e.path)?;
+            if !e.path.starts_with("/dev/input/") {
+                return Err(format!(
+                    "evdev device {:?} must be under /dev/input/",
+                    e.path
+                ));
+            }
+            if evs.contains(&&e.path) {
+                return Err(format!("evdev device {} is listed twice", e.path));
+            }
+            evs.push(&e.path);
+        }
         if let Some(i) = &self.ivshmem {
             let ok = !i.name.is_empty()
                 && i.name.len() <= 32
@@ -535,7 +696,7 @@ pub fn valid_guid(g: &str) -> bool {
 pub const MAX_VM_HOSTPCI: usize = 8;
 
 /// A host PCI device or mediated device passed through to a VM.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct VmHostPci {
     /// A PCI address (`0000:01:00.0`, the domain may be left out) of a
     /// device bound to `vfio-pci`, or the UUID of a mediated device
@@ -544,6 +705,17 @@ pub struct VmHostPci {
     /// The guest's primary VGA adapter (`x-vga=on`); at most one per VM.
     #[serde(default)]
     pub primary_gpu: bool,
+    /// Horcrux moves the device (and the other functions of its IOMMU
+    /// group, e.g. a GPU's HDMI audio) to `vfio-pci` when the VM starts and
+    /// gives it back to its host driver when the VM stops. Off = the device
+    /// must already be bound to `vfio-pci`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub managed: bool,
+    /// Managed GPU only: allow the hand-off even though a monitor is
+    /// connected to this GPU and no other GPU drives one (single-GPU
+    /// passthrough: the host loses its local display while the VM runs).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_display_loss: bool,
 }
 
 /// What a [`VmHostPci::device`] string names.
@@ -864,6 +1036,20 @@ impl VmHardware {
         }
         if self.hostpci.iter().filter(|d| d.primary_gpu).count() > 1 {
             return Err("only one host PCI device can be the primary GPU".into());
+        }
+        for d in &self.hostpci {
+            if (d.managed || d.allow_display_loss) && !matches!(d.kind()?, HostPciKind::Pci(_)) {
+                return Err(format!(
+                    "{}: managed hand-off is for PCI devices, not mediated devices",
+                    d.device
+                ));
+            }
+            if d.allow_display_loss && !d.managed {
+                return Err(format!(
+                    "{}: allow_display_loss needs managed: true",
+                    d.device
+                ));
+            }
         }
         Ok(())
     }
@@ -1353,6 +1539,7 @@ mod tests {
         let h = |d: &str| VmHostPci {
             device: d.into(),
             primary_gpu: false,
+            ..Default::default()
         };
         assert_eq!(
             h("01:00.0").kind(),

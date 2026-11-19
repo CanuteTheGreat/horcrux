@@ -394,6 +394,15 @@ pub async fn run() -> anyhow::Result<()> {
         kubernetes_manager,
     });
 
+    // Gaming VMs: the managed GPU hand-off stops/starts helper services
+    // through the host's init system (OpenRC or systemd), and VMs that were
+    // running across an API restart get their exit watchers back.
+    crate::vm::handoff::set_host_services(Box::new(crate::init::HandoffServices));
+    {
+        let vms = state.vm_manager.clone();
+        tokio::spawn(async move { vms.reconcile_passthrough().await });
+    }
+
     // Default global migration bandwidth limit: 70% of the fastest local link
     // so a live migration cannot saturate it (1 GbE .. 100 GbE).
     {

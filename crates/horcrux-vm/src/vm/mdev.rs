@@ -136,6 +136,7 @@ impl MdevManager {
                 match (VmHostPci {
                     device: u.clone(),
                     primary_gpu: false,
+                    ..Default::default()
                 })
                 .kind()
                 {
@@ -181,7 +182,8 @@ impl MdevManager {
         if !matches!(
             VmHostPci {
                 device: u.clone(),
-                primary_gpu: false
+                primary_gpu: false,
+                ..Default::default()
             }
             .kind(),
             Ok(HostPciKind::Mdev(_))
@@ -291,6 +293,7 @@ mod tests {
         VmHostPci {
             device: d.into(),
             primary_gpu: false,
+            ..Default::default()
         }
     }
 
@@ -471,6 +474,7 @@ mod tests {
         let g = VmHostPci {
             device: "0000:01:00.0".into(),
             primary_gpu: true,
+            ..Default::default()
         };
         assert_eq!(
             device_args(1, &g)[1],

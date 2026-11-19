@@ -7,6 +7,7 @@ Horcrux provides comprehensive GPU passthrough support including PCI passthrough
 - [Overview](#overview)
 - [Prerequisites](#prerequisites)
 - [PCI Passthrough](#pci-passthrough)
+- [Gaming VMs](#gaming-vms-windows-with-a-whole-gpu)
 - [vGPU / mediated devices](#vgpu--mediated-devices-nvidia-vgpu-intel-gvt-g-amd-mxgpu)
 - [API Reference](#api-reference)
 - [Troubleshooting](#troubleshooting)
@@ -206,6 +207,63 @@ Response:
   }
 ]
 ```
+
+## Gaming VMs (Windows with a whole GPU)
+
+Design and limits: [design/gaming-vm.md](design/gaming-vm.md).
+
+1. Check the host: **Infrastructure > GPU Passthrough > Gaming VM readiness**
+   (`GET /api/gpu/pci/gaming-check`). Each GPU gets a verdict: *Ready*,
+   *Usable, see notes* (known issues, programs holding it), *Host's only screen*
+   (single-GPU passthrough) or *Not usable*. Keep the integrated GPU for the
+   host desktop and give the discrete GPU to the VM.
+2. Create a Windows 11 VM (q35, UEFI with Secure Boot, TPM 2.0, virtio disk and
+   network) and on its Hardware page add the GPU with **hand over at start**
+   (`hardware.hostpci[].managed: true`). Horcrux moves the GPU and the other
+   functions of its IOMMU group (its HDMI audio) to `vfio-pci` when the VM
+   starts and gives them back to their host drivers when the VM is shut down,
+   also when Windows powers itself off. It refuses, naming the programs, while
+   something on the host still uses the GPU.
+3. Tuning in the VM's advanced settings:
+
+   ```json
+   "adv": {
+     "hyperv": true,
+     "cpu_pinning": {"vcpus": "auto"},
+     "hugepages": {"size_kb": 2048},
+     "evdev": [{"path": "/dev/input/by-id/usb-...-event-kbd", "grab_all": true},
+               {"path": "/dev/input/by-id/usb-...-event-mouse"}]
+   }
+   ```
+
+   `auto` pinning uses the performance cores of a hybrid Intel CPU (never
+   E-cores) and puts QEMU's own threads on the remaining CPUs. Huge pages are
+   set aside at start and given back at stop. Press both Ctrl keys to switch an
+   evdev keyboard/mouse between host and guest.
+4. Stop a GPU VM with **Shut down** (Windows shuts down cleanly). A hard Stop can
+   leave some GPUs (NVIDIA RTX 50 series) unable to reset until the host is
+   powered off.
+
+Node settings (`[passthrough]` in `/etc/horcrux/config.toml`, all optional):
+
+```toml
+[passthrough]
+hyperv_enlightenments = ["hv-relaxed", "hv-vapic", "hv-spinlocks=0x1fff", "hv-vpindex", "hv-runtime",
+  "hv-synic", "hv-stimer", "hv-stimer-direct", "hv-reset", "hv-frequencies", "hv-reenlightenment",
+  "hv-tlbflush", "hv-ipi", "hv-time"]
+hyperv_cpu_model = "host"
+handoff_stop_services = ["nvidia-persistenced"]   # stopped during the hand-off, started again after
+handoff_refuse_when_held = true
+handoff_timeout_secs = 20
+hugepages_release_on_stop = true
+quirks_files = ["/usr/share/horcrux/gpu-quirks.toml", "/etc/horcrux/gpu-quirks.toml"]
+```
+
+Anti-cheat: Horcrux does not hide the hypervisor. Games whose anti-cheat
+refuses VMs (Valorant, League of Legends, Call of Duty, Battlefield 6, ARC
+Raiders, BattlEye titles such as Rainbow Six Siege, PUBG and Tarkov) will not run
+in the VM; several of them run on the Horcrux host itself through Steam/Proton,
+the rest need Windows on bare metal. The table is in the design document.
 
 ## vGPU / mediated devices (NVIDIA vGPU, Intel GVT-g, AMD MxGPU)
 

@@ -53,7 +53,8 @@ pub fn cpu_mem_args(vm: &QemuVm) -> Vec<String> {
         _ => vm.cpus.to_string(),
     });
     let shared = !adv.virtiofs.is_empty();
-    if adv.numa || shared {
+    let huge = adv.hugepages.as_ref();
+    if adv.numa || shared || huge.is_some() {
         let nodes = if adv.numa {
             u64::from(
                 sockets
@@ -63,10 +64,11 @@ pub fn cpu_mem_args(vm: &QemuVm) -> Vec<String> {
         } else {
             1
         };
-        let backend = if shared {
-            "memory-backend-memfd,share=on"
-        } else {
-            "memory-backend-ram"
+        let huge_backend = huge.map(|h| super::tuning::hugepage_backend(h, shared));
+        let backend = match &huge_backend {
+            Some(b) => b.as_str(),
+            None if shared => "memory-backend-memfd,share=on",
+            None => "memory-backend-ram",
         };
         let per_cpus = u64::from(total_cpus) / nodes;
         for i in 0..nodes {
@@ -365,6 +367,8 @@ pub async fn run_hook_lenient(adv: &VmAdvanced, vm_id: &str, phase: &str) {
 
 /// What happens once QEMU is gone (any way it exited).
 pub async fn after_exit(vm: &QemuVm) {
+    // managed GPU hand-off and huge pages (gaming VMs)
+    super::tuning::after_exit(vm);
     stop_virtiofsd(vm).await;
     run_hook_lenient(&vm.hardware.adv, &vm.id, "post-stop").await;
 }

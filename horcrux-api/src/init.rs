@@ -354,6 +354,26 @@ pub fn detect() -> Option<InitKind> {
     detect_with(Path::new("/"), which)
 }
 
+/// Host services for the managed GPU hand-off of gaming VMs
+/// (`horcrux_vm::vm::handoff`): the same OpenRC/systemd backend.
+pub struct HandoffServices;
+
+#[async_trait]
+impl crate::vm::handoff::HostServices for HandoffServices {
+    async fn is_active(&self, name: &str) -> bool {
+        match backend() {
+            Some(b) => b.exists(name) && matches!(b.state(name).await, Ok(ServiceState::Active)),
+            None => false,
+        }
+    }
+    async fn stop(&self, name: &str) -> Result<(), String> {
+        backend().ok_or("no init system")?.stop(name).await
+    }
+    async fn start(&self, name: &str) -> Result<(), String> {
+        backend().ok_or("no init system")?.start(name).await
+    }
+}
+
 /// The backend for this host; `None` in a container or chroot with no init system.
 pub fn backend() -> Option<Box<dyn InitBackend>> {
     match detect()? {

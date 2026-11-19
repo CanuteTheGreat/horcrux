@@ -25,6 +25,11 @@ pub fn HostPciPanel(hardware: RwSignal<VmHardware>, running: Signal<bool>) -> im
         if dev.is_empty() {
             return;
         }
+        // a device still on its host driver is handed over at each start
+        let managed = pci
+            .get_untracked()
+            .iter()
+            .any(|d| d.address.eq_ignore_ascii_case(&dev) && !d.vfio);
         hardware.update(|h| {
             if !h
                 .hostpci
@@ -34,6 +39,8 @@ pub fn HostPciPanel(hardware: RwSignal<VmHardware>, running: Signal<bool>) -> im
                 h.hostpci.push(VmHostPci {
                     device: dev,
                     primary_gpu: false,
+                    managed,
+                    ..Default::default()
                 });
             }
         });
@@ -60,6 +67,22 @@ pub fn HostPciPanel(hardware: RwSignal<VmHardware>, running: Signal<bool>) -> im
                                     }/>
                                 " primary GPU"
                             </label>
+                            <label title="Move the device from its host driver to vfio-pci when the VM starts, and give it back when the VM stops">
+                                <input type="checkbox" class="vm-hostpci-managed" disabled={move || running.get()}
+                                    prop:checked=d.managed
+                                    on:change=move |ev| {
+                                        let on = event_target_checked(&ev);
+                                        hardware.update(|h| {
+                                            if let Some(x) = h.hostpci.get_mut(i) {
+                                                x.managed = on;
+                                                if !on {
+                                                    x.allow_display_loss = false;
+                                                }
+                                            }
+                                        });
+                                    }/>
+                                " hand over at start"
+                            </label>
                             <button type="button" class="btn btn-sm btn-danger vm-hostpci-remove" disabled={move || running.get()}
                                 on:click=move |_| hardware.update(|h| { h.hostpci.remove(i); })>"Remove"</button>
                         </li>
@@ -72,9 +95,12 @@ pub fn HostPciPanel(hardware: RwSignal<VmHardware>, running: Signal<bool>) -> im
             <div class="form-row">
                 <select id="vm-hostpci-pick" prop:value=pick on:change=move |ev| pick.set(event_target_value(&ev))>
                     <option value="">"device on this node..."</option>
-                    {move || pci.get().into_iter().filter(|d| d.vfio && d.vms.is_empty()).map(|d| view! {
+                    {move || pci.get().into_iter()
+                        .filter(|d| d.vms.is_empty() && d.class_name != "bridge" && d.iommu_group.is_some() && (d.vfio || d.class_name == "gpu"))
+                        .map(|d| view! {
                         <option value=d.address.clone()>
-                            {format!("{} {} {} {}:{}", d.address, d.class_name, d.vendor_name, d.vendor_id, d.device_id)}
+                            {format!("{} {} {} {}:{}{}", d.address, d.class_name, d.vendor_name, d.vendor_id, d.device_id,
+                                if d.vfio { "" } else { " (handed over at start)" })}
                         </option>
                     }).collect_view()}
                     {move || mdevs.get().into_iter().filter(|m| m.vm.is_none()).map(|m| view! {
@@ -91,7 +117,7 @@ pub fn HostPciPanel(hardware: RwSignal<VmHardware>, running: Signal<bool>) -> im
                     on:click=move |_| { add(manual.get_untracked()); manual.set(String::new()); }>"Add by address"</button>
             </div>
             <small class="form-help">
-                "Only devices bound to vfio-pci appear in the list (bind them under "
+                "Devices bound to vfio-pci and GPUs (handed over at each start) appear in the list (bind others under "
                 <a href="/gpu">"Infrastructure > GPU Passthrough"</a>
                 "). Takes effect at the next start. A VM with passthrough hardware cannot be live-migrated or have its state saved."
             </small>

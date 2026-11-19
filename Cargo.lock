@@ -2588,6 +2588,7 @@ dependencies = [
 name = "horcrux-vm"
 version = "0.1.5"
 dependencies = [
+ "async-trait",
  "axum",
  "chrono",
  "futures",
@@ -2603,6 +2604,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.24.0",
+ "toml",
  "tracing",
  "urlencoding",
  "uuid",

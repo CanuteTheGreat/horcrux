@@ -5,6 +5,7 @@ pub mod cross_node_clone;
 pub mod devices;
 pub mod display;
 pub mod firmware;
+pub mod handoff;
 pub mod hardware;
 pub mod hold;
 #[cfg(feature = "incus")]
@@ -23,6 +24,7 @@ pub mod savestate;
 pub mod snapshot;
 pub mod snapshot_quota;
 pub mod snapshot_scheduler;
+pub mod tuning;
 
 pub use qemu::{QemuManager, QemuVm};
 
@@ -121,6 +123,20 @@ impl VmManager {
     }
 
     /// List all virtual machines
+    /// After an API restart: re-attach the exit watchers of running gaming
+    /// VMs (managed GPU hand-off, huge pages) and release what stopped ones
+    /// still hold (see `tuning::reconcile`).
+    pub async fn reconcile_passthrough(&self) {
+        let vms: Vec<qemu::QemuVm> = self
+            .list_vms()
+            .await
+            .iter()
+            .filter(|c| c.hypervisor == VmHypervisor::Qemu)
+            .map(|c| self.qemu.vm_from_config(c))
+            .collect();
+        tuning::reconcile(&vms);
+    }
+
     pub async fn list_vms(&self) -> Vec<VmConfig> {
         // Try database first if available
         let listed = match &self.db {

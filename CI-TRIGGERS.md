@@ -16,6 +16,7 @@ CI work runs **when its inputs change**, not on a clock (owner principle 2026-11
 | `ci.yml` | CI | push main tags (all paths); pull_request; cron 40 21 * * 1 (safety net, see comment in file); dispatch |
 | `deploy-site.yml` | Deploy Horcrux site | push main (paths: 4 filters); dispatch |
 | `docs.yml` | Documentation | push main (paths: 4 filters) |
+| `gaming-handoff-e2e.yml` | Gaming VM hand-off (real kernel, KVM) | push main (paths: 8 filters); dispatch |
 | `guest-power.yml` | Guest save state + cluster drain (2 nodes, KVM) | push main (paths: 19 filters); dispatch |
 | `ha-failover.yml` | HA failover (3 nodes, real QEMU) | push main (paths: 7 filters); dispatch |
 | `incus-vm-console.yml` | Incus VM consoles (KVM) | push main (paths: 10 filters); dispatch |

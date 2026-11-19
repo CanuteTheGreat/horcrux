@@ -6,6 +6,10 @@
 //! * `POST /api/gpu/pci/devices/:addr/bind-vfio`     move a device to `vfio-pci`
 //! * `POST /api/gpu/pci/devices/:addr/unbind-vfio`   give it back to its host driver
 //!   (409 while a VM lists it)
+//! * `GET  /api/gpu/pci/gaming-check`                can this host run a gaming VM:
+//!   KVM, IOMMU, CPU layout (P/E cores) and suggested pinning, huge pages, and per
+//!   GPU the functions that move with it, attached monitors, programs holding it,
+//!   reset methods, known issues and a verdict (docs/design/gaming-vm.md)
 //!
 //! A VM gets the device through `hardware.hostpci` (see `api/mdev.rs`).
 //! Such a VM is pinned to this host: live migration is refused (device state
@@ -28,6 +32,7 @@ use std::sync::Arc;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/gpu/pci/status", get(status))
+        .route("/api/gpu/pci/gaming-check", get(gaming_check))
         .route("/api/gpu/pci/devices", get(list))
         .route("/api/gpu/pci/devices/:addr/bind-vfio", post(bind))
         .route("/api/gpu/pci/devices/:addr/unbind-vfio", post(unbind))
@@ -68,6 +73,16 @@ async fn users(state: &AppState) -> Vec<(String, String)> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+async fn gaming_check() -> Result<Json<crate::vm::handoff::GamingReport>, ApiError> {
+    let r = tokio::task::spawn_blocking(|| {
+        let quirks = crate::vm::handoff::load_quirks(&crate::vm::tuning::config().quirks_files);
+        crate::vm::handoff::host_report(&crate::vm::handoff::Host::default(), &quirks)
+    })
+    .await
+    .map_err(|e| Error::System(format!("gaming check: {e}")))?;
+    Ok(Json(r))
 }
 
 async fn status() -> Json<Status> {
@@ -129,6 +144,7 @@ async fn unbind(
     let a = match (horcrux_common::VmHostPci {
         device: addr.clone(),
         primary_gpu: false,
+        ..Default::default()
     })
     .kind()
     {

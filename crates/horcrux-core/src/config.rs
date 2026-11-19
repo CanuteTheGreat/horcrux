@@ -28,6 +28,70 @@ pub struct HorcruxConfig {
     /// Authentication settings
     #[serde(default)]
     pub auth: AuthConfig,
+    /// GPU / PCI passthrough and VM tuning (gaming VMs)
+    #[serde(default)]
+    pub passthrough: PassthroughConfig,
+}
+
+/// GPU / PCI passthrough and VM tuning settings (`[passthrough]`).
+///
+/// Every value has a default; a node overrides any of them in
+/// `/etc/horcrux/config.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PassthroughConfig {
+    /// QEMU `-cpu` flags added for VMs with `adv.hyperv` (Windows guests).
+    pub hyperv_enlightenments: Vec<String>,
+    /// CPU model used for Hyper-V VMs that set no CPU model themselves.
+    pub hyperv_cpu_model: String,
+    /// Host services stopped (when running) before a managed GPU is moved to
+    /// vfio-pci and started again once it is back on its host driver.
+    pub handoff_stop_services: Vec<String>,
+    /// Refuse a managed hand-off while a host process has the device open
+    /// (unbinding a driver under an open file hangs or crashes that program).
+    pub handoff_refuse_when_held: bool,
+    /// How long one driver unbind/bind may take before the hand-off fails.
+    pub handoff_timeout_secs: u64,
+    /// Give huge pages that a VM start reserved back to the host when it stops.
+    pub hugepages_release_on_stop: bool,
+    /// Known-issue tables for passthrough devices (TOML, later files add to
+    /// earlier ones; missing files are skipped).
+    pub quirks_files: Vec<PathBuf>,
+}
+
+impl Default for PassthroughConfig {
+    fn default() -> Self {
+        Self {
+            hyperv_enlightenments: [
+                "hv-relaxed",
+                "hv-vapic",
+                "hv-spinlocks=0x1fff",
+                "hv-vpindex",
+                "hv-runtime",
+                "hv-synic",
+                "hv-stimer",
+                "hv-stimer-direct",
+                "hv-reset",
+                "hv-frequencies",
+                "hv-reenlightenment",
+                "hv-tlbflush",
+                "hv-ipi",
+                "hv-time",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            hyperv_cpu_model: "host".into(),
+            handoff_stop_services: vec!["nvidia-persistenced".into()],
+            handoff_refuse_when_held: true,
+            handoff_timeout_secs: 20,
+            hugepages_release_on_stop: true,
+            quirks_files: vec![
+                PathBuf::from("/usr/share/horcrux/gpu-quirks.toml"),
+                PathBuf::from("/etc/horcrux/gpu-quirks.toml"),
+            ],
+        }
+    }
 }
 
 /// Authentication settings

@@ -33,6 +33,68 @@ pub struct PciDevice {
     pub vms: Vec<String>,
 }
 
+/// `GET /api/gpu/pci/gaming-check` (horcrux-vm `handoff::GamingReport`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GamingReport {
+    pub kvm: bool,
+    pub iommu_groups: usize,
+    pub vfio_pci_loaded: bool,
+    pub cpus: HostCpus,
+    pub suggested_vcpus: u32,
+    pub suggested_pinning: String,
+    /// (page KiB, total, free)
+    pub hugepages: Vec<(u64, u64, u64)>,
+    pub gpus: Vec<GpuCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostCpus {
+    pub online: Vec<u32>,
+    pub performance: Vec<u32>,
+    pub efficiency: Vec<u32>,
+    pub smt_groups: Vec<Vec<u32>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GpuHolder {
+    pub pid: u32,
+    pub command: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GpuQuirk {
+    pub vendor: String,
+    pub severity: String,
+    pub title: String,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub links: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GpuCheck {
+    pub address: String,
+    pub vendor_id: String,
+    pub device_id: String,
+    pub vendor_name: String,
+    pub driver: Option<String>,
+    pub iommu_group: Option<String>,
+    pub functions: Vec<String>,
+    pub displays: Vec<String>,
+    pub host_keeps_display: bool,
+    pub reset_methods: Vec<String>,
+    pub holders: Vec<GpuHolder>,
+    pub quirks: Vec<GpuQuirk>,
+    pub verdict: String,
+    pub reasons: Vec<String>,
+}
+
+pub async fn gaming_check() -> Result<GamingReport, ApiError> {
+    fetch_json("/gpu/pci/gaming-check").await
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MdevType {
     pub parent: String,
