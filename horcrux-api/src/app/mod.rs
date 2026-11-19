@@ -1927,9 +1927,23 @@ async fn stop_vm(
         .map(|vm| format!("{:?}", vm.status))
         .unwrap_or_else(|_| "unknown".to_string());
 
-    let vm = state.vm_manager.stop_vm(&id).await?;
+    // Record the operator's intent BEFORE the process goes away: the HA loop restarts any Started resource whose QEMU is gone, and in the window
+    // between the stop and the intent update (ha-failover run 3992, "a VM the operator stopped is not restarted by HA") it restarted the VM
+    // the operator had just stopped. A failed stop gives the intent back.
+    #[cfg(feature = "cluster")]
+    let had_ha = state.ha_manager.get_resource(&id).await;
     #[cfg(feature = "cluster")]
     ha_user_intent(&state, &id, ha::HaState::Stopped).await;
+    let vm = match state.vm_manager.stop_vm(&id).await {
+        Ok(vm) => vm,
+        Err(e) => {
+            #[cfg(feature = "cluster")]
+            if let Some(r) = had_ha {
+                ha_user_intent(&state, &id, r.state).await;
+            }
+            return Err(e.into());
+        }
+    };
     emit_vm_state(&state, &vm, &old_status).await;
 
     // Broadcast VM status change

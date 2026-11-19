@@ -506,6 +506,11 @@ impl HaManager {
             horcrux_common::Error::System(format!("VM {} not managed by HA", vm_id))
         })?;
 
+        // The operator stopped it (or HA is switched off for it): a missing process is the intended state, not a failure to recover.
+        if matches!(resource.state, HaState::Stopped | HaState::Disabled) {
+            return Ok(HaAction::None);
+        }
+
         tracing::warn!("Handling failure of VM {} on node {}", vm_id, node);
 
         // Try restart first if under limit
@@ -1183,6 +1188,41 @@ mod tests {
 
         let action = manager.handle_vm_failure("100", "node1").await.unwrap();
         assert!(matches!(action, HaAction::Migrate(_)));
+    }
+
+    #[tokio::test]
+    async fn test_vm_failure_ignored_for_operator_stopped_resource() {
+        let manager = HaManager::new();
+        manager.enable().await;
+        manager
+            .add_group(HaGroup {
+                name: "g".to_string(),
+                nodes: vec!["node1".to_string()],
+                restricted: false,
+                no_failback: false,
+            })
+            .await
+            .unwrap();
+        manager
+            .add_resource(HaConfig {
+                vm_id: "100".to_string(),
+                group: "g".to_string(),
+                max_restart: 3,
+                max_relocate: 2,
+                state: HaState::Started,
+                architecture: Architecture::X86_64,
+                required_passthrough_devices: Vec::new(),
+            })
+            .await
+            .unwrap();
+        // the operator stops the VM: its missing process is intended, HA must not restart it
+        manager
+            .update_resource_state("100", HaState::Stopped, None)
+            .await
+            .unwrap();
+        let action = manager.handle_vm_failure("100", "node1").await.unwrap();
+        assert!(matches!(action, HaAction::None));
+        assert_eq!(manager.get_resource("100").await.unwrap().restart_count, 0);
     }
 
     fn make_node_resources(name: &str, arch: Architecture) -> NodeResources {
