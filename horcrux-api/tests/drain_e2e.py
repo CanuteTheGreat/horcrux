@@ -208,6 +208,9 @@ check(st == 200, "rebalance settings: on return, 0.1 points threshold (replicate
 
 # --- 3. host shutdown -------------------------------------------------------------
 log("== 3. host shutdown of node1: nothing movable left, the pinned VM is saved locally")
+# The test node has no encrypted storage: opt in to plain RAM images (the default refuses).
+_st, _gp = api(N1, "GET", "/nodes/guest-power")
+api(N1, "PUT", "/nodes/guest-power", {**_gp["node"], "save_encryption": "allow_unencrypted"})
 out = sh(N1, ". /hx/env.sh; horcrux-api guests stop")
 log("    horcrux-api guests stop:\n      " + out.replace("\n", "\n      "))
 check("saved vm dr-pin" in out, "pinned VM saved to disk (could not be moved)")

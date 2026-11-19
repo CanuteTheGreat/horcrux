@@ -39,7 +39,7 @@ def token():
     cache = "/tmp/hx-token-" + API.replace("/", "_").replace(":", "_")
     if os.path.exists(cache) and time.time() - os.path.getmtime(cache) < 3000:
         return open(cache).read().strip()
-    st, body = req("POST", "/auth/login", {"username": "admin", "password": "admin"})
+    st, body = req("POST", "/auth/login", {"username": os.environ.get("HX_USER", "admin"), "password": os.environ.get("HX_PASS", "admin")})
     if st != 200:
         sys.exit(f"login {st}: {body}")
     j = json.loads(body)

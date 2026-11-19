@@ -37,6 +37,7 @@ fn stop_label(a: &str) -> &'static str {
         "save" => "Save state",
         "shutdown" => "Shut down",
         "poweroff" => "Power off",
+        "none" => "Do nothing",
         _ => "?",
     }
 }
@@ -120,7 +121,17 @@ pub fn GuestPowerPage() -> impl IntoView {
                 } else {
                     format!("Containers cannot save state on this node: {}", c.criu.error.clone().unwrap_or_default())
                 };
+                let target = o.save_target.clone();
+                let budget = o.stop_budget_secs;
+                let budget_warning = o.stop_budget_warning.clone();
                 view! {
+                    {target.map(|t| if t.encrypted {
+                        view! { <div class="alert alert-info" id="power-encryption-status">{format!("Saved memory goes to encrypted storage: {}.", t.detail)}</div> }.into_view()
+                    } else {
+                        view! { <div class="alert alert-warning" id="power-encryption-status">{format!("Saved memory cannot be written here: {}. Guests are shut down instead of saved until \"Save states to\" points at an encrypted ZFS dataset or LUKS volume.", t.detail)}</div> }.into_view()
+                    })}
+                    <p class="form-help" id="power-budget">{format!("Worst-case time to save or stop all running guests at host shutdown: {budget} s (from the timeouts below; the host waits that long).")}</p>
+                    {budget_warning.map(|w| view! { <div class="alert alert-warning" id="power-budget-warning">{w}</div> })}
                     <div class=if c.criu.available { "alert alert-info" } else { "alert alert-warning" } id="power-criu">{criu}</div>
                     <p class="form-help" id="power-accel">
                         {if c.kvm { "VMs run with KVM acceleration; their state is saved with QEMU." } else { "No /dev/kvm: VMs run under TCG emulation; their state is saved with QEMU all the same." }}
@@ -137,7 +148,26 @@ pub fn GuestPowerPage() -> impl IntoView {
                             <option value="save">"Save state"</option>
                             <option value="shutdown">"Shut down"</option>
                             <option value="poweroff">"Power off"</option>
+                            <option value="none">"Do nothing (guest ends with the host)"</option>
                         </select></label>
+                    <label>"If state cannot be saved "
+                        <select id="power-fallback" prop:value=n.save_fallback.clone()
+                            on:change=move |ev| { let v = event_target_value(&ev); upd(Box::new(move |n| n.save_fallback = v.clone())) }>
+                            <option value="shutdown">"Shut down cleanly (power off after the timeout)"</option>
+                            <option value="poweroff">"Power off at once"</option>
+                        </select></label>
+                    <label>"Saved memory must be on "
+                        <select id="power-encryption" prop:value=n.save_encryption.clone()
+                            on:change=move |ev| { let v = event_target_value(&ev); upd(Box::new(move |n| n.save_encryption = v.clone())) }>
+                            <option value="require">"Encrypted storage only (recommended)"</option>
+                            <option value="allow_unencrypted">"Any storage (plain RAM image on disk)"</option>
+                        </select></label>
+                    <label>"Pause between resumes (s) "
+                        <input id="power-stagger" type="number" min="0" max="3600" prop:value=n.resume_stagger_secs
+                            on:input=move |ev| { let v = event_target_value(&ev).parse().unwrap_or(0); upd(Box::new(move |n| n.resume_stagger_secs = v)) }/></label>
+                    <label>"Shutdown wait margin (s) "
+                        <input id="power-margin" type="number" min="0" max="86400" prop:value=n.stop_margin_secs
+                            on:input=move |ev| { let v = event_target_value(&ev).parse().unwrap_or(60); upd(Box::new(move |n| n.stop_margin_secs = v)) }/></label>
                     <label>"Automatic start action "
                         <select id="power-start" prop:value=n.start_action.clone()
                             on:change=move |ev| { let v = event_target_value(&ev); upd(Box::new(move |n| n.start_action = v.clone())) }>
@@ -258,7 +288,16 @@ fn GuestPowerRow(
     let saved = g.saved.clone();
     let notes = {
         let mut n = Vec::new();
-        if let Some(b) = &g.save_blocker {
+        if g.host_stop_action != "save" && g.policy.stop_action == "save" {
+            n.push(format!(
+                "Will {} at host shutdown, not save: {}",
+                match g.host_stop_action.as_str() {
+                    "poweroff" => "power off",
+                    _ => "shut down",
+                },
+                g.host_stop_reason.clone().unwrap_or_default()
+            ));
+        } else if let Some(b) = &g.save_blocker {
             n.push(format!("State cannot be saved: {b}"));
         }
         if let Some(r) = &g.last_result {
@@ -283,6 +322,7 @@ fn GuestPowerRow(
                 <option value="save">"Save state"</option>
                 <option value="shutdown">"Shut down"</option>
                 <option value="poweroff">"Power off"</option>
+                <option value="none">"Do nothing"</option>
             </select></td>
             <td><select class="power-guest-start" prop:value=start on:change=move |ev| start.set(event_target_value(&ev))>
                 <option value="">{format!("Node default ({})", start_label(&eff.start_action))}</option>

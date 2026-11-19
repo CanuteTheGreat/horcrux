@@ -1,5 +1,6 @@
 //! Saving, resuming and the host shutdown / boot passes (see mod.rs).
-use super::policy::{self, Effective, StartAction, StopAction};
+use super::crypt;
+use super::policy::{self, Effective, SaveEncryption, SaveFallback, StartAction, StopAction};
 use crate::container::savestate as ctsave;
 use crate::vm::savestate::VmSaveOutcome;
 use crate::AppState;
@@ -392,10 +393,34 @@ pub async fn prepare_stateful(state: &Arc<AppState>, k: GuestKind, id: &str) {
 
 // ------------------------------------------------------------------- save
 
-/// Free-space check for a saved state in `dir`.
+/// Where a guest's saved state physically ends up: our directory for
+/// QEMU VMs, LXC and Docker; the runtime's own storage for the runtimes
+/// that keep the state themselves.
+pub fn save_target_dir(g: &GuestInfo, base: &Path) -> PathBuf {
+    match (&g.ct_runtime, g.qemu) {
+        (_, true) => base.to_path_buf(),
+        (Some(ContainerRuntime::Lxc), _) | (Some(ContainerRuntime::Docker), _) => {
+            base.to_path_buf()
+        }
+        (Some(ContainerRuntime::Incus), _) => PathBuf::from("/var/lib/incus"),
+        (Some(ContainerRuntime::Lxd), _) => PathBuf::from("/var/lib/lxd"),
+        (Some(ContainerRuntime::Podman), _) => PathBuf::from("/var/lib/containers"),
+        (None, false) => match g.instance_cli {
+            Some("lxc") => PathBuf::from("/var/lib/lxd"),
+            _ => PathBuf::from("/var/lib/incus"),
+        },
+    }
+}
+
+/// Free-space check for a saved state in `dir`; the directory is private to
+/// root (a RAM image is as sensitive as the guest's secrets).
 fn space_ok(dir: &Path, mem_mb: u64) -> Result<()> {
     std::fs::create_dir_all(dir)
         .map_err(|e| Error::System(format!("cannot create {}: {e}", dir.display())))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
     crate::vm::savestate::check_free_space(dir, mem_mb)
 }
 
@@ -466,6 +491,10 @@ async fn save_locked(
         }
         None => eff.save_dir.clone(),
     };
+    // Saved memory holds secrets: only onto encrypted storage (unless the
+    // administrator opted out).
+    let target = save_target_dir(&g, &base);
+    crypt::verdict(&crypt::probe(&target).await, eff.save_encryption).map_err(Error::Conflict)?;
     let dir = base.join(format!("{}-{}", k.prefix(), safe(id)));
     let timeout = Duration::from_secs(eff.save_timeout_secs);
     let mut saved = SavedGuest {
@@ -729,7 +758,17 @@ async fn stop_one(state: &Arc<AppState>, g: GuestInfo, eff: Effective) -> GuestO
         message,
     };
     let mut warning = None;
+    if eff.stop_action == StopAction::None {
+        return out(
+            "left",
+            true,
+            Some(
+                "The stop action is None: the guest was left alone and ends with the host.".into(),
+            ),
+        );
+    }
     let guard = lock_guest(g.kind, &g.id);
+    let mut fell_back = false;
     if eff.stop_action == StopAction::Save {
         match &guard {
             Ok(_) => match save_locked(state, g.kind, &g.id, None, None).await {
@@ -740,13 +779,19 @@ async fn stop_one(state: &Arc<AppState>, g: GuestInfo, eff: Effective) -> GuestO
                         g.kind.prefix(),
                         g.id
                     );
+                    fell_back = true;
                     warning = Some(format!("State could not be saved: {e}. The guest was shut down instead and will be started again."));
                 }
             },
-            Err(e) => warning = Some(format!("State could not be saved: {e}")),
+            Err(e) => {
+                fell_back = true;
+                warning = Some(format!("State could not be saved: {e}"))
+            }
         }
     }
-    if eff.stop_action != StopAction::Poweroff {
+    let straight_to_poweroff = eff.stop_action == StopAction::Poweroff
+        || (fell_back && eff.save_fallback == SaveFallback::Poweroff);
+    if !straight_to_poweroff {
         match clean_shutdown(state, &g, eff.shutdown_timeout_secs).await {
             Ok(_) => return out("shutdown", true, warning),
             Err(e) => {
@@ -768,6 +813,20 @@ async fn stop_one(state: &Arc<AppState>, g: GuestInfo, eff: Effective) -> GuestO
             )),
         ),
     }
+}
+
+/// Seconds the host stop pass may take, from the configured timeouts and the
+/// number of guests that could be running. The stop client waits this long
+/// (plus nothing hard-coded) and the UI warns when an init system's own
+/// shutdown limit is shorter.
+pub async fn stop_budget(state: &Arc<AppState>) -> u64 {
+    let node = policy::load_node(state).await;
+    let n = list_guests(state)
+        .await
+        .iter()
+        .filter(|g| g.is_up())
+        .count();
+    node.stop_budget_secs(n)
 }
 
 static STOPPING: AtomicBool = AtomicBool::new(false);
@@ -830,13 +889,23 @@ pub async fn stop_all(state: &Arc<AppState>) -> Report {
         },
     );
     let sem = Arc::new(tokio::sync::Semaphore::new(node.max_parallel.max(1)));
-    let mut tasks = Vec::new();
+    // Reverse of the start order: what started last is handled first (the
+    // semaphore queue keeps this order).
+    let mut ordered = Vec::new();
     for g in running {
+        let eff = policy::effective(state, g.kind, &g.id).await;
+        ordered.push((eff, g));
+    }
+    ordered.sort_by(|a, b| {
+        (std::cmp::Reverse(a.0.start_order), &a.1.name)
+            .cmp(&(std::cmp::Reverse(b.0.start_order), &b.1.name))
+    });
+    let mut tasks = Vec::new();
+    for (eff, g) in ordered {
         let st = state.clone();
         let sem = sem.clone();
         tasks.push(tokio::spawn(async move {
             let _permit = sem.acquire_owned().await;
-            let eff = policy::effective(&st, g.kind, &g.id).await;
             let o = stop_one(&st, g, eff).await;
             record(
                 &st,
@@ -968,6 +1037,8 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
     }
     plan.sort_by(|a, b| (a.0, a.1, &a.2.name).cmp(&(b.0, b.1, &b.2.name)));
     let t0 = tokio::time::Instant::now();
+    let stagger = Duration::from_secs(policy::load_node(state).await.resume_stagger_secs as u64);
+    let mut started_any = false;
     let mut outcomes = Vec::new();
     for (_, delay, g, act, saved) in plan {
         let mk = |action: &str, ok: bool, message: Option<String>| GuestOutcome {
@@ -1003,6 +1074,10 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
             _ if g.is_up() => mk("already-running", true, None),
             _ => {
                 tokio::time::sleep_until(t0 + Duration::from_secs(delay as u64)).await;
+                if started_any && !stagger.is_zero() {
+                    tokio::time::sleep(stagger).await;
+                }
+                started_any = true;
                 if act == BootAction::Resume {
                     let _guard = lock_guest(g.kind, &g.id);
                     match resume_locked(state, g.kind, &g.id).await {
@@ -1197,6 +1272,12 @@ pub struct GuestView {
     pub can_save: bool,
     /// Why state cannot be saved (CRIU missing, ...): shown as a warning.
     pub save_blocker: Option<String>,
+    /// What the host shutdown will really do to this guest right now:
+    /// save | shutdown | poweroff | none (after the fallback is applied).
+    pub host_stop_action: String,
+    /// Why it is not the configured action (passthrough, unencrypted
+    /// target, no CRIU, ...).
+    pub host_stop_reason: Option<String>,
     pub last_result: Option<GuestResult>,
 }
 
@@ -1225,13 +1306,38 @@ pub async fn capabilities() -> Capabilities {
     }
 }
 
+/// What the host shutdown will do to a guest, given the configured action
+/// and whether its state can be saved (pure, unit-tested).
+pub fn plan_host_stop(
+    action: StopAction,
+    fallback: SaveFallback,
+    can_save: bool,
+    blocker: Option<&str>,
+) -> (String, Option<String>) {
+    match action {
+        StopAction::None => ("none".into(), None),
+        StopAction::Poweroff => ("poweroff".into(), None),
+        StopAction::Shutdown => ("shutdown".into(), None),
+        StopAction::Save if can_save => ("save".into(), None),
+        StopAction::Save => (
+            match fallback {
+                SaveFallback::Shutdown => "shutdown",
+                SaveFallback::Poweroff => "poweroff",
+            }
+            .into(),
+            Some(blocker.unwrap_or("its state cannot be saved").to_string()),
+        ),
+    }
+}
+
 async fn view_of(
     state: &Arc<AppState>,
     g: GuestInfo,
     sup: &mut BTreeMap<String, ctsave::Support>,
     results: &BTreeMap<String, GuestResult>,
+    probes: &mut BTreeMap<PathBuf, crypt::Probe>,
 ) -> GuestView {
-    let (can_save, save_blocker) = match (&g.ct_runtime, g.qemu) {
+    let (mut can_save, mut save_blocker) = match (&g.ct_runtime, g.qemu) {
         (_, true) if g.passthrough => (false, Some(PASSTHROUGH_NO_SAVE.to_string())),
         (_, true) => (true, None),
         (Some(rt), _) => {
@@ -1261,8 +1367,32 @@ async fn view_of(
             },
         ),
     };
+    let eff = policy::effective(state, g.kind, &g.id).await;
+    if can_save && eff.save_encryption == SaveEncryption::Require {
+        let target = save_target_dir(&g, &eff.save_dir);
+        let p = match probes.get(&target) {
+            Some(p) => p.clone(),
+            None => {
+                let p = crypt::probe(&target).await;
+                probes.insert(target.clone(), p.clone());
+                p
+            }
+        };
+        if let Err(why) = crypt::verdict(&p, eff.save_encryption) {
+            can_save = false;
+            save_blocker = Some(why);
+        }
+    }
+    let (host_stop_action, host_stop_reason) = plan_host_stop(
+        eff.stop_action,
+        eff.save_fallback,
+        can_save,
+        save_blocker.as_deref(),
+    );
     GuestView {
-        policy: policy::effective(state, g.kind, &g.id).await,
+        host_stop_action,
+        host_stop_reason,
+        policy: eff,
         overrides: policy::load_override(state, g.kind, &g.id).await,
         saved: load_saved(state, g.kind, &g.id),
         last_result: results
@@ -1281,9 +1411,10 @@ async fn view_of(
 pub async fn guest_views(state: &Arc<AppState>) -> Vec<GuestView> {
     let results = load_results(state).await;
     let mut sup = BTreeMap::new();
+    let mut probes = BTreeMap::new();
     let mut out = Vec::new();
     for g in list_guests(state).await {
-        out.push(view_of(state, g, &mut sup, &results).await);
+        out.push(view_of(state, g, &mut sup, &results, &mut probes).await);
     }
     out
 }
@@ -1291,7 +1422,14 @@ pub async fn guest_views(state: &Arc<AppState>) -> Vec<GuestView> {
 pub async fn guest_view(state: &Arc<AppState>, k: GuestKind, id: &str) -> Result<GuestView> {
     let g = find_guest(state, k, id).await?;
     let results = load_results(state).await;
-    Ok(view_of(state, g, &mut BTreeMap::new(), &results).await)
+    Ok(view_of(
+        state,
+        g,
+        &mut BTreeMap::new(),
+        &results,
+        &mut BTreeMap::new(),
+    )
+    .await)
 }
 
 #[cfg(test)]
@@ -1318,6 +1456,50 @@ mod tests {
         assert_eq!(ha_boot_override(Skip, true), Skip);
         assert_eq!(ha_boot_override(Start, false), Start);
         assert_eq!(ha_boot_override(Resume, false), Resume);
+    }
+
+    #[test]
+    fn host_stop_plan_applies_the_fallback_and_names_the_reason() {
+        use SaveFallback::*;
+        let (a, r) = plan_host_stop(StopAction::Save, Shutdown, true, None);
+        assert_eq!((a.as_str(), r), ("save", None));
+        let (a, r) = plan_host_stop(StopAction::Save, Shutdown, false, Some("passthrough"));
+        assert_eq!(a, "shutdown");
+        assert_eq!(r.as_deref(), Some("passthrough"));
+        let (a, _) = plan_host_stop(StopAction::Save, Poweroff, false, None);
+        assert_eq!(a, "poweroff");
+        assert_eq!(
+            plan_host_stop(StopAction::None, Shutdown, false, None).0,
+            "none"
+        );
+        assert_eq!(
+            plan_host_stop(StopAction::Shutdown, Shutdown, false, Some("x")).1,
+            None
+        );
+    }
+
+    #[test]
+    fn save_target_follows_the_runtime() {
+        let mut g = GuestInfo {
+            kind: GuestKind::Vm,
+            id: "1".into(),
+            name: "n".into(),
+            runtime: "qemu".into(),
+            status: "running".into(),
+            memory_mb: 1,
+            qemu: true,
+            ct_runtime: None,
+            instance_cli: None,
+            passthrough: false,
+        };
+        let base = Path::new("/enc/saved");
+        assert_eq!(save_target_dir(&g, base), PathBuf::from("/enc/saved"));
+        g.qemu = false;
+        g.instance_cli = Some("incus");
+        assert_eq!(save_target_dir(&g, base), PathBuf::from("/var/lib/incus"));
+        g.kind = GuestKind::Container;
+        g.ct_runtime = Some(ContainerRuntime::Lxc);
+        assert_eq!(save_target_dir(&g, base), PathBuf::from("/enc/saved"));
     }
 
     #[test]

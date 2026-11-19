@@ -1010,6 +1010,7 @@ pub fn checklist(f: &Facts) -> Vec<CheckItem> {
                 "shutdown" => "shut down cleanly",
                 "shutdown-gpu" => "shut down cleanly (a VM with a passed-through GPU can't be saved with its memory)",
                 "poweroff" => "powered off",
+                "none" => "left alone (it ends with the host)",
                 "" => "handled by the node's guest power policy",
                 other => other,
             },

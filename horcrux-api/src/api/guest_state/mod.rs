@@ -17,6 +17,7 @@
 //!   resumes saved guests in start order with their delays.
 //! - HTTP routes (below) for the UI, the CLI and automation.
 pub mod agent;
+pub mod crypt;
 pub mod engine;
 pub mod policy;
 
@@ -28,7 +29,9 @@ use axum::{
     Json, Router,
 };
 pub use engine::{GuestKind, SavedGuest};
-pub use policy::{Effective, GuestOverride, NodePolicy, StartAction, StopAction};
+pub use policy::{
+    Effective, GuestOverride, NodePolicy, SaveEncryption, SaveFallback, StartAction, StopAction,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -67,11 +70,49 @@ pub struct Overview {
     pub guests: Vec<engine::GuestView>,
     /// What the last host shutdown did to each guest.
     pub last_stop: Option<engine::Manifest>,
+    /// What the node's default save directory is stored on (saved memory
+    /// may only go to encrypted storage unless the node allows otherwise).
+    pub save_target: crypt::Probe,
+    /// Worst-case seconds the host stop pass takes with the guests running
+    /// now, from the configured timeouts.
+    pub stop_budget_secs: u64,
+    /// Set when an init system's own shutdown limit is shorter than the
+    /// budget (the stop pass could be cut short).
+    pub stop_budget_warning: Option<String>,
+}
+
+/// systemd ends a shutdown/reboot job after 30 minutes by default
+/// (`JobTimeoutSec=30min` in poweroff/reboot/halt.target); OpenRC has none.
+pub const SYSTEMD_SHUTDOWN_LIMIT_SECS: u64 = 1800;
+
+pub fn budget_warning(budget: u64, systemd: bool) -> Option<String> {
+    (systemd && budget > SYSTEMD_SHUTDOWN_LIMIT_SECS).then(|| {
+        format!(
+            "The worst-case time to save/stop all guests ({budget} s) is longer than systemd's \
+             shutdown limit ({SYSTEMD_SHUTDOWN_LIMIT_SECS} s, JobTimeoutSec of the shutdown \
+             targets): lower the save/shutdown timeouts or raise the parallelism, or raise that \
+             limit with a systemd drop-in"
+        )
+    })
 }
 
 async fn overview(State(state): State<Arc<AppState>>) -> Result<Json<Overview>, ApiError> {
+    let node = policy::load_node(&state).await;
+    let dir = node
+        .save_dir
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| policy::default_save_dir(&state));
+    let budget = engine::stop_budget(&state).await;
     Ok(Json(Overview {
-        node: policy::load_node(&state).await,
+        save_target: crypt::probe(&dir).await,
+        stop_budget_secs: budget,
+        stop_budget_warning: budget_warning(
+            budget,
+            std::path::Path::new("/run/systemd/system").is_dir(),
+        ),
+        node,
         capabilities: engine::capabilities().await,
         guests: engine::guest_views(&state).await,
         last_stop: engine::read_manifest(&state),
@@ -98,13 +139,20 @@ pub struct PolicyView {
     #[serde(rename = "override")]
     pub overrides: GuestOverride,
     pub effective: Effective,
+    /// What the host shutdown will really do (save | shutdown | poweroff |
+    /// none) and why it differs from the configured action.
+    pub host_stop_action: String,
+    pub host_stop_reason: Option<String>,
 }
 
 async fn get_policy(state: &Arc<AppState>, k: GuestKind, id: &str) -> Result<PolicyView, ApiError> {
     engine::require_guest(state, k, id).await?;
+    let v = engine::guest_view(state, k, id).await?;
     Ok(PolicyView {
         overrides: policy::load_override(state, k, id).await,
         effective: policy::effective(state, k, id).await,
+        host_stop_action: v.host_stop_action,
+        host_stop_reason: v.host_stop_reason,
     })
 }
 
