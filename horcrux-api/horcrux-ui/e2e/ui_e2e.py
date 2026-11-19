@@ -748,16 +748,39 @@ def main():
         access_control_checks(context, page)
 
         # ---- VM display: Create VM form -> console page -> live consoles ----
-        page.goto(f"{BASE}/vms/create")
-        page.locator(".form-group", has_text="VM Name").locator("input").fill(DISP_VM)
-        for rid, val in (("vm-memory", "512"), ("vm-disk", "10")):
-            page.check(f"#{rid}-custom")
-            page.fill(f"#{rid}-input", val)
-        page.select_option("#disp-protocol", "spice")
-        page.select_option("#disp-video", "qxl")
-        page.select_option("#disp-sound", "ich9-intel-hda")
-        page.locator("button[type=submit]").click()
-        page.wait_for_url(f"{BASE}/vms", timeout=120000)
+        # Lab run vmc-1118-1609: the submit never reached the API (no VM create
+        # in the server log) and the page stayed on /vms/create for 120 s while
+        # the wasm bundle was re-fetched (ERR_ABORTED), i.e. the page reloaded
+        # under the form. Let the page settle before filling, check that every
+        # value is still in the form right before the click, and on a stall say
+        # what happened (navigations, banner, whether the VM exists) instead of
+        # only timing out.
+        navs = []
+        page.on("framenavigated", lambda f: f == page.main_frame and navs.append(f.url))
+        for attempt in (1, 2):
+            page.goto(f"{BASE}/vms/create")
+            page.wait_for_load_state("networkidle", timeout=30000)
+            page.locator(".form-group", has_text="VM Name").locator("input").fill(DISP_VM)
+            for rid, val in (("vm-memory", "512"), ("vm-disk", "10")):
+                page.check(f"#{rid}-custom")
+                page.fill(f"#{rid}-input", val)
+            page.select_option("#disp-protocol", "spice")
+            page.select_option("#disp-video", "qxl")
+            page.select_option("#disp-sound", "ich9-intel-hda")
+            expect(page.locator(".form-group", has_text="VM Name").locator("input")).to_have_value(DISP_VM)
+            expect(page.locator("#disp-protocol")).to_have_value("spice")
+            nav_count = len(navs)
+            page.locator("button[type=submit]").click()
+            try:
+                page.wait_for_url(f"{BASE}/vms", timeout=60000 if attempt == 1 else 120000)
+                break
+            except Exception:  # noqa: BLE001
+                exists = any(v["name"] == DISP_VM for v in api_get("/api/vms", token()))
+                print(f"CREATE-VM-DIAG attempt {attempt}: url={page.url} vm_exists={exists} "
+                      f"navigations_after_click={navs[nav_count:]} "
+                      f"banner={page.locator('.error, .alert').all_inner_texts()[:3]}", flush=True)
+                if exists or attempt == 2:
+                    raise
         dvm = next(v for v in api_get("/api/vms", token()) if v["name"] == DISP_VM)
         vid = dvm["id"]
         assert dvm["display"] == {"protocol": "spice", "video": "qxl", "sound": "ich9-intel-hda"}, dvm
