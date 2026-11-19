@@ -172,6 +172,14 @@ if [ "$result" = pass ]; then
     for attempt in 1 2; do
       with_deadline $DL_ZFS python3 -u "$HERE/zfs-enc-test.py" --iso "$ISO" --out "$EVI/$n" "$@" 2>&1 | tee "$EVI/test-$n.log" | tail -60
       rc=${PIPESTATUS[0]}
+      # the harness prints its guest-death report ([DIAG] ... QEMU exited ... qemu -d cpu_reset log tail ...) as ONE long line well before the end of its
+      # output, so `tail -60` dropped it (gnome-light runs 19956/20056: the cause of the vanished resumed guest never reached the job log). Re-print those
+      # lines on any failed step.
+      if grep -q '^\[FAIL\]\|FAILED STEPS' "$EVI/test-$n.log" 2>/dev/null; then
+        echo "::group::guest-death diagnostics of $n"
+        grep -hE '^\[DIAG\] .*(QEMU exited|cpu_reset|ssh transport lost)' "$EVI/test-$n.log" | cut -c1-6000 | tail -6
+        echo "::endgroup::"
+      fi
       [ "$rc" = 137 ] || return 0
       echo "::warning::qemu-$n attempt $attempt was SIGKILLed from outside the harness (rc 137, no [FAIL] line): $(uptime | sed 's/.*load/load/'); memory.events: $(tr '\n' ' ' < /sys/fs/cgroup/memory.events 2>/dev/null) memory.peak: $(cat /sys/fs/cgroup/memory.peak 2>/dev/null)"
       rm -rf "$EVI/$n"; pkill -x qemu-system-x86_64 2>/dev/null; sleep 5
