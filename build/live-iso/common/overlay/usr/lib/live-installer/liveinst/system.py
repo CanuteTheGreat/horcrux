@@ -192,6 +192,41 @@ def live_disk_name():
     return pk or os.path.basename(dev)
 
 
+RAM_SQUASHFS = ("/run/initramfs/squashed.img", "/run/initramfs/squashfs.img")   # dracut rd.live.ram copies (current name, older name)
+
+
+def isoscan_disk(root="/"):
+    """the disk holding the ISO FILE the live system was booted from (dracut iso-scan/filename=, e.g. a remote reinstall that put the ISO on a
+    spare partition of the machine's own disk), or "" when the live system did not come from an ISO file"""
+    p = os.path.join(root, "run/initramfs/isoscandev")
+    if not os.path.lexists(p):
+        return ""
+    rc, out = sh(["lsblk", "-no", "PKNAME", os.path.realpath(p)])
+    pk = out.strip().splitlines()[0] if rc == 0 and out.strip() else ""
+    return pk or os.path.basename(os.path.realpath(p))
+
+
+def release_isoscan_medium(inst, disks, root="/"):
+    """Before the disks are touched: when the live system was booted from an ISO FILE on one of the target disks (iso-scan), the image must
+    already be in RAM (rd.live.ram=1), and the ISO loop device + the partition holding the file are unmounted, so partitioning and the copy
+    never read from a disk that is being erased. Refused (nothing touched) without the RAM copy."""
+    d = isoscan_disk(root)
+    names = [os.path.basename(x) for x in disks if str(x).startswith("/dev/")]
+    if any(not str(x).startswith("/dev/") for x in disks):          # "first"/"all" style selectors: any disk may be a target
+        names += [x.get("name", "") for x in list_disks(include_live=True)]
+    if not d or d not in names:
+        return False
+    if not any(os.path.exists(os.path.join(root, x.lstrip("/"))) for x in RAM_SQUASHFS):
+        raise InstallError(f"the live image was started from an ISO file on {d}, which is a target disk, and it is not in RAM: boot it with rd.live.ram=1")
+    inst.log(f"live image: started from an ISO file on target disk {d}; the image is in RAM, releasing the ISO file before partitioning")
+    for cmd in ("umount -l /run/initramfs/live",
+                # only the loop devices backed by the ISO file (the running root's squashfs loop is backed by the RAM copy)
+                "losetup -nO NAME,BACK-FILE | awk '$2 ~ \"^/run/initramfs/isoscan/\" {print $1}' | xargs -r -n1 losetup -d",
+                "umount -l /run/initramfs/isoscan"):
+        inst.run(["sh", "-c", cmd + " 2>/dev/null; true"], check=False)
+    return True
+
+
 def list_disks(include_live=False):
     rc, out = sh(["lsblk", "-J", "-b", "-o", "NAME,PATH,MODEL,SIZE,TYPE,RM,TRAN,ROTA,FSTYPE,LABEL,PARTLABEL"])
     if rc != 0:
@@ -862,6 +897,7 @@ class Installer:
         if self.t2:
             from . import t2
             t2.preflight(self)
+        release_isoscan_medium(self, c["disks"])
         stages.run_stages(self)
         self.prog(100, "Done")
 
@@ -998,7 +1034,8 @@ class Installer:
             self.run(["swapon", L[3]], check=False)
 
     def find_squashfs(self):
-        for pth in ("/run/initramfs/live/LiveOS/squashfs.img", "/run/initramfs/squashfs.img", "/cdrom/LiveOS/squashfs.img"):
+        # the RAM copy first (rd.live.ram=1): the medium may have been released (release_isoscan_medium) or be on an erased disk
+        for pth in RAM_SQUASHFS + ("/run/initramfs/live/LiveOS/squashfs.img", "/cdrom/LiveOS/squashfs.img"):
             if os.path.exists(pth):
                 return pth
         label = read("/etc/live-iso-volid")
