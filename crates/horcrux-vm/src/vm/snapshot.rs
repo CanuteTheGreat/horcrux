@@ -1763,4 +1763,95 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("has no disk"), "{err}");
     }
+
+    /// `all_snapshots` returns every snapshot of every VM (quota counting
+    /// relies on it), not an empty list.
+    #[tokio::test]
+    async fn all_snapshots_lists_every_vm_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = VmSnapshotManager::new(dir.path().to_string_lossy().to_string());
+        assert!(m.all_snapshots().is_empty());
+        let mut a = create_test_vm_config();
+        a.id = "all-snap-a".into();
+        a.status = VmStatus::Stopped;
+        let mut b = create_test_vm_config();
+        b.id = "all-snap-b".into();
+        b.status = VmStatus::Stopped;
+        let s1 = m
+            .create_snapshot(&a, "one".into(), None, false)
+            .await
+            .unwrap();
+        let s2 = m
+            .create_snapshot(&a, "two".into(), None, false)
+            .await
+            .unwrap();
+        let s3 = m
+            .create_snapshot(&b, "three".into(), None, false)
+            .await
+            .unwrap();
+        let mut got: Vec<String> = m.all_snapshots().into_iter().map(|s| s.id).collect();
+        got.sort();
+        let mut want = vec![s1.id, s2.id, s3.id];
+        want.sort();
+        assert_eq!(got, want);
+    }
+
+    /// A disk-only snapshot of a TPM VM carries the TPM state into
+    /// `<snapshot_dir>/<snapshot id>.tpm` (verified copy); a VM without a
+    /// TPM gets no TPM copy even when a stray state directory sits next to
+    /// its disk.
+    #[tokio::test]
+    async fn disk_only_snapshot_copies_tpm_state_only_for_a_tpm_vm() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("tpm-vm.qcow2");
+        let img_s = img.to_string_lossy().to_string();
+        sh("qemu-img", &["create", "-q", "-f", "qcow2", &img_s, "16M"]);
+        let state = super::super::firmware::tpm_state_dir(&img);
+        std::fs::create_dir_all(&state).unwrap();
+        let mut blob = vec![0u8; 64];
+        blob[0] = 2;
+        blob[6..10].copy_from_slice(&64u32.to_be_bytes());
+        for (i, x) in blob.iter_mut().enumerate().skip(10) {
+            *x = i as u8;
+        }
+        std::fs::write(state.join(super::super::firmware::TPM_PERMALL), &blob).unwrap();
+
+        let meta = dir.path().join("meta").to_string_lossy().to_string();
+        let mut m = VmSnapshotManager::new(meta.clone());
+        let mut vm = create_test_vm_config();
+        vm.id = format!("snap-tpm-{}", std::process::id());
+        vm.status = VmStatus::Stopped;
+        vm.disks = vec![horcrux_common::VmDisk {
+            path: img_s.clone(),
+            size_gb: 1,
+            disk_type: "virtio".into(),
+            cache: "none".into(),
+            ..Default::default()
+        }];
+
+        // TPM VM: the state is copied to <snapshot_dir>/<id>.tpm.
+        vm.hardware.tpm = true;
+        let s = m
+            .create_snapshot(&vm, "with-tpm".into(), None, false)
+            .await
+            .unwrap();
+        assert_eq!(s.vm_state, VmSnapshotState::Stopped);
+        let want = std::path::PathBuf::from(&meta).join(format!("{}.tpm", s.id));
+        assert_eq!(m.tpm_copy_dir(&s.id), want);
+        assert_eq!(
+            std::fs::read(want.join(super::super::firmware::TPM_PERMALL)).unwrap(),
+            blob
+        );
+
+        // No TPM: nothing is copied for that snapshot.
+        vm.hardware.tpm = false;
+        let s2 = m
+            .create_snapshot(&vm, "no-tpm".into(), None, false)
+            .await
+            .unwrap();
+        assert!(
+            !m.tpm_copy_dir(&s2.id).exists(),
+            "a VM without a TPM must not get a TPM copy"
+        );
+    }
 }
