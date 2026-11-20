@@ -3050,6 +3050,7 @@ dependencies = [
  "futures",
  "horcrux-common",
  "horcrux-core",
+ "horcrux-guest-proto",
  "nix",
  "rand 0.8.8",
  "rsa",

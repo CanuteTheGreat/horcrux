@@ -333,7 +333,9 @@ impl ConsoleSettings {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
         {
-            return Err("guest_tools_port must be a port name such as org.horcrux.console.0".into());
+            return Err(
+                "guest_tools_port must be a port name such as org.horcrux.console.0".into(),
+            );
         }
         if self.guest_tools_wait_ms > 30_000 {
             return Err("guest_tools_wait_ms must be at most 30000".into());

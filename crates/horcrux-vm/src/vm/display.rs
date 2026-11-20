@@ -210,10 +210,7 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
     // Horcrux guest tools: their own virtio-serial port; the console
     // broker connects to the socket while a viewer is open.
     if let (Some(name), Some(sock)) = (&rt.guest_tools_port, &rt.guest_tools_socket) {
-        let chr = format!(
-            "socket,id=hxgt0,path={},server=on,wait=off",
-            sock.display()
-        );
+        let chr = format!("socket,id=hxgt0,path={},server=on,wait=off", sock.display());
         let port = format!("virtserialport,bus=hxgt-vs.0,chardev=hxgt0,name={name}");
         push(&[
             "-device",

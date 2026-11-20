@@ -16,11 +16,11 @@
 //! section 4 (`ctl` JSON, `keys` JSON, `input` binary, `cursor` JSON).
 use super::encode::{self, EncodeParams, EncodedFrame, Encoder, PixelFormat, VideoCodec};
 use super::guest::{self, GuestLink};
-use horcrux_guest_proto as gproto;
 use super::keymap;
 use super::qemu_dbus::{DbusDisplay, DisplayEvent};
 use base64::Engine as _;
 use horcrux_common::console::{ConsoleProfile, ConsoleSettings};
+use horcrux_guest_proto as gproto;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
@@ -401,10 +401,7 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         }
         _ => None,
     };
-    if link.is_none()
-        && req.guest_tools_cd
-        && req.settings.guest_tools_auto_install
-    {
+    if link.is_none() && req.guest_tools_cd && req.settings.guest_tools_auto_install {
         if let Some(qga) = req.qga_socket.clone() {
             super::deliver::spawn_install(req.vm_id.clone(), qga);
         }
@@ -412,9 +409,12 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
 
     let stats = Arc::new(Mutex::new(SessionStats {
         video_source: "host".into(),
-        guest_tools: link
-            .as_ref()
-            .map(|l| format!("{} {} (agent {})", l.hello.os, l.hello.os_version, l.hello.agent_version)),
+        guest_tools: link.as_ref().map(|l| {
+            format!(
+                "{} {} (agent {})",
+                l.hello.os, l.hello.os_version, l.hello.agent_version
+            )
+        }),
         ..Default::default()
     }));
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -560,7 +560,9 @@ async fn guest_task(
                 let _ = to_rtc.send(ToRtc::Ctl(msg)).await;
             }
             gproto::Msg::Clipboard(c) => {
-                if ctx.req.allow_clipboard && c.text.len() <= ctx.req.settings.clipboard_max_bytes as usize {
+                if ctx.req.allow_clipboard
+                    && c.text.len() <= ctx.req.settings.clipboard_max_bytes as usize
+                {
                     if let Ok(mut s) = ctx.stats.lock() {
                         s.clipboard_out += 1;
                     }
@@ -569,7 +571,8 @@ async fn guest_task(
                 }
             }
             gproto::Msg::Layout(l) => {
-                let msg = serde_json::json!({"t": "guest_layout", "monitors": l.monitors}).to_string();
+                let msg =
+                    serde_json::json!({"t": "guest_layout", "monitors": l.monitors}).to_string();
                 let _ = to_rtc.send(ToRtc::Ctl(msg)).await;
             }
             gproto::Msg::Audio(a) => {
@@ -614,7 +617,11 @@ async fn serial_task(
         match rd.read(&mut buf).await {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                if to_rtc.send(ToRtc::Console(buf[..n].to_vec())).await.is_err() {
+                if to_rtc
+                    .send(ToRtc::Console(buf[..n].to_vec()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -1012,7 +1019,9 @@ async fn transport(
                             // guest tools encode H.264 in the guest
                             if codec == VideoCodec::H264
                                 && ctx.profile().guest_capture
-                                && ctx.guest_can(|c| c.codecs.iter().any(|x| x == "h264") && !c.capture.is_empty())
+                                && ctx.guest_can(|c| {
+                                    c.codecs.iter().any(|x| x == "h264") && !c.capture.is_empty()
+                                })
                             {
                                 let sv = start_video_for(ctx.profile());
                                 let _ = ctx.to_guest(gproto::Msg::StartVideo(sv));
@@ -1021,7 +1030,9 @@ async fn transport(
                     }
                     Event::MediaAdded(m) if m.kind == MediaKind::Audio && audio.is_none() => {
                         let opus = rtc.writer(m.mid).and_then(|w| {
-                            w.payload_params().find(|p| p.spec().codec == Codec::Opus).map(|p| p.pt())
+                            w.payload_params()
+                                .find(|p| p.spec().codec == Codec::Opus)
+                                .map(|p| p.pt())
                         });
                         if let Some(pt) = opus {
                             audio = Some((m.mid, pt));
@@ -1086,10 +1097,18 @@ async fn transport(
                             "clip" => {
                                 let text = serde_json::from_slice::<serde_json::Value>(&d.data)
                                     .ok()
-                                    .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(str::to_string));
+                                    .and_then(|v| {
+                                        v.get("text").and_then(|t| t.as_str()).map(str::to_string)
+                                    });
                                 match text {
-                                    Some(t) if allow_clipboard && t.len() <= settings.clipboard_max_bytes as usize => {
-                                        if ctx.to_guest(gproto::Msg::Clipboard(gproto::Clipboard { mime: "text/plain".into(), text: t })) {
+                                    Some(t)
+                                        if allow_clipboard
+                                            && t.len() <= settings.clipboard_max_bytes as usize =>
+                                    {
+                                        if ctx.to_guest(gproto::Msg::Clipboard(gproto::Clipboard {
+                                            mime: "text/plain".into(),
+                                            text: t,
+                                        })) {
                                             if let Ok(mut s) = ctx.stats.lock() {
                                                 s.clipboard_in += 1;
                                             }
@@ -1105,7 +1124,9 @@ async fn transport(
                             "pad" => {
                                 if let Some(g) = parse_pad(&d.data) {
                                     if allow_input {
-                                        if ctx.to_guest(gproto::Msg::Input(gproto::Input::Gamepad(g))) {
+                                        if ctx
+                                            .to_guest(gproto::Msg::Input(gproto::Input::Gamepad(g)))
+                                        {
                                             if let Ok(mut s) = ctx.stats.lock() {
                                                 s.gamepad_in += 1;
                                             }
@@ -1151,7 +1172,11 @@ async fn transport(
                                             let _ = to_comp.try_send(ToCompositor::KeyframeRequest);
                                         }
                                         Some("resize") if allow_input => {
-                                            if let Some(l) = parse_resize(&v, settings.max_width, settings.max_height) {
+                                            if let Some(l) = parse_resize(
+                                                &v,
+                                                settings.max_width,
+                                                settings.max_height,
+                                            ) {
                                                 if !ctx.to_guest(gproto::Msg::SetLayout(l)) {
                                                     pending_ctl.push(r#"{"t":"resize_unavailable","reason":"no Horcrux guest tools in this VM"}"#.into());
                                                 }
@@ -1179,7 +1204,10 @@ async fn transport(
                                 let via_guest = matches!(ev, InputEvent::Rel { .. })
                                     && ctx.guest_can(|c| c.relative_mouse);
                                 if let (true, InputEvent::Rel { dx, dy }) = (via_guest, &ev) {
-                                    let _ = ctx.to_guest(gproto::Msg::Input(gproto::Input::Rel { dx: *dx, dy: *dy }));
+                                    let _ = ctx.to_guest(gproto::Msg::Input(gproto::Input::Rel {
+                                        dx: *dx,
+                                        dy: *dy,
+                                    }));
                                 } else {
                                     let _ = input.try_send(ev);
                                 }

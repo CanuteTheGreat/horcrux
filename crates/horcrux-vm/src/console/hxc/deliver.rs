@@ -93,7 +93,10 @@ pub async fn install(qga: &Path) -> Result<String, String> {
     )
     .await
     .map_err(|e| e.to_string())?;
-    let pid = r.get("pid").and_then(Value::as_i64).ok_or("guest-exec gave no pid")?;
+    let pid = r
+        .get("pid")
+        .and_then(Value::as_i64)
+        .ok_or("guest-exec gave no pid")?;
     for _ in 0..300 {
         tokio::time::sleep(Duration::from_secs(1)).await;
         let st = qga_exec(qga, "guest-exec-status", json!({"pid": pid}), 10)
@@ -120,7 +123,9 @@ mod tests {
         let (p, a) = install_command("mswindows").unwrap();
         assert_eq!(p, "powershell.exe");
         let s = a.last().unwrap();
-        assert!(s.contains("FileSystemLabel HXTOOLS") && s.contains("msiexec.exe") && s.contains("/qn"));
+        assert!(
+            s.contains("FileSystemLabel HXTOOLS") && s.contains("msiexec.exe") && s.contains("/qn")
+        );
         assert!(install_command("debian").is_none());
     }
 

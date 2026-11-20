@@ -43,7 +43,11 @@ pub async fn connect(
     tokio::spawn(async move {
         while let Some(m) = from_node.recv().await {
             let (k, p) = m.encode();
-            if wr.write_all(&horcrux_guest_proto::frame(k, &p)).await.is_err() {
+            if wr
+                .write_all(&horcrux_guest_proto::frame(k, &p))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -104,7 +108,13 @@ mod tests {
         let t = std::thread::spawn(move || {
             let (mut s, _) = l.accept().unwrap();
             let m = read_msg(&mut s).unwrap();
-            assert!(matches!(m, Msg::HostHello(HostHello { clipboard_max_bytes: 77, .. })));
+            assert!(matches!(
+                m,
+                Msg::HostHello(HostHello {
+                    clipboard_max_bytes: 77,
+                    ..
+                })
+            ));
             let hello = Hello {
                 v: 1,
                 os: "linux".into(),
@@ -135,8 +145,10 @@ mod tests {
         let none = connect(&sock, Duration::from_millis(300), 1).await.unwrap();
         assert!(none.is_none(), "no Hello -> no tools");
         t.join().unwrap();
-        assert!(connect(&dir.path().join("missing"), Duration::from_millis(10), 1)
-            .await
-            .is_err());
+        assert!(
+            connect(&dir.path().join("missing"), Duration::from_millis(10), 1)
+                .await
+                .is_err()
+        );
     }
 }
