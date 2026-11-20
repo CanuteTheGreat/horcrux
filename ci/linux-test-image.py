@@ -27,6 +27,8 @@ REL = os.environ.get("HXL_RELEASE", "trixie")
 NUM = os.environ.get("HXL_DEBIAN_NUM", "13")
 MIRROR = os.environ.get("HXL_MIRROR", "https://cloud.debian.org/images/cloud")
 NAME = f"debian-{NUM}-nocloud-amd64.qcow2"
+# throwaway test VM without a network in the e2e; its console logs root in
+PASSWORD = "hxci"
 
 
 def fetch(url, timeout=600):
@@ -69,6 +71,14 @@ def main(out):
         "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
         "-chardev", f"socket,id=s0,path={ser},server=on,wait=off,logfile={log}", "-serial", "chardev:s0",
         "-display", "none", "-vga", "std",
+        # systemd credentials over SMBIOS: systemd-firstboot (trixie's
+        # nocloud image runs it on the first boot) takes its answers from
+        # here instead of prompting on the console
+        "-smbios", "type=11,value=io.systemd.credential:firstboot.locale=C.UTF-8",
+        "-smbios", "type=11,value=io.systemd.credential:firstboot.keymap=us",
+        "-smbios", "type=11,value=io.systemd.credential:firstboot.timezone=UTC",
+        "-smbios", f"type=11,value=io.systemd.credential:passwd.plaintext-password.root={PASSWORD}",
+        "-smbios", "type=11,value=io.systemd.credential:system.hostname=hxg-deb",
     ], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     for _ in range(50):
         if os.path.exists(ser):
@@ -104,10 +114,12 @@ def main(out):
             s.send(ch.encode())
             time.sleep(0.01)
 
-    if not wait("login:", 240):
+    if not wait("login:", 300):
         q.kill()
         raise SystemExit("FAIL no login prompt on the serial console: " + text()[-1500:])
     send("root\n")
+    if wait("Password:", 15):
+        send(PASSWORD + "\n")
     time.sleep(3)
     # one marker per step; the arithmetic keeps the echo of the command
     # itself from matching
@@ -118,6 +130,11 @@ def main(out):
         q.kill()
         raise SystemExit("FAIL apt-get install ffmpeg qemu-guest-agent: " + text()[-1500:])
     print("ok - ffmpeg and qemu-guest-agent installed", flush=True)
+    # root shell on the graphical console (tty1) so the e2e can type into it
+    send("mkdir -p /etc/systemd/system/getty@tty1.service.d; printf '[Service]\\nExecStart=\\n"
+         "ExecStart=-/sbin/agetty --autologin root --noclear %%I $TERM\\n' "
+         ">/etc/systemd/system/getty@tty1.service.d/autologin.conf; echo HXL_$((40+4))_TTY $?\n")
+    wait("HXL_44_TTY 0", 30)
     send("apt-get clean; ffmpeg -hide_banner -version | head -1; "
          "systemctl is-enabled qemu-guest-agent; echo HXL_$((40+3))_DONE\n")
     wait("HXL_43_DONE", 60)
