@@ -128,6 +128,9 @@ enum ToRtc {
     Clip(String),
     Console(Vec<u8>),
     Audio(Vec<u8>),
+    /// The guest tools answered after the session started (just
+    /// installed, or started at logon): start the guest streams.
+    GuestLinked,
 }
 
 /// What the compositor is told.
@@ -238,6 +241,16 @@ pub fn parse_resize(v: &serde_json::Value, max_w: u32, max_h: u32) -> Option<gpr
 }
 
 /// What the guest tools are asked to encode for this profile.
+pub fn start_audio_for(s: &ConsoleSettings) -> gproto::StartAudio {
+    gproto::StartAudio {
+        codec: "opus".into(),
+        sample_rate: 48000,
+        channels: 2,
+        bitrate_kbps: s.audio_bitrate_kbps,
+        frame_ms: 10,
+    }
+}
+
 pub fn start_video_for(p: &horcrux_common::console::ProfileSettings) -> gproto::StartVideo {
     let fps = p.max_fps.max(1);
     gproto::StartVideo {
@@ -401,11 +414,13 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         }
         _ => None,
     };
-    if link.is_none() && req.guest_tools_cd && req.settings.guest_tools_auto_install {
-        if let Some(qga) = req.qga_socket.clone() {
-            super::deliver::spawn_install(req.vm_id.clone(), qga);
-        }
-    }
+    let install = if link.is_none() && req.guest_tools_cd && req.settings.guest_tools_auto_install {
+        req.qga_socket
+            .clone()
+            .and_then(|qga| super::deliver::spawn_install(req.vm_id.clone(), qga))
+    } else {
+        None
+    };
 
     let stats = Arc::new(Mutex::new(SessionStats {
         video_source: "host".into(),
@@ -435,6 +450,7 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
     let (input_tx, input_rx) = mpsc::channel::<InputEvent>(256);
 
     let absolute = display.absolute;
+    let linked = link.is_some();
     let (guest_tx, guest_rx, guest_caps) = match link {
         Some(GuestLink { hello, tx, rx }) => (Some(tx), Some(rx), Some(hello.caps)),
         None => (None, None, None),
@@ -442,14 +458,49 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
     let ctx = Ctx {
         req,
         stats: stats.clone(),
-        guest_tx,
-        guest_caps,
+        guest_tx: Mutex::new(guest_tx),
+        guest_caps: Mutex::new(guest_caps),
         guest_video: AtomicBool::new(false),
         guest_started: Mutex::new(Vec::new()),
     };
     let ctx = Arc::new(ctx);
     if let Some(rx) = guest_rx {
         tokio::spawn(guest_task(ctx.clone(), rx, to_rtc_tx.clone()));
+    }
+    if let Some(job) = install {
+        let to_rtc = to_rtc_tx.clone();
+        tokio::spawn(async move {
+            let _ = to_rtc
+                .send(ToRtc::Ctl(
+                    serde_json::json!({"t": "guest_tools", "state": "installing"}).to_string(),
+                ))
+                .await;
+            let (state, detail) = match job.await {
+                Ok(Ok(m)) => ("installed", m),
+                Ok(Err(e)) => ("install_failed", e),
+                Err(e) => ("install_failed", e.to_string()),
+            };
+            let _ = to_rtc
+                .send(ToRtc::Ctl(
+                    serde_json::json!({"t": "guest_tools", "state": state, "detail": detail})
+                        .to_string(),
+                ))
+                .await;
+        });
+    }
+    // Without tools now, keep checking: they may have just been installed
+    // (above) or start when a user logs on; the session switches to them.
+    let retry = ctx.req.settings.guest_tools_retry_secs;
+    if !linked && ctx.req.settings.guest_tools && retry > 0 {
+        if let Some(sock) = ctx.req.guest_tools_socket.clone() {
+            tokio::spawn(link_watch(
+                ctx.clone(),
+                sock,
+                Duration::from_secs(retry as u64),
+                to_rtc_tx.clone(),
+                stop_rx.clone(),
+            ));
+        }
     }
     tokio::spawn(input_task(display, input_rx, stats.clone()));
     tokio::spawn(compositor(
@@ -486,8 +537,8 @@ struct Ctx {
     req: SessionRequest,
     stats: Arc<Mutex<SessionStats>>,
     /// To the guest tools, when they answered.
-    guest_tx: Option<mpsc::Sender<gproto::Msg>>,
-    guest_caps: Option<gproto::Caps>,
+    guest_tx: Mutex<Option<mpsc::Sender<gproto::Msg>>>,
+    guest_caps: Mutex<Option<gproto::Caps>>,
     /// The guest tools are capturing + encoding: the node's encoder rests.
     guest_video: AtomicBool,
     /// What the guest tools were asked to run, re-sent when they say
@@ -504,13 +555,73 @@ impl Ctx {
         self.to_guest(m)
     }
     fn to_guest(&self, m: gproto::Msg) -> bool {
-        match &self.guest_tx {
+        let tx = self.guest_tx.lock().ok().and_then(|g| g.clone());
+        match tx {
             Some(tx) => tx.try_send(m).is_ok(),
             None => false,
         }
     }
     fn guest_can(&self, f: impl Fn(&gproto::Caps) -> bool) -> bool {
-        self.guest_caps.as_ref().map(f).unwrap_or(false)
+        self.guest_caps
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(f))
+            .unwrap_or(false)
+    }
+    fn has_guest(&self) -> bool {
+        self.guest_caps.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+}
+
+/// A session that started without the guest tools checks every `every`
+/// whether they answer now and then hands the link to the session.
+async fn link_watch(
+    ctx: Arc<Ctx>,
+    sock: PathBuf,
+    every: Duration,
+    to_rtc: mpsc::Sender<ToRtc>,
+    mut stop: watch::Receiver<bool>,
+) {
+    let wait = Duration::from_millis(ctx.req.settings.guest_tools_wait_ms.max(500) as u64);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => return,
+            _ = tokio::time::sleep(every) => {}
+        }
+        if to_rtc.is_closed() || !sock.exists() {
+            return;
+        }
+        let link = match guest::connect(&sock, wait, ctx.req.settings.clipboard_max_bytes).await {
+            Ok(Some(l)) => l,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::debug!("console guest tools: {e}");
+                continue;
+            }
+        };
+        tracing::info!(
+            "console session {}: guest tools answered ({} {}, agent {})",
+            ctx.req.session_id,
+            link.hello.os,
+            link.hello.os_version,
+            link.hello.agent_version
+        );
+        if let Ok(mut s) = ctx.stats.lock() {
+            s.guest_tools = Some(format!(
+                "{} {} (agent {})",
+                link.hello.os, link.hello.os_version, link.hello.agent_version
+            ));
+        }
+        let GuestLink { hello, tx, rx } = link;
+        if let Ok(mut g) = ctx.guest_caps.lock() {
+            *g = Some(hello.caps);
+        }
+        if let Ok(mut g) = ctx.guest_tx.lock() {
+            *g = Some(tx);
+        }
+        tokio::spawn(guest_task(ctx.clone(), rx, to_rtc.clone()));
+        let _ = to_rtc.send(ToRtc::GuestLinked).await;
+        return;
     }
 }
 
@@ -953,6 +1064,35 @@ async fn compositor(
     }
 }
 
+/// The `ctl` hello: what this session offers the client. Sent again when
+/// the guest tools link up mid-session.
+fn hello_msg(ctx: &Ctx, audio: bool, absolute: bool) -> String {
+    let (codec, backend, w, h) = ctx
+        .stats
+        .lock()
+        .map(|s| (s.codec, s.encoder, s.guest_width, s.guest_height))
+        .unwrap_or_default();
+    serde_json::json!({
+        "t": "hello", "v": 1,
+        "session": ctx.req.session_id,
+        "vm": ctx.req.vm_id,
+        "profile": ctx.req.profile,
+        "codec": codec, "encoder": backend,
+        "width": w, "height": h,
+        "input": ctx.req.allow_input,
+        "absolute": absolute,
+        // C2 (guest tools) adds clipboard/resize/audio.
+        "clipboard": ctx.req.allow_clipboard && ctx.guest_can(|c| c.clipboard),
+        "audio": audio && ctx.guest_can(|c| c.audio),
+        "gamepad": ctx.req.allow_input && ctx.guest_can(|c| c.gamepad),
+        "resize": ctx.req.allow_input && ctx.guest_can(|c| c.resize),
+        "relative": ctx.guest_can(|c| c.relative_mouse),
+        "guest_tools": ctx.has_guest(),
+        "console": ctx.req.serial_socket.is_some(),
+    })
+    .to_string()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn transport(
     ctx: Arc<Ctx>,
@@ -1063,13 +1203,7 @@ async fn transport(
                             audio = Some((m.mid, pt));
                             if settings.audio && ctx.guest_can(|c| c.audio) {
                                 let _ = ctx.start_in_guest(gproto::Msg::StartAudio(
-                                    gproto::StartAudio {
-                                        codec: "opus".into(),
-                                        sample_rate: 48000,
-                                        channels: 2,
-                                        bitrate_kbps: settings.audio_bitrate_kbps,
-                                        frame_ms: 10,
-                                    },
+                                    start_audio_for(settings),
                                 ));
                             }
                         }
@@ -1081,30 +1215,8 @@ async fn transport(
                         channels.insert(label.clone(), id);
                         labels.insert(id, label.clone());
                         if label == "ctl" {
-                            let (codec, backend, w, h) = ctx
-                                .stats
-                                .lock()
-                                .map(|s| (s.codec, s.encoder, s.guest_width, s.guest_height))
-                                .unwrap_or_default();
-                            let hello = serde_json::json!({
-                                "t": "hello", "v": 1,
-                                "session": ctx.req.session_id,
-                                "vm": ctx.req.vm_id,
-                                "profile": ctx.req.profile,
-                                "codec": codec, "encoder": backend,
-                                "width": w, "height": h,
-                                "input": allow_input,
-                                "absolute": absolute,
-                                // C2 (guest tools) adds clipboard/resize/audio.
-                                "clipboard": allow_clipboard && ctx.guest_can(|c| c.clipboard),
-                                "audio": audio.is_some() && ctx.guest_can(|c| c.audio),
-                                "gamepad": allow_input && ctx.guest_can(|c| c.gamepad),
-                                "resize": allow_input && ctx.guest_can(|c| c.resize),
-                                "relative": ctx.guest_can(|c| c.relative_mouse),
-                                "guest_tools": ctx.guest_caps.is_some(),
-                                "console": ctx.req.serial_socket.is_some(),
-                            });
-                            pending_ctl.insert(0, hello.to_string());
+                            let hello = hello_msg(&ctx, audio.is_some(), absolute);
+                            pending_ctl.insert(0, hello);
                         }
                         if label == "console" && serial_tx.is_none() {
                             if let Some(sock) = ctx.req.serial_socket.clone() {
@@ -1394,6 +1506,22 @@ async fn transport(
                         }
                     }
                     Some(ToRtc::Ctl(m)) => pending_ctl.push(m),
+                    Some(ToRtc::GuestLinked) => {
+                        if let Some((_, _, VideoCodec::H264)) = video {
+                            if ctx.profile().guest_capture
+                                && ctx.guest_can(|c| {
+                                    c.codecs.iter().any(|x| x == "h264") && !c.capture.is_empty()
+                                })
+                            {
+                                let sv = start_video_for(ctx.profile());
+                                let _ = ctx.start_in_guest(gproto::Msg::StartVideo(sv));
+                            }
+                        }
+                        if audio.is_some() && settings.audio && ctx.guest_can(|c| c.audio) {
+                            let _ = ctx.start_in_guest(gproto::Msg::StartAudio(start_audio_for(settings)));
+                        }
+                        pending_ctl.push(hello_msg(&ctx, audio.is_some(), absolute));
+                    }
                     Some(ToRtc::Cursor(m)) => {
                         // Only the newest cursor state matters, except that
                         // a pending shape is never replaced by a position.

@@ -42,6 +42,9 @@ pub enum AuditEventType {
     ConsoleSessionStarted,
     ConsoleSessionEnded,
     ConsoleAccessDenied,
+    /// Horcrux guest tools installed into a guest through its guest agent
+    /// (requested or automatic).
+    GuestToolsInstall,
 
     // Storage Operations
     StoragePoolCreated,

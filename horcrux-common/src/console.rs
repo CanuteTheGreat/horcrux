@@ -220,13 +220,19 @@ pub struct ConsoleSettings {
     /// Milliseconds a new session waits for the guest tools to answer
     /// before it uses the node's own capture.
     pub guest_tools_wait_ms: u32,
+    /// Seconds between checks, during a session that started without the
+    /// guest tools, whether they answer now (just installed, or started at
+    /// logon); the session then switches to them without reconnecting.
+    /// 0 = only check when a session starts.
+    pub guest_tools_retry_secs: u32,
     /// Guest tools CD image attached to console VMs (read-only, virtio-scsi)
     /// so the tools can be installed from inside the guest. Empty or a
     /// missing file: no CD.
     pub guest_tools_iso: String,
     /// Install the guest tools automatically through the QEMU guest agent
     /// when a viewer opens and the tools do not answer (Windows guests: the
-    /// MSI from the tools CD).
+    /// MSI from the tools CD; Linux guests: the distribution's package from
+    /// the CD, .deb/.rpm/.apk).
     pub guest_tools_auto_install: bool,
     /// Largest clipboard text carried in either direction (bytes).
     pub clipboard_max_bytes: u32,
@@ -261,6 +267,7 @@ impl Default for ConsoleSettings {
             guest_tools: true,
             guest_tools_port: "org.horcrux.console.0".into(),
             guest_tools_wait_ms: 1500,
+            guest_tools_retry_secs: 5,
             guest_tools_iso: "/usr/share/horcrux/guest-tools/horcrux-guest-tools.iso".into(),
             guest_tools_auto_install: true,
             clipboard_max_bytes: 1 << 20,
@@ -339,6 +346,9 @@ impl ConsoleSettings {
         }
         if self.guest_tools_wait_ms > 30_000 {
             return Err("guest_tools_wait_ms must be at most 30000".into());
+        }
+        if self.guest_tools_retry_secs > 3600 {
+            return Err("guest_tools_retry_secs must be at most 3600".into());
         }
         if !(1..=64 * 1024 * 1024).contains(&self.clipboard_max_bytes) {
             return Err("clipboard_max_bytes must be 1..=67108864".into());

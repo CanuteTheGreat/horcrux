@@ -321,6 +321,13 @@
       hxc.videoSource = m.video;
       if (m.width) hxc.guest = { width: m.width, height: m.height };
       setState("connected", "Connected: " + (hxc.codec || "?") + " encoded in the guest, " + (hxc.hello ? hxc.hello.profile : ""));
+    } else if (m.t === "guest_tools") {
+      // automatic install through the guest agent; the session switches
+      // to the tools by itself when they answer
+      hxc.guestTools = m;
+      statsEl.textContent = m.state === "installing" ? "installing the Horcrux guest tools..."
+        : m.state === "installed" ? "Horcrux guest tools installed, waiting for them to start"
+        : "Horcrux guest tools not installed: " + (m.detail || "");
     } else if (m.t === "guest_video") {
       hxc.guestVideo = m.status;
     } else if (m.t === "guest_layout") {

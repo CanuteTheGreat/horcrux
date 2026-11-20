@@ -9,6 +9,12 @@
 //!   input/clipboard/microphone rights are taken from their privileges
 //!   (`VM.Console.Input`, `.Clipboard`, `.Audio.Mic`) when it is issued.
 //! * `GET /api/console/:vm/hxc/sessions`, `DELETE .../sessions/:id`.
+//! * `GET /api/vms/:id/console/guest-tools` (VM.Audit): can the node
+//!   install the Horcrux guest tools into this VM (guest agent channel,
+//!   tools CD attached), are they in use, the latest install.
+//! * `POST /api/vms/:id/console/guest-tools/install` (VM.Config): install
+//!   them now through the QEMU guest agent (Windows MSI, Linux
+//!   .deb/.rpm/.apk from the tools CD); 202, then poll the GET. Audited.
 //! * WebSocket `/api/ws` message `{"type":"console.offer","ticket","sdp"}`:
 //!   redeems the ticket (same user, same connection, once, before expiry)
 //!   and answers `ConsoleAnswer {session, sdp}` or `ConsoleError {message}`.
@@ -36,6 +42,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/api/console/:vm_id/hxc/sessions/:session_id",
             axum::routing::delete(qemu::stop_session),
+        )
+        .route(
+            "/api/vms/:id/console/guest-tools",
+            get(qemu::guest_tools_status),
+        )
+        .route(
+            "/api/vms/:id/console/guest-tools/install",
+            axum::routing::post(qemu::guest_tools_install),
         );
     r
 }
@@ -210,6 +224,155 @@ mod qemu {
             return Err(ApiError::NotFound(format!("console session {session_id}")));
         }
         Ok(axum::http::StatusCode::NO_CONTENT)
+    }
+
+    #[derive(serde::Serialize)]
+    pub struct GuestToolsStatus {
+        vm: String,
+        running: bool,
+        /// The VM has the QEMU guest agent channel and the agent answers.
+        guest_agent: bool,
+        guest_os: Option<String>,
+        /// The guest tools CD is attached to this run of the VM.
+        tools_cd: bool,
+        /// The guest-tools port exists in this run.
+        tools_port: bool,
+        /// A live console session uses the tools (their OS and version).
+        in_use: Option<String>,
+        auto_install: bool,
+        /// Why an install can't run now (None = it can).
+        blocked: Option<String>,
+        last_install: Option<hxc::deliver::InstallState>,
+    }
+
+    async fn tools_status(state: &AppState, vm_id: &str) -> Result<GuestToolsStatus, ApiError> {
+        let vm = state.vm_manager.get_vm(vm_id).await?;
+        let settings = hxc_settings::get();
+        let mut st = GuestToolsStatus {
+            vm: vm_id.to_string(),
+            running: false,
+            guest_agent: false,
+            guest_os: None,
+            tools_cd: false,
+            tools_port: false,
+            in_use: None,
+            auto_install: settings.guest_tools_auto_install,
+            blocked: None,
+            last_install: hxc::deliver::last_install(vm_id),
+        };
+        if vm.hypervisor != VmHypervisor::Qemu {
+            st.blocked = Some("the Horcrux guest tools are for QEMU VMs".into());
+            return Ok(st);
+        }
+        let disk = crate::console::runtime_disk(&vm).ok();
+        let rt = match &disk {
+            Some(d) => crate::vm::display::DisplayRuntime::load(d).await.ok(),
+            None => None,
+        };
+        st.running = crate::vm::qemu::QemuManager::process_running(&vm.id) && rt.is_some();
+        if let (Some(d), Some(rt)) = (&disk, &rt) {
+            st.tools_cd = rt.guest_tools_iso.is_some();
+            st.tools_port = rt.guest_tools_socket.is_some();
+            let qga = crate::vm::display::DisplayRuntime::qga_socket(d);
+            if st.running && qga.exists() {
+                if let Ok(os) =
+                    crate::vm::devices::qga_exec(&qga, "guest-get-osinfo", serde_json::json!({}), 5)
+                        .await
+                {
+                    st.guest_agent = true;
+                    st.guest_os = os
+                        .get("pretty-name")
+                        .or_else(|| os.get("name"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                }
+            }
+        }
+        st.in_use = broker()
+            .sessions(Some(vm_id))
+            .await
+            .into_iter()
+            .find_map(|s| s.stats.guest_tools.clone());
+        st.blocked = if !st.running {
+            Some("the VM is not running".into())
+        } else if !st.tools_cd {
+            Some("this run of the VM has no guest tools CD (the node needs the guest tools image, [console] guest_tools_iso; restart the VM after installing it)".into())
+        } else if !st.guest_agent {
+            Some("the QEMU guest agent does not answer (enable \"QEMU guest agent\" in the VM's hardware and install qemu-guest-agent / the virtio-win guest agent in the guest)".into())
+        } else if st
+            .last_install
+            .as_ref()
+            .map(|l| l.state == "installing")
+            .unwrap_or(false)
+        {
+            Some("an install is already running".into())
+        } else {
+            None
+        };
+        Ok(st)
+    }
+
+    pub async fn guest_tools_status(
+        State(state): State<Arc<AppState>>,
+        Path(vm_id): Path<String>,
+    ) -> Result<Json<GuestToolsStatus>, ApiError> {
+        Ok(Json(tools_status(&state, &vm_id).await?))
+    }
+
+    pub async fn guest_tools_install(
+        State(state): State<Arc<AppState>>,
+        Path(vm_id): Path<String>,
+        user: Option<Extension<AuthUser>>,
+    ) -> Result<(axum::http::StatusCode, Json<GuestToolsStatus>), ApiError> {
+        let Extension(user) = user.ok_or(ApiError::AuthenticationFailed)?;
+        let st = tools_status(&state, &vm_id).await?;
+        if let Some(reason) = &st.blocked {
+            return Err(ApiError::Conflict(reason.clone()));
+        }
+        let vm = state.vm_manager.get_vm(&vm_id).await?;
+        let disk = crate::console::runtime_disk(&vm)?;
+        let qga = crate::vm::display::DisplayRuntime::qga_socket(&disk);
+        let audit = state.audit_logger.clone();
+        audit
+            .log(event(
+                AuditEventType::GuestToolsInstall,
+                true,
+                &user.username,
+                &vm_id,
+                "guest tools install requested".into(),
+                st.guest_os.clone(),
+                None,
+            ))
+            .await;
+        let (vm2, name) = (vm_id.clone(), user.username.clone());
+        tokio::spawn(async move {
+            let r = hxc::deliver::install_recorded(&vm2, &qga, &name).await;
+            let (ok, detail) = match &r {
+                Ok(rep) => (
+                    rep.ok,
+                    format!("{} (exit {:?})", rep.message, rep.exit_code),
+                ),
+                Err(e) => (false, e.clone()),
+            };
+            audit
+                .log(event(
+                    AuditEventType::GuestToolsInstall,
+                    ok,
+                    &name,
+                    &vm2,
+                    if ok {
+                        "guest tools installed".into()
+                    } else {
+                        "guest tools install failed".into()
+                    },
+                    Some(detail),
+                    None,
+                ))
+                .await;
+        });
+        // let the record show "installing" before answering
+        let st = tools_status(&state, &vm_id).await?;
+        Ok((axum::http::StatusCode::ACCEPTED, Json(st)))
     }
 
     pub struct Signalling {

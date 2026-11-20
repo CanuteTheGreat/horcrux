@@ -354,6 +354,7 @@ pub fn VmConsole() -> impl IntoView {
                                 .into_view();
                             }
                             view! {
+                                <GuestToolsBar vm_id=id.clone()/>
                                 <iframe
                                     id="hxc-frame"
                                     class="console-iframe"
@@ -382,6 +383,124 @@ pub fn VmConsole() -> impl IntoView {
                     }
                 }}
             </div>
+        </div>
+    }
+}
+
+/// `GET /api/vms/:id/console/guest-tools` (the fields the bar shows).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct GuestToolsStatus {
+    #[serde(default)]
+    running: bool,
+    #[serde(default)]
+    guest_os: Option<String>,
+    #[serde(default)]
+    in_use: Option<String>,
+    #[serde(default)]
+    blocked: Option<String>,
+    #[serde(default)]
+    last_install: Option<GuestToolsInstall>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct GuestToolsInstall {
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    by: String,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// Horcrux guest tools state of the VM and the "Install guest tools"
+/// action (VM.Config; the node installs them through the QEMU guest agent).
+#[component]
+fn GuestToolsBar(vm_id: String) -> impl IntoView {
+    let (st, set_st) = create_signal(None::<GuestToolsStatus>);
+    let (note, set_note) = create_signal(None::<String>);
+    let path = format!("/vms/{}/console/guest-tools", urlencoding::encode(&vm_id));
+    let load = {
+        let path = path.clone();
+        move || {
+            let path = path.clone();
+            spawn_local(async move {
+                if let Ok(s) = api::fetch_json::<GuestToolsStatus>(&path).await {
+                    set_st.set(Some(s));
+                }
+            });
+        }
+    };
+    load();
+    // Follow a running install until it ends (and the session picks the
+    // tools up by itself).
+    let poll = load.clone();
+    if let Ok(h) = set_interval_with_handle(
+        move || {
+            let busy = st
+                .get_untracked()
+                .and_then(|s| s.last_install)
+                .map(|l| l.state == "installing")
+                .unwrap_or(false);
+            if busy {
+                poll();
+            }
+        },
+        std::time::Duration::from_secs(3),
+    ) {
+        on_cleanup(move || h.clear());
+    }
+    let install = {
+        let path = path.clone();
+        move |_| {
+            let path = format!("{path}/install");
+            set_note.set(Some("Installing the guest tools...".into()));
+            spawn_local(async move {
+                match api::post_json::<GuestToolsStatus, _>(&path, &serde_json::json!({})).await {
+                    Ok(s) => {
+                        set_st.set(Some(s));
+                        set_note.set(None);
+                    }
+                    Err(e) => set_note.set(Some(format!("Not installed: {}", e.message))),
+                }
+            });
+        }
+    };
+    view! {
+        <div class="guest-tools-bar" id="guest-tools-bar">
+            {move || {
+                let s = st.get().unwrap_or_default();
+                let text = match (&s.in_use, &s.last_install) {
+                    (Some(t), _) => format!("Horcrux guest tools: in use ({t})"),
+                    (None, Some(l)) if l.state == "installing" => {
+                        format!("Horcrux guest tools: installing ({})", l.by)
+                    }
+                    (None, Some(l)) if l.state == "installed" => {
+                        "Horcrux guest tools: installed, starting in the guest".to_string()
+                    }
+                    (None, Some(l)) => format!(
+                        "Horcrux guest tools: install failed: {}",
+                        l.error.clone().unwrap_or_default()
+                    ),
+                    (None, None) if !s.running => "Horcrux guest tools: VM not running".to_string(),
+                    (None, None) => "Horcrux guest tools: not in use".to_string(),
+                };
+                let os = s.guest_os.clone().map(|o| format!(" - guest: {o}")).unwrap_or_default();
+                view! { <span id="guest-tools-state">{text}{os}</span> }
+            }}
+            {move || {
+                let s = st.get().unwrap_or_default();
+                let blocked = s.blocked.clone();
+                let title = blocked.clone().unwrap_or_else(|| {
+                    "Install the Horcrux guest tools through the QEMU guest agent (Windows MSI, Linux package)".into()
+                });
+                view! {
+                    <button id="install-guest-tools" class="btn btn-sm btn-secondary"
+                        title=title disabled=blocked.is_some() on:click=install.clone()>
+                        "Install guest tools"
+                    </button>
+                }
+            }}
+            {move || note.get().map(|n| view! { <span class="muted" id="guest-tools-note">{n}</span> })}
         </div>
     }
 }

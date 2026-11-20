@@ -244,6 +244,11 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             if id == "defaults" {
                 return read_write(m, P::VmAudit, P::SysModify, "/nodes");
             }
+            // Installing the Horcrux guest tools changes software inside
+            // the guest: a configuration change, not a console view.
+            if arg(2) == "console" && arg(3) == "guest-tools" {
+                return read_write(m, P::VmAudit, P::VmConfig, &format!("/vms/{}", id));
+            }
             guest_action(m, &format!("/vms/{}", id), arg(2))
         }
 
@@ -640,6 +645,18 @@ mod tests {
         assert_eq!(
             priv_of(requirement("POST", "/api/console/abc/spice")),
             (P::VmConsole, "/vms/abc".into())
+        );
+        // Installing the guest tools is a configuration change.
+        assert_eq!(
+            priv_of(requirement(
+                "POST",
+                "/api/vms/v1/console/guest-tools/install"
+            )),
+            (P::VmConfig, "/vms/v1".into())
+        );
+        assert_eq!(
+            priv_of(requirement("GET", "/api/vms/v1/console/guest-tools")),
+            (P::VmAudit, "/vms/v1".into())
         );
         // A container's system console is a console, not a config change.
         assert_eq!(

@@ -243,6 +243,10 @@ pub fn ConsoleSettingsPage() -> impl IntoView {
                     <input type="number" min="0" max="30000" name="guest_tools_wait_ms" prop:value=move || sig.get().guest_tools_wait_ms.to_string()
                         on:change=move |ev| { let v = num(&ev, sig.get().guest_tools_wait_ms); sig.update(|s| s.guest_tools_wait_ms = v) }/>
                 </label>
+                <label>"Check again for the guest tools during a session (s, 0 = off)"
+                    <input type="number" min="0" max="3600" name="guest_tools_retry_secs" prop:value=move || sig.get().guest_tools_retry_secs.to_string()
+                        on:change=move |ev| { let v = num(&ev, sig.get().guest_tools_retry_secs); sig.update(|s| s.guest_tools_retry_secs = v) }/>
+                </label>
                 <label>"Guest tools CD image"
                     <input type="text" name="guest_tools_iso" prop:value=move || sig.get().guest_tools_iso
                         on:change=move |ev| { let v = event_target_value(&ev); sig.update(|s| s.guest_tools_iso = v) }/>
@@ -250,7 +254,7 @@ pub fn ConsoleSettingsPage() -> impl IntoView {
                 <label class="checkbox">
                     <input type="checkbox" name="guest_tools_auto_install" prop:checked=move || sig.get().guest_tools_auto_install
                         on:change=move |ev| { let v = event_target_checked(&ev); sig.update(|s| s.guest_tools_auto_install = v) }/>
-                    "Install the guest tools automatically through the QEMU guest agent (Windows guests)"
+                    "Install the guest tools automatically through the QEMU guest agent (Windows MSI; Linux .deb/.rpm/.apk)"
                 </label>
                 <label>"Clipboard limit (bytes)"
                     <input type="number" min="1" name="clipboard_max_bytes" prop:value=move || sig.get().clipboard_max_bytes.to_string()
