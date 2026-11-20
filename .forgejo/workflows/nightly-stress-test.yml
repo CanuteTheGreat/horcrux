@@ -107,7 +107,7 @@ jobs:
         # for the load test) - pulled once up front so neither the fleet
         # boot nor the load test pay first-pull latency mid-measurement.
         run: |
-          docker pull nginx:alpine
+          docker pull nginx:1.31.9-alpine
           docker pull alpine:latest
 
       - name: Remove stale stress containers left by earlier runs
