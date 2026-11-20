@@ -2018,6 +2018,17 @@ class Runner:
         a, P = self.a, self.P
         vm.expect_screen(r"Assign interfaces", 30)     # the menu may still be drawing after the login returned
         scr = vm.screen()
+        # The VT model is 24 rows and the menu fills ~22: one kernel message printed after the menu was drawn (a 2-line
+        # 'clocksource: Long readout interval, skipping watchdog check' when the runner cgroup stalls the guest, run 4127) scrolls the
+        # header off the top. Enter at the prompt makes the menu clear the screen and redraw itself, so ask for a repaint (up to 3 times)
+        # before judging; the assertion below is unchanged.
+        for _ in range(3):
+            if "console menu" in scr:
+                break
+            vm.send("\r")
+            time.sleep(1.5)
+            vm.expect_screen(r"Enter an option", 15)
+            scr = vm.screen()
         vm.snap("console-menu")
         vm.shot("console-menu")
         want = ["console menu", "Assign interfaces", "Reset a user password" if P.get("web_user") else "Reset the admin password", "Web UI:"]   # web_auth=pam products reword option 3
