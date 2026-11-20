@@ -182,6 +182,24 @@ fn WanFields(sig: RwSignal<ConsoleSettings>) -> impl IntoView {
                 <input type="number" min="100" max="65536" name="wan-nack_history_packets" prop:value=move || w().nack_history_packets.to_string()
                     on:change=move |ev| { let v = num(&ev, w().nack_history_packets); set(&|x| x.nack_history_packets = v) }/>
             </label>
+            <label class="checkbox">
+                <input type="checkbox" name="wan-fec" prop:checked=move || w().fec
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|x| x.fec = v) }/>
+                "Forward error correction (FlexFEC) when the client supports it"
+            </label>
+            <label>"FEC repair packets per 100 video packets"
+                <input type="number" min="1" max="100" name="wan-fec_overhead_percent" prop:value=move || w().fec_overhead_percent.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().fec_overhead_percent); set(&|x| x.fec_overhead_percent = v) }/>
+            </label>
+            <label>"Use FEC from this round trip (ms, 0: always)"
+                <input type="number" min="0" max="10000" name="wan-fec_min_rtt_ms" prop:value=move || w().fec_min_rtt_ms.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().fec_min_rtt_ms); set(&|x| x.fec_min_rtt_ms = v) }/>
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name="wan-pace_video" prop:checked=move || w().pace_video
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|x| x.pace_video = v) }/>
+                "Pace video packets at the link estimate (off: each frame is sent at once)"
+            </label>
             <button type="button" class="btn" id="hxc-relay-refresh" on:click=move |_| refresh()>"Refresh relay status"</button>
         </fieldset>
     }
@@ -262,6 +280,11 @@ fn ProfileFields(name: &'static str, sig: RwSignal<ConsoleSettings>) -> impl Int
                 <input type="checkbox" name=format!("{name}-guest_capture") prop:checked=move || get().guest_capture
                     on:change=move |ev| { let v = event_target_checked(&ev); set(&|p| p.guest_capture = v) }/>
                 "Capture and encode inside the guest when Horcrux guest tools run"
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name=format!("{name}-low_latency_playout") prop:checked=move || get().low_latency_playout
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|p| p.low_latency_playout = v) }/>
+                "Show each frame as soon as it arrives (no playout smoothing)"
             </label>
         </fieldset>
     }
@@ -369,6 +392,15 @@ pub fn ConsoleSettingsPage() -> impl IntoView {
                 <label>"x264 preset (software H.264)"
                     <input type="text" name="x264_preset" prop:value=move || sig.get().x264_preset
                         on:change=move |ev| { let v = event_target_value(&ev); sig.update(|s| s.x264_preset = v) }/>
+                </label>
+                <label class="checkbox">
+                    <input type="checkbox" name="x264_in_process" prop:checked=move || sig.get().x264_in_process
+                        on:change=move |ev| { let v = event_target_checked(&ev); sig.update(|s| s.x264_in_process = v) }/>
+                    "Software H.264 in-process (libx264): rate changes without an encoder restart"
+                </label>
+                <label>"libx264 names or paths (comma-separated, tried in order)"
+                    <input type="text" name="x264_library" prop:value=move || list(&sig.get().x264_library)
+                        on:change=move |ev| { let v = parse_list(event_target_value(&ev)); sig.update(|s| s.x264_library = v) }/>
                 </label>
                 <label>"Ticket lifetime (s)"
                     <input type="number" name="ticket_lifetime_secs" prop:value=move || sig.get().ticket_lifetime_secs.to_string()

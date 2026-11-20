@@ -1,0 +1,40 @@
+[package]
+name = "horcrux-desktop"
+description = "Horcrux desktop client: the Horcrux Console in a native window (same WebRTC protocol, tickets and signalling as the web client) with raw mouse capture, gamepads and high refresh"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "horcrux-console"
+path = "src/main.rs"
+
+[dependencies]
+horcrux-media = { path = "../crates/horcrux-media" }
+horcrux-turn = { path = "../crates/horcrux-turn" }
+str0m = { workspace = true }
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+tokio-tungstenite = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4.5", features = ["derive", "env"] }
+rpassword = "7.3"
+# Window and input (licences: Apache-2.0 / MIT OR Apache-2.0)
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
+softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Gamepads straight from evdev (Apache-2.0 OR MIT): no libudev at build time
+evdev = "0.12"

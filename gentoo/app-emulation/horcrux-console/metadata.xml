@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>canutethegreat@errant.solutions</email>
+		<name>CanuteTheGreat</name>
+	</maintainer>
+	<longdescription lang="en">
+		Horcrux Console desktop client. Opens a Horcrux VM console in a native
+		window over the same WebRTC protocol, console tickets and signalling as
+		the web client (direct UDP or the node's relay). Adds raw relative mouse
+		motion while the pointer is captured, gamepads read from the system and
+		frames shown as soon as they are decoded at the monitor's refresh rate.
+	</longdescription>
+	<use>
+		<flag name="X">Windows on X11</flag>
+		<flag name="wayland">Windows on Wayland</flag>
+	</use>
+	<upstream>
+		<bugs-to>https://github.com/CanuteTheGreat/horcrux/issues</bugs-to>
+	</upstream>
+</pkgmetadata>

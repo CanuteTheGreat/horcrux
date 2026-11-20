@@ -1,0 +1,10 @@
+[package]
+name = "horcrux-media"
+description = "Horcrux Console media helpers: in-process H.264 encoding through the system libx264 (loaded at run time), RGB to I420 conversion and FlexFEC (flexfec-03) repair packets (docs/design/horcrux-console.md)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = "0.2"

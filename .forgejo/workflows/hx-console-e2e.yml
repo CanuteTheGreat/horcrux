@@ -23,6 +23,8 @@ on:
       - 'horcrux-api/tests/hx_console_e2e.*'
       - 'horcrux-api/tests/hx_console_wan_e2e.*'
       - 'crates/horcrux-turn/**'
+      - 'crates/horcrux-media/**'
+      - 'horcrux-desktop/**'
       - 'crates/horcrux-vm/tests/hxc_dbus_e2e.rs'
       - '.forgejo/workflows/hx-console-e2e.yml'
   workflow_dispatch: {}
@@ -148,14 +150,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-hx-console-
 
-      - name: Relay unit tests (STUN/TURN codec, RFC 5769 vectors, allocations)
-        run: cargo test -p horcrux-turn
+      - name: Relay and media unit tests (STUN/TURN codec, RFC 5769 vectors, FlexFEC, libx264/libavcodec round trip)
+        run: cargo test -p horcrux-turn -p horcrux-media -p horcrux-desktop
 
-      - name: Build horcrux-api (all features)
-        run: cargo build -p horcrux-api --all-features
+      - name: Build horcrux-api (all features) and the desktop client
+        run: |
+          cargo build -p horcrux-api --all-features
+          cargo build -p horcrux-desktop
 
-      - name: WAN e2e (netem paths, relay, adaptation)
+      - name: WAN e2e (netem paths, relay, adaptation, FEC, desktop client)
         run: |
           set -o pipefail
+          export HXC_DESKTOP_BIN=$PWD/target/debug/horcrux-console
           HXC_OUT=/tmp/hxc-wan bash horcrux-api/tests/hx_console_wan_e2e.sh target/debug/horcrux-api 2>&1 | tee /tmp/hxc-wan.log
           grep -E '^(LATENCY|RESULTS)' /tmp/hxc-wan.log || true

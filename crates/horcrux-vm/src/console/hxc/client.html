@@ -44,7 +44,7 @@
   // State exposed for diagnostics and automated tests.
   const hxc = window.hxc = {
     state: "starting", hello: null, guest: { width: 0, height: 0 }, codec: null,
-    framesDecoded: 0, rttMs: null, inputToFrameMs: [], inputToFrameCount: 0, lastError: null, denied: [],
+    framesDecoded: 0, rttMs: null, inputToFrameMs: [], inputToFrameCount: 0, inputToReceiveMs: [], framesSinceInput: [], lastError: null, denied: [],
     server: null, link: null, refreshHz: null,
   };
   function setState(s, text) {
@@ -133,18 +133,25 @@
     hxc.regionChangeMs = null; hxc.watch = r;
   };
   const pctx = probe.getContext("2d", { willReadFrequently: true });
-  let lastPixels = null, inputAt = null;
+  let lastPixels = null, inputAt = null, firstRxAfterInput = null, framesAfterInput = 0;
   function framePixels() {
     try {
       pctx.drawImage(video, 0, 0, probe.width, probe.height);
       return pctx.getImageData(0, 0, probe.width, probe.height).data;
     } catch { return null; }
   }
-  function onFrame() {
+  function onFrame(_t, meta) {
     // performance.now(), not the callback's frame timestamp: that one can
     // predate an input sent during the same frame (negative latencies)
     const now = performance.now();
     hxc.framesDecoded++;
+    // when the first frame after an input arrived (its last packet), to tell
+    // network/node delay from presentation delay
+    if (inputAt !== null) {
+      framesAfterInput++;
+      const rx = meta && typeof meta.receiveTime === "number" ? meta.receiveTime : now;
+      if (firstRxAfterInput === null && rx >= inputAt) firstRxAfterInput = rx;
+    }
     if (hxc.watch && changed(regionPixels(hxc.watch), hxc.watch.base)) {
       hxc.regionChangeMs = now - hxc.watch.at; hxc.watch = null;
     }
@@ -152,7 +159,11 @@
     if (changed(px, lastPixels)) {
       lastPixels = px; hxc.lastChangeAt = now;
       if (inputAt !== null) {
-        const ms = now - inputAt; inputAt = null;
+        const ms = now - inputAt;
+        hxc.inputToReceiveMs.push(firstRxAfterInput === null ? null : firstRxAfterInput - inputAt);
+        hxc.framesSinceInput.push(framesAfterInput);
+        if (hxc.inputToReceiveMs.length > 50) { hxc.inputToReceiveMs.shift(); hxc.framesSinceInput.shift(); }
+        inputAt = null; firstRxAfterInput = null; framesAfterInput = 0;
         hxc.inputToFrameMs.push(ms); hxc.inputToFrameCount++;
         if (hxc.inputToFrameMs.length > 50) hxc.inputToFrameMs.shift();
         send("ctl", JSON.stringify({ t: "report", input_to_frame_ms: ms, rtt_ms: hxc.rttMs }));
@@ -185,7 +196,7 @@
   // stops counting so it cannot inflate the next sample.
   function markInput() {
     const t = performance.now();
-    if (inputAt === null || t - inputAt > 2000) inputAt = t;
+    if (inputAt === null || t - inputAt > 2000) { inputAt = t; firstRxAfterInput = null; framesAfterInput = 0; }
   }
   function key(e, down) {
     e.preventDefault();
@@ -349,6 +360,8 @@
       const why = { link: "the link", uplink: "the node's upload", profile: "the profile", floor: "the minimum" }[l.target.limit] || l.target.limit;
       t += ", sending " + l.target.width + "x" + l.target.height + " " + l.target.fps + " fps at " + mbit(l.target.kbps) + " (limited by " + why + ")";
     }
+    const s = hxc.server;
+    if (s && s.fec) t += s.fec_active ? ", loss protection on (FEC)" : ", loss protection ready (FEC)";
     return t;
   }
   hxc.linkText = linkText;

@@ -35,6 +35,7 @@ use str0m::channel::ChannelId;
 use str0m::format::Codec;
 use str0m::media::{MediaKind, MediaTime, Mid, Pt};
 use str0m::net::{Protocol, Receive};
+use str0m::rtp::Extension;
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, watch};
@@ -116,6 +117,17 @@ pub struct SessionStats {
     /// running one produces: [width, height, fps, kbit/s].
     pub encoder_starts: u64,
     pub encoded: Option<[u32; 4]>,
+    /// `libx264` (in-process: rate changes and keyframes without a
+    /// restart) or `ffmpeg` (the FFmpeg program).
+    pub encoder_impl: Option<String>,
+    /// Rate changes applied to the running encoder without a restart.
+    pub rate_changes: u64,
+    /// Encoder restarts for a new picture size (link adaptation).
+    pub size_changes: u64,
+    /// FlexFEC negotiated with the client / protecting now / repair packets sent.
+    pub fec: bool,
+    pub fec_active: bool,
+    pub fec_packets: u64,
 }
 
 pub struct SessionHandle {
@@ -397,6 +409,31 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
     if req.settings.wan.adaptive {
         cfg = cfg.enable_bwe(Some(Bitrate::kbps(profile.bitrate_kbps as u64)));
     }
+    // FlexFEC when the client offers it: str0m must know the payload type to
+    // send it, and hands out the sent packets the repairs are built from.
+    let fec_offer = req
+        .settings
+        .wan
+        .fec
+        .then(|| super::fec::offered(&req.offer_sdp))
+        .flatten();
+    if let Some(o) = &fec_offer {
+        cfg.codec_config().add_config(
+            o.pt.into(),
+            None,
+            Codec::Unknown,
+            str0m::media::Frequency::NINETY_KHZ,
+            None,
+            str0m::format::FormatParams::default(),
+        );
+        cfg = cfg.enable_raw_packets(true);
+    }
+    if profile.low_latency_playout {
+        // ids 1..=14 are one-byte header extensions; str0m's defaults use
+        // 1..=4 and 10..=13
+        cfg.extension_map()
+            .set(PLAYOUT_DELAY_EXT_ID, Extension::PlayoutDelay);
+    }
     cfg = cfg
         .set_send_buffer_video(req.settings.wan.nack_history_packets as usize)
         .set_stats_interval(Some(Duration::from_secs(1)));
@@ -410,8 +447,68 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         .sdp_api()
         .accept_offer(offer)
         .map_err(|e| format!("offer not acceptable: {e}"))?;
-    let answer_sdp = answer.to_sdp_string();
+    let mut answer_sdp = answer.to_sdp_string();
+    let mut fec: Option<FecTx> = None;
+    if let Some(o) = &fec_offer {
+        let mid = Mid::from(o.mid.as_str());
+        // the one send stream str0m made for the video m-line (no repair yet)
+        let media = rtc
+            .direct_api()
+            .stream_tx_by_mid(mid, None)
+            .map(|s| (s.ssrc(), s.rtx()));
+        let repair_ssrc: u32 = rand::random::<u32>() | 1;
+        match media.and_then(|(m, rtx)| {
+            super::fec::answer(&answer_sdp, o, *m, repair_ssrc).map(|a| (m, rtx, a))
+        }) {
+            Some((m, rtx, a)) => {
+                answer_sdp = a;
+                let mut api = rtc.direct_api();
+                // re-key the media stream under its own RID (see FecTx)
+                api.remove_stream_tx(m);
+                api.declare_stream_tx(m, rtx, mid, Some(super::fec::MEDIA_RID.into()));
+                api.declare_stream_tx(
+                    repair_ssrc.into(),
+                    None,
+                    mid,
+                    Some(super::fec::REPAIR_RID.into()),
+                );
+                fec = Some(FecTx {
+                    pt: o.pt.into(),
+                    ssrc: repair_ssrc.into(),
+                    protector: horcrux_media::flexfec::Protector::new(
+                        *m,
+                        req.settings.wan.fec_overhead_percent,
+                    ),
+                    seq: (rand::random::<u16>() & 0x7fff) as u64,
+                });
+                tracing::info!(
+                    "console: FlexFEC pt {} repair SSRC {} protects media SSRC {}",
+                    o.pt,
+                    repair_ssrc,
+                    *m
+                );
+            }
+            None => tracing::warn!(
+                "console: FlexFEC offered but the answer has no video SSRC/CNAME; not used"
+            ),
+        }
+    }
 
+    // Video pacing (only matters with link adaptation, i.e. str0m's BWE).
+    if !req.settings.wan.pace_video {
+        let mut api = rtc.direct_api();
+        if let Some(mid) = super::fec::video_mid(&answer_sdp).map(|m| Mid::from(m.as_str())) {
+            for rid in [
+                None,
+                Some(super::fec::MEDIA_RID.into()),
+                Some(super::fec::REPAIR_RID.into()),
+            ] {
+                if let Some(st) = api.stream_tx_by_mid(mid, rid) {
+                    st.set_unpaced(true);
+                }
+            }
+        }
+    }
     // The connection to the guest's display is made before answering, so
     // a VM without the D-Bus display fails the request, not the session.
     let (disp_tx, disp_rx) = mpsc::channel::<DisplayEvent>(64);
@@ -438,6 +535,7 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
 
     let stats = Arc::new(Mutex::new(SessionStats {
         video_source: "host".into(),
+        fec: fec.is_some(),
         guest_tools: link.as_ref().map(|l| {
             format!(
                 "{} {} (agent {})",
@@ -502,6 +600,7 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
             stop_rx,
             absolute,
             to_rtc_self,
+            fec,
         )
         .await;
         if let Ok(mut s) = ctx.stats.lock() {
@@ -514,6 +613,52 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         let _ = done_tx.send(true);
     });
     Ok((handle, answer_sdp))
+}
+
+/// The FlexFEC repair stream of a session.
+///
+/// str0m resolves send streams by MID + RID, and a lookup with RID `None`
+/// matches *any* stream of the MID (its writer, pacer and padding walk a
+/// `HashMap`). With a second (repair) stream on the video MID, frames went
+/// out on the repair SSRC or sat in a queue the pacer never polled. So when
+/// FlexFEC is negotiated, the media stream is re-declared under an internal
+/// RID too ([`super::fec::MEDIA_RID`]) and the video is written with it:
+/// every lookup is then exact. Browsers demultiplex by MID first, so the
+/// RID header extension on those packets changes nothing for them.
+/// Header extension id of the playout-delay extension (when the profile asks
+/// for low-latency playout).
+const PLAYOUT_DELAY_EXT_ID: u8 = 5;
+
+struct FecTx {
+    pt: Pt,
+    ssrc: str0m::rtp::Ssrc,
+    protector: horcrux_media::flexfec::Protector,
+    seq: u64,
+}
+
+/// Write one encoded video frame (with the media RID when a repair stream
+/// shares the MID, see [`FecTx`]).
+fn write_video(
+    rtc: &mut Rtc,
+    fec: &Option<FecTx>,
+    low_latency: bool,
+    (mid, pt): (Mid, Pt),
+    now: Instant,
+    rtp: MediaTime,
+    data: Vec<u8>,
+) {
+    let Some(mut w) = rtc.writer(mid) else { return };
+    if fec.is_some() {
+        w = w.rid(super::fec::MEDIA_RID.into());
+    }
+    if low_latency {
+        // playout delay 0/0: the browser renders each frame on decode
+        let zero = MediaTime::new(0, str0m::media::Frequency::HUNDREDTHS);
+        w = w.playout_delay(zero, zero);
+    }
+    if let Err(e) = w.write(pt, now, rtp, data) {
+        tracing::debug!("console video write: {e}");
+    }
 }
 
 struct Ctx {
@@ -922,9 +1067,12 @@ async fn compositor(
                         let _ = ctx.to_guest(gproto::Msg::Keyframe);
                     }
                     Some(ToCompositor::KeyframeRequest) => {
-                        // FFmpeg's CLI can't be asked for an IDR mid-stream;
+                        // The in-process encoder makes the next frame an IDR.
+                        // FFmpeg's program can't be asked for one mid-stream;
                         // a fresh encoder starts with one. Rate-limited.
-                        if last_keyframe_restart.elapsed() > Duration::from_millis(500) {
+                        if encoder.as_mut().map(|e| e.request_keyframe()).unwrap_or(false) {
+                            dirty = true;
+                        } else if last_keyframe_restart.elapsed() > Duration::from_millis(500) {
                             last_keyframe_restart = Instant::now();
                             encoder = None;
                             submitted.clear();
@@ -977,18 +1125,33 @@ async fn compositor(
                     if let Some(t) = rate {
                         params.bitrate_kbps = t.kbps.max(100);
                         params.max_bitrate_kbps = t.kbps.max(100);
-                        params.fps = t.fps.max(1);
+                        // the in-process encoder opens at the profile's frame
+                        // rate (the ceiling) and gets the target's below
+                        if !(settings.x264_in_process && c == VideoCodec::H264 && b == encode::EncoderBackend::Software) {
+                            params.fps = t.fps.max(1);
+                        }
                         let (w, h) = encode::fit(f.width, f.height, t.width.max(2), t.height.max(2));
                         params.out_width = params.out_width.min(w);
                         params.out_height = params.out_height.min(h);
                     }
                     running = Some((params.bitrate_kbps, params.out_width, params.out_height, params.fps));
-                    if let Ok(mut s) = ctx.stats.lock() {
-                        s.encoder_starts += 1;
-                        s.encoded = Some([params.out_width, params.out_height, params.fps, params.bitrate_kbps]);
-                    }
-                    match Encoder::spawn(&settings.ffmpeg_path, params, enc_tx.clone()) {
-                        Ok(e) => encoder = Some(e),
+                    let mut encoded = [params.out_width, params.out_height, params.fps, params.bitrate_kbps];
+                    match Encoder::spawn(settings, params, enc_tx.clone()) {
+                        Ok(mut e) => {
+                            if let Some(t) = rate {
+                                // the in-process encoder opened at the ceiling:
+                                // the target's slower rate is a frame budget
+                                if t.fps.max(1) < e.params().fps && e.set_rate(t.kbps.max(100), t.fps.max(1)) {
+                                    encoded[2] = t.fps.max(1);
+                                }
+                            }
+                            if let Ok(mut s) = ctx.stats.lock() {
+                                s.encoder_starts += 1;
+                                s.encoded = Some(encoded);
+                                s.encoder_impl = Some(e.kind().to_string());
+                            }
+                            encoder = Some(e)
+                        }
                         Err(e) => {
                             tracing::warn!("console: encoder did not start: {e}");
                             let msg = serde_json::json!({"t": "error", "message": format!("encoder did not start: {e}")}).to_string();
@@ -1021,14 +1184,40 @@ async fn compositor(
                 sv.keyframe_interval_frames = sv.fps * profile.keyframe_interval_secs.max(1);
                 let _ = ctx.to_guest(gproto::Msg::StartVideo(sv));
             } else if let (Some((kbps, ow, oh, fps)), Some(f)) = (running, fb.as_ref()) {
-                // FFmpeg's CLI can't change rate or size in-stream and
-                // a restart costs a keyframe: restart for a new size or
-                // frame rate, or a bitrate change of -30% / +50%.
                 let (w, h) = encode::fit(f.width, f.height, t.width.max(2), t.height.max(2));
                 let (mw, mh) =
                     encode::fit(f.width, f.height, settings.max_width, settings.max_height);
-                let shape = (w.min(mw), h.min(mh), t.fps.max(1)) != (ow, oh, fps);
-                if shape || t.kbps * 10 < kbps * 7 || t.kbps * 10 > kbps * 15 {
+                let size = (w.min(mw), h.min(mh)) != (ow, oh);
+                // The in-process encoder takes a new bitrate and frame rate
+                // between two frames (its frame rate is the ceiling it was
+                // opened with; slower pacing gets a per-frame budget):
+                // only a new size restarts it.
+                let enc_fps = encoder.as_ref().map(|e| e.params().fps).unwrap_or(fps);
+                let in_stream = !size
+                    && t.fps.max(1) <= enc_fps
+                    && encoder
+                        .as_mut()
+                        .map(|e| e.set_rate(t.kbps.max(100), t.fps.max(1)))
+                        .unwrap_or(false);
+                if in_stream {
+                    running = Some((t.kbps.max(100), ow, oh, fps));
+                    if let Ok(mut s) = ctx.stats.lock() {
+                        s.rate_changes += 1;
+                        s.encoded = Some([ow, oh, t.fps.max(1), t.kbps.max(100)]);
+                    }
+                // FFmpeg's program can't change rate or size in-stream and
+                // a restart costs a keyframe: restart for a new size or
+                // frame rate, or a bitrate change of -30% / +50%.
+                } else if size
+                    || t.fps.max(1) != fps
+                    || t.kbps * 10 < kbps * 7
+                    || t.kbps * 10 > kbps * 15
+                {
+                    if size {
+                        if let Ok(mut s) = ctx.stats.lock() {
+                            s.size_changes += 1;
+                        }
+                    }
                     encoder = None;
                     submitted.clear();
                     dirty = true;
@@ -1071,6 +1260,7 @@ async fn transport(
     mut stop: watch::Receiver<bool>,
     absolute: bool,
     to_rtc_self: mpsc::Sender<ToRtc>,
+    mut fec: Option<FecTx>,
 ) -> String {
     let (net_tx, mut net_rx) = mpsc::channel::<(Vec<u8>, SocketAddr, SocketAddr)>(256);
     let mut readers = Vec::new();
@@ -1107,6 +1297,7 @@ async fn transport(
     let mut pending_ctl: Vec<String> = Vec::new();
     let mut pending_cursor: Option<String> = None;
     let start = Instant::now();
+    let low_latency = ctx.profile().low_latency_playout;
     let mut enc_lat: VecDeque<f64> = VecDeque::new();
     let mut stats_tick = tokio::time::interval(Duration::from_secs(2));
     let allow_input = ctx.req.allow_input;
@@ -1127,6 +1318,7 @@ async fn transport(
         .to_string()
     };
 
+    let mut inline_timeouts = 0u32;
     let reason = loop {
         // Drain str0m's output until it asks for a timeout.
         let timeout = loop {
@@ -1162,11 +1354,55 @@ async fn transport(
                             }
                         }
                     }
-                    Event::MediaEgressStats(m) if video.map(|v| v.0 == m.mid).unwrap_or(false) => {
+                    // the repair stream shares the MID: its stats (no NACKs,
+                    // no loss) must not overwrite the media stream's
+                    Event::MediaEgressStats(m)
+                        if video.map(|v| v.0 == m.mid).unwrap_or(false)
+                            && m.rid.as_deref() != Some(super::fec::REPAIR_RID) =>
+                    {
                         if let Ok(mut s) = ctx.stats.lock() {
                             s.rtt_ms = m.rtt.map(|d| d.as_secs_f64() * 1000.0).or(s.rtt_ms);
                             s.loss_pct = m.loss.map(|l| l as f64 * 100.0).or(s.loss_pct);
                             s.nacks = m.nacks;
+                        }
+                    }
+                    Event::RawPacket(p) => {
+                        if let (Some(f), str0m::rtp::RawPacket::RtpTx(_, buf)) = (fec.as_mut(), *p)
+                        {
+                            let (rtt, was) = ctx
+                                .stats
+                                .lock()
+                                .map(|s| (s.rtt_ms, s.fec_active))
+                                .unwrap_or((None, false));
+                            let on = super::fec::active(wan.fec, rtt, wan.fec_min_rtt_ms);
+                            if on != was {
+                                if let Ok(mut s) = ctx.stats.lock() {
+                                    s.fec_active = on;
+                                }
+                            }
+                            if !on {
+                                f.protector.reset();
+                                continue;
+                            }
+                            let repairs = f.protector.push(&buf);
+                            let n = repairs.len() as u64;
+                            if let Some(st) = rtc.direct_api().stream_tx(&f.ssrc) {
+                                for (ts, payload) in repairs {
+                                    st.write_rtp(str0m::rtp::RtpWrite::new(
+                                        f.pt,
+                                        f.seq.into(),
+                                        ts,
+                                        Instant::now(),
+                                        payload,
+                                    ));
+                                    f.seq += 1;
+                                }
+                            }
+                            if n > 0 {
+                                if let Ok(mut s) = ctx.stats.lock() {
+                                    s.fec_packets += n;
+                                }
+                            }
                         }
                     }
                     Event::IceConnectionStateChange(IceConnectionState::Disconnected) => {
@@ -1461,8 +1697,24 @@ async fn transport(
         if last_rx.elapsed() > idle_timeout {
             break "client went silent (session_idle_timeout_secs)".to_string();
         }
+        // str0m's pacer (on whenever link adaptation runs) asks for a timeout
+        // 1 us after the last one for every packet it releases. Going through
+        // tokio's timer for those costs a full timer tick (~1 ms) per packet,
+        // so a 15-packet frame left the node ~15 ms late (adaptive LAN median
+        // 76 ms vs 57 ms fixed-rate, where str0m's null pacer drains a frame
+        // in one go). Timeouts that are already due are handled inline; the
+        // bound only keeps the other select branches served during a burst
+        // (an anti-starvation limit, not a tunable).
+        const MAX_INLINE_TIMEOUTS: u32 = 256;
+        let now = Instant::now();
+        if timeout <= now && inline_timeouts < MAX_INLINE_TIMEOUTS {
+            inline_timeouts += 1;
+            let _ = rtc.handle_input(Input::Timeout(now));
+            continue;
+        }
+        inline_timeouts = 0;
         let wait = timeout
-            .saturating_duration_since(Instant::now())
+            .saturating_duration_since(now)
             .min(Duration::from_millis(250));
         tokio::select! {
             _ = stop.changed() => break "stopped".to_string(),
@@ -1501,7 +1753,10 @@ async fn transport(
                         "width": s.guest_width, "height": s.guest_height, "path": s.path,
                         "estimate_kbps": s.link_estimate_kbps, "target": s.target,
                         "rtt_ms": s.rtt_ms, "loss_pct": s.loss_pct, "nacks": s.nacks,
-                        "encoded": s.encoded, "encoder_starts": s.encoder_starts});
+                        "encoded": s.encoded, "encoder_starts": s.encoder_starts,
+                        "encoder_impl": s.encoder_impl, "rate_changes": s.rate_changes,
+                        "size_changes": s.size_changes,
+                        "fec": s.fec, "fec_active": s.fec_active, "fec_packets": s.fec_packets});
                     pending_ctl.push(msg.to_string());
                 }
                 let _ = rtc.handle_input(Input::Timeout(Instant::now()));
@@ -1516,11 +1771,7 @@ async fn transport(
                                 str0m::media::Frequency::NINETY_KHZ,
                             );
                             let len = data.len();
-                            if let Some(w) = rtc.writer(mid) {
-                                if let Err(e) = w.write(pt, now, rtp, data) {
-                                    tracing::debug!("console video write: {e}");
-                                }
-                            }
+                            write_video(&mut rtc, &fec, low_latency, (mid, pt), now, rtp, data);
                             let _ = at;
                             if let Ok(mut s) = ctx.stats.lock() {
                                 s.frames_sent += 1;
@@ -1558,11 +1809,7 @@ async fn transport(
                                 str0m::media::Frequency::NINETY_KHZ,
                             );
                             let len = frame.data.len();
-                            if let Some(w) = rtc.writer(mid) {
-                                if let Err(e) = w.write(pt, now, rtp, frame.data) {
-                                    tracing::debug!("console video write: {e}");
-                                }
-                            }
+                            write_video(&mut rtc, &fec, low_latency, (mid, pt), now, rtp, frame.data);
                             enc_lat.push_back((now - at).as_secs_f64() * 1000.0);
                             if enc_lat.len() > 60 { enc_lat.pop_front(); }
                             if let Ok(mut s) = ctx.stats.lock() {

@@ -84,6 +84,10 @@ pub struct ProfileSettings {
     /// running (the node forwards the packets without transcoding);
     /// otherwise the node encodes QEMU's display.
     pub guest_capture: bool,
+    /// Ask the browser to show each frame as soon as it is decoded (WebRTC
+    /// playout delay 0): no smoothing buffer, lowest input-to-picture time.
+    /// Off: the browser paces playout itself (smoother on jittery links).
+    pub low_latency_playout: bool,
 }
 
 impl ProfileSettings {
@@ -100,6 +104,7 @@ impl ProfileSettings {
                 hdr: false,
                 intra_refresh: false,
                 guest_capture: true,
+                low_latency_playout: true,
             },
             ConsoleProfile::Gaming => Self {
                 max_fps: 120,
@@ -112,6 +117,7 @@ impl ProfileSettings {
                 hdr: false,
                 intra_refresh: false,
                 guest_capture: true,
+                low_latency_playout: true,
             },
             ConsoleProfile::Console => Self {
                 max_fps: 15,
@@ -124,6 +130,7 @@ impl ProfileSettings {
                 hdr: false,
                 intra_refresh: false,
                 guest_capture: false,
+                low_latency_playout: true,
             },
         }
     }
@@ -240,6 +247,18 @@ pub struct WanSettings {
     /// Video packets kept for retransmission on a client's NACK (and for
     /// bandwidth probing); larger covers longer round trips at high rates.
     pub nack_history_packets: u32,
+    /// Send FlexFEC (flexfec-03) repair packets for the video when the client
+    /// offers FlexFEC: one lost packet per protected set is rebuilt at once
+    /// instead of costing a retransmission round trip.
+    pub fec: bool,
+    /// Repair packets per 100 video packets (at least one per frame).
+    pub fec_overhead_percent: u32,
+    /// Protect only while the measured round trip is at least this long
+    /// (ms); below it a retransmission is cheaper. 0: always.
+    pub fec_min_rtt_ms: u32,
+    /// Spread video packets over time at the link estimate (WebRTC pacer)
+    /// while link adaptation runs. Off: each frame leaves at once.
+    pub pace_video: bool,
 }
 
 impl Default for WanSettings {
@@ -270,6 +289,10 @@ impl Default for WanSettings {
             down_interval_ms: 1000,
             up_interval_ms: 4000,
             nack_history_packets: 4096,
+            fec: true,
+            fec_overhead_percent: 25,
+            fec_min_rtt_ms: 40,
+            pace_video: true,
         }
     }
 }
@@ -348,6 +371,12 @@ impl WanSettings {
         if !(100..=65_536).contains(&self.nack_history_packets) {
             return Err("wan.nack_history_packets must be 100..=65536".into());
         }
+        if !(1..=100).contains(&self.fec_overhead_percent) {
+            return Err("wan.fec_overhead_percent must be 1..=100".into());
+        }
+        if self.fec_min_rtt_ms > 10_000 {
+            return Err("wan.fec_min_rtt_ms must be at most 10000".into());
+        }
         if !(1..=120).contains(&self.min_fps) {
             return Err("wan.min_fps must be 1..=120".into());
         }
@@ -388,6 +417,12 @@ pub struct ConsoleSettings {
     pub ffmpeg_path: String,
     /// Software H.264 speed/quality trade-off (x264 preset name).
     pub x264_preset: String,
+    /// Encode software H.264 in-process through the system libx264, so
+    /// link adaptation changes the bitrate (and asks for keyframes) without
+    /// restarting the encoder. Off, or no library found: the FFmpeg program.
+    pub x264_in_process: bool,
+    /// libx264 names or paths tried in order for the in-process encoder.
+    pub x264_library: Vec<String>,
     /// UDP ports for the WebRTC media of console sessions (one per session).
     pub udp_port_min: u16,
     pub udp_port_max: u16,
@@ -445,6 +480,12 @@ impl Default for ConsoleSettings {
             vaapi_device: "/dev/dri/renderD128".into(),
             ffmpeg_path: "ffmpeg".into(),
             x264_preset: "ultrafast".into(),
+            x264_in_process: true,
+            x264_library: vec![
+                "libx264.so.165".into(),
+                "libx264.so.164".into(),
+                "libx264.so".into(),
+            ],
             udp_port_min: 61200,
             udp_port_max: 61299,
             candidate_addresses: Vec::new(),
@@ -516,6 +557,16 @@ impl ConsoleSettings {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-')
         {
             return Err("x264_preset must be a preset name such as ultrafast".into());
+        }
+        if self.x264_library.len() > 16
+            || self
+                .x264_library
+                .iter()
+                .any(|l| l.trim().is_empty() || l.len() > 4096 || l.contains('\0'))
+        {
+            return Err(
+                "x264_library must list at most 16 non-empty library names or paths".into(),
+            );
         }
         if !(64..=16384).contains(&self.max_width) || !(64..=16384).contains(&self.max_height) {
             return Err("max_width/max_height must be 64..=16384".into());

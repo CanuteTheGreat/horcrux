@@ -1,0 +1,20 @@
+# Horcrux Console desktop client settings (defaults).
+# Copy to ~/.config/horcrux/console.toml and set node and vm; every key
+# can also be given on the command line (horcrux-console --help).
+node = ""
+user = "root"
+password_env = "HORCRUX_PASSWORD"
+vm = ""
+profile = ""
+ca_file = ""
+cert_sha256 = ""
+avcodec = ["libavcodec.so.62", "libavcodec.so.61", "libavcodec.so.60", "libavcodec.so.59", "libavcodec.so.58", "libavcodec.so"]
+avutil = ["libavutil.so.60", "libavutil.so.59", "libavutil.so.58", "libavutil.so.57", "libavutil.so.56", "libavutil.so"]
+release_key = "ControlRight"
+relative_mouse = "auto"
+fullscreen = false
+gamepads = true
+refresh_hz = 0
+width = 1280
+height = 800
+connect_timeout_ms = 15000

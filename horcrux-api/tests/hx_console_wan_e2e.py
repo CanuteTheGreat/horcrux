@@ -111,6 +111,8 @@ check(rs["running"] is False, "no relay runs while WAN access is off")
 
 def settings(**wan):
     s = json.loads(json.dumps(BASE_SETTINGS))
+    s.update(wan.pop("_top", {}))
+    s["desktop"].update(wan.pop("_desktop", {}))
     s["wan"].update(wan)
     _, saved = call("PUT", "/console/settings", s, token=ADMIN)
     return saved
@@ -164,13 +166,19 @@ def wait_static(page, quiet_ms=1500, timeout=60):
     return False
 
 
+TRIAL_DETAIL = []
+
+
 def trial(page, action, timeout=8):
     n = page.evaluate("window.hxc.inputToFrameCount")
     page.evaluate(action)
     end = time.time() + timeout
     while time.time() < end:
         if page.evaluate("window.hxc.inputToFrameCount") > n:
-            return page.evaluate("window.hxc.inputToFrameMs[window.hxc.inputToFrameMs.length-1]")
+            ms, rx, nf = page.evaluate("[window.hxc.inputToFrameMs.at(-1), window.hxc.inputToReceiveMs.at(-1), "
+                                       "window.hxc.framesSinceInput.at(-1)]")
+            TRIAL_DETAIL.append((ms, rx, nf))
+            return ms
         time.sleep(0.03)
     return None
 
@@ -194,6 +202,8 @@ CLIENT_STATS = """async () => {
     packets_lost: inb ? inb.packetsLost : null, packets_received: inb ? inb.packetsReceived : null,
     nacks_sent: inb ? inb.nackCount : null, plis_sent: inb ? inb.pliCount : null,
     frames_dropped: inb ? inb.framesDropped : null,
+    fec_packets_received: inb ? (inb.fecPacketsReceived ?? null) : null,
+    fec_packets_discarded: inb ? (inb.fecPacketsDiscarded ?? null) : null,
     jitter_buffer_ms: inb && inb.jitterBufferEmittedCount ? n(inb.jitterBufferDelay / inb.jitterBufferEmittedCount * 1000) : null,
     decode_ms: inb && inb.framesDecoded ? n(inb.totalDecodeTime / inb.framesDecoded * 1000) : null,
     width: inb ? inb.frameWidth : null, height: inb ? inb.frameHeight : null,
@@ -225,9 +235,30 @@ CONDITIONS = [
     ("lan_direct", (0, 0, None), dict(enabled=False), None, dict(path="direct")),
     # same path without link adaptation (no congestion control / pacer): A/B for its latency cost
     ("lan_direct_fixed_rate", (0, 0, None), dict(enabled=False, adaptive=False), None, dict(path="direct")),
+    # the same links through the FFmpeg program instead of the in-process
+    # encoder (nodes without libx264): the comparison for in-stream rate changes
+    ("lan_direct_ffmpeg", (0, 0, None), dict(enabled=False, _top=dict(x264_in_process=False)), None,
+     dict(path="direct")),
+    # link adaptation with the video sent unpaced (each frame at once)
+    ("lan_direct_unpaced", (0, 0, None), dict(enabled=False, pace_video=False), None, dict(path="direct")),
+    # the browser's own playout smoothing instead of playout delay 0
+    ("lan_direct_jitter_buffer", (0, 0, None), dict(enabled=False, _desktop=dict(low_latency_playout=False)), None,
+     dict(path="direct")),
+    ("lan_direct_fixed_rate_ffmpeg", (0, 0, None), dict(enabled=False, adaptive=False, _top=dict(x264_in_process=False)),
+     None, dict(path="direct")),
     ("wan_relay_rtt20", (20, 0, None), dict(enabled=True, force_relay=True), None, dict(path="relay", proto="udp")),
     ("wan_relay_rtt50_loss1", (50, 1, None), dict(enabled=True, force_relay=True), None, dict(path="relay", proto="udp")),
     ("wan_relay_rtt100_loss2", (100, 2, None), dict(enabled=True, force_relay=True), None, dict(path="relay", proto="udp")),
+    # FlexFEC A/B on the same lossy link, with a browser that advertises
+    # FlexFEC (Chromium field trial; the default browser offer has none)
+    ("wan_relay_rtt100_loss2_nofec", (100, 2, None), dict(enabled=True, force_relay=True, fec=False), None,
+     dict(path="relay", proto="udp", client="fec", fec=False, trials=30)),
+    ("wan_relay_rtt100_loss2_fec", (100, 2, None), dict(enabled=True, force_relay=True, fec=True), None,
+     dict(path="relay", proto="udp", client="fec", fec=True, trials=30)),
+    ("wan_relay_rtt100_loss5_nofec", (100, 5, None), dict(enabled=True, force_relay=True, fec=False), None,
+     dict(path="relay", proto="udp", client="fec", fec=False, trials=30)),
+    ("wan_relay_rtt100_loss5_fec", (100, 5, None), dict(enabled=True, force_relay=True, fec=True), None,
+     dict(path="relay", proto="udp", client="fec", fec=True, trials=30)),
     ("wan_fallback_rtt40", (40, 0, None), dict(enabled=True, force_relay=False), ["61200:61299"], dict(path="relay", proto="udp")),
     ("wan_relay_tcp_rtt40", (40, 0, None), dict(enabled=True, force_relay=True), ["3478", "61200:61299"], dict(path="relay", proto="tcp")),
     ("wan_rate3mbit_rtt40", (40, 0, 3000), dict(enabled=True, force_relay=True), None, dict(path="relay", max_kbps=3000, flood=True)),
@@ -245,9 +276,40 @@ with sync_playwright() as pw:
     ctx = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 860})
     r = ctx.request.post(CLIENT_BASE + "/api/auth/login", data={"username": "admin", "password": "admin"})
     check(r.ok, "browser in the client namespace logs in to the node over the veth link")
+    # The FlexFEC browser logs WebRTC's own receive path (FEC header parsing,
+    # recovered packets) to a file: the FEC conditions check that the repair
+    # packets are understood and really rebuild lost packets.
+    fec_log = os.path.join(OUT, "chromium-fec.log")
+    wrapper_fec = os.path.join(OUT, "chromium-fec-in-netns.sh")
+    with open(wrapper_fec, "w") as f:
+        f.write(f"#!/bin/sh\nexec {SUDO} ip netns exec {NS} \"{real}\" \"$@\" 2>>\"{fec_log}\"\n")
+    os.chmod(wrapper_fec, 0o755)
+    browser_fec = pw.chromium.launch(executable_path=wrapper_fec, args=[
+        "--autoplay-policy=no-user-gesture-required",
+        "--force-fieldtrials=WebRTC-FlexFEC-03-Advertised/Enabled/WebRTC-FlexFEC-03/Enabled/",
+        "--enable-logging=stderr", "--v=0", "--vmodule=*/webrtc/*=1"])
 
-    def open_console(name):
-        page = ctx.new_page()
+    def fec_log_size():
+        try:
+            return os.path.getsize(fec_log)
+        except OSError:
+            return 0
+
+    def fec_log_since(mark):
+        try:
+            with open(fec_log, "rb") as f:
+                f.seek(mark)
+                return f.read().decode(errors="replace")
+        except OSError:
+            return ""
+
+    ctx_fec = browser_fec.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 860})
+    r = ctx_fec.request.post(CLIENT_BASE + "/api/auth/login", data={"username": "admin", "password": "admin"})
+    check(r.ok, "FlexFEC-advertising browser logs in to the node")
+    CLIENTS = {"default": ctx, "fec": ctx_fec}
+
+    def open_console(name, client="default"):
+        page = CLIENTS[client].new_page()
         page.on("pageerror", lambda e: print(f"[{name} pageerror] {e}", flush=True))
         page.goto(f"{CLIENT_BASE}/api/console/{VM}/hxc")
         try:
@@ -259,6 +321,14 @@ with sync_playwright() as pw:
             print("DEBUG", page.evaluate("""() => JSON.stringify({state: window.hxc && window.hxc.state,
                 err: window.hxc && window.hxc.lastError, ice: window.hxc && window.hxc.pc && window.hxc.pc.iceConnectionState,
                 servers: window.hxc && window.hxc.iceServers && window.hxc.iceServers.map(s => s.urls)})"""), flush=True)
+            # what the receiver got (packets, frames, keyframes, PLIs, decoder) and the node's view
+            print("DEBUG-RX", page.evaluate("""async () => {
+                const out = {server: window.hxc && window.hxc.server, framesDecoded: window.hxc && window.hxc.framesDecoded};
+                if (window.hxc && window.hxc.pc) (await window.hxc.pc.getStats()).forEach(r => {
+                  if (r.type === 'inbound-rtp' && r.kind === 'video') out.inbound = r;
+                  if (r.type === 'codec') (out.codecs = out.codecs || []).push(r.mimeType + ' ' + r.payloadType);
+                });
+                return JSON.stringify(out); }"""), flush=True)
             raise
         check(page.evaluate("window.hxc.state") == "connected",
               f"{name}: console connected ({page.evaluate('window.hxc.lastError')})")
@@ -284,6 +354,7 @@ with sync_playwright() as pw:
         if ONLY and name not in ONLY:
             continue
         print(f"---- {name}: rtt {rtt} ms, loss {loss}%, rate {rate or '-'} kbit/s, wan {wan}, blocked {blocked}", flush=True)
+        fec_mark = fec_log_size()
         saved = settings(**wan)
         if wan.get("enabled"):
             _, rs = call("GET", "/console/relay", token=ADMIN)
@@ -292,7 +363,7 @@ with sync_playwright() as pw:
         block(blocked)
         _, probe_ticket = call("POST", f"/console/{VM}/hxc/ticket", {"conn_id": "probe"}, token=ADMIN)
         print("DEBUG ticket", json.dumps({k: probe_ticket.get(k) for k in ("ice_servers", "ice_transport_policy")})[:400], flush=True)
-        page = open_console(name)
+        page = open_console(name, want.get("client", "default"))
         ice = page.evaluate("window.hxc.iceServers")
         print("DEBUG page ice", json.dumps([{"urls": x.get("urls"), "user": bool(x.get("username"))} for x in (ice or [])]), flush=True)
         if wan.get("enabled"):
@@ -301,11 +372,12 @@ with sync_playwright() as pw:
         time.sleep(2)
         wait_static(page, quiet_ms=800, timeout=20)
         lat = []
-        for i in range(14):
+        trials = want.get("trials", 14)
+        for i in range(trials):
             wait_static(page, quiet_ms=500, timeout=10)
             lat.append(trial(page, key("KeyA" if i % 2 == 0 else "Backspace")))
         got = len([x for x in lat if x is not None])
-        check(got >= 10, f"{name}: keystrokes reach the guest and the echo comes back ({got}/14)")
+        check(got >= trials * 5 // 7, f"{name}: keystrokes reach the guest and the echo comes back ({got}/{trials})")
         time.sleep(2.5)
         cs = page.evaluate(CLIENT_STATS)
         link = page.evaluate("window.hxc.link") or {}
@@ -320,8 +392,33 @@ with sync_playwright() as pw:
         if want.get("proto"):
             check(cs["relay_protocol"] == want["proto"], f"{name}: relay reached over {want['proto']}")
         res = {"conditions": {"rtt_ms": rtt, "loss_pct": loss, "rate_kbit": rate, "blocked_udp": blocked},
-               "path": path, "keystroke_to_picture": summary(lat), "samples_ms": [x and round(x) for x in lat], "datachannel_rtt_ms": rtt_dc and round(rtt_dc, 1),
-               "client": cs, "node": {k: server.get(k) for k in ("estimate_kbps", "target", "rtt_ms", "loss_pct", "nacks", "encode_ms", "codec", "encoder", "encoded", "encoder_starts")}}
+               "path": path, "keystroke_to_picture": summary(lat), "samples_ms": [x and round(x) for x in lat],
+               # per keystroke: first frame received after it (ms) and frames shown until the change was seen
+               "first_receive_ms": [d[1] and round(d[1]) for d in TRIAL_DETAIL[-len(lat):]],
+               "frames_until_seen": [d[2] for d in TRIAL_DETAIL[-len(lat):]], "datachannel_rtt_ms": rtt_dc and round(rtt_dc, 1),
+               "client": cs, "node": {k: server.get(k) for k in ("estimate_kbps", "target", "rtt_ms", "loss_pct", "nacks", "encode_ms", "codec", "encoder", "encoded", "encoder_starts",
+                                                       "encoder_impl", "rate_changes", "size_changes", "fec", "fec_active", "fec_packets")}}
+        if "fec" in want:
+            if want["fec"]:
+                check(server.get("fec") and server.get("fec_packets", 0) > 0 and (cs.get("fec_packets_received") or 0) > 0,
+                      f"{name}: FlexFEC negotiated, {server.get('fec_packets')} repair packets sent, "
+                      f"{cs.get('fec_packets_received')} received by the browser")
+                log = fec_log_since(fec_mark)
+                recovered = log.count("Recovered media packet")
+                discarded = sum(log.count(m) for m in ("Discarding FlexFEC", "FlexFEC03 packet protecting multiple",
+                                                       "Discarding truncated FlexFEC", "malformed header"))
+                res["fec_recovered_packets"] = recovered
+                check(discarded == 0 and (recovered > 0 or not loss),
+                      f"{name}: the browser parses every repair packet ({discarded} discarded) and rebuilt "
+                      f"{recovered} lost packets from them")
+            else:
+                check(not server.get("fec_packets"), f"{name}: FEC off: no repair packets ({server.get('fec_packets')})")
+        if server.get("encoder_impl") == "libx264" and not want.get("flood"):
+            # in-process H.264: adaptation changes the rate of the running
+            # encoder; only a new picture size would restart it
+            check(server.get("encoder_starts") == 1 + (server.get("size_changes") or 0),
+                  f"{name}: the encoder restarts only for a new picture size, {server.get('rate_changes')} in-stream "
+                  f"rate changes (starts {server.get('encoder_starts')}, size changes {server.get('size_changes')})")
         if want.get("flood"):
             # fill the screen continuously so the encoder needs more than the link allows
             type_text(page, "while true; do cat /proc/cpuinfo; done\n")
@@ -356,11 +453,15 @@ with sync_playwright() as pw:
             # newest step. The FFmpeg CLI encoder is not restarted for a
             # bitrate drop under 30% (a restart costs a keyframe), so its
             # rate may sit up to target / 0.7 while size and frame rate match.
+            # The in-process libx264 encoder changes its rate in-stream, so
+            # there it must match the target exactly.
             def follows(snap):
                 e, t = snap.get("encoded"), snap.get("target")
+                kbps = t and max(t["kbps"], 100)
+                cap = kbps if snap.get("encoder_impl") == "libx264" else kbps and kbps * 10 // 7 + 1
                 return bool(e and t and e[0] <= t["width"] + 2 and e[1] <= t["height"] + 2
                             and e[2] == max(t["fps"], 1)
-                            and e[3] <= max(t["kbps"], 100) * 10 // 7 + 1)
+                            and e[3] <= cap)
             deadline = time.time() + float(os.environ.get("HXC_WAN_FOLLOW_SECS", "8"))
             snap = page.evaluate("window.hxc.server") or {}
             while not follows(snap) and time.time() < deadline:
@@ -411,10 +512,59 @@ with sync_playwright() as pw:
     }""", servers)
     check("relay" not in reused, f"credentials of an ended session ({session}) get no relay allocation (candidates {reused})")
     probe.close()
+
+    # The Horcrux desktop client (horcrux-console): same ticket, signalling
+    # and WebRTC protocol, run headless in the client namespace (decodes
+    # with the system FFmpeg libraries, types at the shell, sends gamepad
+    # and raw relative motion), direct and through the relay.
+    desktop = os.environ.get("HXC_DESKTOP_BIN")
+    if desktop:
+        import hashlib
+        der = ssl.PEM_cert_to_DER_cert(ssl.get_server_certificate(("127.0.0.1", 8006)))
+        fp = hashlib.sha256(der).hexdigest()
+        for name, wan, rtt in (("desktop_direct", dict(enabled=False), 0),
+                               ("desktop_relay_rtt50", dict(enabled=True, force_relay=True), 50)):
+            if ONLY and name not in ONLY:
+                continue
+            settings(**wan)
+            shape(rtt, 0)
+            block(None)
+            argv = ["env", "HORCRUX_PASSWORD=admin", "XDG_CONFIG_HOME=/nonexistent", desktop, "--headless",
+                    "--node", CLIENT_BASE, "--user", "admin", "--vm", VM, "--cert-sha256", fp,
+                    "--warmup-secs", "4", "--trials", "12", "--exercise-input"]
+            r = run(argv, ns=True, check_rc=False)
+            with open(f"{OUT}/{name}.log", "w") as f:
+                f.write(r.stdout + "\n" + r.stderr)
+            check(r.returncode == 0, f"{name}: the desktop client ran (exit {r.returncode}: {r.stderr.strip()[-300:]})")
+            rep = json.loads(r.stdout.strip().splitlines()[-1])
+            node = rep.get("node") or {}
+            stats = node.get("stats") or {}
+            lat = [x for x in rep["key_to_frame_ms"] if x is not None]
+            res = {"conditions": {"rtt_ms": rtt}, "path": stats.get("path"), "client_path": rep["path"],
+                   "keystroke_to_picture": summary(lat), "samples_ms": [round(x) for x in lat],
+                   "frames_decoded": rep["frames_decoded"], "decode_errors": rep["decode_errors"],
+                   "decoder": rep["decoder"], "size": [rep["width"], rep["height"]],
+                   "node": {k: stats.get(k) for k in ("keys_in", "pointer_in", "gamepad_in", "encoder_impl",
+                                                       "client_refresh_hz", "frames_sent")}}
+            RESULTS[name] = res
+            print("PATH " + json.dumps({name: res}), flush=True)
+            if lat:
+                print("LATENCY " + json.dumps({name: res["keystroke_to_picture"]}), flush=True)
+            check(rep["frames_decoded"] >= 10 and rep["decode_errors"] == 0,
+                  f"{name}: {rep['frames_decoded']} frames decoded ({rep['width']}x{rep['height']}, {rep['decoder']}), "
+                  f"{rep['decode_errors']} decode errors")
+            check(len(lat) >= 10, f"{name}: {len(lat)} of 12 keystrokes came back as a new picture")
+            want_path = "relay" if wan.get("force_relay") else "direct"
+            check(stats.get("path") == want_path, f"{name}: the node sees the {want_path} path ({stats.get('path')})")
+            check((stats.get("keys_in") or 0) >= 24, f"{name}: the node took the keystrokes ({stats.get('keys_in')})")
+            check(stats.get("client_refresh_hz") == 60, f"{name}: the client's refresh rate reached the node "
+                  f"({stats.get('client_refresh_hz')})")
+        wait_allocations(0)
     settings(enabled=False)
     _, rs = call("GET", "/console/relay", token=ADMIN)
     check(rs["running"] is False, "turning WAN access off stops the relay")
     browser.close()
+    browser_fec.close()
 
 shape(0, 0)
 block(None)
