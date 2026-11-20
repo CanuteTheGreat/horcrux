@@ -558,7 +558,7 @@ with sync_playwright() as pw:
                    "keystroke_to_picture": summary(lat), "samples_ms": [round(x) for x in lat],
                    "frames_decoded": rep["frames_decoded"], "decode_errors": rep["decode_errors"],
                    "decoder": rep["decoder"], "size": [rep["width"], rep["height"]],
-                   "node": {k: stats.get(k) for k in ("keys_in", "pointer_in", "gamepad_in", "encoder_impl",
+                   "node": {k: stats.get(k) for k in ("keys_in", "pointer_in", "gamepad_in", "gamepad_rx", "encoder_impl",
                                                        "client_refresh_hz", "frames_sent")}}
             RESULTS[name] = res
             print("PATH " + json.dumps({name: res}), flush=True)
@@ -571,6 +571,8 @@ with sync_playwright() as pw:
             want_path = "relay" if wan.get("force_relay") else "direct"
             check(stats.get("path") == want_path, f"{name}: the node sees the {want_path} path ({stats.get('path')})")
             check((stats.get("keys_in") or 0) >= 24, f"{name}: the node took the keystrokes ({stats.get('keys_in')})")
+            check((stats.get("gamepad_rx") or 0) >= 2, f"{name}: the node received the gamepad states "
+                  f"({stats.get('gamepad_rx')}; handed to guest tools: {stats.get('gamepad_in')})")
             check(stats.get("client_refresh_hz") == 60, f"{name}: the client's refresh rate reached the node "
                   f"({stats.get('client_refresh_hz')})")
         wait_allocations(0)

@@ -3,7 +3,7 @@
 
 EAPI=8
 
-inherit cargo git-r3
+inherit cargo desktop git-r3 xdg
 
 DESCRIPTION="Horcrux Console desktop client: VM consoles in a native window (raw mouse, gamepads, high refresh)"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
@@ -43,11 +43,16 @@ src_install() {
 	dobin "$(cargo_target_dir)"/horcrux-console
 	insinto /usr/share/horcrux-console
 	newins packaging/linux/horcrux-console.toml console.toml.example
+	# start-menu entry and the horcrux-console:// link handler
+	domenu packaging/linux/horcrux-console.desktop
 	einstalldocs
 }
 
 pkg_postinst() {
-	elog "Connect with:  horcrux-console --node https://NODE:8006 --vm VMID"
+	xdg_pkg_postinst
+	elog "Start Horcrux Console from the menu (connection window), open a VM's"
+	elog "\"Open in the desktop app\" link in the web UI, or run"
+	elog "  horcrux-console --node https://NODE:8006 --vm VMID"
 	elog "Defaults live in \${XDG_CONFIG_HOME:-~/.config}/horcrux/console.toml;"
 	elog "see /usr/share/horcrux-console/console.toml.example (horcrux-console --print-defaults)."
 	elog "Gamepads are read from /dev/input: add the user to the 'input' group."

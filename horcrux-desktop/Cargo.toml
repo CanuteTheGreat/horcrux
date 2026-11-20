@@ -31,6 +31,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { version = "4.5", features = ["derive", "env"] }
 rpassword = "7.3"
+# Connection window text: the public-domain 8x8 bitmap font (MIT)
+font8x8 = { version = "0.3", default-features = false }
 # Window and input (licences: Apache-2.0 / MIT OR Apache-2.0)
 winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
 softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
@@ -38,3 +40,26 @@ softbuffer = { version = "0.4", default-features = false, features = ["x11", "x1
 [target.'cfg(target_os = "linux")'.dependencies]
 # Gamepads straight from evdev (Apache-2.0 OR MIT): no libudev at build time
 evdev = "0.12"
+
+[target.'cfg(windows)'.dependencies]
+# Microsoft's Windows API bindings (MIT OR Apache-2.0): XInput (loaded at
+# run time) and attaching to the parent's console for command-line use.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Console",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# GameController.framework bindings (Zlib OR Apache-2.0 OR MIT, objc2 family)
+objc2-game-controller = { version = "0.3", default-features = false, features = [
+    "std",
+    "GCController",
+    "GCExtendedGamepad",
+    "GCPhysicalInputProfile",
+    "GCControllerElement",
+    "GCControllerButtonInput",
+    "GCControllerAxisInput",
+    "GCControllerDirectionPad",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray"] }
