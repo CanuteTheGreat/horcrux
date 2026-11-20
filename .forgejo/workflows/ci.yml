@@ -1170,7 +1170,7 @@ jobs:
           echo "Docker daemon architecture: $daemon_arch -> building stage3:${target_arch}-systemd"
           docker build \
             --build-arg TARGETARCH="$target_arch" \
-            --build-arg HORCRUX_USE="cli systemd docker -qemu -monitoring -webui" \
+            --build-arg HORCRUX_USE="cli systemd docker -qemu -viewer -monitoring -webui" \
             -t horcrux/api:${{ github.sha }} .
 
       - name: Smoke-test the built image
@@ -1664,7 +1664,7 @@ jobs:
           docker build \
             --target use-matrix \
             --build-arg TARGETARCH="$target_arch" \
-            --build-arg HORCRUX_USE="cli systemd docker -qemu -monitoring -webui" \
+            --build-arg HORCRUX_USE="cli systemd docker -qemu -viewer -monitoring -webui" \
             -t horcrux/use-matrix:${{ github.sha }} .
           docker rmi horcrux/use-matrix:${{ github.sha }} || true
 
