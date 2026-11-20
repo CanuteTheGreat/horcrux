@@ -228,6 +228,12 @@ pub struct ConsoleSettings {
     /// when a viewer opens and the tools do not answer (Windows guests: the
     /// MSI from the tools CD).
     pub guest_tools_auto_install: bool,
+    /// Horcrux virtual display (Windows guest tools' virtual monitors):
+    /// `auto` = when the VM's passed-through GPU had no monitor attached or
+    /// has no display outputs at all (recorded at the GPU hand-off), so the
+    /// guest still gets a desktop at the viewer's size and refresh rate;
+    /// `always`; `never`.
+    pub virtual_display: String,
     /// Largest clipboard text carried in either direction (bytes).
     pub clipboard_max_bytes: u32,
     /// Opus bitrate for guest audio (kbit/s).
@@ -263,6 +269,7 @@ impl Default for ConsoleSettings {
             guest_tools_wait_ms: 1500,
             guest_tools_iso: "/usr/share/horcrux/guest-tools/horcrux-guest-tools.iso".into(),
             guest_tools_auto_install: true,
+            virtual_display: "auto".into(),
             clipboard_max_bytes: 1 << 20,
             audio_bitrate_kbps: 128,
             desktop: desktop(),
@@ -271,6 +278,9 @@ impl Default for ConsoleSettings {
         }
     }
 }
+
+/// Values of [`ConsoleSettings::virtual_display`].
+pub const VIRTUAL_DISPLAY_POLICIES: [&str; 3] = ["auto", "always", "never"];
 
 /// Codecs the C1 encoder pipeline can produce.
 pub const KNOWN_CODECS: [&str; 2] = ["h264", "vp8"];
@@ -339,6 +349,12 @@ impl ConsoleSettings {
         }
         if self.guest_tools_wait_ms > 30_000 {
             return Err("guest_tools_wait_ms must be at most 30000".into());
+        }
+        if !VIRTUAL_DISPLAY_POLICIES.contains(&self.virtual_display.as_str()) {
+            return Err(format!(
+                "virtual_display must be one of {}",
+                VIRTUAL_DISPLAY_POLICIES.join(", ")
+            ));
         }
         if !(1..=64 * 1024 * 1024).contains(&self.clipboard_max_bytes) {
             return Err("clipboard_max_bytes must be 1..=67108864".into());

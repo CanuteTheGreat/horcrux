@@ -322,6 +322,10 @@ mod qemu {
                 serial_socket: Some(rt.serial_socket.clone()),
                 qga_socket: Some(crate::vm::display::DisplayRuntime::qga_socket(&disk)),
                 guest_tools_cd: rt.guest_tools_iso.is_some(),
+                virtual_display: crate::vm::handoff::wants_virtual_display(
+                    &settings.virtual_display,
+                    crate::vm::handoff::load_record(&disk).as_ref(),
+                ),
             };
             match session::start(req).await {
                 Ok((handle, answer)) => {

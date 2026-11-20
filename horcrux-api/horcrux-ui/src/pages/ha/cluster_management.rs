@@ -11,9 +11,9 @@
 use crate::api::{
     add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes,
     get_cluster_power_status, get_cpu_groups, get_local_nics, get_power_auto, get_quorum_plan,
-    get_vms, power_down_node, power_node_note, put_power_auto, put_qdevice, remove_cluster_node, set_node_caps,
-    set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode, CpuGroupsView,
-    FindNodeRequest, NicView, NicsView, NodeCaps, PowerAuto, PowerStatus,
+    get_vms, power_down_node, power_node_note, put_power_auto, put_qdevice, remove_cluster_node,
+    set_node_caps, set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode,
+    CpuGroupsView, FindNodeRequest, NicView, NicsView, NodeCaps, PowerAuto, PowerStatus,
     QuorumPlanView,
 };
 use horcrux_common::VmConfig;
