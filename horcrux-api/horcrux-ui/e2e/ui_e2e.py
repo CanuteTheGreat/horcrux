@@ -1319,8 +1319,12 @@ def cluster_nodes_checks(context):
         # Confirm: DELETE /api/cluster/nodes/e2e-peer
         answer["accept"] = True
         row.get_by_role("button", name="Remove").click()
+        # The success message shows as soon as the DELETE answers and clears
+        # itself 3 s later, while the table reload that drops the row loads
+        # several endpoints: on a busy runner the row can vanish after the
+        # message is gone. Check the message first, then the row.
+        expect(page.get_by_text(f"Node '{peer}' removed")).to_be_visible(timeout=30000)
         expect(page.locator("#cluster-node-table tbody tr", has_text=peer)).to_have_count(0, timeout=30000)
-        expect(page.get_by_text(f"Node '{peer}' removed")).to_be_visible()
         assert not any(n["name"] == peer for n in api_get("/api/cluster/nodes", tok))
         expect(page.locator("#cluster-node-table tbody tr", has_text="(this node)")).to_have_count(1)
     finally:
