@@ -170,9 +170,14 @@ label `HXTOOLS`, on its own virtio-scsi controller) when the node has the
 image. When a viewer opens, no tools answer and the QEMU guest agent runs,
 the node installs them (`guest_tools_auto_install`): Windows guests get the
 MSI from the CD through `guest-exec` (Windows Installer, removable like any
-package). Linux guests install the `app-emulation/horcrux-guest-tools`
-package (OpenRC and systemd service files included); the CD carries the
-static agent and service files for distributions without a package yet.
+package). Linux guests install the package for their distribution from the CD:
+`linux/x86_64/horcrux-guest-tools.{deb,rpm,apk}` (built with nfpm by
+`ci/build-guest-tools-pkgs.sh`; each holds the static agent, the config file
+kept on upgrade, the systemd unit and the OpenRC script; depends on `ffmpeg`;
+not enabled by the package, the node does that; removal stops and disables
+it under either init). Gentoo uses the `app-emulation/horcrux-guest-tools`
+ebuild. The CD also carries the loose static agent and service files
+(`linux/`) for other distributions.
 
 ## 5. Security model
 

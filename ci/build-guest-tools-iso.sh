@@ -4,7 +4,9 @@
 #   windows/horcrux-guest-tools-<version>-x64.msi   (ci/build-guest-tools-msi.sh)
 #   linux/horcrux-guest-agent                       (static x86_64 musl build)
 #   linux/horcrux-guest-agent.initd + .service + guest-tools.conf
+#   linux/x86_64/horcrux-guest-tools.{deb,rpm,apk}  (ci/build-guest-tools-pkgs.sh)
 # Env: OUT_DIR (default dist), MSI (path, default the newest dist/*.msi),
+#      PKG_DIR (default $OUT_DIR/linux/x86_64, built when missing),
 #      LINUX_AGENT (path, default the musl release build), LABEL (HXTOOLS).
 # Needs xorriso.
 set -euo pipefail
@@ -24,6 +26,12 @@ cp "$LINUX_AGENT" "$WORK/linux/horcrux-guest-agent"
 strip "$WORK/linux/horcrux-guest-agent" 2>/dev/null || true
 cp packaging/linux/horcrux-guest-agent.initd packaging/linux/horcrux-guest-agent.service \
    packaging/linux/guest-tools.conf "$WORK/linux/"
+PKG_DIR="${PKG_DIR:-$OUT_DIR/linux/x86_64}"
+for f in deb rpm apk; do
+  [ -f "$PKG_DIR/horcrux-guest-tools.$f" ] || { OUT_DIR="$OUT_DIR" LINUX_AGENT="$LINUX_AGENT" bash ci/build-guest-tools-pkgs.sh; break; }
+done
+mkdir -p "$WORK/linux/x86_64"
+for f in deb rpm apk; do cp "$PKG_DIR/horcrux-guest-tools.$f" "$WORK/linux/x86_64/"; done
 mkdir -p "$OUT_DIR"
 ISO="$OUT_DIR/horcrux-guest-tools.iso"
 xorriso -as mkisofs -quiet -V "$LABEL" -J -R -o "$ISO" "$WORK"

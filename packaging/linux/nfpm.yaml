@@ -1,0 +1,51 @@
+# nfpm (MIT) recipe for the Linux Horcrux guest tools: one package per format
+# (deb, rpm, apk) built by ci/build-guest-tools-pkgs.sh, which exports
+# HX_VERSION, HX_AGENT (the static musl agent) and HX_FFMPEG_DEP (rendered in).
+#
+# Layout matches the Gentoo package (gentoo/app-emulation/horcrux-guest-tools):
+# the agent, /etc/horcrux/guest-tools.conf (a config file: kept on upgrade),
+# the systemd unit AND the OpenRC script, so one package serves systemd and
+# OpenRC hosts. The package never enables or starts the service (the node does
+# that after install); removal stops and disables it under whichever init runs.
+#
+# Runtime dependency ffmpeg (capture + encode):
+#   deb, apk: ffmpeg
+#   rpm: the file /usr/bin/ffmpeg. A capability name "ffmpeg" does NOT resolve
+#        on Fedora (ffmpeg-free provides no such name, checked live), but the
+#        file dependency resolves to ffmpeg-free (Fedora), ffmpeg (RPM Fusion,
+#        EPEL-based RHEL) and openSUSE's ffmpeg. Note ffmpeg-free ships no
+#        libx264: software H.264 encode needs RPM Fusion's ffmpeg (the agent
+#        then uses VA-API/NVENC where present).
+name: horcrux-guest-tools
+arch: amd64
+platform: linux
+version: ${HX_VERSION}
+version_schema: none
+section: utils
+priority: optional
+maintainer: Horcrux Contributors <noreply@canutethegreat.com>
+vendor: Horcrux Contributors
+homepage: https://github.com/CanuteTheGreat/horcrux
+license: GPL-3.0
+description: |
+  Horcrux guest tools: display capture and encode, input, clipboard and
+  display layout inside a VM for Horcrux Console. Ships systemd and OpenRC
+  service files; the service is not enabled by the package.
+contents:
+  - src: ${HX_AGENT}
+    dst: /usr/bin/horcrux-guest-agent
+    file_info: {mode: 0755}
+  - src: packaging/linux/guest-tools.conf
+    dst: /etc/horcrux/guest-tools.conf
+    type: config|noreplace
+    file_info: {mode: 0644}
+  - src: packaging/linux/horcrux-guest-agent.service
+    dst: /usr/lib/systemd/system/horcrux-guest-agent.service
+    file_info: {mode: 0644}
+  - src: packaging/linux/horcrux-guest-agent.initd
+    dst: /etc/init.d/horcrux-guest-agent
+    file_info: {mode: 0755}
+depends:
+  - ${HX_FFMPEG_DEP}
+scripts:
+  preremove: packaging/linux/prerm.sh

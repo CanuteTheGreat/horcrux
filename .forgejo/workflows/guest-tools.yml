@@ -5,7 +5,8 @@ name: Horcrux guest tools (Windows MSI, Linux agent, real Linux guest)
 # - Windows: cross-compiled horcrux-guest-agent.exe (x86_64-pc-windows-gnu)
 #   packed as an MSI with wixl (ci/build-guest-tools-msi.sh); the MSI tables
 #   are checked with msiinfo.
-# - Linux: static musl agent, the guest-tools CD image
+# - Linux: static musl agent, deb/rpm/apk packages (nfpm, install-tested in
+#   debian/fedora/alpine containers), the guest-tools CD image
 #   (ci/build-guest-tools-iso.sh), then crates/horcrux-guest-tools/tests/
 #   linux_guest_e2e.py boots Alpine with the tools CD and checks capture +
 #   encode, keyboard/mouse/gamepad injection and the keystroke-to-frame
@@ -20,6 +21,7 @@ on:
       - 'packaging/windows/**'
       - 'packaging/linux/**'
       - 'ci/build-guest-tools-*.sh'
+      - 'ci/test-guest-tools-pkgs.sh'
       - '.forgejo/workflows/guest-tools.yml'
   workflow_dispatch: {}
 
@@ -81,7 +83,14 @@ jobs:
       - name: Linux agent (static) + guest tools CD
         run: |
           cargo build -p horcrux-guest-tools --release --target x86_64-unknown-linux-musl
+          bash ci/build-guest-tools-pkgs.sh
           bash ci/build-guest-tools-iso.sh
+
+      - name: Linux packages install test (debian, fedora, alpine in real containers)
+        run: |
+          # job containers see the runner's Docker daemon; the test uses
+          # docker create + cp + start -a (no bind mounts).
+          bash ci/test-guest-tools-pkgs.sh
 
       - name: Linux guest e2e (Alpine, virtio-serial guest-tools port)
         run: |
@@ -101,4 +110,4 @@ jobs:
         # No artifact upload: the Forgejo artifact backend fails the finalize
         # step of upload-artifact on this instance (see docs.yml). Shipping the
         # tools to nodes is the packaging work of phase C2b.
-        run: sha256sum dist/horcrux-guest-tools-*-x64.msi dist/horcrux-guest-tools.iso target/x86_64-unknown-linux-musl/release/horcrux-guest-agent 2>/dev/null || true
+        run: sha256sum dist/horcrux-guest-tools-*-x64.msi dist/horcrux-guest-tools.iso dist/linux/x86_64/horcrux-guest-tools.* target/x86_64-unknown-linux-musl/release/horcrux-guest-agent 2>/dev/null || true
