@@ -2462,7 +2462,11 @@ class Runner:
             rc, z = ssh(FWD_SSH, self.key, "zfs get -H -o value encryption,keyformat,keylocation,keystatus rpool | tr '\\n' ' '")
             if want_enc:
                 ok = "aes-256-gcm hex prompt available" in z.replace("\r", "")
-                rc, t = ssh(FWD_SSH, self.key, "ls -l /etc/tpm-unlock; for k in /boot/initramfs-*.img; do lsinitrd $k | grep -E 'tpm2_unseal|tpm-zfskey|tpm-unlock/key' | wc -l; done; grep -c . /etc/dracut.conf.d/92-tpm-unlock.conf")
+                # lsinitrd unpacks every initramfs (zfs + tpm2 tools, tens of MB) on a busy guest: it exceeded the default 40 s (run 21014: "timeout"), so allow T(240) and retry once
+                for _try in range(2):
+                    rc, t = ssh(FWD_SSH, self.key, "ls -l /etc/tpm-unlock; for k in /boot/initramfs-*.img; do lsinitrd $k | grep -E 'tpm2_unseal|tpm-zfskey|tpm-unlock/key' | wc -l; done; grep -c . /etc/dracut.conf.d/92-tpm-unlock.conf", timeout=int(T(240)))
+                    if t.strip() != "timeout":
+                        break
                 self.step("disk-encrypted-with-tpm-sealed-key-unlocked-without-a-console-prompt", ok and "key.priv" in t, re.sub(r"\s+", " ", z + " | " + t)[:300])
             else:
                 self.step("disk-not-encrypted-because-no-tpm-no-prompt", z.split()[:1] == ["off"], re.sub(r"\s+", " ", z)[:200])
