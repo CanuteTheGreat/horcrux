@@ -276,12 +276,12 @@ latency runs).
 
 ## 6. Latency budget and targets
 
-| Path | Target | Budget (gaming profile, 240 Hz) |
-|---|---|---|
-| Same host, raw frames (ivshmem) | < 8 ms frame-to-viewer | capture 1-2 ms, copy 1 ms, present up to 1 frame |
-| LAN, encoded | < 20 ms click-to-photon | input 1 ms, game frame 4 ms, capture 1 ms, encode 2-4 ms, network 1-2 ms, decode 2-4 ms, present 4 ms |
-| WAN | LAN + RTT + jitter buffer | adaptive bitrate fits the uplink; FEC instead of retransmission when RTT is high |
-| Desktop profile, LAN | < 50 ms, text lossless within 500 ms of last change | |
+| Path | Target | Budget (gaming profile, 240 Hz) | Measured (2026-11-20, unloaded node, details below) |
+|---|---|---|---|
+| Same host, raw frames (ivshmem) | < 8 ms frame-to-viewer | capture 1-2 ms, copy 1 ms, present up to 1 frame | **met**: median 2.0 ms, p95 4.0 ms at 120 fps; median 2.7-2.8 ms, p95 3.7 ms at 60 fps (1280x800, without window present) |
+| LAN, encoded | < 20 ms click-to-photon | input 1 ms, game frame 4 ms, capture 1 ms, encode 2-4 ms, network 1-2 ms, decode 2-4 ms, present 4 ms | guest half only: keystroke to encoded frame at the node median 16.5 ms (60 fps, software x264 in a 2-vCPU guest); full path needs GPU hardware |
+| WAN | LAN + RTT + jitter buffer | adaptive bitrate fits the uplink; FEC instead of retransmission when RTT is high | C3 |
+| Desktop profile, LAN | < 50 ms, text lossless within 500 ms of last change | | **not met**: keystroke to picture in the browser median 95 ms (min 65 ms), host software encode, no tools |
 
 Measured numbers per path go into this table and into the GeForce NOW
 comparison in docs/design/gaming-vm.md section 14 as phases land. Tests measure
@@ -361,6 +361,60 @@ medians are dominated by software encode inside a 4-vCPU guest and by the
 shared CI host, not by the transport. The < 20 ms LAN gaming target needs a
 GPU encoder in the guest (NVENC/AMF/QSV, code present, untested without GPU
 hardware) and an unloaded node.
+
+### Measured in C2d (same host and host encode, unloaded node)
+
+Conditions: one x86 laptop-class node (12 threads, 15 GiB), idle apart from
+the test (load average 0.5-1.6 during every run); tests in an Ubuntu 24.04
+container with KVM, QEMU 8.2.2; Alpine
+3.24 guest with 2 vCPUs, 1280x800 console. Sources:
+`crates/horcrux-viewer/tests/shm_guest_e2e.py` (ring path, guest tools
+writer, `horcrux-viewer measure` reader), `crates/horcrux-guest-tools/tests/
+linux_guest_e2e.py` (guest encode) and `horcrux-api/tests/hx_console_e2e.sh`
+(host encode, real horcrux-api, headless Chromium client). All three also
+run in CI (`guest-tools.yml`, `hx-console-e2e.yml`) on the shared runners,
+whose numbers are higher under load.
+
+Frame-to-viewer = guest capture-to-publish (guest clock) + publish-to-seen
+(host clock: the guest copies the reader's clock stamp into each slot) +
+the viewer's copy out of the ring. Keystroke-to-frame = QMP key event to
+the first frame in the viewer with more than 3 pixels changed by more than
+64 levels (the C1 detector); the stimulus switches the whole console to
+reverse video, and 3 s without input before each series produced 0
+changed frames.
+
+| Measurement | Result | Conditions |
+|---|---|---|
+| Ring frame-to-viewer, 120 fps | median 1.99 ms, p95 3.97 ms (capture->publish 1.26, publish->seen 0.25, copy 0.42) | 930 frames in 8 s (119.8 fps), virtio-vga, write-combined BAR |
+| Ring frame-to-viewer, 60 fps | median 2.84 / 2.73 ms, p95 3.65 / 3.72 ms | std VGA / virtio-vga, 59.2 fps |
+| Keystroke to raw frame in the viewer (QEMU keyboard, no encode) | median 24.4 ms (min 15.6, p95 28.7) at 120 fps; 32.6-34.2 ms (min 23.8) at 60 fps | includes the guest's own reaction (shell + console redraw) and on average half a capture period |
+| Keystroke to encoded frame at the node (guest tools: uinput keyboard, in-guest kmsgrab + x264) | median 16.5 ms, p95 19.8 ms, 40/40 | 60 fps, CBR 2 Mbit/s, encode median 2.1 ms |
+| Keystroke to picture in the browser, host encode (no tools) | median 95.3 ms (min 64.5, max 197.7), 10/10 | QEMU D-Bus display, software x264 encode 13.3 ms average, data-channel RTT 2.8 ms, headless Chromium software decode |
+| Pre-OS keystroke / pointer move / click to picture, host encode | median 127 / 446 / 370 ms | boot loader 640x480; pointer and click include the guest kernel and `od` printing the event |
+
+Reading:
+- The ring path meets its target with room to spare: at 120 fps a frame
+  reaches the viewer about 2 ms after the guest captured it. Window
+  presentation adds up to one display refresh on top (not in these
+  numbers: the measuring reader has no window).
+- Keystroke-to-picture on the ring path is dominated by the guest, not the
+  transport: after half a capture period (4-8 ms) the remaining 16-26 ms
+  are QEMU's emulated keyboard, the guest shell and the console redraw. The same keystroke through the guest
+  tools' uinput keyboard reaches an encoded frame in 16.5 ms, so input
+  through the tools is faster than QEMU's PS/2 keyboard; routing keys
+  through the tools when they run is a follow-up.
+- Host encode misses the desktop target (95 ms vs < 50 ms) even on an idle
+  node. Known parts: encode 13 ms, transport 3 ms, guest reaction about
+  25-30 ms (from the ring numbers); the remaining 40-50 ms sit in the
+  browser (jitter buffer, software decode in headless Chromium, the
+  detector's frame callback). Follow-up: per-stage timestamps (RTP
+  header extension with the capture time), a zero playout delay hint for
+  `desktop`/`gaming`, and hardware encode.
+- Write-combining matters on AMD hosts (guest memory types honoured): an
+  uncached BAR mapping took 65 ms per 1280x800 frame (14 fps), write-
+  combined 2.7 ms. kmsgrab does not hold its frame rate once copy-out is
+  faster than the frame period (376 frames/s asked for 120 starved the
+  guest), so raw capture caps its output with `-fpsmax`.
 
 ## 7. Standalone machine
 
@@ -630,9 +684,7 @@ Still open in C2 (queued as C2c-C2d):
   Microsoft's documentation; configurable resolution/refresh incl. 240+ Hz,
   used automatically for GPUs without monitors/outputs) and the virtual HID
   gamepad for Windows; both are drivers and need signing (below).
-- C2d: the same-host ivshmem raw-frame path and the native viewer window on a
-  Horcrux desktop (Wayland), QEMU (no-tools) audio to Opus, a latency run on
-  an unloaded node for the host-encode path.
+- C2d: done, see "C2d status" below.
 - Needs real GPU hardware: NVENC/AMF/QSV inside a Windows guest, VA-API/NVENC
   inside a Linux guest, HDR, 4:4:4 in hardware encoders, 240 Hz capture.
 
@@ -648,3 +700,69 @@ code-signing certificate. Test-signing mode (bcdedit testsigning) is not an
 option for gaming VMs: it needs Secure Boot off, which anti-cheat refuses.
 Sources: learn.microsoft.com driver signing policy and code-signing
 attestation pages.
+
+### C2d status (2026-11-20)
+
+Done:
+- Same-host frame ring (section 4.2): the node adds the ivshmem-plain device
+  over a root-only file under `[console] shm_frames_dir` to every console VM
+  (`shm_frames`, `shm_frames_size_mib`, `shm_frames_slots`; config.toml,
+  API, declarative config, System > Horcrux Console), writes the ring header
+  before QEMU starts and removes the file when the VM stops. Clean-room ring
+  protocol in `crates/horcrux-guest-proto/src/ring.rs`.
+- Guest tools write raw frames only while a viewer reads: Linux through the
+  write-combined sysfs BAR mapping with FFmpeg kmsgrab/x11grab raw BGRX
+  (`-fpsmax` holds the asked rate), Windows through the virtio-win IVSHMEM
+  driver with DXGI Desktop Duplication (compiled and clippy-clean for
+  x86_64-pc-windows-gnu; not yet run on a Windows guest with the device).
+  New guest settings `shm_frames`, `shm_poll_ms`, `shm_reader_timeout_ms`,
+  `shm_pci_dir`, `shm_device`, `shm_write_combine`.
+- Local viewer socket and local tickets (section 4.3):
+  `POST /api/console/<vm>/hxc/local-ticket`, `[console] local_socket`, ring
+  descriptor over SCM_RIGHTS, tickets bound to the viewer's uid, single use,
+  same RBAC and audit as the WebRTC console; sessions listed with
+  `video_source = shm`.
+- Native viewer `horcrux-viewer` (`crates/horcrux-viewer`, USE flag `viewer`
+  in app-emulation/horcrux, on by default with `qemu`): Wayland/X11 window
+  (winit + softbuffer, no GPU needed), keyboard, mouse, pointer lock with raw
+  relative motion, fullscreen, up to four evdev gamepads, every value a
+  setting; `horcrux-viewer measure` for tests and latency runs.
+- QEMU D-Bus audio without guest tools: console VMs with a sound card get
+  `-audiodev dbus`; the broker registers an AudioOutListener (bounded: a VM
+  without D-Bus audio no longer stalls the console connect), encodes the PCM
+  with an FFmpeg libopus child (low delay, one packet per Ogg page,
+  `audio_frame_ms` 5/10/20/40/60) and sends it on the WebRTC audio track;
+  guest-tools audio takes priority when it arrives.
+- Latency run on an unloaded node (section 6, "Measured in C2d").
+
+Proven:
+- Ring path in a real VM (`shm_guest_e2e.py`, CI `guest-tools.yml`, std VGA
+  and virtio-vga): the tools find the ring on the ivshmem BAR, capture nothing
+  without a reader, deliver 1280x800 raw frames at the asked 60/120 fps,
+  stop when the reader leaves; frame-to-viewer and keystroke-to-frame times
+  in section 6.
+- Node half end to end (`hx_local_viewer_e2e.sh`, CI `hx-console-e2e.yml`,
+  real horcrux-api + QEMU + Alpine): ring device and D-Bus audio in the VM's
+  argv, root-only ring file with the node's header, 403 without VM.Console,
+  view-only tickets, a ticket bound to another uid refused, `horcrux-viewer`
+  signing in and mapping the ring received over the socket (same inode as the
+  root-only file), keys over the local socket running a command in the
+  guest, a view-only session's keys refused and counted, single use, audit
+  entries, ring file removed at VM stop. The host-encode console e2e still
+  passes with the audio change.
+- Unit tests: ring layout/consistency/hostile sizes/stale reader stamps,
+  local protocol framing, uid-bound tickets, frame-ring/local-socket/audio
+  settings validation, QEMU argv, FFmpeg PCM -> Opus packets with the real
+  FFmpeg, evdev -> standard gamepad mapping, viewer settings.
+
+Not proven yet:
+- The viewer window itself has not been shown on a Horcrux desktop session
+  (no compositor in CI; the window code is compiled and its input encoding
+  is unit tested, the ring reader it uses is the one measured above).
+- Guest-originated sound through D-Bus audio into a browser (needs a guest
+  that plays audio in CI); the encoder half runs against real FFmpeg.
+- The Windows ring writer on a Windows guest with the IVSHMEM driver.
+- Host-encode desktop target (< 50 ms) is missed (95 ms median on an idle
+  node); follow-ups listed in section 6.
+- Needs real GPU hardware: 240 Hz capture of a GPU-rendered desktop into the
+  ring, hardware encode in the guest and on the host.
