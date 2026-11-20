@@ -781,6 +781,12 @@ def http(port, path, method="GET", body=None, timeout=10):
             return scheme, e.code, e.read()
         except Exception as e:
             last = e
+            # Only a server that does not speak TLS (handshake rejected / connection dropped) justifies trying plain http. A timeout or a refused
+            # connection on https must be reported as such: falling through to http made a slow PAM login under TCG (https timed out) read as
+            # "308 This server only speaks HTTPS" (horcrux aarch64 run 4567), hiding the real cause.
+            reason = getattr(e, "reason", e)
+            if not isinstance(reason, (ssl.SSLError, ConnectionResetError, EOFError)) and not type(e).__name__ == "RemoteDisconnected":
+                break
     return None, 0, str(last).encode()
 
 
@@ -2000,7 +2006,7 @@ class Runner:
             else:
                 webpw = PW
                 how = "the password typed in the installer"
-            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": P.get("web_user", "admin"), "password": webpw})
+            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": P.get("web_user", "admin"), "password": webpw}, timeout=T(40))
             self.step("web-login", code == 200 and (a.project == "patronus" or b"token" in resp or b"ticket" in resp), f"{how}: POST /api/auth/login -> {code} {resp[:60]!r}")
             if P.get("web_user"):
                 # no built-in admin, root and a wrong password are refused with the same 401; the old first-boot files do not exist
@@ -2077,7 +2083,7 @@ class Runner:
     def web_login_code(self, pw, wait=0):
         end = time.time() + wait
         while True:
-            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": self.P.get("web_user", "admin"), "password": pw})
+            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": self.P.get("web_user", "admin"), "password": pw}, timeout=T(40))
             self.login_err = resp.decode(errors="replace")[:80] if code == 0 else ""      # why there was no HTTP answer (timeout / refused / TLS)
             if code == 200 or time.time() >= end:
                 return code
@@ -2426,7 +2432,7 @@ class Runner:
         # root's password IS the test login password PW by design (answer file); the generated web admin password must differ from it and from root's hash
         HG.account_check(sh, self.step, web_secret=web, console_open=a.console_open)
         if a.flow == "auto" and web:
-            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": self.P.get("web_user", "admin"), "password": PW})
+            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": self.P.get("web_user", "admin"), "password": PW}, timeout=T(40))
             self.step("web-admin-refuses-the-root-login-password", code in (400, 401, 403, 429), f"POST /api/auth/login admin/<root login password> -> {code}")
         HG.clock_gate(sh, self.step, timeout=T(480), label="months-off-rtc-clock-stepped-by-chrony-after-the-late-network" if late else "months-off-rtc-clock-stepped-by-chrony")
         if late and a.project == "patronus":
