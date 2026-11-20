@@ -220,6 +220,14 @@ pub struct ConsoleSettings {
     /// Milliseconds a new session waits for the guest tools to answer
     /// before it uses the node's own capture.
     pub guest_tools_wait_ms: u32,
+    /// Guest tools CD image attached to console VMs (read-only, virtio-scsi)
+    /// so the tools can be installed from inside the guest. Empty or a
+    /// missing file: no CD.
+    pub guest_tools_iso: String,
+    /// Install the guest tools automatically through the QEMU guest agent
+    /// when a viewer opens and the tools do not answer (Windows guests: the
+    /// MSI from the tools CD).
+    pub guest_tools_auto_install: bool,
     /// Largest clipboard text carried in either direction (bytes).
     pub clipboard_max_bytes: u32,
     /// Opus bitrate for guest audio (kbit/s).
@@ -253,6 +261,8 @@ impl Default for ConsoleSettings {
             guest_tools: true,
             guest_tools_port: "org.horcrux.console.0".into(),
             guest_tools_wait_ms: 1500,
+            guest_tools_iso: "/usr/share/horcrux/guest-tools/horcrux-guest-tools.iso".into(),
+            guest_tools_auto_install: true,
             clipboard_max_bytes: 1 << 20,
             audio_bitrate_kbps: 128,
             desktop: desktop(),

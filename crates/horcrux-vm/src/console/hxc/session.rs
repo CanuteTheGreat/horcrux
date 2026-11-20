@@ -55,6 +55,10 @@ pub struct SessionRequest {
     pub guest_tools_socket: Option<PathBuf>,
     /// Host end of the VM's serial console (the `console` channel).
     pub serial_socket: Option<PathBuf>,
+    /// QEMU guest agent socket (automatic guest tools install).
+    pub qga_socket: Option<PathBuf>,
+    /// The guest tools CD is attached to this VM run.
+    pub guest_tools_cd: bool,
 }
 
 /// Live numbers of a session (GET .../sessions, ctl `stats`).
@@ -397,6 +401,14 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         }
         _ => None,
     };
+    if link.is_none()
+        && req.guest_tools_cd
+        && req.settings.guest_tools_auto_install
+    {
+        if let Some(qga) = req.qga_socket.clone() {
+            super::deliver::spawn_install(req.vm_id.clone(), qga);
+        }
+    }
 
     let stats = Arc::new(Mutex::new(SessionStats {
         video_source: "host".into(),

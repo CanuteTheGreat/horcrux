@@ -1,0 +1,14 @@
+[Unit]
+Description=Horcrux guest tools agent (Horcrux Console capture, input, clipboard, layout)
+Documentation=https://github.com/CanuteTheGreat/horcrux/blob/main/docs/design/horcrux-console.md
+After=systemd-udevd.service systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStartPre=-/sbin/modprobe -q uinput
+ExecStart=/usr/bin/horcrux-guest-agent
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

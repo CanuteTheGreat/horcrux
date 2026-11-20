@@ -51,6 +51,9 @@ pub struct DisplayRuntime {
     pub guest_tools_port: Option<String>,
     #[serde(default)]
     pub guest_tools_socket: Option<PathBuf>,
+    /// Guest tools CD attached to this run (virtio-scsi, read-only).
+    #[serde(default)]
+    pub guest_tools_iso: Option<PathBuf>,
 }
 
 impl DisplayRuntime {
@@ -108,6 +111,7 @@ impl DisplayRuntime {
             dbus_display: false,
             guest_tools_port: None,
             guest_tools_socket: None,
+            guest_tools_iso: None,
         })
     }
 
@@ -219,6 +223,23 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
             "-device",
             &port,
         ]);
+        // The tools CD on its own virtio-scsi controller (no collision with
+        // the VM's IDE/SATA CD drives; the guest needs virtio drivers for
+        // the port anyway).
+        if let Some(iso) = &rt.guest_tools_iso {
+            let drive = format!(
+                "file={},if=none,id=hxgtcd,media=cdrom,readonly=on",
+                iso.display()
+            );
+            push(&[
+                "-device",
+                "virtio-scsi-pci,id=hxgtscsi",
+                "-drive",
+                &drive,
+                "-device",
+                "scsi-cd,bus=hxgtscsi.0,drive=hxgtcd",
+            ]);
+        }
     }
 
     // Video card.
@@ -397,6 +418,7 @@ mod tests {
             dbus_display: false,
             guest_tools_port: None,
             guest_tools_socket: None,
+            guest_tools_iso: None,
         }
     }
 
@@ -414,6 +436,13 @@ mod tests {
         let a = qemu_args(&VmDisplay::default(), &VmArchitecture::X86_64, &r).join(" ");
         assert!(
             a.contains("-device virtio-serial-pci,id=hxgt-vs -chardev socket,id=hxgt0,path=/vms/a.hxgt.sock,server=on,wait=off -device virtserialport,bus=hxgt-vs.0,chardev=hxgt0,name=org.horcrux.console.0"),
+            "{a}"
+        );
+        assert!(!a.contains("hxgtcd"), "{a}");
+        r.guest_tools_iso = Some(PathBuf::from("/usr/share/hx/t.iso"));
+        let a = qemu_args(&VmDisplay::default(), &VmArchitecture::X86_64, &r).join(" ");
+        assert!(
+            a.contains("-device virtio-scsi-pci,id=hxgtscsi -drive file=/usr/share/hx/t.iso,if=none,id=hxgtcd,media=cdrom,readonly=on -device scsi-cd,bus=hxgtscsi.0,drive=hxgtcd"),
             "{a}"
         );
     }

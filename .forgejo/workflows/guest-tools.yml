@@ -1,0 +1,98 @@
+name: Horcrux guest tools (Windows MSI, Linux agent, real Linux guest)
+
+# Builds the Horcrux guest tools for both guest families and tests the
+# Linux agent inside a real VM through the guest-tools virtio-serial port:
+# - Windows: cross-compiled horcrux-guest-agent.exe (x86_64-pc-windows-gnu)
+#   packed as an MSI with wixl (ci/build-guest-tools-msi.sh); the MSI tables
+#   are checked with msiinfo.
+# - Linux: static musl agent, the guest-tools CD image
+#   (ci/build-guest-tools-iso.sh), then crates/horcrux-guest-tools/tests/
+#   linux_guest_e2e.py boots Alpine with the tools CD and checks capture +
+#   encode, keyboard/mouse/gamepad injection and the keystroke-to-frame
+#   latency on the same host.
+# The Windows agent's own real-Windows checks are
+# crates/horcrux-guest-tools/tests/win_harness.py (Windows eval VM).
+on:
+  push:
+    paths:
+      - 'crates/horcrux-guest-proto/**'
+      - 'crates/horcrux-guest-tools/**'
+      - 'packaging/windows/**'
+      - 'packaging/linux/**'
+      - 'ci/build-guest-tools-*.sh'
+      - '.forgejo/workflows/guest-tools.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: "replace:${{ github.workflow }}@${{ github.ref }}"
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: "3"
+
+jobs:
+  guest-tools:
+    name: Build MSI + Linux agent, Linux guest e2e (KVM)
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu,x86_64-unknown-linux-musl
+
+      - name: Install tools
+        run: |
+          for i in 1 2 3; do
+            sudo apt-get update -qq || true
+            apt-cache policy msitools | grep -q 'Candidate: [0-9]' && break
+            sleep 15
+          done
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            gcc-mingw-w64-x86-64 msitools xorriso qemu-system-x86 qemu-utils ffmpeg curl
+          ls -l /dev/kvm
+
+      - name: Unit tests (protocol, agent)
+        run: cargo test -p horcrux-guest-proto -p horcrux-guest-tools
+
+      - name: Windows agent + MSI
+        run: |
+          bash ci/build-guest-tools-msi.sh
+          msi=$(ls dist/horcrux-guest-tools-*-x64.msi)
+          msiinfo export "$msi" ServiceInstall | grep -q HorcruxGuestTools
+          msiinfo export "$msi" File | grep -q horcrux-guest-agent.exe
+          echo "ok - $msi"
+
+      - name: Linux agent (static) + guest tools CD
+        run: |
+          cargo build -p horcrux-guest-tools --release --target x86_64-unknown-linux-musl
+          bash ci/build-guest-tools-iso.sh
+
+      - name: Linux guest e2e (Alpine, virtio-serial guest-tools port)
+        run: |
+          AMIRROR=https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64
+          meta=$(curl -fsSL --retry 3 "$AMIRROR/latest-releases.yaml")
+          afile=$(printf '%s\n' "$meta" | awk '/flavor: alpine-virt/{f=1} f&&/file:/{print $2; exit}')
+          asum=$(printf '%s\n' "$meta" | awk '/flavor: alpine-virt/{f=1} f&&/sha256:/{print $2; exit}')
+          curl -fsSL --retry 3 -o /tmp/alpine-virt.iso "$AMIRROR/$afile"
+          echo "$asum  /tmp/alpine-virt.iso" | sha256sum -c --quiet
+          mkdir -p /tmp/lgt-out
+          python3 -u crates/horcrux-guest-tools/tests/linux_guest_e2e.py \
+            target/x86_64-unknown-linux-musl/release/horcrux-guest-agent /tmp/alpine-virt.iso /tmp/lgt-out
+          cat /tmp/lgt-out/linux-guest-e2e.json
+
+      - name: Upload the guest tools
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: horcrux-guest-tools
+          path: |
+            dist/horcrux-guest-tools-*-x64.msi
+            dist/horcrux-guest-tools.iso
+            dist/horcrux-guest-tools.iso.sha256
+            /tmp/lgt-out/linux-guest-e2e.json
+          if-no-files-found: warn

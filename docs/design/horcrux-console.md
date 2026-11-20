@@ -134,6 +134,47 @@ Video: H.264, HEVC and AV1 (negotiated by client support and encoder
 capability), 8- or 10-bit, 4:2:0 or 4:4:4 where both ends support it.
 Every message carries a version; unknown fields are ignored.
 
+## 4.1 Guest tools port (C2)
+
+The node and the Horcrux guest tools talk over one byte stream per VM: a
+virtio-serial port named by `[console] guest_tools_port` (default
+`org.horcrux.console.0`; QEMU `virtserialport` on its own
+`virtio-serial-pci`, host end `<disk>.hxgt.sock`). The crate
+`crates/horcrux-guest-proto` is the whole wire format: `len u32 LE`,
+`kind u8`, payload; JSON for control (`Hello` with probed capabilities,
+`HostHello`, `StartVideo`, `VideoStatus`, `Clipboard`, `SetLayout`/`Layout`,
+`StartAudio`), binary for media and input (`Video` = one encoded access unit
+with keyframe flag, capture time and capture-to-port time; `Audio` = one
+Opus packet; `Input` = key (QEMU qnum), button, raw relative motion,
+absolute position, wheel, full gamepad state). Unknown kinds and fields are
+skipped, so either side can be newer. The broker connects when a viewer
+opens, sends `HostHello` and waits `guest_tools_wait_ms` (default 1500 ms)
+for `Hello`; without an answer the session uses the node's capture, so
+nothing needs the tools. Only one session holds the port at a time; other
+viewers of the same VM use the node's capture.
+
+What flows where in a session with tools:
+
+| Data | Path |
+|---|---|
+| video | guest capture + encode (H.264 Annex B) -> port -> str0m RTP, no transcoding; the node's encoder rests while the guest stream runs and takes over if the tools stop or report an error; keyframe requests (PLI, new viewer) go to the guest |
+| keyboard, buttons, absolute pointer | QEMU D-Bus input (works with and without tools, and pre-OS) |
+| raw relative mouse (pointer lock, `gaming`) | client `input` channel kind 2 -> tools (uinput / SendInput) |
+| gamepads | client `pad` channel (W3C standard mapping) -> tools (uinput gamepad on Linux; Windows needs the virtual HID gamepad driver, see 11) |
+| clipboard | client `clip` channel <-> tools, only with VM.Console.Clipboard, size-limited (`clipboard_max_bytes`) |
+| resize / layout | client `ctl` `resize` -> tools (`xrandr` with CVT-RB modes on Linux, ChangeDisplaySettingsEx on Windows) -> `guest_layout` back |
+| audio | tools capture (PulseAudio/PipeWire via FFmpeg on Linux) -> Opus -> str0m audio track |
+| serial text | client `console` channel <-> the VM's serial socket (input needs VM.Console.Input) |
+
+Delivery: every console VM run gets the guest tools CD (`guest_tools_iso`,
+label `HXTOOLS`, on its own virtio-scsi controller) when the node has the
+image. When a viewer opens, no tools answer and the QEMU guest agent runs,
+the node installs them (`guest_tools_auto_install`): Windows guests get the
+MSI from the CD through `guest-exec` (Windows Installer, removable like any
+package). Linux guests install the `app-emulation/horcrux-guest-tools`
+package (OpenRC and systemd service files included); the CD carries the
+static agent and service files for distributions without a package yet.
+
 ## 5. Security model
 
 - Only authenticated Horcrux users (password + 2FA/SSO per account policy)

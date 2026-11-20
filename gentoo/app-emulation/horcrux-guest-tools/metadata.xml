@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>canutethegreat@errant.solutions</email>
+		<name>CanuteTheGreat</name>
+	</maintainer>
+	<longdescription lang="en">
+		Horcrux guest tools for Linux guests: the in-VM agent of Horcrux Console.
+		Captures and encodes the guest display inside the guest (FFmpeg kmsgrab or
+		x11grab with VA-API, NVENC or libx264), injects keyboard, mouse and gamepad
+		input through uinput, syncs the clipboard and sizes displays to the viewer.
+		Talks to the Horcrux node over the VM's virtio-serial guest-tools port.
+	</longdescription>
+	<use>
+		<flag name="vaapi">Hardware H.264 encode through VA-API</flag>
+		<flag name="X">Clipboard and display layout in X11 sessions (xclip, xrandr)</flag>
+		<flag name="wayland">Clipboard in Wayland sessions (wl-clipboard)</flag>
+	</use>
+	<upstream>
+		<bugs-to>https://github.com/CanuteTheGreat/horcrux/issues</bugs-to>
+	</upstream>
+</pkgmetadata>

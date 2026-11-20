@@ -1406,6 +1406,10 @@ impl QemuManager {
                 runtime.guest_tools_socket = Some(
                     super::display::DisplayRuntime::guest_tools_socket_path(&vm.disk_path),
                 );
+                let iso = std::path::PathBuf::from(&c.guest_tools_iso);
+                if !c.guest_tools_iso.is_empty() && iso.is_file() {
+                    runtime.guest_tools_iso = Some(iso);
+                }
             }
         }
         let (binary, mut args) = qemu_command(vm, &runtime, kvm, ovmf.as_ref());

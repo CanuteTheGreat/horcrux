@@ -320,6 +320,8 @@ mod qemu {
                 allow_clipboard: t.allow_clipboard,
                 guest_tools_socket: rt.guest_tools_socket.clone(),
                 serial_socket: Some(rt.serial_socket.clone()),
+                qga_socket: Some(crate::vm::display::DisplayRuntime::qga_socket(&disk)),
+                guest_tools_cd: rt.guest_tools_iso.is_some(),
             };
             match session::start(req).await {
                 Ok((handle, answer)) => {

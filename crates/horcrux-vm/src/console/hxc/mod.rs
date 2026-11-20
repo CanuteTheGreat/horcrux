@@ -11,6 +11,7 @@
 //!   they work, libx264/libvpx otherwise).
 //! * [`session`]: the WebRTC transport (str0m) and the data channels.
 //! * [`page`]: the browser client served by the node.
+pub mod deliver;
 pub mod encode;
 pub mod guest;
 pub mod keymap;

@@ -58,6 +58,34 @@ fn ProfileFields(name: &'static str, sig: RwSignal<ConsoleSettings>) -> impl Int
                     prop:value=move || get().idle_refresh_fps.to_string()
                     on:change=move |ev| { let v = num(&ev, get().idle_refresh_fps); set(&|p| p.idle_refresh_fps = v) }/>
             </label>
+            <label class="checkbox">
+                <input type="checkbox" name=format!("{name}-fixed_rate") prop:checked=move || get().fixed_rate
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|p| p.fixed_rate = v) }/>
+                "Fixed frame rate (send every frame, not only changes)"
+            </label>
+            <label>"Chroma"
+                <select name=format!("{name}-chroma")
+                    on:change=move |ev| { let v = event_target_value(&ev); set(&|p| p.chroma = v.clone()) }>
+                    {["420", "444"].into_iter().map(|c| view! {
+                        <option value=c selected=move || get().chroma == c>{if c == "444" { "4:4:4 (crisp text, needs client support)" } else { "4:2:0 (every client)" }}</option>
+                    }).collect_view()}
+                </select>
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name=format!("{name}-intra_refresh") prop:checked=move || get().intra_refresh
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|p| p.intra_refresh = v) }/>
+                "Intra refresh instead of large keyframes"
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name=format!("{name}-hdr") prop:checked=move || get().hdr
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|p| p.hdr = v) }/>
+                "HDR where the guest GPU and the client support it"
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name=format!("{name}-guest_capture") prop:checked=move || get().guest_capture
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|p| p.guest_capture = v) }/>
+                "Capture and encode inside the guest when Horcrux guest tools run"
+            </label>
         </fieldset>
     }
 }
@@ -201,6 +229,36 @@ pub fn ConsoleSettingsPage() -> impl IntoView {
                     <input type="checkbox" name="audit_sessions" prop:checked=move || sig.get().audit_sessions
                         on:change=move |ev| { let v = event_target_checked(&ev); sig.update(|s| s.audit_sessions = v) }/>
                     "Audit session start/stop and refused tickets"
+                </label>
+                <label class="checkbox">
+                    <input type="checkbox" name="guest_tools" prop:checked=move || sig.get().guest_tools
+                        on:change=move |ev| { let v = event_target_checked(&ev); sig.update(|s| s.guest_tools = v) }/>
+                    "Horcrux guest tools port on console VMs (applies at the next VM start)"
+                </label>
+                <label>"Guest tools port name"
+                    <input type="text" name="guest_tools_port" prop:value=move || sig.get().guest_tools_port
+                        on:change=move |ev| { let v = event_target_value(&ev); sig.update(|s| s.guest_tools_port = v) }/>
+                </label>
+                <label>"Wait for the guest tools (ms)"
+                    <input type="number" min="0" max="30000" name="guest_tools_wait_ms" prop:value=move || sig.get().guest_tools_wait_ms.to_string()
+                        on:change=move |ev| { let v = num(&ev, sig.get().guest_tools_wait_ms); sig.update(|s| s.guest_tools_wait_ms = v) }/>
+                </label>
+                <label>"Guest tools CD image"
+                    <input type="text" name="guest_tools_iso" prop:value=move || sig.get().guest_tools_iso
+                        on:change=move |ev| { let v = event_target_value(&ev); sig.update(|s| s.guest_tools_iso = v) }/>
+                </label>
+                <label class="checkbox">
+                    <input type="checkbox" name="guest_tools_auto_install" prop:checked=move || sig.get().guest_tools_auto_install
+                        on:change=move |ev| { let v = event_target_checked(&ev); sig.update(|s| s.guest_tools_auto_install = v) }/>
+                    "Install the guest tools automatically through the QEMU guest agent (Windows guests)"
+                </label>
+                <label>"Clipboard limit (bytes)"
+                    <input type="number" min="1" name="clipboard_max_bytes" prop:value=move || sig.get().clipboard_max_bytes.to_string()
+                        on:change=move |ev| { let v = num(&ev, sig.get().clipboard_max_bytes); sig.update(|s| s.clipboard_max_bytes = v) }/>
+                </label>
+                <label>"Audio bitrate (kbit/s, Opus)"
+                    <input type="number" min="6" max="510" name="audio_bitrate_kbps" prop:value=move || sig.get().audio_bitrate_kbps.to_string()
+                        on:change=move |ev| { let v = num(&ev, sig.get().audio_bitrate_kbps); sig.update(|s| s.audio_bitrate_kbps = v) }/>
                 </label>
                 <ProfileFields name="desktop" sig=sig/>
                 <ProfileFields name="console" sig=sig/>

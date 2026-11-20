@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+# Horcrux guest tools (Horcrux Console: in-guest capture/encode, input,
+# clipboard, display layout). Settings: /etc/horcrux/guest-tools.conf.
+
+description="Horcrux guest tools agent"
+command="/usr/bin/horcrux-guest-agent"
+command_args="${HORCRUX_GUEST_AGENT_ARGS:-}"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/horcrux-guest-agent.log"
+error_log="/var/log/horcrux-guest-agent.log"
+
+depend() {
+	need localmount
+	after udev modules
+}
+
+start_pre() {
+	# uinput for keyboard/mouse/gamepad injection
+	modprobe -q uinput 2>/dev/null || true
+}
