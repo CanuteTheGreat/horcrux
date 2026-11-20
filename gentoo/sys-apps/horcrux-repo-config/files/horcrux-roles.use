@@ -11,3 +11,6 @@ dev-util/xdelta lzma
 app-emulation/qemu spice usbredir virtfs vnc zstd
 # the Horcrux Console encoder (an ffmpeg child process): H.264 (x264) and VP8 (libvpx)
 media-video/ffmpeg vpx x264
+# ffmpeg (Console encoder) pulls media-libs/harfbuzz (drawtext/libass); harfbuzz's default `cairo` USE (hb-view/hb-shape tools only) dragged x11-libs/cairo into a
+# headless server's world update (daily server-systemd red 2026-11-20). Nothing on a Horcrux host needs harfbuzz's cairo tools.
+media-libs/harfbuzz -cairo

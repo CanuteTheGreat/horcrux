@@ -170,6 +170,8 @@ class ProductBlockers(unittest.TestCase):
         for eb in os.listdir(os.path.join(GENTOO, "app-emulation", "horcrux-bin")):
             if eb.endswith(".ebuild"):
                 self.assertIn("app-emulation/qemu[spice,usbredir,virtfs,vnc,zstd]", _rd("gentoo", "app-emulation", "horcrux-bin", eb), eb)
+        for path in (("gentoo", "sys-apps", "horcrux-repo-config", "files", "horcrux-roles.use"), ("gentoo", "app-emulation", "horcrux-bin", "files", "package.use")):
+            self.assertRegex(_rd(*path), r"(?m)^media-libs/harfbuzz -cairo\b", path[-1])   # ffmpeg -> harfbuzz[cairo] -> x11-libs/cairo leaked into server world updates
         self.assertRegex(use, r"(?m)^app-emulation/qemu .*\bspice\b")      # first install of the manager on an existing machine resolves without autounmask
         # a global -spice / USE="-spice" in the image's own config would silently undo it
         for root, _, files in os.walk(os.path.join(REPO, "build", "live-iso")):
