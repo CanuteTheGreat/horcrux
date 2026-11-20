@@ -1283,6 +1283,24 @@ def cluster_nodes_checks(context):
         expect(page.locator("#quorum-summary")).to_contain_text(
             f"{qp['total_votes']} votes in total; quorum needs {qp['quorum']}", timeout=30000)
 
+        # Idle power-down: the automatic-loop switch drives PUT /api/cluster/power/auto
+        auto0 = api_get("/api/cluster/power/auto", tok)
+        if not auto0["forced_by_env"]:
+            want = not auto0["enabled"]
+            expect(page.locator("#power-auto-state")).to_contain_text(
+                "Automatic power-down: " + ("on" if auto0["enabled"] else "off"), timeout=30000)
+            try:
+                page.locator("#power-auto-toggle").click()
+                expect(page.locator("#power-auto-state")).to_contain_text(
+                    "Automatic power-down: " + ("on" if want else "off"), timeout=30000)
+                assert api_get("/api/cluster/power/auto", tok)["enabled"] is want
+            finally:
+                req = urllib.request.Request(
+                    f"{BASE}/api/cluster/power/auto", method="PUT",
+                    data=json.dumps({"enabled": auto0["enabled"]}).encode(),
+                    headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+                urlopen(req)
+
         # add a peer through the dialog, then remove it
         page.get_by_role("button", name="Add Node").first.click()
         page.get_by_placeholder("node-02").fill(peer)

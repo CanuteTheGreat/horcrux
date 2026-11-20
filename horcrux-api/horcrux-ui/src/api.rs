@@ -809,6 +809,28 @@ pub async fn put_qdevice(setting: Option<(&str, &str)>) -> Result<(), ApiError> 
         .map(|_| ())
 }
 
+/// `GET/PUT /api/cluster/power/auto`: is the automatic idle power-down loop on
+/// (on this node), and is it forced on by `HORCRUX_IDLE_POWER=1`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerAuto {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub forced_by_env: bool,
+}
+
+pub async fn get_power_auto() -> Result<PowerAuto, ApiError> {
+    fetch_json("/cluster/power/auto").await
+}
+
+pub async fn put_power_auto(enabled: bool) -> Result<PowerAuto, ApiError> {
+    #[derive(Serialize)]
+    struct Body {
+        enabled: bool,
+    }
+    put_json("/cluster/power/auto", &Body { enabled }).await
+}
+
 pub async fn get_cluster_power_status() -> Result<PowerStatus, ApiError> {
     fetch_json("/cluster/power/status").await
 }

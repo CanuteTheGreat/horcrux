@@ -29,7 +29,7 @@ cluster shut idle `power-managed` nodes down by itself:
 - The shutdown is the same guarded graceful BMC call as `POST /api/cluster/power/down`; a refusal
   is logged as a warning and retried after a fresh streak.
 
-You can also switch it on or off at runtime, no restart: `PUT /api/cluster/power/auto` with `{"enabled":true}` (`GET` shows `enabled` and `forced_by_env`). The choice is stored in `/etc/horcrux/idle-power` (override with `HORCRUX_IDLE_POWER_FILE`) on the node you call, so set it on every node. `HORCRUX_IDLE_POWER=1` in the environment keeps the loop on regardless.
+You can also switch it on or off at runtime, no restart: `PUT /api/cluster/power/auto` with `{"enabled":true}` (`GET` shows `enabled` and `forced_by_env`). The choice is stored in `/etc/horcrux/idle-power` (override with `HORCRUX_IDLE_POWER_FILE`) on the node you call, so set it on every node. `HORCRUX_IDLE_POWER=1` in the environment keeps the loop on regardless. The same switch is on the Cluster Management page: the Idle power-down panel shows "Automatic power-down: on/off" with a Turn on / Turn off button (disabled when the environment forces it on).
 
 ## Automatic wake-on-demand
 

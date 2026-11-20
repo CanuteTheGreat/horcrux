@@ -10,10 +10,11 @@
 //! - `POST /api/cluster/find-node`           <- `FindNodeRequest` -> node name
 use crate::api::{
     add_cluster_node, find_best_node_for_vm, get_cluster_architecture, get_cluster_nodes,
-    get_cluster_power_status, get_cpu_groups, get_local_nics, get_quorum_plan, get_vms,
-    power_down_node, power_node_note, put_qdevice, remove_cluster_node, set_node_caps,
+    get_cluster_power_status, get_cpu_groups, get_local_nics, get_power_auto, get_quorum_plan,
+    get_vms, power_down_node, power_node_note, put_power_auto, put_qdevice, remove_cluster_node, set_node_caps,
     set_node_priority, AddNodeRequest, ClusterArchitecture, ClusterNode, CpuGroupsView,
-    FindNodeRequest, NicView, NicsView, NodeCaps, PowerStatus, QuorumPlanView,
+    FindNodeRequest, NicView, NicsView, NodeCaps, PowerAuto, PowerStatus,
+    QuorumPlanView,
 };
 use horcrux_common::VmConfig;
 use leptos::*;
@@ -174,6 +175,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
         create_signal(None::<ClusterArchitecture>);
     let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
     let (power_status, set_power_status) = create_signal(None::<PowerStatus>);
+    let (power_auto, set_power_auto) = create_signal(None::<PowerAuto>);
     let (quorum_plan, set_quorum_plan) = create_signal(None::<QuorumPlanView>);
     let (nics_view, set_nics_view) = create_signal(None::<NicsView>);
     let (cpu_groups, set_cpu_groups) = create_signal(None::<CpuGroupsView>);
@@ -217,6 +219,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
             match get_cluster_power_status().await {
                 Ok(p) => set_power_status.set(Some(p)),
                 Err(e) => errors.push(format!("Failed to load power status: {}", e)),
+            }
+
+            // The automatic-loop switch is informational for the page: a failure must not raise the page error.
+            if let Ok(a) = get_power_auto().await {
+                set_power_auto.set(Some(a));
             }
 
             match get_quorum_plan().await {
@@ -728,6 +735,37 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                 )}
                             </p>
                             <p id="power-summary" class="text-sm font-medium mt-1">{summary}</p>
+                            {move || power_auto.get().map(|a| {
+                                let forced = a.forced_by_env;
+                                let on = a.enabled;
+                                let state = if forced {
+                                    "Automatic power-down: on (forced by HORCRUX_IDLE_POWER=1 in this node's environment)".to_string()
+                                } else if on {
+                                    "Automatic power-down: on (the cluster leader powers off one idle power-managed node at a time)".to_string()
+                                } else {
+                                    "Automatic power-down: off".to_string()
+                                };
+                                view! {
+                                    <div id="power-auto" class="flex flex-wrap items-center gap-2 mt-2">
+                                        <span id="power-auto-state" class="text-sm">{state}</span>
+                                        <button id="power-auto-toggle" class="px-3 py-1 bg-blue-600 text-white rounded text-sm"
+                                            disabled=forced
+                                            on:click=move |_| {
+                                                spawn_local(async move {
+                                                    match put_power_auto(!on).await {
+                                                        Ok(_) => {
+                                                            flash(if on { "Automatic power-down switched off on this node".to_string() } else { "Automatic power-down switched on on this node (set it on every node)".to_string() });
+                                                            load_cluster_data();
+                                                        }
+                                                        Err(e) => set_error.set(Some(format!("Failed to change automatic power-down: {}", e))),
+                                                    }
+                                                });
+                                            }>
+                                            {if on { "Turn off" } else { "Turn on" }}
+                                        </button>
+                                    </div>
+                                }
+                            })}
                         </div>
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-50">
