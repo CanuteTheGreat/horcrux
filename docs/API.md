@@ -537,6 +537,10 @@ leases are not carried over (clients re-request). Horcrux does not fail a
 network over by itself when its node dies; change `serve_node`. The host
 firewall must let UDP 67 and UDP/TCP 53 reach the server address.
 
+### Protection flag
+
+`GET|PUT /api/vms/{id}/protection` and `GET|PUT /api/containers/{id}/protection`, body `{"protected": true}`. While set, `DELETE` of that guest answers `409` and names the way out; clear the flag (`{"protected": false}`) to delete. The flag is dropped when the guest is deleted. Needs VM.Audit to read, VM.Config to change.
+
 ## Snapshots
 
 ### List Snapshots

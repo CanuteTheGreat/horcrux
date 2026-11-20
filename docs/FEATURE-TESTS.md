@@ -24,6 +24,7 @@ A failing feature, or a claimed-but-missing one, is a bug: it is filed in qa-fin
 | `vm.clone` | VMs | full clone (stopped source) boots with the source's data | README Templates | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-16 (VM cluster run 1116-1039) |
 | `vm.disk-add` | VMs | add a disk, guest sees it | UI VM hardware | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-16 (VM cluster run 1116-1039) |
 | `vm.delete` | VMs | delete VM removes QEMU, files and record | API vms | vmc: nodetests/vm_lifecycle.py | VM | pass, 2026-11-16 (VM cluster run 1116-1039) |
+| `vm.protection` | VMs | protected VM refuses DELETE (409) until the flag is cleared | docs/API.md Protection flag | rust: horcrux-api/tests/it/protection_tests.rs | - | written, not yet run |
 | `vm.nic-bridge-vlan-pxe` | VMs | NIC on a VLAN-aware bridge, PXE DHCP seen on the right VLAN, CD insert/eject, shutdown/reboot/reset | docs/API.md | vmc: ciport.py running the CI e2e vm_nic_e2e.py on a VM node | VM | pass, 2026-11-16 (VM cluster run 1116-1039) |
 | `vm.devices-balloon-agent` | VMs | balloon, guest agent, hotplug | API vms | vmc: ciport.py running the CI e2e vm_devices_e2e.py on a VM node | VM | pass, 2026-11-16 (VM cluster run 1116-1039) |
 | `vm.advanced-serial-virtiofs` | VMs | extra serial ports, virtiofs, hookscript | UI vm_advanced | vmc: ciport.py running the CI e2e vm_advanced_e2e.py on a VM node | VM | pass, 2026-11-16 (VM cluster run 1116-1039) |

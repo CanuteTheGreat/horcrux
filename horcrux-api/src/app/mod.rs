@@ -568,6 +568,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::storage_content::routes())
         .merge(api::resource_pools::routes())
         .merge(api::inventory::routes())
+        .merge(api::protection::routes())
         .merge(api::declarative::routes())
         .merge(api::firewall_objects::routes())
         .merge(api::sdn_cni::routes())
@@ -1964,6 +1965,7 @@ async fn delete_vm(
     auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    api::protection::ensure_vm_unprotected(&state, &id).await?;
     // Get VM name before deletion
     let vm_name = state
         .vm_manager
@@ -1973,6 +1975,7 @@ async fn delete_vm(
         .unwrap_or_else(|_| id.clone());
 
     state.vm_manager.delete_vm(&id).await?;
+    api::protection::forget(&state, &api::protection::vm_key(&id)).await;
     // Its firewall goes with it: the rules used to stay stored, be
     // re-installed at every start, and apply to a new VM with the same id.
     if let Err(e) = state
@@ -3058,12 +3061,14 @@ async fn delete_container(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    api::protection::ensure_ct_unprotected(&state, &id).await?;
     // Own task for the same reason as create_container.
     let manager = state.container_manager.clone();
     let del_id = id.clone();
     tokio::spawn(async move { manager.delete_container(&del_id).await })
         .await
         .map_err(|e| ApiError::Internal(format!("container delete task failed: {e}")))??;
+    api::protection::forget(&state, &api::protection::ct_key(&id)).await;
     // Its firewall goes with it (a new container with the same id must
     // not inherit the rules).
     if let Err(e) = state

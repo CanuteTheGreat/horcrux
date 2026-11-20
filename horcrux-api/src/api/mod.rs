@@ -31,6 +31,7 @@ pub mod hx_console;
 pub mod idle_power;
 pub mod import_cleanup;
 pub mod inventory;
+pub mod protection;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;
 pub mod lane_m;

@@ -30,6 +30,7 @@ mod integration_tests;
 mod inventory_tests;
 mod k8s_restart_tests;
 mod mdev_tests;
+mod protection_tests;
 mod metric_servers_tests;
 mod migration_tests;
 mod nightly_stress_tests;
