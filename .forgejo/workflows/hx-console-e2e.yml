@@ -82,10 +82,8 @@ jobs:
       - name: Build horcrux-api (all features) and the web UI
         run: |
           cargo build -p horcrux-api --all-features
-          if ! command -v trunk >/dev/null; then
-            curl -fsSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | sudo tar xz -C /usr/local/bin trunk
-          fi
-          (cd horcrux-api/horcrux-ui && trunk build --release)
+          bash ci/install-wasm-tools.sh
+          (cd horcrux-api/horcrux-ui && trunk build --release --offline)
 
       - name: Windows ISO (runner cache volume hxc-win-iso)
         env:

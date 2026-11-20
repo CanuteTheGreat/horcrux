@@ -904,33 +904,16 @@ jobs:
         continue-on-error: true
         run: |
           curl -fsS -m 5 http://10.1.10.103:8088/ci/env.sh -o /tmp/rw-cache-env.sh && RW_CACHE_WANT=rust RW_CACHE_EXPORT=1 . /tmp/rw-cache-env.sh || true
-      - name: Install trunk
-        # `cargo install trunk` from source hits a real dependency conflict:
-        # lightningcss pulls in two incompatible cssparser versions (0.33 vs
-        # 0.37), failing to compile (confirmed 2026-09-25). Install the
-        # prebuilt binary release instead - avoids building lightningcss
-        # from source entirely, and is faster too.
-        #
-        # This job is labeled `runs-on: linux-cross-x86_64`, but the the emulated runner host runner
-        # (the designated non-AWS fallback, see standing CI notes) is actual
-        # Apple Silicon hardware and does not always honor an amd64 container
-        # platform for this job -- confirmed 2026-10-02 via `rustc`'s own
-        # "default host tuple is aarch64-unknown-linux-gnu" in this job's log.
-        # A hardcoded x86_64 trunk binary then fails under Rosetta with
-        # "failed to open elf at /lib64/ld-linux-x86-64.so.2". Detect the
-        # actual container arch via `uname -m` and fetch the matching trunk
-        # release so this works whether the job lands on a genuine x86_64
-        # container or an arm64 one.
+      - name: Install trunk + wasm tools
+        # Prebuilt binaries (`cargo install trunk` hits a lightningcss/cssparser conflict), matching
+        # the container's real arch (arm64 runners also take this job). ci/install-wasm-tools.sh also
+        # installs wasm-bindgen (Cargo.lock version) and wasm-opt (Trunk.toml [tools]) with retries
+        # and checksum checks: trunk's own mid-build download has no retry, and one reset
+        # connection to GitHub failed this job (run 4582). `trunk build --offline` then proves
+        # nothing is downloaded during the build.
         run: |
-          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install trunk"
-          case "$(uname -m)" in
-            x86_64) TRUNK_ARCH=x86_64-unknown-linux-gnu ;;
-            aarch64|arm64) TRUNK_ARCH=aarch64-unknown-linux-gnu ;;
-            *) echo "Unsupported arch for trunk install: $(uname -m)" >&2; exit 1 ;;
-          esac
-          curl -L "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-${TRUNK_ARCH}.tar.gz" | tar xzf -
-          sudo mv trunk /usr/local/bin/trunk
-          trunk --version
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install trunk + wasm tools"
+          bash "$GITHUB_WORKSPACE/ci/install-wasm-tools.sh"
 
       - name: Ensure Node.js is present (self-heal)
         # catthehacker/ubuntu:act-26.04 job containers on the the emulated runner host
@@ -965,7 +948,7 @@ jobs:
         working-directory: horcrux-api/horcrux-ui
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build UI"
-          trunk build --release
+          trunk build --release --offline
 
       - name: Memory probe report
         if: always()
@@ -1352,17 +1335,11 @@ jobs:
           # the S3 Gateway page drives a real server (ui_e2e.py s3 checks)
           bash ci/install-s3-gateway.sh
 
-      - name: Install trunk
-        # Same prebuilt-binary install as the Build Web UI job.
+      - name: Install trunk + wasm tools
+        # Same install as the Build Web UI job (retried, checksum-checked, no download mid-build).
         run: |
-          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install trunk"
-          case "$(uname -m)" in
-            x86_64) TRUNK_ARCH=x86_64-unknown-linux-gnu ;;
-            aarch64|arm64) TRUNK_ARCH=aarch64-unknown-linux-gnu ;;
-            *) echo "Unsupported arch: $(uname -m)" >&2; exit 1 ;;
-          esac
-          curl -L "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-${TRUNK_ARCH}.tar.gz" | tar xzf -
-          sudo mv trunk /usr/local/bin/trunk
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Install trunk + wasm tools"
+          bash "$GITHUB_WORKSPACE/ci/install-wasm-tools.sh"
 
       - name: Ensure Node.js is present (self-heal)
         run: |
@@ -1392,7 +1369,7 @@ jobs:
       - name: Build web UI and API
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Build web UI and API"
-          (cd horcrux-api/horcrux-ui && trunk build)
+          (cd horcrux-api/horcrux-ui && trunk build --offline)
           cargo build --all-features -p horcrux-api --bin horcrux-api
 
       - name: Install Playwright + Chromium
