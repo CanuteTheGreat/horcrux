@@ -3,8 +3,11 @@ name: Horcrux guest tools (Windows MSI, Linux agent, real Linux guest)
 # Builds the Horcrux guest tools for both guest families and tests the
 # Linux agent inside a real VM through the guest-tools virtio-serial port:
 # - Windows: cross-compiled horcrux-guest-agent.exe (x86_64-pc-windows-gnu)
-#   packed as an MSI with wixl (ci/build-guest-tools-msi.sh); the MSI tables
-#   are checked with msiinfo.
+#   and the guest drivers (virtual display hxidd, virtual gamepad hxpad:
+#   clang-cl + lld-link against the pinned nuget WDK/SDK,
+#   ci/build-guest-drivers.sh) packed as an MSI with wixl
+#   (ci/build-guest-tools-msi.sh); the MSI tables and the driver DLLs'
+#   imports are checked.
 # - Linux: static musl agent, the guest-tools CD image
 #   (ci/build-guest-tools-iso.sh), then crates/horcrux-guest-tools/tests/
 #   linux_guest_e2e.py boots Alpine with the tools CD and checks capture +
@@ -20,6 +23,7 @@ on:
       - 'packaging/windows/**'
       - 'packaging/linux/**'
       - 'ci/build-guest-tools-*.sh'
+      - 'ci/build-guest-drivers.sh'
       - '.forgejo/workflows/guest-tools.yml'
   workflow_dispatch: {}
 
@@ -53,7 +57,8 @@ jobs:
             sleep 15
           done
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            gcc-mingw-w64-x86-64 msitools wixl xorriso qemu-system-x86 qemu-utils ffmpeg curl
+            gcc-mingw-w64-x86-64 msitools wixl xorriso qemu-system-x86 qemu-utils ffmpeg curl \
+            clang lld llvm unzip
           ls -l /dev/kvm
 
       - name: Cache cargo registry
@@ -63,6 +68,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
+            ~/.cache/horcrux-wdk
           key: ${{ runner.os }}-cargo-guest-tools-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-guest-tools-
@@ -76,6 +82,17 @@ jobs:
           msi=$(ls dist/horcrux-guest-tools-*-x64.msi)
           msiinfo export "$msi" ServiceInstall | grep -q HorcruxGuestTools
           msiinfo export "$msi" File | grep -q horcrux-guest-agent.exe
+          for f in hxidd.dll hxidd.inf hxpad.dll hxpad.inf; do
+            msiinfo export "$msi" File | grep -q "$f" || { echo "FAIL $f not in the MSI"; exit 1; }
+          done
+          msiinfo export "$msi" CustomAction | grep -q -- '--drivers install'
+          msiinfo export "$msi" CustomAction | grep -q -- '--drivers remove'
+          # the drivers are user-mode DLLs bound to the UMDF 2 / IddCx runtime only
+          for d in hxidd hxpad; do
+            llvm-objdump -p "dist/drivers/$d/$d.dll" | grep -E 'DLL Name|FxDriverEntryUm' | tee "/tmp/$d.imp"
+            grep -q FxDriverEntryUm "/tmp/$d.imp"
+            ! grep -i -E 'msvcr|vcruntime|ucrtbase|api-ms-win-crt' "/tmp/$d.imp"
+          done
           echo "ok - $msi"
 
       - name: Linux agent (static) + guest tools CD

@@ -32,6 +32,7 @@ pub async fn connect(
     socket: &Path,
     wait: Duration,
     clipboard_max_bytes: u32,
+    virtual_display: bool,
 ) -> Result<Option<GuestLink>, String> {
     let stream = match UnixStream::connect(socket).await {
         Ok(s) => s,
@@ -74,6 +75,7 @@ pub async fn connect(
     let hh = Msg::HostHello(HostHello {
         v: VERSION,
         clipboard_max_bytes,
+        virtual_display,
     });
     to_guest.send(hh).await.map_err(|e| e.to_string())?;
     let deadline = tokio::time::Instant::now() + wait;
@@ -112,6 +114,7 @@ mod tests {
                 m,
                 Msg::HostHello(HostHello {
                     clipboard_max_bytes: 77,
+                    virtual_display: true,
                     ..
                 })
             ));
@@ -134,7 +137,7 @@ mod tests {
             let (_s2, _) = l2.accept().unwrap();
             std::thread::sleep(Duration::from_millis(600));
         });
-        let mut g = connect(&sock, Duration::from_secs(2), 77)
+        let mut g = connect(&sock, Duration::from_secs(2), 77, true)
             .await
             .unwrap()
             .expect("tools answered");
@@ -142,13 +145,18 @@ mod tests {
         g.tx.send(Msg::Ping(5)).await.unwrap();
         assert_eq!(g.rx.recv().await, Some(Msg::Pong(5)));
         drop(g);
-        let none = connect(&sock, Duration::from_millis(300), 1).await.unwrap();
+        let none = connect(&sock, Duration::from_millis(300), 1, false)
+            .await
+            .unwrap();
         assert!(none.is_none(), "no Hello -> no tools");
         t.join().unwrap();
-        assert!(
-            connect(&dir.path().join("missing"), Duration::from_millis(10), 1)
-                .await
-                .is_err()
-        );
+        assert!(connect(
+            &dir.path().join("missing"),
+            Duration::from_millis(10),
+            1,
+            false
+        )
+        .await
+        .is_err());
     }
 }

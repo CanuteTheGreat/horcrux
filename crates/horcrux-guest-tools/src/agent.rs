@@ -4,7 +4,8 @@
 //! same [`Out`] channel.
 use crate::config::Config;
 use horcrux_guest_proto::{
-    self as proto, Clipboard, Hello, Input, Layout, Msg, StartAudio, StartVideo, VideoStatus,
+    self as proto, Clipboard, Hello, HostHello, Input, Layout, Msg, StartAudio, StartVideo,
+    VideoStatus,
 };
 use std::sync::mpsc;
 
@@ -18,6 +19,8 @@ pub type Out = mpsc::SyncSender<Msg>;
 pub trait Platform: Send {
     /// Capabilities found on this guest (probed, not assumed).
     fn hello(&self) -> Hello;
+    /// What the node asked for in its `HostHello` (before anything else).
+    fn host_hello(&mut self, _h: &HostHello) {}
     /// Start or restart capture + encode with these parameters.
     fn start_video(&mut self, cfg: &StartVideo, out: Out) -> VideoStatus;
     fn stop_video(&mut self);
@@ -112,6 +115,7 @@ pub fn run(cfg: &Config, mut p: Box<dyn Platform>) -> Result<(), String> {
         };
         match m {
             Msg::HostHello(h) => {
+                p.host_hello(&h);
                 // The node connects to its end of the port whenever a viewer
                 // opens; anything sent before that was dropped by QEMU, so
                 // every HostHello is answered with a fresh Hello.

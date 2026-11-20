@@ -1,0 +1,91 @@
+; hxpad.inf - Horcrux Virtual Gamepad (UMDF 2 HID minidriver)
+; Part of Horcrux Guest Tools. SPDX-License-Identifier: GPL-3.0-or-later
+; Written from Microsoft's INF, WDF directive and "Creating WDF HID
+; minidrivers" documentation.
+;
+; Software device(s) created by horcrux-guest-agent ("drivers install"),
+; hardware id HorcruxVirtualGamepad, one per configured pad. The inbox
+; MsHidUmdf.sys is the function driver (HID pass-through); hxpad.dll runs
+; below it through the UMDF reflector. Settings in the hardware key:
+;   HidVendorId / HidProductId / HidVersion  HID attributes. 0 = no vendor id
+;       claimed (Horcrux owns no USB vendor id; set real ids here once one
+;       is allocated)
+;   HidManufacturer / HidProduct            HID strings
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = HIDClass
+ClassGuid   = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %Mfg%
+CatalogFile = hxpad.cat
+DriverVer   = 11/20/2026,@DRIVERVER@
+PnpLockdown = 1
+
+[Manufacturer]
+%Mfg% = HxModels, NTamd64.10.0...17134
+
+[HxModels.NTamd64.10.0...17134]
+%DeviceDesc% = HxPad_Install, HorcruxVirtualGamepad
+
+[SourceDisksNames]
+1 = %Disk%
+
+[SourceDisksFiles]
+hxpad.dll = 1
+
+[DestinationDirs]
+HxPad_Files = 13
+
+[HxPad_Files]
+hxpad.dll
+
+[HxPad_Install.NT]
+CopyFiles = HxPad_Files
+
+[HxPad_Install.NT.hw]
+AddReg = HxPad_HwReg
+
+[HxPad_HwReg]
+HKR,,"LowerFilters",0x00010008,"WUDFRd"
+HKR,,"HidVendorId",0x00010003,0
+HKR,,"HidProductId",0x00010003,0
+HKR,,"HidVersion",0x00010003,0x100
+HKR,,"HidManufacturer",0x00000002,"Horcrux"
+HKR,,"HidProduct",0x00000002,"Horcrux Virtual Gamepad"
+
+[HxPad_Install.NT.Services]
+AddService = WUDFRd, 0x000001f8, HxPad_WudfRd
+AddService = mshidumdf, 0x000001fa, HxPad_MsHidUmdf
+
+[HxPad_WudfRd]
+DisplayName   = %WudfRdName%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\WUDFRd.sys
+
+[HxPad_MsHidUmdf]
+DisplayName   = %MsHidUmdfName%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\mshidumdf.sys
+
+[HxPad_Install.NT.Wdf]
+UmdfService                = hxpad, HxPad_Umdf
+UmdfServiceOrder           = hxpad
+UmdfKernelModeClientPolicy = AllowKernelModeClients
+UmdfMethodNeitherAction    = Copy
+UmdfFileObjectPolicy       = AllowNullAndUnknownFileObjects
+UmdfFsContextUsePolicy     = CanUseFsContext2
+
+[HxPad_Umdf]
+UmdfLibraryVersion = 2.25.0
+ServiceBinary      = %13%\hxpad.dll
+
+[Strings]
+Mfg           = "Horcrux"
+Disk          = "Horcrux Guest Tools"
+DeviceDesc    = "Horcrux Virtual Gamepad"
+WudfRdName    = "Windows Driver Foundation - User-mode Driver Framework Reflector"
+MsHidUmdfName = "Microsoft HID pass-through for UMDF"

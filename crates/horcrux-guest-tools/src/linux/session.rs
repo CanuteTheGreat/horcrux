@@ -246,6 +246,7 @@ pub fn parse_xrandr(text: &str) -> (Layout, Vec<String>) {
             height: h,
             refresh_hz: hz,
             primary,
+            virtual_display: false,
         });
     }
     (l, outs)
@@ -305,7 +306,8 @@ Virtual-3 disconnected (normal left inverted right x axis y axis)
                 width: 2560,
                 height: 1440,
                 refresh_hz: 240,
-                primary: true
+                primary: true,
+                virtual_display: false
             }
         );
         assert_eq!(l.monitors[1].x, 2560);
