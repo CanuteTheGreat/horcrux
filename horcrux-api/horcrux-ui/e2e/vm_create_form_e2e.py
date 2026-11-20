@@ -230,8 +230,15 @@ def main():
         log("ok: ISO downloaded from a URL with a checksum from the Create VM form")
 
         # ---- create: everything lands in the VM -------------------------------
-        page.select_option("#vm-cdrom", index=[
-            i for i, t in enumerate(page.locator("#vm-cdrom option").all_inner_texts()) if iso_name in t][0])
+        # Pick the uploaded ISO by its value (the path). An index read from
+        # the option texts goes stale: the download's options reload lands
+        # asynchronously and re-renders the list sorted by name, so the same
+        # index can then point at e2e-form-dl2.iso (the uploaded file's random
+        # name sorts after it about 60% of the time).
+        iso_value = page.locator("#vm-cdrom option", has_text=iso_name).get_attribute("value")
+        assert iso_value and iso_value.endswith(iso_name), iso_value
+        page.select_option("#vm-cdrom", value=iso_value)
+        expect(page.locator("#vm-cdrom")).to_have_value(iso_value)
         page.locator("button[type=submit]").click()
         page.wait_for_url(f"{BASE}/vms", timeout=60000)
         vm = next(v for v in api("GET", "/vms")[1] if v["name"] == VM)
