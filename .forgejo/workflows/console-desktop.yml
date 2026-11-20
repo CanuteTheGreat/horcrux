@@ -1,0 +1,170 @@
+name: Horcrux Console desktop client (Linux, Windows, macOS)
+
+# Phase C3c of docs/design/horcrux-console.md: the desktop client
+# (horcrux-desktop, binary horcrux-console) on all three OSes.
+#   cross:   Linux unit tests; Windows (x86_64-pc-windows-gnu) clippy, release
+#            build, test binaries and the MSI (wixl; contents checked with
+#            msiinfo); macOS (aarch64 + x86_64) clippy with zig cc for the C
+#            parts. A macOS binary/.pkg needs Apple's SDK, so it is built by
+#            ci/build-console-pkg.sh on a macOS machine only (there is no
+#            macOS runner for this repo).
+#   windows: our Windows Server 2022 runner (label windows-x86_64, MSVC):
+#            native unit tests with HX_REQUIRE_DECODER=1, i.e. the test stream
+#            is really decoded by Windows Media Foundation; then the MSI from
+#            the cross job is installed, checked (program, Start menu entry,
+#            horcrux-console:// handler, settings example) and removed.
+# The Linux client's headless WAN e2e stays in hx-console-e2e.yml.
+on:
+  push:
+    paths:
+      - 'horcrux-desktop/**'
+      - 'crates/horcrux-media/**'
+      - 'crates/horcrux-turn/**'
+      - 'packaging/windows/horcrux-console.wxs'
+      - 'packaging/macos/**'
+      - 'packaging/linux/horcrux-console.*'
+      - 'ci/build-console-*.sh'
+      - '.forgejo/workflows/console-desktop.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: "replace:${{ github.workflow }}@${{ github.ref }}"
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: "3"
+  # zig as the C compiler for the macOS check targets (ring / aws-lc C parts)
+  ZIG_URL: https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+  ZIG_SHA256: d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea
+
+jobs:
+  cross:
+    name: Linux tests, Windows build + MSI, macOS check
+    runs-on: linux-cross-x86_64
+    container: catthehacker/ubuntu:act-26.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: x86_64-pc-windows-gnu,aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install tools
+        run: |
+          for i in 1 2 3; do
+            sudo apt-get update -qq || true
+            apt-cache policy wixl | grep -q 'Candidate: [0-9]' && break
+            sleep 15
+          done
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            build-essential clang libxkbcommon-dev libavcodec-dev libx264-dev ffmpeg \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 msitools wixl curl xz-utils python3
+          curl -fsSL --retry 3 -o /tmp/zig.tar.xz "$ZIG_URL"
+          echo "$ZIG_SHA256  /tmp/zig.tar.xz" | sha256sum -c --quiet
+          sudo tar -xJf /tmp/zig.tar.xz -C /opt
+          sudo ln -sf /opt/zig-linux-x86_64-0.13.0/zig /usr/local/bin/zig
+          zig version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-hx-desktop-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-hx-desktop-
+
+      - name: Linux unit tests + clippy (decoder = libavcodec)
+        run: |
+          HX_REQUIRE_DECODER=1 cargo test -p horcrux-media -p horcrux-desktop
+          cargo clippy -p horcrux-media -p horcrux-desktop --all-targets -- -D warnings
+
+      - name: Windows clippy, release build, test binaries
+        run: |
+          cargo clippy -p horcrux-media -p horcrux-desktop --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+          cargo test --no-run -p horcrux-media -p horcrux-desktop --target x86_64-pc-windows-gnu
+
+      - name: Windows MSI (wixl) and its contents
+        run: |
+          set -euo pipefail
+          OUT_DIR=dist bash ci/build-console-msi.sh
+          M=$(ls dist/horcrux-console-*-x64.msi)
+          msiinfo export "$M" File > /tmp/file.txt
+          msiinfo export "$M" Shortcut > /tmp/shortcut.txt
+          msiinfo export "$M" Registry > /tmp/registry.txt
+          grep -q 'horcrux-console.exe' /tmp/file.txt
+          grep -q 'console.toml.example' /tmp/file.txt
+          grep -q 'Horcrux Console' /tmp/shortcut.txt
+          grep -q 'URL Protocol' /tmp/registry.txt
+          grep -q 'shell\\open\\command' /tmp/registry.txt
+          cat /tmp/shortcut.txt /tmp/registry.txt
+
+      - name: macOS clippy (aarch64 + x86_64; zig cc for the C parts, nothing linked)
+        run: |
+          mkdir -p /tmp/zcc
+          for t in aarch64 x86_64; do
+            cpu=""; [ $t = aarch64 ] && cpu="-mcpu=apple_m1"
+            printf '#!/bin/sh\nfor a in "$@"; do case "$a" in --target=*|-mmacosx-version-min=*|-march=*) ;; *) set -- "$@" "$a";; esac; shift; done\nexec zig cc -target %s-macos %s "$@"\n' "$t" "$cpu" > /tmp/zcc/$t-cc
+            chmod 755 /tmp/zcc/$t-cc
+          done
+          export CC_aarch64_apple_darwin=/tmp/zcc/aarch64-cc CC_x86_64_apple_darwin=/tmp/zcc/x86_64-cc
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo clippy -p horcrux-media -p horcrux-desktop --all-targets --target $t -- -D warnings
+          done
+          python3 -c "import plistlib; d = plistlib.load(open('packaging/macos/Info.plist', 'rb')); assert d['CFBundleURLTypes'][0]['CFBundleURLSchemes'] == ['horcrux-console']"
+          bash -n ci/build-console-pkg.sh
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: horcrux-console-msi
+          path: dist/horcrux-console-*-x64.msi
+
+  windows:
+    name: Windows (native MSVC tests, Media Foundation decode, MSI install)
+    needs: cross
+    runs-on: windows-x86_64
+    timeout-minutes: 90
+    env:
+      CARGO_TARGET_DIR: C:\ci\target\horcrux-console
+      HX_REQUIRE_DECODER: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests (the H.264 test stream is decoded by Media Foundation)
+        shell: pwsh
+        run: |
+          rustc -V
+          cargo test -p horcrux-media -p horcrux-desktop -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/download-artifact@v3
+        with:
+          name: horcrux-console-msi
+          path: msi
+
+      - name: MSI install, check, remove
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem msi\horcrux-console-*-x64.msi).FullName
+          $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /l*v msi-install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content msi-install.log -Tail 40; exit 1 }
+          $dir = "C:\Program Files\Horcrux\Console"
+          $fail = @()
+          if (-not (Test-Path "$dir\horcrux-console.exe")) { $fail += "program" }
+          if (-not (Test-Path "$dir\console.toml.example")) { $fail += "settings example" }
+          if (-not (Test-Path "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Horcrux Console.lnk")) { $fail += "Start menu entry" }
+          $cmd = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\horcrux-console\shell\open\command")."(default)"
+          if ($cmd -ne "`"$dir\horcrux-console.exe`" `"%1`"") { $fail += "link handler ($cmd)" }
+          & "$dir\horcrux-console.exe" --print-defaults | Out-File defaults.toml
+          if (-not (Select-String -Quiet -Path defaults.toml -Pattern '^decoder = "auto"')) { $fail += "--print-defaults" }
+          $p = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn" -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or (Test-Path "$dir\horcrux-console.exe")) { $fail += "uninstall" }
+          if (Test-Path "Registry::HKEY_CLASSES_ROOT\horcrux-console") { $fail += "link handler left after uninstall" }
+          if ($fail.Count) { Write-Host "FAILED: $($fail -join ', ')"; exit 1 }
+          Write-Host "MSI install, Start menu entry, link handler, defaults and removal OK"

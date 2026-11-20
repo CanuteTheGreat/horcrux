@@ -669,7 +669,7 @@ option for gaming VMs: it needs Secure Boot off, which anti-cheat refuses.
 Sources: learn.microsoft.com driver signing policy and code-signing
 attestation pages.
 
-### C3 status (2026-11-20, C3b same day)
+### C3 status (2026-11-20, C3b and C3c same day)
 
 Done:
 - `crates/horcrux-turn`: STUN (RFC 8489) / TURN (RFC 8656) relay and client,
@@ -733,10 +733,78 @@ C3b (2026-11-20):
   `packaging/linux/horcrux-console.toml`), ebuild
   `gentoo/app-emulation/horcrux-console`.
 
+C3c (2026-11-20): the desktop client on Windows and macOS, connection window.
+- Per-OS H.264 decoder behind one interface (`crates/horcrux-media/src/decoder.rs`,
+  setting `decoder` = auto | avcodec | mediafoundation | videotoolbox, and
+  `hardware_decode`): Linux/Unix the system libavcodec (run-time loaded, as in
+  C3b), Windows the Media Foundation H.264 decoder MFT (`mfdec.rs`; DXVA through
+  a D3D11 device manager when `hardware_decode` is on and the GPU offers it,
+  the software MFT otherwise), macOS VideoToolbox (`vtdec.rs`, AVCC samples from
+  the Annex B stream, NV12 out). No codec library is shipped on any OS. A
+  shared test stream (`tests/data/gray-128x96.h264`) is decoded by each
+  backend; `HX_REQUIRE_DECODER=1` makes a missing decoder a test failure.
+- Gamepads: evdev (Linux), XInput (Windows, `xinput1_4.dll` loaded at run
+  time, Guide button where the system exposes it), GameController.framework
+  (macOS, extended gamepad profile), all polled into the same 16-byte pad
+  state. Raw relative mouse while captured comes from winit's device events on
+  every OS (WM_INPUT on Windows), with the cursor confined/locked by winit.
+- Connection window (all OSes, `horcrux-desktop/src/ui.rs`, drawn in the same
+  software surface, no toolkit): node URL, user, password, certificate
+  fingerprint check with "Trust certificate" (stored per node in the recent
+  file next to the settings), VM list from `GET /api/vms` filtered to running
+  QEMU VMs whose Horcrux Console is available, profile, Open. Starting the
+  program without `--node`/`--vm` (Start menu, Applications, desktop menu)
+  opens it.
+- `horcrux-console://HOST[:PORT]/VM?profile=P&user=U` links: the web UI's
+  console page offers "Open in the desktop app" when the Horcrux Console is
+  available; the app fills its connection window from the link and asks for
+  the password (nothing secret in the link). Handlers: the MSI's
+  `HKCR\horcrux-console`, the Linux `.desktop` file
+  (`x-scheme-handler/horcrux-console`), `CFBundleURLTypes` in the macOS bundle.
+- Settings per OS: `$XDG_CONFIG_HOME/horcrux/console.toml` (Linux/Unix),
+  `%APPDATA%\horcrux\console.toml` (Windows), `~/Library/Application
+  Support/horcrux/console.toml` (macOS); the packaged example is still
+  `horcrux-console --print-defaults`.
+- Packages: Windows MSI (`ci/build-console-msi.sh`, wixl,
+  `packaging/windows/horcrux-console.wxs`: program, Start menu entry, link
+  handler, settings example), macOS `.pkg` with a universal
+  `Horcrux Console.app` (`ci/build-console-pkg.sh`, pkgbuild/productbuild,
+  runs on macOS only), Gentoo ebuild with the `.desktop` file.
+- CI (`.forgejo/workflows/console-desktop.yml`): Linux tests; Windows and
+  macOS (aarch64 + x86_64) clippy from Linux (mingw-w64; zig cc for the C
+  parts of the macOS check); MSI built and its tables checked; on the Windows
+  Server 2022 runner native MSVC unit tests with Media Foundation decoding the
+  test stream, then MSI install / check / removal.
+- Proven on a Windows Server 2022 VM (QEMU, software MFT) against a real node
+  (debug `horcrux-api` with an Alpine VM): headless runs decoded 1280x800 at
+  0 decode errors over the direct path (58-83 frames, keystroke-to-picture
+  median 51-75 ms on a busy CI host) and through the node's relay with
+  `force_relay` (66 frames, median 50 ms); typed text logged in on the guest's
+  console (snapshot of the decoded picture shows the shell); the node counted
+  the client's gamepad states (`gamepad_rx` = 2; `gamepad_in` stays 0 because
+  that guest has no guest tools to hand them to). The MSI installed with
+  msiexec, created the Start menu entry and the link handler; opening a
+  `horcrux-console://` link showed the connection window with node and user
+  filled in, the certificate fingerprint check, and after "Trust certificate"
+  the VM console at ~34 fps.
+- New session stat `gamepad_rx` (pad states received from the client), next to
+  `gamepad_in` (handed to the guest tools); the WAN e2e checks it for the
+  desktop client paths.
+
 Open:
-- C3c: the desktop client on Windows (Media Foundation decode, XInput /
-  Windows.Gaming.Input, MSI) and macOS (VideoToolbox, GameController, .pkg),
-  a connection window and a `horcrux-console://` handler for the web UI.
+- macOS was compile-checked only (clippy for both architectures): there is no
+  macOS CI runner for this repo, so the VideoToolbox decode, the
+  GameController path, the `.pkg` build and link opening have not been
+  executed. Link opening on macOS also needs an Apple Event (`kAEGetURL`)
+  handler: winit does not pass the URL, so a clicked link currently opens an
+  empty connection window there.
+- Windows headless run in CI against a node: needs the installed Windows test
+  image of the guest-tools e2e (C2b, `hx-console-guest-e2e.yml`) on main.
+- Relay bound to the unspecified address answers from the address of the
+  outgoing route, not the one the request reached (seen with a client inside
+  a container on the node itself: the reply came from the bridge address and
+  was dropped by the client's NAT). Workaround: set `relay_listen_address`;
+  fix: answer with IP_PKTINFO / per-address sockets.
 - FlexFEC receive in the desktop client (str0m has no FEC receiver).
 - Cluster: relay on the cluster name/VIP (C4), shared relay secret across
   nodes.

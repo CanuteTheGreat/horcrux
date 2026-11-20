@@ -401,6 +401,9 @@ with sync_playwright() as pw:
         ui.goto(f"{BASE}/vms/{VM}/console")
         ui.wait_for_selector("#hxc-frame", timeout=30000)
         check(ui.locator("#console-type").input_value() == "horcrux", "UI console page opens the Horcrux Console first")
+        href = ui.get_attribute("#console-desktop-app", "href") or ""
+        want = "horcrux-console://" + BASE.split("://", 1)[1].rstrip("/") + "/" + VM
+        check(href == want, f"UI offers 'Open in the desktop app' with the node's link ({href})")
         ui.goto(f"{BASE}/vms/{VM}/console?classic=1")
         ui.wait_for_selector("#console-frame", timeout=30000)
         check(True, "UI ?classic=1 opens the classic VNC console")
