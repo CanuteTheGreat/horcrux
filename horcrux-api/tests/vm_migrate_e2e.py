@@ -191,12 +191,13 @@ cfg = create_vm(
 disk0 = cfg["disks"][0]["path"]
 check(len(cfg["disks"]) == 2 and cfg["disks"][1]["disk_type"] == "scsi", "two disks recorded")
 args = sh(N1, f"tr '\\0' ' ' < /proc/$(cat /var/run/horcrux-vm-{vm}.pid)/cmdline")
-for want in ["q35", "if=pflash", "tpm-tis", "virtio-blk-pci", "scsi-hd", "rotation_rate=1", "-cpu qemu64"]:
+# a new VM's TPM is CRB (create_vm_from_image); only pre-setting VMs stay on TIS
+for want in ["q35", "if=pflash", "tpm-crb", "virtio-blk-pci", "scsi-hd", "rotation_rate=1", "-cpu qemu64"]:
     check(want in args, f"QEMU runs with {want}")
 check("UEFI" in guest(N1, disk0, "test -d /sys/firmware/efi && echo UEFI"), "guest booted with UEFI")
 check(guest(N1, disk0, "cat /sys/block/sda/queue/rotational").strip().endswith("0"), "SCSI disk is an SSD in the guest")
 tpm = qmp(N1, disk0, "query-tpm")
-check(any(t.get("model") == "tpm-tis" for t in tpm.get("return", [])), f"TPM 2.0 attached ({tpm})")
+check(any(t.get("model") == "tpm-crb" for t in tpm.get("return", [])), f"TPM 2.0 attached ({tpm})")
 marker = f"hx-live-{int(time.time())}"
 guest(N1, disk0, f"echo {marker} > /home/cirros/m; sync")
 up_before = uptime(N1, disk0)
@@ -220,7 +221,7 @@ up_after = uptime(N2, d0)
 check(up_after > up_before, f"guest kept running: uptime {up_before} -> {up_after} (no reboot)")
 check("UEFI" in guest(N2, d0, "test -d /sys/firmware/efi && echo UEFI"), "still UEFI on node2")
 tpm = qmp(N2, d0, "query-tpm")
-check(any(t.get("model") == "tpm-tis" for t in tpm.get("return", [])), "TPM came along")
+check(any(t.get("model") == "tpm-crb" for t in tpm.get("return", [])), "TPM came along")
 check(sh(N2, f"test -f {d0.rsplit('.', 1)[0]}.efivars.qcow2 && echo y") == "y", "EFI variable store on node2")
 st, rules = api(N2, "GET", f"/vms/{vm}/firewall/rules")
 check(st == 200 and any(r["id"] == "mig-fw" for r in rules), "firewall rule moved to node2")
