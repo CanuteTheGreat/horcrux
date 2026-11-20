@@ -36,7 +36,14 @@ pub fn BackupDashboard() -> impl IntoView {
             match bk::list_backups().await {
                 Ok(b) => {
                     set_backups.set(b);
-                    set_error.set(None);
+                    // Only clear a stale load error: an action's failure message
+                    // (backup/verify/restore) must survive the reload that follows it.
+                    if error
+                        .get_untracked()
+                        .map_or(false, |e| e.starts_with("Loading backups"))
+                    {
+                        set_error.set(None);
+                    }
                 }
                 Err(e) => set_error.set(Some(format!("Loading backups: {}", e.message))),
             }
