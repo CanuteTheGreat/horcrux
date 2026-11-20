@@ -13,7 +13,8 @@
 //!   OpenRC).
 //!
 //! Two triggers: automatically when a viewer opens, no tools answer and the
-//! agent runs (`guest_tools_auto_install`, one attempt per VM per `RETRY`
+//! agent runs (`guest_tools_auto_install`, one attempt per VM per
+//! `guest_tools_auto_install_retry_secs`
 //! so a guest without the agent or with a failing install is not hammered
 //! on every viewer), and on request (`POST /api/vms/:id/console/guest-tools/install`).
 use crate::vm::devices::qga_exec;
@@ -23,9 +24,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-
-const RETRY: Duration = Duration::from_secs(600);
-/// Longest an install may run in the guest (seconds).
 
 /// PowerShell run by the guest agent (as SYSTEM) in a Windows guest. The
 /// MSI path goes to msiexec unquoted (`E:\\windows\\horcrux-guest-tools-*.msi`
@@ -178,11 +176,11 @@ pub async fn install_recorded(
 
 static LAST: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
 
-fn due(vm: &str) -> bool {
+fn due(vm: &str, retry: Duration) -> bool {
     let Ok(mut g) = LAST.lock() else { return false };
     let map = g.get_or_insert_with(HashMap::new);
     match map.get(vm) {
-        Some(t) if t.elapsed() < RETRY => false,
+        Some(t) if t.elapsed() < retry => false,
         _ => {
             map.insert(vm.to_string(), Instant::now());
             true
@@ -196,8 +194,9 @@ pub fn spawn_install(
     vm_id: String,
     qga: PathBuf,
     timeout_secs: u64,
+    retry_secs: u64,
 ) -> Option<tokio::task::JoinHandle<Result<String, String>>> {
-    if !qga.exists() || !due(&vm_id) {
+    if !qga.exists() || !due(&vm_id, Duration::from_secs(retry_secs)) {
         return None;
     }
     Some(tokio::spawn(async move {
@@ -394,8 +393,12 @@ mod tests {
 
     #[test]
     fn one_attempt_per_interval() {
-        assert!(due("vm-a"));
-        assert!(!due("vm-a"));
-        assert!(due("vm-b"));
+        let r = Duration::from_secs(600);
+        assert!(due("vm-a", r));
+        assert!(!due("vm-a", r));
+        assert!(due("vm-b", r));
+        // a zero wait allows the next attempt at once
+        assert!(due("vm-c", Duration::ZERO));
+        assert!(due("vm-c", Duration::ZERO));
     }
 }

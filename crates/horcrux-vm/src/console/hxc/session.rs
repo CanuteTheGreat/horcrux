@@ -420,6 +420,7 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
                 req.vm_id.clone(),
                 qga,
                 req.settings.guest_tools_install_timeout_secs.into(),
+                req.settings.guest_tools_auto_install_retry_secs.into(),
             )
         })
     } else {

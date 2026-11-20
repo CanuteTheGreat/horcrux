@@ -251,6 +251,10 @@ pub fn ConsoleSettingsPage() -> impl IntoView {
                     <input type="number" min="30" max="7200" name="guest_tools_install_timeout_secs" prop:value=move || sig.get().guest_tools_install_timeout_secs.to_string()
                         on:change=move |ev| { let v = num(&ev, sig.get().guest_tools_install_timeout_secs); sig.update(|s| s.guest_tools_install_timeout_secs = v) }/>
                 </label>
+                <label>"Wait before another automatic install attempt on the same VM (s)"
+                    <input type="number" min="0" max="86400" name="guest_tools_auto_install_retry_secs" prop:value=move || sig.get().guest_tools_auto_install_retry_secs.to_string()
+                        on:change=move |ev| { let v = num(&ev, sig.get().guest_tools_auto_install_retry_secs); sig.update(|s| s.guest_tools_auto_install_retry_secs = v) }/>
+                </label>
                 <label>"Guest tools CD image"
                     <input type="text" name="guest_tools_iso" prop:value=move || sig.get().guest_tools_iso
                         on:change=move |ev| { let v = event_target_value(&ev); sig.update(|s| s.guest_tools_iso = v) }/>

@@ -247,7 +247,7 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             // Installing the Horcrux guest tools changes software inside
             // the guest: a configuration change, not a console view.
             if arg(2) == "console" && arg(3) == "guest-tools" {
-                return read_write(m, P::VmAudit, P::VmConfig, &format!("/vms/{}", id));
+                return read_write(m, P::VmAudit, P::VmConfig, format!("/vms/{}", id));
             }
             guest_action(m, &format!("/vms/{}", id), arg(2))
         }

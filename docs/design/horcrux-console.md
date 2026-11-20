@@ -494,7 +494,8 @@ Done and proven in CI (`hx-console-guest-e2e.yml`, KVM runner):
   install-tested in Debian, Fedora and Alpine containers in `guest-tools.yml`)
   on the tools CD under `linux/<arch>/`, next to the Gentoo ebuild.
 - New settings: `guest_tools_retry_secs` (in-session re-check, default 5 s),
-  `guest_tools_install_timeout_secs` (default 600 s); Windows agent:
+  `guest_tools_install_timeout_secs` (default 600 s),
+  `guest_tools_auto_install_retry_secs` (default 600 s); Windows agent:
   `port_write_max`, `port_busy_wait_ms`, `port_busy_tries`,
   `port_write_timeout_ms`, `port_handle` (set by the service).
 

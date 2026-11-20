@@ -238,6 +238,10 @@ pub struct ConsoleSettings {
     /// agent (s); a guest agent that stops answering for a moment while
     /// the installer runs is retried until then.
     pub guest_tools_install_timeout_secs: u32,
+    /// After an automatic install attempt, the next viewer of the same VM
+    /// does not try again for this long (s), so a guest whose install
+    /// fails is not hammered on every viewer. The API action ignores it.
+    pub guest_tools_auto_install_retry_secs: u32,
     /// Largest clipboard text carried in either direction (bytes).
     pub clipboard_max_bytes: u32,
     /// Opus bitrate for guest audio (kbit/s).
@@ -275,6 +279,7 @@ impl Default for ConsoleSettings {
             guest_tools_iso: "/usr/share/horcrux/guest-tools/horcrux-guest-tools.iso".into(),
             guest_tools_auto_install: true,
             guest_tools_install_timeout_secs: 600,
+            guest_tools_auto_install_retry_secs: 600,
             clipboard_max_bytes: 1 << 20,
             audio_bitrate_kbps: 128,
             desktop: desktop(),
@@ -354,6 +359,9 @@ impl ConsoleSettings {
         }
         if !(30..=7200).contains(&self.guest_tools_install_timeout_secs) {
             return Err("guest_tools_install_timeout_secs must be between 30 and 7200".into());
+        }
+        if self.guest_tools_auto_install_retry_secs > 86_400 {
+            return Err("guest_tools_auto_install_retry_secs must be at most 86400".into());
         }
         if self.guest_tools_retry_secs > 3600 {
             return Err("guest_tools_retry_secs must be at most 3600".into());
