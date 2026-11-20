@@ -2023,6 +2023,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
+name = "font8x8"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
+
+[[package]]
 name = "foreign-types"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3124,11 +3130,14 @@ version = "0.1.5"
 dependencies = [
  "clap",
  "evdev",
+ "font8x8",
  "futures",
  "hex",
  "horcrux-media",
  "horcrux-turn",
  "http 1.5.0",
+ "objc2-foundation 0.3.2",
+ "objc2-game-controller",
  "reqwest",
  "rpassword",
  "rustls",
@@ -3144,6 +3153,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "windows",
  "winit",
 ]
 
@@ -3192,6 +3202,7 @@ name = "horcrux-media"
 version = "0.1.5"
 dependencies = [
  "libc",
+ "windows",
 ]
 
 [[package]]
@@ -5055,6 +5066,16 @@ dependencies = [
  "bitflags 2.13.2",
  "objc2 0.6.5",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-game-controller"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1962c1882c5abcedb18e5f01acffeaad7b3cbd0a9d4cd8f5ca259ba8a64cb9a3"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

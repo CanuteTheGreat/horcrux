@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Horcrux Console desktop client for Windows (GPL-3.0-or-later).
+     Built with wixl (msitools) by ci/build-console-msi.sh, which passes
+     Version=<workspace version> ConsoleExe=<path to horcrux-console.exe>
+     ExampleConf=<the default settings, packaging/linux/horcrux-console.toml>.
+     Installs %ProgramFiles%\Horcrux\Console\horcrux-console.exe, a Start menu
+     shortcut, the settings example (console.toml.example next to the program;
+     each user's own settings live in %APPDATA%\horcrux\console.toml) and the
+     horcrux-console:// link handler the web UI's "Open in the desktop app"
+     uses (the link only fills in the connection window, which asks for the
+     password). H.264 is decoded by Windows itself (Media Foundation), so no
+     codec library is installed. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Horcrux Console" Language="1033" Version="$(var.Version)"
+           Manufacturer="Horcrux" UpgradeCode="3c5e9b0a-8f27-4d61-a4b8-2e7d1c9f6a35">
+    <Package Description="Horcrux Console desktop client" Manufacturer="Horcrux" InstallerVersion="500"
+             Compressed="yes" InstallScope="perMachine"/>
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Horcrux Console is already installed."/>
+    <Media Id="1" Cabinet="hxc.cab" EmbedCab="yes"/>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="HorcruxDir" Name="Horcrux">
+          <Directory Id="INSTALLDIR" Name="Console">
+            <Component Id="ConsoleExe" Guid="5a8d2f61-3c47-4e9b-b1a0-7f6e4d2c9b18" Win64="yes">
+              <File Id="ConsoleExeFile" Name="horcrux-console.exe" Source="$(var.ConsoleExe)" KeyPath="yes"/>
+            </Component>
+            <Component Id="ExampleConf" Guid="e2b7c9d4-6a15-4f38-9c02-8d4b1e7a5f63" Win64="yes">
+              <File Id="ExampleConfFile" Name="console.toml.example" Source="$(var.ExampleConf)" KeyPath="yes"/>
+            </Component>
+            <Component Id="UrlHandler" Guid="9f4c1b7e-2d58-4a63-8e90-b5c3a7d16e24" Win64="yes">
+              <RegistryKey Root="HKLM" Key="Software\Classes\horcrux-console">
+                <RegistryValue Type="string" Value="URL:Horcrux Console" KeyPath="yes"/>
+                <RegistryValue Type="string" Name="URL Protocol" Value=""/>
+              </RegistryKey>
+              <RegistryKey Root="HKLM" Key="Software\Classes\horcrux-console\DefaultIcon">
+                <RegistryValue Type="string" Value="&quot;[INSTALLDIR]horcrux-console.exe&quot;,0"/>
+              </RegistryKey>
+              <RegistryKey Root="HKLM" Key="Software\Classes\horcrux-console\shell\open\command">
+                <RegistryValue Type="string" Value="&quot;[INSTALLDIR]horcrux-console.exe&quot; &quot;%1&quot;"/>
+              </RegistryKey>
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Component Id="StartMenu" Guid="c71e3a95-4b2d-4f86-a0d7-1e9b5c8f2a46" Win64="yes">
+          <Shortcut Id="ConsoleShortcut" Name="Horcrux Console" Description="Horcrux VM consoles in a window"
+                    Target="[INSTALLDIR]horcrux-console.exe" WorkingDirectory="INSTALLDIR"/>
+          <RegistryValue Root="HKLM" Key="Software\Horcrux\Console" Name="StartMenuShortcut"
+                         Type="integer" Value="1" KeyPath="yes"/>
+        </Component>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Title="Horcrux Console" Level="1">
+      <ComponentRef Id="ConsoleExe"/>
+      <ComponentRef Id="ExampleConf"/>
+      <ComponentRef Id="UrlHandler"/>
+      <ComponentRef Id="StartMenu"/>
+    </Feature>
+  </Product>
+</Wix>

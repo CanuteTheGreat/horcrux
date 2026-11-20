@@ -100,7 +100,11 @@ pub struct SessionStats {
     pub clipboard_in: u64,
     pub clipboard_out: u64,
     pub audio_packets: u64,
+    /// Gamepad states handed to the guest tools.
     pub gamepad_in: u64,
+    /// Gamepad states received from the client (whether or not a guest
+    /// tools agent was there to take them).
+    pub gamepad_rx: u64,
     /// `direct` or `relay` (the node's TURN relay, WAN).
     pub path: Option<String>,
     /// Congestion-control estimate of the link (kbit/s).
@@ -1533,6 +1537,9 @@ async fn transport(
                             }
                             "pad" => {
                                 if let Some(g) = parse_pad(&d.data) {
+                                    if let Ok(mut s) = ctx.stats.lock() {
+                                        s.gamepad_rx += 1;
+                                    }
                                     if allow_input {
                                         if ctx
                                             .to_guest(gproto::Msg::Input(gproto::Input::Gamepad(g)))

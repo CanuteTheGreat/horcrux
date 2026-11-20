@@ -90,18 +90,7 @@ unsafe fn sym<T: Copy>(h: *mut c_void, name: &str) -> Result<T, String> {
     }
 }
 
-/// A decoded picture in planar 4:2:0 (borrowed from the decoder until the
-/// next call).
-pub struct Picture<'a> {
-    pub width: usize,
-    pub height: usize,
-    pub y: &'a [u8],
-    pub y_stride: usize,
-    pub u: &'a [u8],
-    pub u_stride: usize,
-    pub v: &'a [u8],
-    pub v_stride: usize,
-}
+pub use crate::decoder::Picture;
 
 /// An H.264 decoder (low delay: one thread, no frame reordering wait).
 pub struct Decoder {
@@ -261,33 +250,7 @@ impl Drop for Decoder {
     }
 }
 
-/// Library names tried by default (newest FFmpeg first).
-pub fn default_avcodec() -> Vec<String> {
-    [
-        "libavcodec.so.62",
-        "libavcodec.so.61",
-        "libavcodec.so.60",
-        "libavcodec.so.59",
-        "libavcodec.so.58",
-        "libavcodec.so",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-pub fn default_avutil() -> Vec<String> {
-    [
-        "libavutil.so.60",
-        "libavutil.so.59",
-        "libavutil.so.58",
-        "libavutil.so.57",
-        "libavutil.so.56",
-        "libavutil.so",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
+pub use crate::decoder::{default_avcodec, default_avutil};
 
 #[cfg(test)]
 mod tests {

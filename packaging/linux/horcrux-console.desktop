@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Horcrux Console
+GenericName=VM console
+Comment=Horcrux VM consoles in a native window
+Exec=horcrux-console %u
+Terminal=false
+Categories=Network;RemoteAccess;System;
+MimeType=x-scheme-handler/horcrux-console;
+StartupWMClass=horcrux-console

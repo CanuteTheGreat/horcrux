@@ -1,10 +1,24 @@
 [package]
 name = "horcrux-media"
-description = "Horcrux Console media helpers: in-process H.264 encoding through the system libx264 (loaded at run time), RGB to I420 conversion and FlexFEC (flexfec-03) repair packets (docs/design/horcrux-console.md)"
+description = "Horcrux Console media helpers: in-process H.264 encoding through the system libx264 (loaded at run time), RGB to I420 conversion, FlexFEC (flexfec-03) repair packets, and H.264 decoding through the operating system's own decoder (libavcodec on Linux, Media Foundation on Windows, VideoToolbox on macOS) (docs/design/horcrux-console.md)"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-[dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Microsoft's Windows API bindings (MIT OR Apache-2.0): the Media
+# Foundation H.264 decoder MFT, with DXVA through a D3D11 device.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Variant",
+    "Win32_Media_MediaFoundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }

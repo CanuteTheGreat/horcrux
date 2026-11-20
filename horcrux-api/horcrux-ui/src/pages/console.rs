@@ -276,6 +276,17 @@ pub fn VmConsole() -> impl IntoView {
                             "Serial"
                         </option>
                     </select>
+                    {move || (console_type.get() == ConsoleType::Horcrux
+                        && hxc.get().map(|st| st.available).unwrap_or(false)).then(|| view! {
+                        <a
+                            id="console-desktop-app"
+                            class="btn btn-secondary"
+                            href=desktop_link(&vm_id())
+                            title="Opens this console in the Horcrux Console desktop app (Linux, Windows, macOS); it asks for your password"
+                        >
+                            "Open in the desktop app"
+                        </a>
+                    })}
                     {move || (console_type.get() == ConsoleType::Vnc && !instance_vm()).then(|| view! {
                         <button id="console-cad" class="btn btn-secondary" title="Send Ctrl+Alt+Del" on:click=send_cad>
                             "Ctrl+Alt+Del"
@@ -384,6 +395,20 @@ pub fn VmConsole() -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// `horcrux-console://HOST[:PORT]/VM`: the desktop app's link for this
+/// node (the page's own host) and VM. The app fills in its connection
+/// window from it and asks for the password; nothing secret is in the link.
+fn desktop_link(vm_id: &str) -> String {
+    let host = web_sys::window()
+        .and_then(|w| w.location().host().ok())
+        .unwrap_or_default();
+    desktop_link_for(&host, vm_id)
+}
+
+fn desktop_link_for(host: &str, vm_id: &str) -> String {
+    format!("horcrux-console://{host}/{}", urlencoding::encode(vm_id))
 }
 
 /// SPICE: connection details + `.vv` file for remote-viewer/virt-viewer.
@@ -555,5 +580,18 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
                 <button class="btn btn-sm btn-primary" on:click=move |_| send_line()>"Send"</button>
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::desktop_link_for;
+
+    #[test]
+    fn desktop_app_link() {
+        assert_eq!(
+            desktop_link_for("node.example:8006", "web 1"),
+            "horcrux-console://node.example:8006/web%201"
+        );
     }
 }

@@ -7,19 +7,29 @@
 //! cannot do well: raw relative mouse motion while captured, gamepads read
 //! from the system, and frames shown the moment they are decoded at the
 //! monitor's refresh rate.
+//!
+//! Without a node and VM to connect to (or with a `horcrux-console://`
+//! link) the window starts as the connection window (`ui`): node, user,
+//! password, then the node's VMs that can be shown, and a profile.
+// A window application on Windows (no console window of its own); command
+// line use attaches to the parent's console (see `attach_console`).
+#![cfg_attr(windows, windows_subsystem = "windows")]
 mod config;
 mod gamepad;
 mod net;
 mod session;
+mod ui;
 
 use clap::Parser;
-use config::{Args, Settings};
-use horcrux_media::avcodec::Decoder;
+use config::{Args, Recent, Settings};
+use horcrux_media::decoder::{self, Decoder};
 use horcrux_media::yuv;
 use serde_json::{json, Value};
 use session::{FromSession, ToSession};
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use winit::application::ApplicationHandler;
@@ -27,7 +37,7 @@ use winit::event::{
     DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId};
 
 /// W3C `KeyboardEvent.code` for a winit key (winit uses the same names
@@ -40,12 +50,92 @@ fn w3c_code(k: KeyCode) -> String {
     }
 }
 
-fn password(s: &Settings) -> Result<String, String> {
-    if let Ok(p) = std::env::var(&s.password_env) {
-        return Ok(p);
+fn decoder_config(s: &Settings) -> decoder::Config {
+    decoder::Config {
+        backend: s.decoder.clone(),
+        hardware: s.hardware_decode,
+        avcodec: s.avcodec.clone(),
+        avutil: s.avutil.clone(),
     }
+}
+
+fn env_password(s: &Settings) -> Option<String> {
+    std::env::var(&s.password_env).ok()
+}
+
+fn terminal_password(s: &Settings) -> Result<String, String> {
     rpassword::prompt_password(format!("Password for {}@{}: ", s.user, s.node))
         .map_err(|e| e.to_string())
+}
+
+/// W3C key codes (and Shift) that type `text` on a US layout.
+fn text_keys(text: &str) -> Result<Vec<(String, bool)>, String> {
+    const PLAIN: &str = "`1234567890-=[]\\;',./";
+    const SHIFTED: &str = "~!@#$%^&*()_+{}|:\"<>?";
+    const CODES: [&str; 21] = [
+        "Backquote",
+        "Digit1",
+        "Digit2",
+        "Digit3",
+        "Digit4",
+        "Digit5",
+        "Digit6",
+        "Digit7",
+        "Digit8",
+        "Digit9",
+        "Digit0",
+        "Minus",
+        "Equal",
+        "BracketLeft",
+        "BracketRight",
+        "Backslash",
+        "Semicolon",
+        "Quote",
+        "Comma",
+        "Period",
+        "Slash",
+    ];
+    text.chars()
+        .map(|c| match c {
+            'a'..='z' => Ok((format!("Key{}", c.to_ascii_uppercase()), false)),
+            'A'..='Z' => Ok((format!("Key{c}"), true)),
+            ' ' => Ok(("Space".into(), false)),
+            '\n' => Ok(("Enter".into(), false)),
+            '\t' => Ok(("Tab".into(), false)),
+            _ => {
+                if let Some(i) = PLAIN.chars().position(|p| p == c) {
+                    Ok((CODES[i].into(), false))
+                } else if let Some(i) = SHIFTED.chars().position(|p| p == c) {
+                    Ok((CODES[i].into(), true))
+                } else {
+                    Err(format!("cannot type {c:?}"))
+                }
+            }
+        })
+        .collect()
+}
+
+/// A decoded I420 picture as a binary PPM.
+fn ppm(y: &[u8], u: &[u8], v: &[u8], w: usize, h: usize) -> Vec<u8> {
+    let mut px = vec![0u32; w * h];
+    yuv::i420_to_xrgb(
+        y,
+        w,
+        u,
+        w.div_ceil(2),
+        v,
+        w.div_ceil(2),
+        w,
+        h,
+        &mut px,
+        w,
+        h,
+    );
+    let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+    for p in px {
+        out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8]);
+    }
+    out
 }
 
 fn pct(v: &mut [f64], p: f64) -> Option<f64> {
@@ -56,6 +146,9 @@ fn pct(v: &mut [f64], p: f64) -> Option<f64> {
     Some(v[((v.len() - 1) as f64 * p).round() as usize])
 }
 
+/// A picture as owned I420 planes and its size.
+type I420 = (Vec<u8>, Vec<u8>, Vec<u8>, usize, usize);
+
 #[derive(Default)]
 struct Counters {
     decoded: u64,
@@ -63,6 +156,8 @@ struct Counters {
     size: (usize, usize),
     connected_ms: Option<u64>,
     last_err: Option<String>,
+    /// the last picture, kept for --snapshot
+    last: Option<I420>,
 }
 
 /// No window: connect, decode, measure, report JSON (CI e2e).
@@ -73,14 +168,36 @@ fn headless(
     api: &net::Api,
     st: session::Started,
 ) -> Result<Value, String> {
-    let mut dec = Decoder::open(&s.avcodec, &s.avutil)?;
+    let mut dec = Decoder::open(&decoder_config(s))?;
+    let keep = args.snapshot.is_some();
     let t0 = Instant::now();
     let mut c = Counters::default();
     let step =
         |c: &mut Counters, dec: &mut Decoder, wait: Duration| -> Result<Option<Instant>, String> {
             match st.from.recv_timeout(wait) {
                 Ok(FromSession::Frame(au, at)) => {
-                    match dec.decode(&au, |p| c.size = (p.width, p.height)) {
+                    match dec.decode(&au, |p| {
+                        c.size = (p.width, p.height);
+                        if keep {
+                            let (w, h, cw) = (p.width, p.height, p.width.div_ceil(2));
+                            let ch = h.div_ceil(2);
+                            let copy = |src: &[u8], stride: usize, w: usize, h: usize| {
+                                let mut d = vec![0u8; w * h];
+                                for r in 0..h {
+                                    d[r * w..(r + 1) * w]
+                                        .copy_from_slice(&src[r * stride..r * stride + w]);
+                                }
+                                d
+                            };
+                            c.last = Some((
+                                copy(p.y, p.y_stride, w, h),
+                                copy(p.u, p.u_stride, cw, ch),
+                                copy(p.v, p.v_stride, cw, ch),
+                                w,
+                                h,
+                            ));
+                        }
+                    }) {
                         Ok(true) => {
                             c.decoded += 1;
                             Ok(Some(at))
@@ -113,6 +230,24 @@ fn headless(
         step(&mut c, &mut dec, Duration::from_millis(50))?;
     }
     let warm_frames = c.decoded;
+    if let Some(t) = &args.type_text {
+        // a literal backslash-n is Enter too (handy from scripts)
+        for (code, shift) in text_keys(&t.replace("\\n", "\n"))? {
+            if shift {
+                let _ = st.to.send(ToSession::Key("ShiftLeft".into(), true));
+            }
+            let _ = st.to.send(ToSession::Key(code.clone(), true));
+            let _ = st.to.send(ToSession::Key(code, false));
+            if shift {
+                let _ = st.to.send(ToSession::Key("ShiftLeft".into(), false));
+            }
+            step(&mut c, &mut dec, Duration::from_millis(30))?;
+        }
+        let end = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < end {
+            step(&mut c, &mut dec, Duration::from_millis(20))?;
+        }
+    }
     // key-to-picture: press a key, time to the next decoded frame (the
     // node sends nothing new for an unchanged screen)
     let mut lat = Vec::new();
@@ -161,6 +296,9 @@ fn headless(
                 .cloned()
         })
         .unwrap_or(Value::Null);
+    if let (Some(path), Some((y, u, v, w, h))) = (&args.snapshot, &c.last) {
+        std::fs::write(path, ppm(y, u, v, *w, *h)).map_err(|e| format!("{path}: {e}"))?;
+    }
     let _ = st.to.send(ToSession::Bye);
     // the session ends on its own; give the bye a moment
     rt.block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
@@ -168,7 +306,7 @@ fn headless(
     Ok(json!({
         "session": st.session,
         "path": st.path,
-        "decoder": format!("{} + {}", dec.libraries.0, dec.libraries.1),
+        "decoder": dec.describe(),
         "connected_ms": c.connected_ms,
         "frames_decoded": c.decoded,
         "warmup_frames": warm_frames,
@@ -184,33 +322,108 @@ fn headless(
     }))
 }
 
+/// A failed login, with the fingerprint of an untrusted certificate.
+struct LoginFail {
+    msg: String,
+    fingerprint: Option<String>,
+}
+
+type LoggedIn = Result<(Arc<net::Api>, Vec<ui::VmEntry>, usize), LoginFail>;
+
 enum UserEvent {
     Session(FromSession),
+    LoggedIn(LoggedIn),
+    Started(Box<Result<(session::Started, Settings), String>>),
+}
+
+/// The node's VMs the Horcrux Console can show now (running QEMU VMs whose
+/// console status says available), and how many others there are.
+async fn console_vms(api: &net::Api) -> Result<(Vec<ui::VmEntry>, usize), String> {
+    let all = api.get("/vms").await?;
+    let all = all.as_array().cloned().unwrap_or_default();
+    let candidates: Vec<&Value> = all
+        .iter()
+        .filter(|v| v["hypervisor"] == "qemu" && v["status"] == "running")
+        .take(256)
+        .collect();
+    let checks = futures::future::join_all(candidates.iter().map(|v| async move {
+        let id = v["id"].as_str().unwrap_or_default().to_string();
+        let ok = !id.is_empty()
+            && api
+                .get(&format!("/console/{id}/hxc/status"))
+                .await
+                .map(|st| st["available"] == true)
+                .unwrap_or(false);
+        ok.then(|| ui::VmEntry {
+            name: v["name"].as_str().unwrap_or(&id).to_string(),
+            id,
+        })
+    }))
+    .await;
+    let mut vms: Vec<ui::VmEntry> = checks.into_iter().flatten().collect();
+    vms.sort_by_key(|v| v.name.to_lowercase());
+    let hidden = all.len() - vms.len();
+    Ok((vms, hidden))
+}
+
+#[derive(PartialEq)]
+enum Mode {
+    Connect,
+    Console,
 }
 
 struct App {
     s: Settings,
-    to: UnboundedSender<ToSession>,
+    rt: Arc<tokio::runtime::Runtime>,
+    proxy: EventLoopProxy<UserEvent>,
+    mode: Mode,
+    form: ui::Form,
+    layout: ui::Layout,
+    recent: Recent,
+    recent_path: Option<PathBuf>,
+    api: Option<Arc<net::Api>>,
+    /// The console was opened from the connection window: go back to it
+    /// when the console closes.
+    from_window: bool,
+    /// Open `form.want_vm` right after the login (a link or a configured
+    /// VM).
+    auto_open: bool,
+    /// The certificate pin used for the last login came from `recent`.
+    pinned_from_recent: bool,
     window: Option<Rc<Window>>,
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
-    dec: Decoder,
-    /// last decoded picture (I420) and its size
-    pic: (Vec<u8>, Vec<u8>, Vec<u8>, usize, usize),
+    to: Option<UnboundedSender<ToSession>>,
+    /// Where gamepad threads send (the current session, if any).
+    pads: Arc<Mutex<Option<UnboundedSender<ToSession>>>>,
+    gamepads_started: bool,
+    dec: Option<Decoder>,
+    /// last decoded picture
+    pic: I420,
     shown: yuv::Rect,
     captured: bool,
     relative_ok: bool,
-    last_click: Option<Instant>,
     status: String,
     title_at: Instant,
     frames: u64,
+    cursor: (f64, f64),
+    mods: ModifiersState,
 }
 
 impl App {
+    fn send(&self, m: ToSession) {
+        if let Some(to) = &self.to {
+            let _ = to.send(m);
+        }
+    }
+
     fn set_capture(&mut self, on: bool) {
         let Some(w) = self.window.as_ref() else {
             return;
         };
         if on {
+            // Locked: macOS, X11/Wayland pointer lock; Windows has only
+            // Confined (ClipCursor): raw WM_INPUT motion keeps coming at
+            // the clip edge, so relative motion is unaffected.
             let ok = w
                 .set_cursor_grab(CursorGrabMode::Locked)
                 .or_else(|_| w.set_cursor_grab(CursorGrabMode::Confined))
@@ -226,20 +439,36 @@ impl App {
     }
 
     fn title(&self) {
-        if let Some(w) = &self.window {
-            let cap = if self.captured {
-                format!(" - mouse captured ({} releases)", self.s.release_key)
-            } else {
-                String::new()
-            };
-            w.set_title(&format!(
-                "{} - Horcrux Console{cap} {}",
-                self.s.vm, self.status
-            ));
+        let Some(w) = &self.window else { return };
+        if self.mode == Mode::Connect {
+            w.set_title("Horcrux Console - connect");
+            return;
         }
+        let cap = if self.captured {
+            format!(" - mouse captured ({} releases)", self.s.release_key)
+        } else {
+            String::new()
+        };
+        w.set_title(&format!(
+            "{} - Horcrux Console{cap} {}",
+            self.s.vm, self.status
+        ));
+    }
+
+    fn ui_scale(&self) -> i32 {
+        if self.s.ui_scale > 0 {
+            return self.s.ui_scale as i32;
+        }
+        let f = self
+            .window
+            .as_ref()
+            .map(|w| w.scale_factor())
+            .unwrap_or(1.0);
+        ((2.0 * f).round() as i32).clamp(1, 4)
     }
 
     fn present(&mut self) {
+        let scale = self.ui_scale();
         let (Some(w), Some(surf)) = (self.window.as_ref(), self.surface.as_mut()) else {
             return;
         };
@@ -254,6 +483,21 @@ impl App {
         let Ok(mut buf) = surf.buffer_mut() else {
             return;
         };
+        if self.mode == Mode::Connect {
+            let (cw, ch) = (dw.get() as i32, dh.get() as i32);
+            self.layout = ui::Layout::new(&self.form, cw, ch, scale);
+            ui::draw(
+                &self.form,
+                &self.layout,
+                &mut ui::Canvas {
+                    px: &mut buf,
+                    w: cw,
+                    h: ch,
+                },
+            );
+            let _ = buf.present();
+            return;
+        }
         let (y, u, v, pw, ph) = (
             &self.pic.0,
             &self.pic.1,
@@ -292,6 +536,229 @@ impl App {
             ((y - r.y as f64) * self.pic.4 as f64 / r.h as f64).clamp(0.0, self.pic.4 as f64 - 1.0);
         Some((gx as i32, gy as i32))
     }
+
+    fn send_display(&self) {
+        let hz = if self.s.refresh_hz > 0 {
+            self.s.refresh_hz
+        } else {
+            self.window
+                .as_ref()
+                .and_then(|w| w.current_monitor())
+                .and_then(|m| m.refresh_rate_millihertz())
+                .map(|m| m.div_ceil(1000))
+                .unwrap_or(60)
+        };
+        self.send(ToSession::Ctl(json!({"t": "display", "refresh_hz": hz})));
+    }
+
+    fn start_gamepads(&mut self) {
+        if self.gamepads_started || !self.s.gamepads {
+            return;
+        }
+        self.gamepads_started = true;
+        let pads = self.pads.clone();
+        let n = gamepad::spawn(
+            move |p| {
+                if let Some(to) = pads.lock().ok().and_then(|g| g.clone()) {
+                    let _ = to.send(ToSession::Pad(p.bytes()));
+                }
+            },
+            self.s.gamepad_poll_hz,
+        );
+        tracing::info!("{n} gamepad(s)");
+    }
+
+    /// A session is up: switch the window to the console.
+    fn begin_console(&mut self, st: session::Started, s: Settings) {
+        let dec = match Decoder::open(&decoder_config(&s)) {
+            Ok(d) => d,
+            Err(e) => {
+                let _ = st.to.send(ToSession::Bye);
+                self.fail(format!("H.264 decoder: {e}"));
+                return;
+            }
+        };
+        tracing::info!("decoder: {}", dec.describe());
+        self.s = s;
+        forward(st.from, self.proxy.clone());
+        if let Ok(mut g) = self.pads.lock() {
+            *g = Some(st.to.clone());
+        }
+        self.to = Some(st.to);
+        self.dec = Some(dec);
+        self.pic = (vec![], vec![], vec![], 0, 0);
+        self.mode = Mode::Console;
+        self.status = "connecting".into();
+        self.send_display();
+        self.start_gamepads();
+        self.title();
+        self.present();
+    }
+
+    fn end_console(&mut self, why: String) {
+        if self.captured {
+            self.set_capture(false);
+        }
+        if let Ok(mut g) = self.pads.lock() {
+            *g = None;
+        }
+        self.to = None;
+        self.dec = None;
+        self.mode = Mode::Connect;
+        self.form.busy = false;
+        self.form.error = true;
+        self.form.status = format!("Console closed: {why}");
+        self.title();
+        self.present();
+    }
+
+    fn fail(&mut self, msg: String) {
+        self.form.busy = false;
+        self.form.error = true;
+        self.form.status = msg;
+        self.present();
+    }
+
+    fn save_recent(&mut self) {
+        if !self.s.remember_connection {
+            return;
+        }
+        if let Some(p) = &self.recent_path {
+            if let Err(e) = self.recent.save(p) {
+                tracing::warn!("{e}");
+            }
+        }
+    }
+
+    /// The settings for a connection from the window's fields.
+    fn window_settings(&mut self) -> Result<Settings, String> {
+        let mut s = self.s.clone();
+        s.node = self.form.node.trim().trim_end_matches('/').to_string();
+        s.user = self.form.user.trim().to_string();
+        s.vm = self
+            .form
+            .selected_vm()
+            .map(|v| v.id.clone())
+            .unwrap_or_else(|| "x".into());
+        s.profile = self.form.profile_name().into();
+        s.validate_target()?;
+        self.pinned_from_recent = false;
+        if s.ca_file.is_empty() && s.cert_sha256.is_empty() {
+            if let Some(fp) = self.recent.trusted.get(&s.node) {
+                s.cert_sha256 = fp.clone();
+                self.pinned_from_recent = true;
+            }
+        }
+        Ok(s)
+    }
+
+    fn connect(&mut self) {
+        let s = match self.window_settings() {
+            Ok(s) => s,
+            Err(e) => return self.fail(e),
+        };
+        if s.user.is_empty() {
+            return self.fail("Enter a user name".into());
+        }
+        let t = match net::tls(&s) {
+            Ok(t) => t,
+            Err(e) => return self.fail(e),
+        };
+        self.form.busy = true;
+        self.form.error = false;
+        self.form.detail.clear();
+        self.form.status = format!("Logging in to {} ...", s.node);
+        self.present();
+        let pw = self.form.password.clone();
+        let proxy = self.proxy.clone();
+        let pinned_by_user =
+            !s.ca_file.is_empty() || (!s.cert_sha256.is_empty() && !self.pinned_from_recent);
+        let from_recent = self.pinned_from_recent;
+        self.rt.spawn(async move {
+            let r: LoggedIn = async {
+                let api = net::Api::login(&s, &t, &pw).await.map_err(|msg| {
+                    // offer to trust the certificate only when nothing was
+                    // pinned; a pinned one that changed is just refused
+                    let fp = t.seen().filter(|_| !pinned_by_user && !from_recent);
+                    LoginFail {
+                        msg: if fp.is_some() {
+                            "The node's certificate is not trusted yet. Compare its SHA-256 with the node (System > Certificates) before trusting it:".into()
+                        } else if from_recent && t.seen().is_some() {
+                            format!("The node's certificate changed since you trusted it ({msg})")
+                        } else {
+                            msg
+                        },
+                        fingerprint: fp,
+                    }
+                })?;
+                let (vms, hidden) = console_vms(&api).await.map_err(|msg| LoginFail {
+                    msg: format!("VM list: {msg}"),
+                    fingerprint: None,
+                })?;
+                Ok((Arc::new(api), vms, hidden))
+            }
+            .await;
+            let _ = proxy.send_event(UserEvent::LoggedIn(r));
+        });
+    }
+
+    fn open(&mut self) {
+        let (Some(api), Some(vm)) = (self.api.clone(), self.form.selected_vm().cloned()) else {
+            return;
+        };
+        let s = match self.window_settings() {
+            Ok(s) => s,
+            Err(e) => return self.fail(e),
+        };
+        self.form.busy = true;
+        self.form.error = false;
+        self.form.status = format!("Opening {} ...", vm.name);
+        self.present();
+        let proxy = self.proxy.clone();
+        self.rt.spawn(async move {
+            let r = session::start(&s, &api).await.map(|st| (st, s));
+            let _ = proxy.send_event(UserEvent::Started(Box::new(r)));
+        });
+    }
+
+    fn act(&mut self, el: &ActiveEventLoop, a: ui::Action) {
+        match a {
+            ui::Action::None => {}
+            ui::Action::Quit => el.exit(),
+            ui::Action::Connect => self.connect(),
+            ui::Action::Open => self.open(),
+            ui::Action::Trust => {
+                if let Some(fp) = self.form.untrusted.take() {
+                    let node = self.form.node.trim().trim_end_matches('/').to_string();
+                    self.recent.trusted.insert(node, fp);
+                    self.save_recent();
+                    self.form.detail.clear();
+                    self.connect();
+                }
+            }
+        }
+        self.present();
+    }
+
+    fn ui_key(&self, ev: &winit::event::KeyEvent) -> Vec<ui::Key> {
+        let shift = self.mods.shift_key();
+        match &ev.logical_key {
+            Key::Named(NamedKey::Tab) if shift => vec![ui::Key::BackTab],
+            Key::Named(NamedKey::Tab) => vec![ui::Key::Tab],
+            Key::Named(NamedKey::Enter) => vec![ui::Key::Enter],
+            Key::Named(NamedKey::Backspace) => vec![ui::Key::Backspace],
+            Key::Named(NamedKey::Escape) => vec![ui::Key::Escape],
+            Key::Named(NamedKey::ArrowUp) => vec![ui::Key::Up],
+            Key::Named(NamedKey::ArrowDown) => vec![ui::Key::Down],
+            Key::Named(NamedKey::ArrowLeft) => vec![ui::Key::Left],
+            Key::Named(NamedKey::ArrowRight) => vec![ui::Key::Right],
+            _ => ev
+                .text
+                .as_ref()
+                .map(|t| t.chars().map(ui::Key::Char).collect())
+                .unwrap_or_default(),
+        }
+    }
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -299,10 +766,15 @@ impl ApplicationHandler<UserEvent> for App {
         if self.window.is_some() {
             return;
         }
+        let title = if self.mode == Mode::Connect {
+            "Horcrux Console - connect".to_string()
+        } else {
+            format!("{} - Horcrux Console", self.s.vm)
+        };
         let mut attrs = Window::default_attributes()
-            .with_title(format!("{} - Horcrux Console", self.s.vm))
+            .with_title(title)
             .with_inner_size(winit::dpi::LogicalSize::new(self.s.width, self.s.height));
-        if self.s.fullscreen {
+        if self.s.fullscreen && self.mode == Mode::Console {
             attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(None)));
         }
         let w = match el.create_window(attrs) {
@@ -313,30 +785,111 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
-        let hz = if self.s.refresh_hz > 0 {
-            self.s.refresh_hz
-        } else {
-            w.current_monitor()
-                .and_then(|m| m.refresh_rate_millihertz())
-                .map(|m| m.div_ceil(1000))
-                .unwrap_or(60)
+        // a window bigger than the screen hides its own controls: shrink it
+        // to 90 % of the monitor (the settings' size stays the upper bound)
+        if w.fullscreen().is_none() {
+            if let Some(mon) = w.current_monitor() {
+                let (ms, is) = (mon.size(), w.inner_size());
+                let (mw, mh) = (ms.width * 9 / 10, ms.height * 9 / 10);
+                if mw > 0 && mh > 0 && (is.width > mw || is.height > mh) {
+                    let _ = w.request_inner_size(winit::dpi::PhysicalSize::new(
+                        is.width.min(mw),
+                        is.height.min(mh),
+                    ));
+                }
+            }
+        }
+        let ctx = match softbuffer::Context::new(w.clone()) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("display connection: {e}");
+                el.exit();
+                return;
+            }
         };
-        let _ = self
-            .to
-            .send(ToSession::Ctl(json!({"t": "display", "refresh_hz": hz})));
-        let ctx = softbuffer::Context::new(w.clone()).expect("display connection");
-        self.surface = Some(softbuffer::Surface::new(&ctx, w.clone()).expect("window surface"));
+        match softbuffer::Surface::new(&ctx, w.clone()) {
+            Ok(s) => self.surface = Some(s),
+            Err(e) => {
+                eprintln!("window surface: {e}");
+                el.exit();
+                return;
+            }
+        }
         self.window = Some(w);
-        self.status = "connecting".into();
+        if self.mode == Mode::Console {
+            self.send_display();
+            self.status = "connecting".into();
+        }
         self.title();
+        self.present();
     }
 
     fn user_event(&mut self, el: &ActiveEventLoop, ev: UserEvent) {
-        let UserEvent::Session(m) = ev;
+        let m = match ev {
+            UserEvent::LoggedIn(r) => {
+                self.form.busy = false;
+                match r {
+                    Ok((api, vms, hidden)) => {
+                        let n = vms.len();
+                        self.api = Some(api);
+                        self.form.set_vms(vms, hidden);
+                        self.form.error = false;
+                        self.form.detail.clear();
+                        self.form.status = format!(
+                            "Logged in as {} - {n} VM{} can be shown",
+                            self.form.user.trim(),
+                            if n == 1 { "" } else { "s" }
+                        );
+                        self.recent.node = self.form.node.trim().trim_end_matches('/').into();
+                        self.recent.user = self.form.user.trim().into();
+                        self.save_recent();
+                        let wanted = self.form.want_vm.clone();
+                        if self.auto_open
+                            && wanted.is_some()
+                            && self
+                                .form
+                                .selected_vm()
+                                .map(|v| Some(&v.id) == wanted.as_ref())
+                                == Some(true)
+                        {
+                            self.auto_open = false;
+                            self.open();
+                        }
+                    }
+                    Err(f) => {
+                        self.form.error = true;
+                        self.form.status = f.msg;
+                        self.form.detail = f.fingerprint.clone().unwrap_or_default();
+                        self.form.untrusted = f.fingerprint;
+                        if self.form.untrusted.is_some() {
+                            self.form.focus = Some(ui::Field::Trust);
+                        }
+                    }
+                }
+                self.present();
+                return;
+            }
+            UserEvent::Started(r) => {
+                self.form.busy = false;
+                match *r {
+                    Ok((st, s)) => {
+                        self.recent.vm = s.vm.clone();
+                        self.recent.profile = s.profile.clone();
+                        self.save_recent();
+                        self.from_window = true;
+                        self.begin_console(st, s);
+                    }
+                    Err(e) => self.fail(e),
+                }
+                return;
+            }
+            UserEvent::Session(m) => m,
+        };
         match m {
             FromSession::Frame(au, _) => {
+                let Some(dec) = self.dec.as_mut() else { return };
                 let mut got = None;
-                match self.dec.decode(&au, |p| {
+                match dec.decode(&au, |p| {
                     let (w, h) = (p.width, p.height);
                     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
                     let mut y = vec![0u8; w * h];
@@ -361,9 +914,7 @@ impl ApplicationHandler<UserEvent> for App {
                             self.present();
                         }
                     }
-                    Err(_) => {
-                        let _ = self.to.send(ToSession::Keyframe);
-                    }
+                    Err(_) => self.send(ToSession::Keyframe),
                 }
                 if self.title_at.elapsed() > Duration::from_secs(1) {
                     self.title_at = Instant::now();
@@ -385,7 +936,11 @@ impl ApplicationHandler<UserEvent> for App {
             FromSession::Cursor => {}
             FromSession::Closed(r) => {
                 eprintln!("console closed: {r}");
-                el.exit();
+                if self.from_window {
+                    self.end_console(r);
+                } else {
+                    el.exit();
+                }
             }
         }
     }
@@ -393,10 +948,56 @@ impl ApplicationHandler<UserEvent> for App {
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, ev: WindowEvent) {
         match ev {
             WindowEvent::CloseRequested => {
-                let _ = self.to.send(ToSession::Bye);
+                self.send(ToSession::Bye);
                 el.exit();
+                return;
             }
-            WindowEvent::RedrawRequested | WindowEvent::Resized(_) => self.present(),
+            WindowEvent::RedrawRequested | WindowEvent::Resized(_) => {
+                self.present();
+                return;
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                self.present();
+                return;
+            }
+            WindowEvent::ModifiersChanged(m) => {
+                self.mods = m.state();
+                return;
+            }
+            _ => {}
+        }
+        if self.mode == Mode::Connect {
+            match ev {
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed =>
+                {
+                    for k in self.ui_key(&event) {
+                        let a = self.form.key(k);
+                        self.act(el, a);
+                    }
+                    self.present();
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    self.cursor = (position.x, position.y);
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    let a = self.form.click(
+                        self.cursor.0 as i32,
+                        self.cursor.1 as i32,
+                        &self.layout.clone(),
+                    );
+                    self.act(el, a);
+                    self.present();
+                }
+                _ => {}
+            }
+            return;
+        }
+        match ev {
             WindowEvent::Focused(false) => {
                 if self.captured {
                     self.set_capture(false);
@@ -415,15 +1016,13 @@ impl ApplicationHandler<UserEvent> for App {
                     if event.repeat {
                         return;
                     }
-                    let _ = self
-                        .to
-                        .send(ToSession::Key(code, event.state == ElementState::Pressed));
+                    self.send(ToSession::Key(code, event.state == ElementState::Pressed));
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if !self.captured {
                     if let Some((x, y)) = self.guest_xy(position.x, position.y) {
-                        let _ = self.to.send(ToSession::Motion(1, x, y));
+                        self.send(ToSession::Motion(1, x, y));
                     }
                 }
             }
@@ -442,29 +1041,28 @@ impl ApplicationHandler<UserEvent> for App {
                     _ => false,
                 };
                 if state == ElementState::Pressed && !self.captured && want_capture {
-                    self.last_click = Some(Instant::now());
                     self.set_capture(true);
                 }
-                let _ = self
-                    .to
-                    .send(ToSession::Button(b, state == ElementState::Pressed));
+                self.send(ToSession::Button(b, state == ElementState::Pressed));
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let (dx, dy) = match delta {
                     MouseScrollDelta::LineDelta(x, y) => (x.signum() as i32, -y.signum() as i32),
                     MouseScrollDelta::PixelDelta(p) => (p.x.signum() as i32, -p.y.signum() as i32),
                 };
-                let _ = self.to.send(ToSession::Wheel(dx, dy));
+                self.send(ToSession::Wheel(dx, dy));
             }
             _ => {}
         }
     }
 
     fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, ev: DeviceEvent) {
-        // raw, unaccelerated motion while the mouse is captured
+        // raw, unaccelerated motion while the mouse is captured (WM_INPUT
+        // on Windows, XInput2 raw events / relative-pointer on Linux,
+        // CGEvent deltas on macOS)
         if let DeviceEvent::MouseMotion { delta } = ev {
             if self.captured {
-                let _ = self.to.send(ToSession::Motion(
+                self.send(ToSession::Motion(
                     2,
                     delta.0.round() as i32,
                     delta.1.round() as i32,
@@ -485,7 +1083,30 @@ fn forward(rx: std::sync::mpsc::Receiver<FromSession>, proxy: EventLoopProxy<Use
     });
 }
 
+/// Windows: the program is a window application, so a command-line start
+/// (headless runs, --print-defaults, --help, errors) attaches to the
+/// console it was started from; redirected output keeps its handles.
+#[cfg(windows)]
+fn attach_console() {
+    use windows::Win32::System::Console::{
+        AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE,
+    };
+    // SAFETY: plain console API calls.
+    unsafe {
+        let redirected = GetStdHandle(STD_OUTPUT_HANDLE)
+            .map(|h| !h.is_invalid() && !h.0.is_null())
+            .unwrap_or(false);
+        if !redirected {
+            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_console() {}
+
 fn main() {
+    attach_console();
     let args = Args::parse();
     if args.print_defaults {
         print!(
@@ -512,51 +1133,121 @@ fn main() {
 
 fn real_main(args: Args) -> Result<(), String> {
     let s = Settings::load(&args)?;
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let pw = password(&s)?;
-    let t = net::tls(&s)?;
-    let (api, st) = rt.block_on(async {
-        let api = net::Api::login(&s, &t, &pw).await?;
-        let st = session::start(&s, &api).await?;
-        Ok::<_, String>((api, st))
-    })?;
-    drop(pw);
+    let link = args.url.as_deref().map(config::parse_link).transpose()?;
+    let rt = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?,
+    );
     if args.headless {
+        s.validate()?;
+        let pw = match env_password(&s) {
+            Some(p) => p,
+            None => terminal_password(&s)?,
+        };
+        let t = net::tls(&s)?;
+        let (api, st) = rt.block_on(async {
+            let api = net::Api::login(&s, &t, &pw).await?;
+            let st = session::start(&s, &api).await?;
+            Ok::<_, String>((api, st))
+        })?;
         let report = headless(&s, &args, &rt, &api, st)?;
         println!("{report}");
         return Ok(());
     }
-    let dec = Decoder::open(&s.avcodec, &s.avutil)?;
+    let recent_path = Recent::path(Settings::file(&args).as_deref());
+    let recent = match (&recent_path, s.remember_connection) {
+        (Some(p), true) => Recent::load(p),
+        _ => Recent::default(),
+    };
     let el = EventLoop::<UserEvent>::with_user_event()
         .build()
         .map_err(|e| e.to_string())?;
-    forward(st.from, el.create_proxy());
-    if s.gamepads {
-        let to = st.to.clone();
-        let n = gamepad::spawn(move |p| {
-            let _ = to.send(ToSession::Pad(p.bytes()));
-        });
-        tracing::info!("{n} gamepad(s)");
-    }
+    // Connect at once only with a node, a VM and the password in the
+    // environment, never for a link (any web page can open one; the
+    // window always asks for the password there).
+    let direct = link.is_none() && !args.connect_window && s.has_target();
+    let direct_pw = if direct { env_password(&s) } else { None };
     let mut app = App {
-        s,
-        to: st.to,
+        s: s.clone(),
+        rt: rt.clone(),
+        proxy: el.create_proxy(),
+        mode: Mode::Connect,
+        form: ui::Form::default(),
+        layout: ui::Layout::default(),
+        recent,
+        recent_path,
+        api: None,
+        from_window: false,
+        auto_open: false,
+        pinned_from_recent: false,
         window: None,
         surface: None,
-        dec,
+        to: None,
+        pads: Arc::new(Mutex::new(None)),
+        gamepads_started: false,
+        dec: None,
         pic: (vec![], vec![], vec![], 0, 0),
         shown: yuv::Rect::default(),
         captured: false,
         relative_ok: false,
-        last_click: None,
         status: String::new(),
         title_at: Instant::now(),
         frames: 0,
+        cursor: (0.0, 0.0),
+        mods: ModifiersState::empty(),
     };
+    if let Some(pw) = direct_pw {
+        s.validate()?;
+        let t = net::tls(&s)?;
+        let (_api, st) = rt.block_on(async {
+            let api = net::Api::login(&s, &t, &pw).await?;
+            let st = session::start(&s, &api).await?;
+            Ok::<_, String>((api, st))
+        })?;
+        drop(pw);
+        let dec = Decoder::open(&decoder_config(&s))?;
+        tracing::info!("decoder: {}", dec.describe());
+        forward(st.from, el.create_proxy());
+        if let Ok(mut g) = app.pads.lock() {
+            *g = Some(st.to.clone());
+        }
+        app.to = Some(st.to);
+        app.dec = Some(dec);
+        app.mode = Mode::Console;
+        app.start_gamepads();
+    } else {
+        let r = &app.recent;
+        let (node, user, profile, vm) = match &link {
+            Some(l) => (
+                l.node.clone(),
+                l.user.clone().unwrap_or_else(|| s.user.clone()),
+                l.profile.clone().unwrap_or_default(),
+                Some(l.vm.clone()),
+            ),
+            None if !s.node.is_empty() => (
+                s.node.clone(),
+                s.user.clone(),
+                s.profile.clone(),
+                (!s.vm.is_empty()).then(|| s.vm.clone()),
+            ),
+            None => (
+                r.node.clone(),
+                if r.user.is_empty() {
+                    s.user.clone()
+                } else {
+                    r.user.clone()
+                },
+                r.profile.clone(),
+                (!r.vm.is_empty()).then(|| r.vm.clone()),
+            ),
+        };
+        app.auto_open = link.is_some() || s.has_target();
+        app.form = ui::Form::new(&node, &user, &profile);
+        app.form.want_vm = vm;
+    }
     el.run_app(&mut app).map_err(|e| e.to_string())
 }
 
@@ -585,5 +1276,44 @@ mod tests {
             ),
             Some(9.0)
         );
+    }
+
+    #[test]
+    fn typing_text() {
+        let k = text_keys("Ab1 _\n").unwrap();
+        let want: Vec<(String, bool)> = [
+            ("KeyA", true),
+            ("KeyB", false),
+            ("Digit1", false),
+            ("Space", false),
+            ("Minus", true),
+            ("Enter", false),
+        ]
+        .iter()
+        .map(|(c, s)| (c.to_string(), *s))
+        .collect();
+        assert_eq!(k, want);
+        assert_eq!(text_keys(">").unwrap(), vec![("Period".to_string(), true)]);
+        assert_eq!(text_keys("\"").unwrap(), vec![("Quote".to_string(), true)]);
+        assert_eq!(
+            text_keys("\\").unwrap(),
+            vec![("Backslash".to_string(), false)]
+        );
+        assert!(text_keys("\u{e9}").is_err());
+        let p = ppm(&[235; 4], &[128], &[128], 2, 2);
+        assert!(p.starts_with(b"P6\n2 2\n255\n"));
+        assert_eq!(p.len(), 11 + 12);
+    }
+
+    #[test]
+    fn decoder_settings_pass_through() {
+        let s = Settings {
+            decoder: "avcodec".into(),
+            hardware_decode: false,
+            ..Default::default()
+        };
+        let c = decoder_config(&s);
+        assert_eq!((c.backend.as_str(), c.hardware), ("avcodec", false));
+        assert_eq!(c.avcodec, s.avcodec);
     }
 }
