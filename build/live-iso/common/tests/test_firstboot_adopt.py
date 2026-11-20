@@ -11,6 +11,7 @@ def adopt(state):
     return subprocess.run(["sh", str(SCRIPT), "--adopt"], env=env, capture_output=True, text=True, timeout=20)
 
 
+@unittest.skipUnless(SCRIPT.exists(), "Horcrux repo tree only (vendored into Patronus, which has no horcrux-firstboot package)")
 class FirstbootAdopt(unittest.TestCase):
     def test_initialised_host_marked_done(self):
         with tempfile.TemporaryDirectory() as d:
