@@ -13,6 +13,7 @@
 //! lines), which overrides the defaults in [`config::Config`].
 mod agent;
 mod config;
+mod hxdrv;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(windows)]
@@ -33,6 +34,15 @@ fn main() {
             serde_json::to_string_pretty(&p.hello()).unwrap_or_default()
         );
         return;
+    }
+    #[cfg(windows)]
+    if let Some(code) = windows::one_shot(&cfg) {
+        std::process::exit(code);
+    }
+    #[cfg(not(windows))]
+    if cfg.drivers.is_some() || cfg.gamepad_test {
+        eprintln!("horcrux-guest-agent: the guest drivers are Windows-only");
+        std::process::exit(2);
     }
     #[cfg(windows)]
     if cfg.service {

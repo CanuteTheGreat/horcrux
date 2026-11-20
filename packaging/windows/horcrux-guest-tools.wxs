@@ -2,10 +2,16 @@
 <!-- Horcrux Guest Tools for Windows (GPL-3.0-or-later).
      Built with wixl (msitools) by ci/build-guest-tools-msi.sh, which passes
      Version=<workspace version> AgentExe=<path to horcrux-guest-agent.exe>
-     DefaultConf=<path to the default guest-tools.conf>.
+     DefaultConf=<path to the default guest-tools.conf>
+     Drivers=<directory with hxidd\ and hxpad\ from ci/build-guest-drivers.sh>.
      Installs the agent into %ProgramFiles%\Horcrux\Guest Tools, registers it as the
      auto-start service HorcruxGuestTools (its command line is the service flag, which launches the agent in
-     the active console session) and drops %ProgramData%\Horcrux\guest-tools.conf. -->
+     the active console session) and drops %ProgramData%\Horcrux\guest-tools.conf.
+     The Horcrux guest drivers (virtual display, virtual gamepad) are copied to
+     ...\Guest Tools\drivers and installed by the agent's "drivers install" command (as SYSTEM:
+     a per-guest signing certificate whose private key is deleted right after, see
+     crates/horcrux-guest-tools/src/windows/drivers.rs). Property HXDRIVERS=0 skips them
+     (msiexec /i ... HXDRIVERS=0); a driver failure never fails the tools install. -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="Horcrux Guest Tools" Language="1033" Version="$(var.Version)"
            Manufacturer="Horcrux" UpgradeCode="6f1d3a52-4b8e-4c0d-9a77-5e2c8b1f40d3">
@@ -13,6 +19,7 @@
              Compressed="yes" InstallScope="perMachine"/>
     <MajorUpgrade DowngradeErrorMessage="A newer version of Horcrux Guest Tools is already installed."/>
     <Media Id="1" Cabinet="hx.cab" EmbedCab="yes"/>
+    <Property Id="HXDRIVERS" Value="1"/>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
@@ -26,6 +33,20 @@
                               Arguments="--service"/>
               <ServiceControl Id="HxSvcControl" Name="HorcruxGuestTools" Start="install" Stop="both" Remove="uninstall" Wait="no"/>
             </Component>
+            <Directory Id="HxDriversDir" Name="drivers">
+              <Directory Id="HxIddDir" Name="hxidd">
+                <Component Id="HxIdd" Guid="3d8e1c47-5b2a-4f60-9e13-7c4a2b9d0f51" Win64="yes">
+                  <File Id="HxIddDll" Name="hxidd.dll" Source="$(var.Drivers)/hxidd/hxidd.dll" KeyPath="yes"/>
+                  <File Id="HxIddInf" Name="hxidd.inf" Source="$(var.Drivers)/hxidd/hxidd.inf"/>
+                </Component>
+              </Directory>
+              <Directory Id="HxPadDir" Name="hxpad">
+                <Component Id="HxPad" Guid="8a5f2e90-1c3b-4d7e-b6a4-0e9d3f7c2b18" Win64="yes">
+                  <File Id="HxPadDll" Name="hxpad.dll" Source="$(var.Drivers)/hxpad/hxpad.dll" KeyPath="yes"/>
+                  <File Id="HxPadInf" Name="hxpad.inf" Source="$(var.Drivers)/hxpad/hxpad.inf"/>
+                </Component>
+              </Directory>
+            </Directory>
           </Directory>
         </Directory>
       </Directory>
@@ -41,6 +62,20 @@
     <Feature Id="Main" Title="Horcrux Guest Tools" Level="1">
       <ComponentRef Id="AgentExe"/>
       <ComponentRef Id="DefaultConf"/>
+      <ComponentRef Id="HxIdd"/>
+      <ComponentRef Id="HxPad"/>
     </Feature>
+
+    <!-- deferred + no impersonation = runs as SYSTEM inside the install transaction -->
+    <CustomAction Id="HxDriversInstall" FileKey="AgentExeFile" ExeCommand="--drivers install"
+                  Execute="deferred" Impersonate="no" Return="ignore"/>
+    <CustomAction Id="HxDriversRemove" FileKey="AgentExeFile" ExeCommand="--drivers remove"
+                  Execute="deferred" Impersonate="no" Return="ignore"/>
+    <!-- explicit numbers (wixl does not resolve Before=): RemoveFiles is 3500,
+         InstallFiles 4000, StartServices 5900 (the agent starts with the drivers in place) -->
+    <InstallExecuteSequence>
+      <Custom Action="HxDriversRemove" Sequence="3490">REMOVE~="ALL"</Custom>
+      <Custom Action="HxDriversInstall" Sequence="4010">NOT REMOVE~="ALL" AND HXDRIVERS="1"</Custom>
+    </InstallExecuteSequence>
   </Product>
 </Wix>
