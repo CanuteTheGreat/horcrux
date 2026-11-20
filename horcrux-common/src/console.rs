@@ -246,6 +246,26 @@ pub struct ConsoleSettings {
     pub clipboard_max_bytes: u32,
     /// Opus bitrate for guest audio (kbit/s).
     pub audio_bitrate_kbps: u32,
+    /// Give console VMs the Horcrux frame ring (an ivshmem device) so the
+    /// guest tools can hand raw frames to the native viewer on the same
+    /// host, with no encode.
+    pub shm_frames: bool,
+    /// Directory of the frame rings' backing files: tmpfs (`/dev/shm`) or
+    /// a hugetlbfs mount (e.g. `/dev/hugepages`).
+    pub shm_frames_dir: String,
+    /// Size of one VM's frame ring in MiB (a power of two; 128 holds three
+    /// 3840x2160 frames, 64 three 2560x1440 frames). Memory is used only
+    /// as frames are written.
+    pub shm_frames_size_mib: u32,
+    /// Frame slots in the ring (2..=8; 3 lets the writer always find a
+    /// free slot while the viewer copies).
+    pub shm_frames_slots: u32,
+    /// Unix socket where native viewers on this node redeem a local console
+    /// ticket and receive the frame ring and an input channel.
+    pub local_socket: String,
+    /// Opus frame length for the node's (no guest tools) audio encode, in
+    /// ms (5, 10, 20, 40 or 60; shorter = lower latency, more overhead).
+    pub audio_frame_ms: u32,
     pub desktop: ProfileSettings,
     pub gaming: ProfileSettings,
     pub console: ProfileSettings,
@@ -282,6 +302,12 @@ impl Default for ConsoleSettings {
             guest_tools_auto_install_retry_secs: 600,
             clipboard_max_bytes: 1 << 20,
             audio_bitrate_kbps: 128,
+            shm_frames: true,
+            shm_frames_dir: "/dev/shm".into(),
+            shm_frames_size_mib: 128,
+            shm_frames_slots: 3,
+            local_socket: "/run/horcrux/console.sock".into(),
+            audio_frame_ms: 10,
             desktop: desktop(),
             gaming: gaming(),
             console: console(),
@@ -372,6 +398,23 @@ impl ConsoleSettings {
         if !(6..=510).contains(&self.audio_bitrate_kbps) {
             return Err("audio_bitrate_kbps must be 6..=510".into());
         }
+        if !(4..=1024).contains(&self.shm_frames_size_mib)
+            || !self.shm_frames_size_mib.is_power_of_two()
+        {
+            return Err("shm_frames_size_mib must be a power of two in 4..=1024".into());
+        }
+        if !(2..=8).contains(&self.shm_frames_slots) {
+            return Err("shm_frames_slots must be 2..=8".into());
+        }
+        if self.shm_frames && !self.shm_frames_dir.starts_with('/') {
+            return Err("shm_frames_dir must be an absolute path".into());
+        }
+        if !self.local_socket.starts_with('/') {
+            return Err("local_socket must be an absolute path".into());
+        }
+        if ![5, 10, 20, 40, 60].contains(&self.audio_frame_ms) {
+            return Err("audio_frame_ms must be 5, 10, 20, 40 or 60".into());
+        }
         self.desktop.validate("desktop")?;
         self.gaming.validate("gaming")?;
         self.console.validate("console")?;
@@ -398,6 +441,23 @@ mod tests {
         assert_eq!(partial.desktop.max_fps, 20);
         assert_eq!(partial.desktop.bitrate_kbps, 4000);
         assert_eq!(partial.codecs, vec!["h264", "vp8"]);
+        assert!(partial.shm_frames && partial.shm_frames_size_mib == 128);
+    }
+
+    #[test]
+    fn frame_ring_and_local_socket_settings_are_checked() {
+        let bad = |f: &dyn Fn(&mut ConsoleSettings)| {
+            let mut s = ConsoleSettings::default();
+            f(&mut s);
+            s.validate().is_err()
+        };
+        assert!(bad(&|s| s.shm_frames_size_mib = 100));
+        assert!(bad(&|s| s.shm_frames_size_mib = 2));
+        assert!(bad(&|s| s.shm_frames_slots = 1));
+        assert!(bad(&|s| s.shm_frames_dir = "shm".into()));
+        assert!(bad(&|s| s.local_socket = "console.sock".into()));
+        assert!(bad(&|s| s.audio_frame_ms = 7));
+        assert!(!bad(&|s| s.shm_frames_size_mib = 64));
     }
 
     #[test]

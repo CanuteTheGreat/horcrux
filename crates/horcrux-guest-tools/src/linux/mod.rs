@@ -4,6 +4,7 @@
 //! active graphical session (wl-clipboard / xclip, xrandr), PulseAudio /
 //! PipeWire audio to Opus.
 mod session;
+pub mod shm;
 mod uinput;
 mod video;
 
@@ -98,6 +99,7 @@ impl Platform for Linux {
                 virtual_display: false,
                 chroma444: true,
                 hdr: false,
+                shm_frames: shm::available(&self.cfg),
             },
         }
     }

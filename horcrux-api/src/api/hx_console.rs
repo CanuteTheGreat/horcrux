@@ -8,6 +8,10 @@
 //!   ticket for the caller, bound to their API WebSocket connection; the
 //!   input/clipboard/microphone rights are taken from their privileges
 //!   (`VM.Console.Input`, `.Clipboard`, `.Audio.Mic`) when it is issued.
+//! * `POST /api/console/:vm/hxc/local-ticket` `{uid, profile?}`: a ticket
+//!   for the native viewer on this node, redeemable once on the local
+//!   socket (`[console] local_socket`) by a peer with that Unix uid; it
+//!   hands over the VM's frame ring (raw frames, no encode) and takes input.
 //! * `GET /api/console/:vm/hxc/sessions`, `DELETE .../sessions/:id`.
 //! * `GET /api/vms/:id/console/guest-tools` (VM.Audit): can the node
 //!   install the Horcrux guest tools into this VM (guest agent channel,
@@ -37,6 +41,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/api/console/:vm_id/hxc/ticket",
             axum::routing::post(qemu::ticket),
+        )
+        .route(
+            "/api/console/:vm_id/hxc/local-ticket",
+            axum::routing::post(qemu::local_ticket),
         )
         .route("/api/console/:vm_id/hxc/sessions", get(qemu::sessions))
         .route(
@@ -80,6 +88,95 @@ async fn put_settings(
         })
         .await;
     Ok(Json(saved))
+}
+
+/// Serve the same-host viewer socket (`[console] local_socket`).
+#[cfg(feature = "qemu")]
+pub async fn start_local_socket(state: &Arc<AppState>) {
+    use crate::console::hxc::local::{self, LocalEvent};
+    let path = std::path::PathBuf::from(hxc_settings::get().local_socket);
+    let vms = state.vm_manager.clone();
+    let resolve: local::Resolve = Arc::new(move |vm_id: String| {
+        let vms = vms.clone();
+        Box::pin(async move {
+            let vm = vms.get_vm(&vm_id).await.map_err(|e| e.to_string())?;
+            crate::console::runtime_disk(&vm).map_err(|e| e.to_string())
+        })
+    });
+    let audit = state.audit_logger.clone();
+    let on_event: local::OnEvent = Arc::new(move |ev: LocalEvent| {
+        if !hxc_settings::get().audit_sessions {
+            return;
+        }
+        use crate::audit::{AuditEvent, AuditEventType, AuditResult, AuditSeverity};
+        let (kind, ok, user, vm, action, details, session) = match ev {
+            LocalEvent::Started {
+                user,
+                vm,
+                session,
+                details,
+            } => (
+                AuditEventType::ConsoleSessionStarted,
+                true,
+                Some(user),
+                Some(vm),
+                "local console session started".to_string(),
+                details,
+                Some(session),
+            ),
+            LocalEvent::Ended {
+                user,
+                vm,
+                session,
+                details,
+            } => (
+                AuditEventType::ConsoleSessionEnded,
+                true,
+                Some(user),
+                Some(vm),
+                "local console session ended".to_string(),
+                details,
+                Some(session),
+            ),
+            LocalEvent::Refused { reason, uid } => (
+                AuditEventType::ConsoleAccessDenied,
+                false,
+                None,
+                None,
+                "local console ticket refused".to_string(),
+                format!("{reason} (uid {uid})"),
+                None,
+            ),
+        };
+        let audit = audit.clone();
+        tokio::spawn(async move {
+            audit
+                .log(AuditEvent {
+                    timestamp: chrono::Utc::now(),
+                    event_type: kind,
+                    severity: if ok {
+                        AuditSeverity::Info
+                    } else {
+                        AuditSeverity::Warning
+                    },
+                    user,
+                    source_ip: None,
+                    resource: vm,
+                    action,
+                    result: if ok {
+                        AuditResult::Success
+                    } else {
+                        AuditResult::Failure
+                    },
+                    details: Some(details),
+                    session_id: session,
+                })
+                .await;
+        });
+    });
+    if let Err(e) = local::serve(path, qemu::broker(), hxc_settings::get, resolve, on_event).await {
+        tracing::warn!("Horcrux Console local socket not available: {e}");
+    }
 }
 
 /// The `console.*` WebSocket side channel.
@@ -210,6 +307,79 @@ mod qemu {
             input: t.allow_input,
             clipboard: t.allow_clipboard,
             microphone: t.allow_mic,
+        }))
+    }
+
+    #[derive(serde::Deserialize)]
+    pub struct LocalTicketRequest {
+        /// Unix uid of the viewer process that will redeem the ticket.
+        uid: u32,
+        #[serde(default)]
+        profile: Option<ConsoleProfile>,
+    }
+
+    #[derive(serde::Serialize)]
+    pub struct LocalTicketResponse {
+        ticket: String,
+        expires_at: i64,
+        profile: ConsoleProfile,
+        input: bool,
+        socket: String,
+    }
+
+    pub async fn local_ticket(
+        State(state): State<Arc<AppState>>,
+        Path(vm_id): Path<String>,
+        user: Option<Extension<AuthUser>>,
+        principal: Option<Extension<crate::auth::store::Principal>>,
+        Json(req): Json<LocalTicketRequest>,
+    ) -> Result<Json<LocalTicketResponse>, ApiError> {
+        let Extension(user) = user.ok_or(ApiError::AuthenticationFailed)?;
+        let settings = hxc_settings::get();
+        if !settings.enabled {
+            return Err(ApiError::ServiceUnavailable(
+                "The Horcrux Console is turned off on this node (Settings > Console)".into(),
+            ));
+        }
+        let disk = vm_disk(&state, &vm_id).await?.ok_or_else(|| {
+            ApiError::ServiceUnavailable("Only QEMU VMs have the Horcrux Console".into())
+        })?;
+        if !hxc::vm_dbus_display(&disk).await {
+            return Err(ApiError::ServiceUnavailable(
+                "This VM is not running with the D-Bus display; start (or restart) it".into(),
+            ));
+        }
+        let acl_path = format!("/vms/{vm_id}");
+        let has = |p: Privilege| {
+            principal
+                .as_ref()
+                .map(|Extension(pr)| pr.has(p, &acl_path))
+                .unwrap_or(false)
+        };
+        let t = broker()
+            .issue(
+                HxcTicket {
+                    ticket: String::new(),
+                    vm_id: vm_id.clone(),
+                    user_id: user.user_id.clone(),
+                    username: user.username.clone(),
+                    conn_id: format!("local:{}", req.uid),
+                    profile: req.profile.unwrap_or(settings.default_profile),
+                    allow_input: has(Privilege::VmConsoleInput),
+                    allow_clipboard: has(Privilege::VmConsoleClipboard),
+                    allow_mic: has(Privilege::VmConsoleAudioMic),
+                    candidate_ips: Vec::new(),
+                    expires_at: 0,
+                },
+                settings.ticket_lifetime_secs,
+            )
+            .await;
+        Ok(Json(LocalTicketResponse {
+            ticket: t.ticket,
+            expires_at: t.expires_at,
+            profile: t.profile,
+            input: t.allow_input,
+            socket: settings.local_socket,
         }))
     }
 
