@@ -354,8 +354,22 @@ else:
 
 # ---- latency: keystroke through the tools -> first changed encoded frame ----
 lat = []
-# the blinking text cursor would change frames on its own
-stype("echo 0 > /sys/class/graphics/fbcon/cursor_blink; setterm -blink off >/dev/tty1 2>&1\n")
+# Stimulus: a key that visibly changes the whole screen, the way a game
+# reacts to input. inv.sh runs on tty1 and switches the console to reverse
+# video on "x", back on "y", and ends on "q". Written over the serial
+# console (a heredoc), started through the tools' keyboard.
+INV = """stty -icanon -echo
+while c=$(dd bs=1 count=1 2>/dev/null); do
+case "$c" in x) printf '\033[?5h';; y) printf '\033[?5l';; q) break;; esac
+done
+printf '\033[?5l'; stty sane
+"""
+stype("echo 0 > /sys/class/graphics/fbcon/cursor_blink\n")
+stype("cat > /tmp/inv.sh <<'HXEOF'\n" + INV.replace("\033", "\\033") + "HXEOF\n")
+stype("sha1sum /tmp/inv.sh\n")
+ttype("clear\n")
+time.sleep(0.5)
+ttype("sh /tmp/inv.sh\n")
 time.sleep(1)
 send_json(START_VIDEO, {"codec": "h264", "fps": 60, "bitrate_kbps": 2000, "max_bitrate_kbps": 2000,
                         "keyframe_interval_frames": 600, "low_delay": True, "fixed_rate": True, "chroma": "420"})
@@ -374,18 +388,16 @@ else:
     for i in range(40):
         for _ in recv_msgs(0.3):
             pass
-        ch = "x" if i % 2 == 0 else "\b"
         sent = time.time()
-        if ch == "\b":
-            key(0x0e, True)
-            key(0x0e, False)
-        else:
-            ttype("x", gap=0)
+        ttype("x" if i % 2 == 0 else "y", gap=0)
         for kind, p, t in recv_msgs(1.0):
             if kind == VIDEO and not p[0] & 1 and len(p) - 20 > thr:
                 lat.append((t - sent) * 1000)
                 break
     send(STOP_VIDEO)
+    ttype("y")
+    ttype("q")
+    time.sleep(0.5)
     if false_hits:
         fail("latency", f"change detector fires without input ({false_hits} frames over {thr} bytes in 2 s idle)")
     elif len(lat) >= 20:
@@ -395,7 +407,7 @@ else:
                                  "threshold_bytes": thr}
         ok("latency", f"keystroke -> changed encoded frame at the node: median {lat[len(lat) // 2]:.1f} ms, "
            f"min {lat[0]:.1f} ms, p95 {lat[int(len(lat) * 0.95) - 1]:.1f} ms over {len(lat)} samples "
-           f"(idle P-frame {base} B, threshold {thr} B, 0 false hits idle; 60 fps software x264, 2-vCPU guest)")
+           f"(screen-wide change on the key; idle P-frame {base} B, threshold {thr} B, 0 false hits idle; 60 fps software x264, 2-vCPU guest)")
     else:
         fail("latency", f"only {len(lat)} of 40 keystrokes produced a changed frame (idle P-frame {base} B)")
 

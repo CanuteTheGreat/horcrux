@@ -240,6 +240,28 @@ hardware encode (VA-API/NVENC, code paths present, untested without a GPU
 runner). These rows are rewritten when the C2 latency run on dedicated
 hardware lands.
 
+### Measured in C2 part 1 (guest tools, in-guest encode, port level)
+
+Source: `crates/horcrux-guest-tools/tests/linux_guest_e2e.py` (CI workflow
+`guest-tools.yml`), Alpine 3.24 guest with 2 vCPUs under KVM (QEMU 8.2), the
+static agent from the tools CD, the test acting as the node on the
+`<disk>.hxgt.sock` socket. No WebRTC and no client decode in this row: it
+measures the guest half of the path (input injection, guest reaction,
+capture, encode, virtio-serial) that the guest-tools session forwards
+without transcoding.
+
+| Measurement | Result | Conditions |
+|---|---|---|
+| Keystroke (tools' uinput keyboard) to an encoded frame carrying the guest's reaction (whole-screen reverse video), at the node | median 15.6 ms, p95 29.4 ms, 40/40 keystrokes | 1280x800, 60 fps fixed rate, software x264 in the guest (`ultrafast`, `zerolatency`, CBR 2 Mbit/s), 0 detector hits in 2 s without input |
+| In-guest encode time per frame (agent-reported) | median 2.1 ms, p95 2.3 ms | same; mostly-static console content |
+| Keyframe on request | 430-490 ms | the FFmpeg CLI encoder restarts for an IDR (hardware MF/NVENC encoders force one in-stream) |
+
+Reading: at 60 fps half a frame period (8.3 ms) is the expected average wait
+for the next capture, so the guest half costs about one frame period.
+240 Hz gaming capture, hardware encode in the guest and the browser half
+(decode, present) of this path are measured in C2b with a Windows guest and
+on GPU hardware.
+
 ## 7. Standalone machine
 
 One box runs everything: the guest, the broker, the encoder and, if WAN access

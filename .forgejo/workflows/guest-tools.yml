@@ -49,12 +49,23 @@ jobs:
         run: |
           for i in 1 2 3; do
             sudo apt-get update -qq || true
-            apt-cache policy msitools | grep -q 'Candidate: [0-9]' && break
+            apt-cache policy wixl | grep -q 'Candidate: [0-9]' && break
             sleep 15
           done
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            gcc-mingw-w64-x86-64 msitools xorriso qemu-system-x86 qemu-utils ffmpeg curl
+            gcc-mingw-w64-x86-64 msitools wixl xorriso qemu-system-x86 qemu-utils ffmpeg curl
           ls -l /dev/kvm
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-guest-tools-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-guest-tools-
 
       - name: Unit tests (protocol, agent)
         run: cargo test -p horcrux-guest-proto -p horcrux-guest-tools
@@ -85,14 +96,9 @@ jobs:
             target/x86_64-unknown-linux-musl/release/horcrux-guest-agent /tmp/alpine-virt.iso /tmp/lgt-out
           cat /tmp/lgt-out/linux-guest-e2e.json
 
-      - name: Upload the guest tools
+      - name: Checksums of what was built
         if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: horcrux-guest-tools
-          path: |
-            dist/horcrux-guest-tools-*-x64.msi
-            dist/horcrux-guest-tools.iso
-            dist/horcrux-guest-tools.iso.sha256
-            /tmp/lgt-out/linux-guest-e2e.json
-          if-no-files-found: warn
+        # No artifact upload: the Forgejo artifact backend fails the finalize
+        # step of upload-artifact on this instance (see docs.yml). Shipping the
+        # tools to nodes is the packaging work of phase C2b.
+        run: sha256sum dist/horcrux-guest-tools-*-x64.msi dist/horcrux-guest-tools.iso target/x86_64-unknown-linux-musl/release/horcrux-guest-agent 2>/dev/null || true
