@@ -348,9 +348,27 @@ with sync_playwright() as pw:
                               "estimate_kbps_range": est and [min(est), max(est)],
                               "encoded": series[-1]["encoded"],
                               "fps_while_flooding": round((frames1 - frames0) / 15.0, 1), "client": cs2}
-            enc = series[-1]["encoded"]
-            check(enc and target and enc[0] <= target["width"] + 2 and enc[3] <= max(target["kbps"], 100),
-                  f"{name}: the node encodes at the target ({enc} vs {target})")
+            # The encoder follows the node's target. Compare both from ONE
+            # node stats message (window.hxc.link is pushed at once on a
+            # target change, the stats message only every few seconds, so
+            # pairing link.target with stats.encoded compares two moments),
+            # and give the encoder a few stats periods to restart after the
+            # newest step. The FFmpeg CLI encoder is not restarted for a
+            # bitrate drop under 30% (a restart costs a keyframe), so its
+            # rate may sit up to target / 0.7 while size and frame rate match.
+            def follows(snap):
+                e, t = snap.get("encoded"), snap.get("target")
+                return bool(e and t and e[0] <= t["width"] + 2 and e[1] <= t["height"] + 2
+                            and e[2] == max(t["fps"], 1)
+                            and e[3] <= max(t["kbps"], 100) * 10 // 7 + 1)
+            deadline = time.time() + float(os.environ.get("HXC_WAN_FOLLOW_SECS", "8"))
+            snap = page.evaluate("window.hxc.server") or {}
+            while not follows(snap) and time.time() < deadline:
+                time.sleep(0.5)
+                snap = page.evaluate("window.hxc.server") or {}
+            res["adapted"]["node_snapshot"] = {"target": snap.get("target"), "encoded": snap.get("encoded")}
+            check(follows(snap),
+                  f"{name}: the node encodes at its target ({snap.get('encoded')} vs {snap.get('target')})")
             page.evaluate("window.hxc.sendKey('ControlLeft', true);" + key("KeyC") + "window.hxc.sendKey('ControlLeft', false);")
             time.sleep(0.5)
             type_text(page, "clear\n")
