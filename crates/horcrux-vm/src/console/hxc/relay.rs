@@ -262,7 +262,11 @@ pub fn apply_spawn(s: &ConsoleSettings) {
 fn host_only(host: &str) -> String {
     let h = host.trim();
     if h.starts_with('[') {
-        return h.split(']').next().map(|x| format!("{x}]")).unwrap_or_default();
+        return h
+            .split(']')
+            .next()
+            .map(|x| format!("{x}]"))
+            .unwrap_or_default();
     }
     match h.rsplit_once(':') {
         Some((a, p)) if p.chars().all(|c| c.is_ascii_digit()) && !a.contains(':') => a.into(),
@@ -422,6 +426,9 @@ mod tests {
         let r = peer_rules(&s);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].ip.to_string(), "192.0.2.4");
-        assert_eq!((r[0].port_min, r[0].port_max), (s.udp_port_min, s.udp_port_max));
+        assert_eq!(
+            (r[0].port_min, r[0].port_max),
+            (s.udp_port_min, s.udp_port_max)
+        );
     }
 }

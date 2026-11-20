@@ -276,7 +276,11 @@ impl Default for WanSettings {
 
 impl WanSettings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.relay_listen_address.parse::<std::net::IpAddr>().is_err() {
+        if self
+            .relay_listen_address
+            .parse::<std::net::IpAddr>()
+            .is_err()
+        {
             return Err("wan.relay_listen_address must be an IP address".into());
         }
         if self.relay_port == 0 {
@@ -325,7 +329,11 @@ impl WanSettings {
         {
             return Err("wan.upnp_gateway must be empty, an IP address or ip:port".into());
         }
-        if self.upnp_ssdp_address.parse::<std::net::SocketAddr>().is_err() {
+        if self
+            .upnp_ssdp_address
+            .parse::<std::net::SocketAddr>()
+            .is_err()
+        {
             return Err("wan.upnp_ssdp_address must be ip:port".into());
         }
         if self.uplink_kbps != 0 && self.uplink_kbps < 100 {
@@ -346,7 +354,9 @@ impl WanSettings {
         if !(100..=60_000).contains(&self.down_interval_ms)
             || !(100..=600_000).contains(&self.up_interval_ms)
         {
-            return Err("wan.down_interval_ms must be 100..=60000 and up_interval_ms 100..=600000".into());
+            return Err(
+                "wan.down_interval_ms must be 100..=60000 and up_interval_ms 100..=600000".into(),
+            );
         }
         Ok(())
     }
@@ -537,7 +547,10 @@ impl ConsoleSettings {
             || (self.wan.relay_port_min..=self.wan.relay_port_max).contains(&self.udp_port_max)
             || (self.udp_port_min..=self.udp_port_max).contains(&self.wan.relay_port_min)
         {
-            return Err("wan.relay_port_min..relay_port_max must not overlap udp_port_min..udp_port_max".into());
+            return Err(
+                "wan.relay_port_min..relay_port_max must not overlap udp_port_min..udp_port_max"
+                    .into(),
+            );
         }
         self.desktop.validate("desktop")?;
         self.gaming.validate("gaming")?;

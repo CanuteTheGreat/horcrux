@@ -373,7 +373,10 @@ mod qemu {
                                 format!("console session started ({})", t.profile.name()),
                                 Some(format!(
                                     "input={} clipboard={} relay_offered={} candidates={:?}",
-                                    t.allow_input, t.allow_clipboard, !t.relay_tag.is_empty(), t.candidate_ips
+                                    t.allow_input,
+                                    t.allow_clipboard,
+                                    !t.relay_tag.is_empty(),
+                                    t.candidate_ips
                                 )),
                                 Some(session_id.clone()),
                             ))

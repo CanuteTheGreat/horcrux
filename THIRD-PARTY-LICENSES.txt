@@ -14,7 +14,7 @@ QEMU (GPL-2.0; the Horcrux Console reads guest screens through QEMU's D-Bus disp
 interface) and FFmpeg (LGPL-2.1+ or GPL-2.0+ depending on the distribution's build; the
 Horcrux Console encoder runs `ffmpeg` as a child process). Both come from the OS packages.
 
-Horcrux workspace crates (not listed below): horcrux-api, horcrux-auth, horcrux-backup, horcrux-cli, horcrux-cluster, horcrux-common, horcrux-container, horcrux-core, horcrux-guest-proto, horcrux-guest-tools, horcrux-k8s, horcrux-mobile, horcrux-monitoring, horcrux-nas, horcrux-sdn, horcrux-storage, horcrux-ui, horcrux-vm, terraform-provider-horcrux
+Horcrux workspace crates (not listed below): horcrux-api, horcrux-auth, horcrux-backup, horcrux-cli, horcrux-cluster, horcrux-common, horcrux-container, horcrux-core, horcrux-guest-proto, horcrux-guest-tools, horcrux-k8s, horcrux-mobile, horcrux-monitoring, horcrux-nas, horcrux-sdn, horcrux-storage, horcrux-turn, horcrux-ui, horcrux-vm, terraform-provider-horcrux
 
 ------------------------------------------------------------------------------
 1. Crates (676)
