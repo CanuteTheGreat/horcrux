@@ -383,6 +383,12 @@ link adaptation keeps a configured 1 Mbit/s uplink cap. GeForce NOW's
 "under 30 ms" claim is encode (software x264 16-19 ms per frame here vs
 hardware), decode and the jitter buffer. GPU-encode numbers per path still
 need GPU hardware.
+
+C2d (idle laptop-class node, 1280x800, software capture in a 2-vCPU guest): the
+same-host raw-frame path delivers a guest frame to the viewer in 2.0 ms
+median at 120 fps (target < 8 ms), keystroke to raw frame 24 ms median;
+guest-tools keystroke to encoded frame 16.5 ms; host-encode keystroke to
+browser picture 95 ms (desktop target < 50 ms not met yet).
 Details: docs/design/horcrux-console.md section 6.
 
 ## 15. Phases
