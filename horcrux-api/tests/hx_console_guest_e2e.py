@@ -13,7 +13,7 @@ Horcrux tools; ci/windows-test-image.py):
   * the browser shows the guest-encoded stream (session stats video_source
     "guest", guest_encoder), through the real virtio-serial port;
   * absolute pointer + buttons (rubber-band selection on the desktop),
-    raw relative motion through the tools, keyboard into Notepad with the
+    raw relative motion through the tools, keyboard into the Run box with the
     keystroke-to-picture latency, clipboard guest -> browser and browser ->
     guest, resize through the tools, audio (Opus track packets) when the
     tools report audio.
@@ -295,21 +295,24 @@ def windows(browser):
     RESULTS["windows_video"] = {"guest": g, "rtp": vs}
     print(f"   windows video {g} {vs}", flush=True)
 
-    # keyboard: Notepad via Win+R, then typed text with latency
+    # keyboard: typed into the Run box's text field, with latency. Not
+    # Notepad: Windows 11's Store Notepad opens a "saves your progress" tip
+    # on its first start that takes the keyboard, and on a slow guest
+    # "notepad<Enter>" could reach the Run box before or after it was ready,
+    # so the test passed or failed by timing. The Run box is a classic Win32
+    # edit field with the focus as soon as it shows.
     page.evaluate(combo("MetaLeft", "KeyR"))
-    time.sleep(2.5)
-    type_text(page, "notepad\n")
-    time.sleep(6)
+    time.sleep(4)
     quiet(page, 1500, 20)
     lat = []
     typed = "hxc2b windows keys 42"
     type_text(page, typed, measure=lat, gap=0.25)
-    page.screenshot(path=f"{OUT}/windows-notepad.png")
+    page.screenshot(path=f"{OUT}/windows-typed.png")
     check(len([x for x in lat if x is not None]) >= len(typed.replace(" ", "")) // 2,
-          f"windows: keystrokes reach Notepad and come back in the guest-encoded picture "
+          f"windows: keystrokes reach the Run box and come back in the guest-encoded picture "
           f"({len([x for x in lat if x is not None])}/{len(typed.replace(' ', ''))})", fatal=False)
     latency_summary("windows_guest_encoded_key_to_picture", lat)
-    # clipboard guest -> browser: select all + copy in Notepad
+    # clipboard guest -> browser: select all + copy in the Run box
     page.evaluate("window.hxc.guestClipboard = null")
     page.evaluate(combo("ControlLeft", "KeyA"))
     time.sleep(0.5)
@@ -340,12 +343,14 @@ def windows(browser):
         time.sleep(0.3)
     back = page.evaluate("window.hxc.guestClipboard")
     check(back is not None and sent + " ok" in back,
-          f"windows: browser clipboard reaches the guest (pasted into Notepad, cut back: {back!r})", fatal=False)
+          f"windows: browser clipboard reaches the guest (pasted into the Run box, cut back: {back!r})", fatal=False)
     stats = session_stats(vm)
     RESULTS["windows_clipboard"] = {"in": stats.get("clipboard_in"), "out": stats.get("clipboard_out")}
 
     # absolute pointer + buttons: a rubber band on the desktop
-    # (Notepad closed first: Win+D shows the desktop)
+    # (the Run box closed first, then Win+D shows the desktop)
+    page.evaluate(key("Escape"))
+    time.sleep(1)
     page.evaluate(combo("MetaLeft", "KeyD"))
     time.sleep(2)
     quiet(page, 1500, 20)
