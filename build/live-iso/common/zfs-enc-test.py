@@ -576,8 +576,15 @@ class ZRun(qt.Runner):
         pk = [l.strip() for l in o.splitlines() if "/" in l]
         gui = [x for x in pk if re.match(self.DISPLAY_RE, x + "/") and x not in self.DISPLAY_ALLOW]
         open(f"{self.z.out}/installed-packages.txt", "w").write("\n".join(pk) + "\n")
+        why = ""
+        if gui:
+            # name what pulled each display package in (reverse deps + install time + world membership), so a red run explains itself
+            rc2, o2 = self.sh("for p in " + " ".join(gui[:6]) + "; do echo \"== $p $(date -r /var/db/pkg/$p-[0-9]* +%FT%T 2>/dev/null | head -1) USE=$(cat /var/db/pkg/$p-[0-9]*/USE 2>/dev/null | head -1 | cut -c1-80)\"; "
+                              "grep -qx \"$p\" /var/lib/portage/world && echo IN-WORLD; qdepends -Q -q $p 2>/dev/null | head -8; done; tail -3 /var/log/horcrux-firstboot.log 2>/dev/null; grep -c . /var/log/emerge.log 2>/dev/null; tail -6 /var/log/emerge.log 2>/dev/null", timeout=120)
+            why = " :: why: " + re.sub(r"\s+", " ", o2).strip()[:900]
+            open(f"{self.z.out}/display-stack-why.txt", "w").write(o2)
         self.step("server-has-no-display-stack-installed", rc == 0 and len(pk) > 100 and not gui,
-                  f"{len(pk)} packages installed; gui-libs/gui-wm/x11-*/gnome-*/mesa/qt/pipewire/NetworkManager found: {gui[:20] or 'none'} (allowed library deps: {', '.join(self.DISPLAY_ALLOW)})")
+                  f"{len(pk)} packages installed; gui-libs/gui-wm/x11-*/gnome-*/mesa/qt/pipewire/NetworkManager found: {gui[:20] or 'none'} (allowed library deps: {', '.join(self.DISPLAY_ALLOW)})" + why)
         rc, o = self.sh("(pgrep -x 'Xorg|Xwayland|gdm|lightdm|sddm|gnome-shell|cage|sway|weston' || true) | wc -l; (" + init_cmds.running_list_sh("gdm|lightdm|sddm|display-manager|xdm") + " | wc -l)")
         self.step("server-runs-no-x-wayland-or-display-manager", o.split()[-2:] == ["0", "0"], f"display processes / display-manager services: {' '.join(o.split()[-2:])}")
         rc, o = self.sh("grep -o 'console=tty[A-Za-z0-9,]*' /proc/cmdline | tr '\\n' ' '; echo; pgrep -af 'agetty|console-menu|live-serial' | head -4")
