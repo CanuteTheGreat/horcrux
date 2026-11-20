@@ -18,7 +18,7 @@ One run (`horcrux-autoupdate run`), at nice 19 / ionice idle, under `flock` and 
    from `egencache` after each sync (kept out of `git status`; never the gentoo repo or a repo whose cache is tracked in git). Without it
    eix-update falls back to `ebuild ... depend`, which current Portage refuses, and prints `cannot properly execute` per ebuild.
 2. ZFS root: boot-environment snapshot `pre-upgrade-*` through `horcrux-be snapshot` (plain `zfs snapshot` if the tool is absent). No snapshot, no update.
-3. `emerge -uDN --with-bdeps=y --keep-going @world`, binpkgs from the binhost first (`--getbinpkg --usepkg`); `app-emulation/horcrux-bin` is excluded from binpkgs (its ebuild fetches a tarball).
+3. `emerge -uDN --keep-going @world` (`--with-bdeps=n`; `WITH_BDEPS=yes` selects `--with-bdeps=y`, which on a server installs ~80 build-only packages including the X11 libraries that the headless gate forbids and that the depclean step then refuses to remove), binpkgs from the binhost first (`--getbinpkg --usepkg`); `app-emulation/horcrux-bin` is excluded from binpkgs (its ebuild fetches a tarball).
 4. `emerge --depclean <packages>`: the `--pretend` list minus the protected kernel/ZFS/boot/firmware/Horcrux packages (`DEPCLEAN_KEEP`,
    kept and named in the status), when that is at most `DEPCLEAN_MAX` (20) packages. A bigger set usually means a package is missing
    from the world file: nothing is removed.
