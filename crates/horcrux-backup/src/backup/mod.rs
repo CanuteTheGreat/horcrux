@@ -1063,25 +1063,42 @@ impl BackupManager {
                     if m["Type"].as_str() != Some("volume") {
                         continue;
                     }
-                    let (Some(name), Some(src)) = (m["Name"].as_str(), m["Source"].as_str()) else {
+                    let (Some(name), Some(dest)) = (m["Name"].as_str(), m["Destination"].as_str())
+                    else {
                         continue;
                     };
                     if !seen.insert(name.to_string()) {
                         continue;
                     }
+                    // Read through the runtime (`cp`), not the volume's host
+                    // directory: that path is not visible when the API runs
+                    // in a container or the runtime is remote/rootless.
+                    let tree = staging.join(format!("volume-{}.d", seen.len() - 1));
+                    tokio::fs::create_dir_all(&tree).await?;
+                    archive::run_async(
+                        prog,
+                        vec![
+                            "cp".into(),
+                            "-a".into(),
+                            format!("{}:{}/.", c.name, dest),
+                            tree.to_string_lossy().into(),
+                        ],
+                    )
+                    .await?;
                     let file = staging.join(format!("volume-{}.tar", seen.len() - 1));
                     archive::run_async(
                         "tar",
                         vec![
                             "--numeric-owner".into(),
                             "-C".into(),
-                            src.into(),
+                            tree.to_string_lossy().into(),
                             "-cf".into(),
                             file.to_string_lossy().into(),
                             ".".into(),
                         ],
                     )
                     .await?;
+                    let _ = tokio::fs::remove_dir_all(&tree).await;
                     let mut f = payload(&file, "volume").await?;
                     f.source = Some(name.to_string());
                     files.push(f);
@@ -1478,6 +1495,7 @@ impl BackupManager {
                 // different guest never touches a volume that still exists:
                 // it gets a new volume `<volume>-<guest>` and the config
                 // points at that.
+                let mut vol_data: Vec<(PathBuf, String)> = Vec::new();
                 for f in m.files.iter().filter(|f| f.kind == "volume") {
                     let Some(orig) = f.source.clone() else {
                         continue;
@@ -1502,39 +1520,52 @@ impl BackupManager {
                     }
                     archive::run_async(prog, vec!["volume".into(), "create".into(), vol.clone()])
                         .await?;
-                    let mp = archive::run_async(
-                        prog,
-                        vec![
-                            "volume".into(),
-                            "inspect".into(),
-                            "--format".into(),
-                            "{{.Mountpoint}}".into(),
-                            vol.clone(),
-                        ],
-                    )
-                    .await?;
-                    let mp = String::from_utf8_lossy(&mp.stdout).trim().to_string();
-                    if mp.is_empty() {
+                    // Unpack now, copy into the new container once it exists
+                    // (`cp` works whether or not the volume's host directory
+                    // is visible from here).
+                    let dest = inspect["Mounts"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|m| m["Name"].as_str() == Some(orig.as_str()))
+                        .and_then(|m| m["Destination"].as_str())
+                        .map(str::to_string);
+                    let Some(dest) = dest else {
                         return Err(Error::System(format!(
-                            "{prog} volume {vol} has no mount point to restore into"
+                            "backup has data for volume {orig} but no mount path for it"
                         )));
-                    }
+                    };
+                    let tree = dir.join(format!("{}.d", f.name));
+                    tokio::fs::create_dir_all(&tree).await?;
                     archive::run_async(
                         "tar",
                         vec![
                             "--numeric-owner".into(),
                             "-C".into(),
-                            mp,
+                            tree.to_string_lossy().into(),
                             "-xpf".into(),
                             dir.join(&f.name).to_string_lossy().into(),
                         ],
                     )
                     .await?;
+                    vol_data.push((tree, dest));
                 }
                 if existing.is_some() {
                     cm.delete_container(target).await?;
                 }
                 let created = cm.create_container(config).await?;
+                for (tree, dest) in &vol_data {
+                    archive::run_async(
+                        prog,
+                        vec![
+                            "cp".into(),
+                            "-a".into(),
+                            format!("{}/.", tree.display()),
+                            format!("{name}:{dest}/"),
+                        ],
+                    )
+                    .await?;
+                }
                 if req.start {
                     cm.start_container(target).await?;
                 }
