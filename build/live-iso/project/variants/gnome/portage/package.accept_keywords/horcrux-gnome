@@ -1,0 +1,2 @@
+# GNOME image viewer of the full GNOME edition (gnome-core-apps prefers it over eog; ::gentoo keeps it ~amd64). Pulled by gnome-extra/horcrux-gnome-extras.
+media-gfx/loupe ~amd64
