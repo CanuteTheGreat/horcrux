@@ -561,7 +561,7 @@ def _default_config(profile, fs, fs_why):
         "t2": "auto", "t2_firmware": "auto",
         # install profile: server | desktop (desktop needs the desktop image variant)
         "install_type": "server",
-        "user_name": "", "user_fullname": "", "user_hash": "", "user_password": "", "user_autologin": False,
+        "user_name": "", "user_fullname": "", "user_hash": "", "user_password": "", "user_autologin": False, "user_pw_first_login": False,
         "services_off": [], "ssh_enabled": True,
         "sysctl_hardening": bool(profile.get("sysctl_hardening", True)),
         "use": {"preset": "recommended", "flags": {}},
@@ -628,6 +628,8 @@ def config_from_answers(profile, path):
     u = a.get("user", {})
     c["user_name"], c["user_fullname"] = u.get("name", ""), u.get("fullname", u.get("name", ""))
     c["user_hash"], c["user_password"] = u.get("password_hash", ""), u.get("password", "")
+    # answer file only: no password now, the user chooses one at the first login (empty + expired; console/greeter only, ssh password login stays off)
+    c["user_pw_first_login"] = bool(u.get("password_at_first_login", False))
     c["user_autologin"] = bool(u.get("autologin", False))
     dl = d.get("disks", d.get("disk", "first"))
     c["disks"] = [dl] if isinstance(dl, str) else list(dl)
@@ -674,7 +676,9 @@ def validate_config(profile, c, unattended=False, require_secret=True):
         from . import desktop
         if desktop.user_problem(c.get("user_name", "")):
             errs.append("user: " + desktop.user_problem(c.get("user_name", "")))
-        if c.get("user_hash"):
+        if c.get("user_pw_first_login"):
+            errs += first_login_problems(c)
+        elif c.get("user_hash"):
             if crypt_hash_problem(c["user_hash"]):
                 errs.append("user password hash: " + crypt_hash_problem(c["user_hash"]))
         elif not c.get("user_password"):
@@ -684,6 +688,8 @@ def validate_config(profile, c, unattended=False, require_secret=True):
         from . import desktop
         if desktop.user_problem(c.get("user_name", "")):
             errs.append("user: the web UI signs in system users, so an administrator account is required - " + desktop.user_problem(c.get("user_name", "")))
+        elif c.get("user_pw_first_login"):
+            errs += first_login_problems(c)
         elif not (c.get("user_hash") or c.get("user_password")):
             errs.append("user: no password for " + c["user_name"])
     if profile.get("encryption") == "tpm-or-none" and c.get("enc_passphrase_given"):
@@ -734,10 +740,22 @@ def validate_config(profile, c, unattended=False, require_secret=True):
     return errs
 
 
+def first_login_problems(c):
+    """[user] password_at_first_login = true: the account is created with an empty, expired password, so the first console or
+    greeter login makes the user choose one. Refused together with a password (ambiguous) or with SSH password login
+    (an empty password must never be usable over the network)."""
+    errs = []
+    if c.get("user_hash") or c.get("user_password"):
+        errs.append("user: password_at_first_login excludes password/password_hash (the user chooses the password at the first login)")
+    if c.get("ssh_password_auth"):
+        errs.append("user: password_at_first_login needs ssh_password_auth = false (an empty password must never work over SSH)")
+    return errs
+
+
 def has_login_user(c):
     """a sudo-capable account is created (root can then stay locked)"""
     d = c.get("desktop") or {}
-    return bool((c.get("user_name") and (c.get("user_hash") or c.get("user_password")))
+    return bool((c.get("user_name") and (c.get("user_hash") or c.get("user_password") or c.get("user_pw_first_login")))
                 or (d.get("enable") and d.get("user") and (d.get("password") or d.get("password_hash"))))
 
 

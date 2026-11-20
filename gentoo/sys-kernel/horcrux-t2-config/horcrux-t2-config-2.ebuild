@@ -5,7 +5,8 @@ EAPI=8
 
 inherit systemd
 
-T2_COMMIT="e16720782ee30fac38486b6c58d32443899c136a"
+# t2linux 6.18 LTS branch (KVER 6.18.56; Gentoo dropped every 7.2.x kernel and OpenZFS 2.3.x stops at 7.2)
+T2_COMMIT="bf06511b536a75fcea3146aa341f183c2a2daebc"
 
 DESCRIPTION="Apple T2 Mac support for sys-kernel/gentoo-kernel: t2linux patch set, kernel config, initramfs config"
 HOMEPAGE="https://github.com/t2linux/linux-t2-patches https://wiki.t2linux.org"
@@ -17,11 +18,11 @@ LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="~amd64"
 
-# Patch set pinned to the last commit before the 7.3 rebase: it applies to gentoo-kernel 7.2.x (OpenZFS 2.3.x
-# declares Linux-Maximum 7.2). It is applied by Portage's user-patch mechanism, so a newer 7.2.y rebuilds with it.
-# deliberately NO dependency on the kernel (it would pull a ~1 h source build into every config update). Use with
-# sys-kernel/gentoo-kernel 7.2.x only: the pinned patch set does not apply to 7.3+ and OpenZFS 2.3.x does not build there
-# (package.mask >=sys-kernel/gentoo-kernel-7.3 on the machine; the Horcrux image ships that mask).
+# Patch set pinned to t2linux's 6.18 LTS branch: it applies to sys-kernel/gentoo-kernel 6.18.x (Gentoo's long-term
+# kernel; OpenZFS 2.3.x supports it). Portage's user-patch mechanism applies it, so every 6.18.y update rebuilds with it.
+# Deliberately NO dependency on the kernel (it would pull a ~1 h source build into every config update). The patch set
+# does not apply to 6.19+/7.x, so the package ships a mask (/etc/portage/package.mask/horcrux-t2-kernel) that keeps
+# gentoo-kernel, gentoo-kernel-bin and virtual/dist-kernel on the 6.18 LTS series.
 RDEPEND="
 	sys-kernel/dracut
 	dev-lang/python
@@ -37,6 +38,15 @@ src_install() {
 	done
 
 	# kernel config fragment (merged by the dist-kernel eclass after Gentoo's config)
+	# keep the kernel on the series this patch set targets (6.18 LTS)
+	insinto /etc/portage/package.mask
+	newins - horcrux-t2-kernel <<-'EOF'
+		# sys-kernel/horcrux-t2-config: the t2linux patch set targets the 6.18 LTS series (OpenZFS 2.3.x supports it)
+		>=sys-kernel/gentoo-kernel-6.19
+		>=sys-kernel/gentoo-kernel-bin-6.19
+		>=virtual/dist-kernel-6.19
+	EOF
+
 	insinto /etc/kernel/config.d
 	cat "${FILESDIR}/t2.config" > "${T}/90-horcrux-t2.config" || die
 	echo "# --- t2linux extra_config (pinned ${T2_COMMIT:0:7})" >> "${T}/90-horcrux-t2.config"

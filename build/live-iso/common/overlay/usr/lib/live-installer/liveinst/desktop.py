@@ -81,7 +81,7 @@ def create_user(inst):
     prob = user_problem(name)
     if prob:
         raise InstallError("a user account is needed: " + prob)
-    if not (c.get("user_hash") or c.get("user_password")):
+    if not (c.get("user_hash") or c.get("user_password") or c.get("user_pw_first_login")):
         raise InstallError("no password for " + name)
     prof = getattr(inst, "p", {})
     pam = prof.get("web_auth") == "pam"
@@ -95,7 +95,12 @@ def create_user(inst):
     # the home dataset is mounted above the root BE by zfsroot.mount()/mount_rest() (they fail the install
     # otherwise): a home created in the BE's own /home would be hidden by the empty home dataset at boot
     inst.run(["useradd", "-m", "-G", groups, "-s", "/bin/bash", "-c", c.get("user_fullname", name), name], chroot=True)
-    if c.get("user_hash"):
+    if c.get("user_pw_first_login"):
+        # empty + expired: the first console/greeter login asks for a new password (pam_unix nullok); SSH password login is off
+        inst.run(["passwd", "-d", name], chroot=True)
+        inst.run(["chage", "-d", "0", name], chroot=True)
+        inst.log(f"user {name}: no password yet, it is chosen at the first login (empty + expired)")
+    elif c.get("user_hash"):
         inst.run(["chpasswd", "-e"], chroot=True, input_=f"{name}:{c['user_hash']}\n")
     else:
         inst.run(["chpasswd"], chroot=True, input_=f"{name}:{c['user_password']}\n")
@@ -110,7 +115,7 @@ def apply(inst):
     prob = user_problem(name)
     if prob:
         raise InstallError("desktop profile needs a user account: " + prob)
-    if not (c.get("user_hash") or c.get("user_password")):
+    if not (c.get("user_hash") or c.get("user_password") or c.get("user_pw_first_login")):
         raise InstallError("desktop profile needs a password for " + name)
     create_user(inst)
     from . import initsys
