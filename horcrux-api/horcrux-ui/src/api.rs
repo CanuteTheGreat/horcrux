@@ -5668,7 +5668,7 @@ pub async fn get_container_logs_ticket(
 
 #[derive(Serialize)]
 struct ExecTicketBody<'a> {
-    command: Vec<&'a str>,
+    command: Vec<String>,
     runtime: &'a str,
 }
 
@@ -5677,10 +5677,11 @@ pub async fn get_container_exec_ticket(
     command: &str,
     runtime: &str,
 ) -> Result<WsTicketResponse, ApiError> {
-    let cmd: Vec<&str> = if command.trim().is_empty() {
-        vec!["/bin/sh"]
+    let cmd: Vec<String> = if command.trim().is_empty() {
+        vec!["/bin/sh".to_string()]
     } else {
-        command.split_whitespace().collect()
+        crate::pages::container_create::split_command(command)
+            .unwrap_or_else(|_| command.split_whitespace().map(str::to_string).collect())
     };
     post_json(
         &format!("/containers/{}/exec-ticket", container_id),

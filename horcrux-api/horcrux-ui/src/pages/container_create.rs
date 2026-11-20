@@ -13,6 +13,69 @@ pub fn lines(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Split a command line into argv the way a POSIX shell would for quoting:
+/// whitespace separates words, single quotes keep everything literal,
+/// double quotes allow `\\"` and `\\\\` escapes, and a bare backslash escapes
+/// the next character. No expansion of any kind happens.
+pub fn split_command(input: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            c if c.is_whitespace() => {
+                if in_word {
+                    out.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            '\'' => {
+                in_word = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(c) => cur.push(c),
+                        None => return Err("Command has an unclosed ' quote".to_string()),
+                    }
+                }
+            }
+            '"' => {
+                in_word = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some('\\') => match chars.next() {
+                            Some(e @ ('"' | '\\')) => cur.push(e),
+                            Some(e) => {
+                                cur.push('\\');
+                                cur.push(e);
+                            }
+                            None => return Err("Command has an unclosed \" quote".to_string()),
+                        },
+                        Some(c) => cur.push(c),
+                        None => return Err("Command has an unclosed \" quote".to_string()),
+                    }
+                }
+            }
+            '\\' => {
+                in_word = true;
+                if let Some(e) = chars.next() {
+                    cur.push(e);
+                }
+            }
+            c => {
+                in_word = true;
+                cur.push(c);
+            }
+        }
+    }
+    if in_word {
+        out.push(cur);
+    }
+    Ok(out)
+}
+
 /// Build the API request from the raw form values. Kept free of any
 /// browser APIs so it can be unit-tested natively.
 #[allow(clippy::too_many_arguments)]
@@ -56,10 +119,7 @@ pub fn build_request(
         lines(env),
         lines(ports),
         lines(volumes),
-        command
-            .split_whitespace()
-            .map(str::to_string)
-            .collect::<Vec<_>>(),
+        split_command(command)?,
     );
     if !oci && (!env.is_empty() || !ports.is_empty() || !volumes.is_empty() || !command.is_empty())
     {
@@ -702,6 +762,21 @@ mod tests {
             available: ok,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn split_command_honours_quotes() {
+        assert_eq!(
+            split_command("sh -c 'echo x > /data/m; sleep 86400'").unwrap(),
+            vec!["sh", "-c", "echo x > /data/m; sleep 86400"]
+        );
+        assert_eq!(
+            split_command(r#"echo "a \"b\" c"  d\ e ''"#).unwrap(),
+            vec!["echo", r#"a "b" c"#, "d e", ""]
+        );
+        assert!(split_command("").unwrap().is_empty());
+        assert!(split_command("echo 'oops").is_err());
+        assert!(split_command("echo \"oops").is_err());
     }
 
     #[test]
