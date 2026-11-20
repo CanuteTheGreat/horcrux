@@ -149,14 +149,9 @@ def mount_rest(inst):
 
 
 ZRAM_CONF = """# written by the Horcrux installer: compressed RAM swap instead of swap on ZFS (unsafe) or a disk partition
-load_on_start=yes
-unload_on_stop=yes
-num_devices=1
-type0=swap
-flag0=
-size0={mb}
-maxs0=1
-algo0=zstd
+# read by the image's /etc/init.d/zram-swap (and zram-swap.service); same sizing the old zram-init file had
+zram_percent=50
+zram_max_mb={max_mb}
 """
 
 BE_CONF = """# horcrux-be (boot environments)
@@ -175,17 +170,22 @@ fi
 """
 
 
-def configure(inst, cmdline_extra="", kernel_glob="*"):
-    """after copy_system, inside the target (chroot bound)"""
+def configure_zram(inst):
+    """One zram swap: the image's zram-swap script (retries mkswap/swapon/zramctl; the zram-init script gave up silently on a slow
+    first boot, aarch64 TCG daily run 21506: zram-init 'started', /proc/swaps empty). zram-init is kept out of the runlevels."""
     from .system import mem_mb
     ram = mem_mb() or 8192
-    inst.write("/etc/conf.d/zram-init", ZRAM_CONF.format(mb=max(2048, min(ram // 2, 16384))))
+    inst.write("/etc/conf.d/zram-swap", ZRAM_CONF.format(max_mb=max(2048, min(ram // 2, 16384))))
     from . import initsys
-    if initsys.target_init(inst.target) == "openrc" and os.path.exists(f"{inst.target}/etc/init.d/zram-init"):
-        inst.run(["rc-update", "add", "zram-init", "boot"], chroot=True, check=False)
-        # one zram swap only: the generic cfg_hardening step enabled the live image's zram-swap script as well, which gave
-        # two zram devices (7.7G prio 16383 + 8G prio 100) on hogshead
-        inst.run(["rc-update", "del", "zram-swap", "default"], chroot=True, check=False)
+    if initsys.target_init(inst.target) == "openrc":
+        inst.run(["rc-update", "del", "zram-init", "boot"], chroot=True, check=False)
+        inst.run(["rc-update", "add", "zram-swap", "default"], chroot=True, check=False)
+
+
+def configure(inst, cmdline_extra="", kernel_glob="*"):
+    """after copy_system, inside the target (chroot bound)"""
+    from . import initsys
+    configure_zram(inst)
     # systemd: the image's zram-swap.service (the same script as OpenRC's zram-swap, reads /etc/conf.d/zram-swap) is the one zram swap,
     # enabled by cfg_finish_config
     inst.write("/etc/horcrux/be.conf", BE_CONF.format(cmdline=cmdline_extra.strip(), kglob=kernel_glob))
