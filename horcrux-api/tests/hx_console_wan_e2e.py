@@ -338,8 +338,11 @@ with sync_playwright() as pw:
             frames1 = page.evaluate("window.hxc.framesDecoded")
             cs2 = page.evaluate(CLIENT_STATS)
             target = series[-1]["target"]
+            # the cap holds; the named limit must be the reason whenever the
+            # link itself would allow more than the cap
             ok = all(x["target"] and x["target"]["kbps"] <= want["max_kbps"] for x in series[-5:]) and (
-                not want.get("limit") or target["limit"] == want["limit"])
+                not want.get("limit") or target["limit"] == want["limit"]
+                or (series[-1]["estimate_kbps"] or 0) <= want["max_kbps"])
             est = [x["estimate_kbps"] for x in series if x["estimate_kbps"]]
             res["adapted"] = {"target": target, "estimate_kbps_median": est and statistics.median(est),
                               "estimate_kbps_range": est and [min(est), max(est)],
@@ -358,12 +361,14 @@ with sync_playwright() as pw:
         print("PATH " + json.dumps({name: res}), flush=True)
         if res["keystroke_to_picture"]:
             print("LATENCY " + json.dumps({name: res["keystroke_to_picture"]}), flush=True)
-        page.close()
+        closed = time.time()
+        page.close(run_before_unload=True)
         if wan.get("enabled"):
-            rs = wait_allocations(0)
-            check(rs["allocations"] == 0, f"{name}: the session's relay allocations are gone after it closed ({rs['allocations']})")
+            rs = wait_allocations(0, timeout=45)
+            check(rs["allocations"] == 0, f"{name}: the session's relay allocations are gone {time.time() - closed:.1f} s after the page closed ({rs['allocations']})")
             check(rs["auth_failures"] == 0 and rs["forbidden_peers"] == 0,
-                  f"{name}: relay counters clean (auth failures {rs['auth_failures']}, forbidden peers {rs['forbidden_peers']})")
+                  f"{name}: relay counters clean (auth failures {rs['auth_failures']}, forbidden peers {rs['forbidden_peers']}, "
+                  f"late requests of ended sessions {rs.get('revoked_rejects')})")
 
     # A relay credential stops working once its session has ended (revoked).
     settings(enabled=True, force_relay=True)

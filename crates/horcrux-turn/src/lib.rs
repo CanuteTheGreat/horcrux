@@ -84,6 +84,9 @@ mod tests {
         relay.revoke("sess1");
         assert_eq!(relay.stats().allocations, 0);
         assert_eq!(c.refresh(300).await.unwrap(), Err(401));
+        // a closing client's late refresh is not counted as an attack
+        let s = relay.stats();
+        assert_eq!((s.revoked_rejects, s.auth_failures), (1, 0));
     }
 
     #[tokio::test]

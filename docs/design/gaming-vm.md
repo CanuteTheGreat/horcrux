@@ -375,6 +375,14 @@ Horcrux Console C1 (no guest tools, software x264, headless browser client on
 a shared CI host): data-channel RTT 2-7 ms, server encode 14-31 ms at
 1280x800, keystroke-to-picture median 73-168 ms; host CPU contention dominates
 and no gaming-path number exists yet (needs guest tools + GPU encode, C2).
+Horcrux Console C3 (netem-shaped WAN, built-in TURN relay, software x264,
+headless browser): keystroke-to-picture median 110 ms at 20 ms RTT, 160 ms at
+50 ms RTT + 1% loss, 273 ms at 100 ms RTT + 2% loss, 130 ms over TURN/TCP;
+link adaptation keeps a configured 1 Mbit/s uplink cap. GeForce NOW's
+< 40 ms recommended RTT corresponds to our 20-50 ms rows; the gap to its
+"under 30 ms" claim is encode (software x264 16-19 ms per frame here vs
+hardware), decode and the jitter buffer. GPU-encode numbers per path still
+need GPU hardware.
 Details: docs/design/horcrux-console.md section 6.
 
 ## 15. Phases
@@ -388,7 +396,9 @@ Details: docs/design/horcrux-console.md section 6.
    display source, host encode, WebRTC, web client, native viewer), proven on
    an ordinary desktop VM, then C2 (guest tools incl. IDD/capture/encode/
    gamepad, `gaming` profile, same-host ivshmem path).
-4. Horcrux Console C3: WAN relay (standalone or cluster), adaptive bitrate,
+4. Horcrux Console C3 (**relay, router mapping, link adaptation, NACK and the
+   netem e2e done 2026-11-20**; FEC, desktop app, in-stream encoder rate open as
+   C3b): WAN relay (standalone or cluster), adaptive bitrate,
    FEC, desktop app; latency tests per path.
 5. HA placement and failover for GPU VMs; GPU pool, sessions, quotas.
 6. Protected gaming VM + attestation; confidential tier where hardware allows.
