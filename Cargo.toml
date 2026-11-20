@@ -16,6 +16,7 @@ members = [
     "crates/horcrux-guest-proto",
     "crates/horcrux-turn",
     "crates/horcrux-guest-tools",
+    "crates/horcrux-viewer",
     "horcrux-api/horcrux-ui",
     "horcrux-mobile",
     "horcrux-common",
