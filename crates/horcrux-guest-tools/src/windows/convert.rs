@@ -3,7 +3,15 @@
 
 /// Convert `src` (tight BGRA, `sw`x`sh`) into `dst` (NV12, `dw`x`dh`, both
 /// even). Rows are split over `threads` threads.
-pub fn bgra_to_nv12(src: &[u8], sw: usize, sh: usize, dst: &mut Vec<u8>, dw: usize, dh: usize, threads: usize) {
+pub fn bgra_to_nv12(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    dst: &mut Vec<u8>,
+    dw: usize,
+    dh: usize,
+    threads: usize,
+) {
     dst.resize(dw * dh * 3 / 2, 0);
     let (y_plane, uv_plane) = dst.split_at_mut(dw * dh);
     let xmap: Vec<usize> = (0..dw).map(|x| x * sw / dw).collect();
@@ -35,7 +43,9 @@ pub fn bgra_to_nv12(src: &[u8], sw: usize, sh: usize, dst: &mut Vec<u8>, dw: usi
                         let mut sr = 0i32;
                         let mut sg = 0i32;
                         let mut sb = 0i32;
-                        for (k, (row, yrow)) in [(r0, &mut *ya), (r1, &mut *yb)].into_iter().enumerate() {
+                        for (k, (row, yrow)) in
+                            [(r0, &mut *ya), (r1, &mut *yb)].into_iter().enumerate()
+                        {
                             let _ = k;
                             for dx in [bx * 2, bx * 2 + 1] {
                                 let px = &row[xmap[dx] * 4..xmap[dx] * 4 + 3];
@@ -47,8 +57,10 @@ pub fn bgra_to_nv12(src: &[u8], sw: usize, sh: usize, dst: &mut Vec<u8>, dw: usi
                             }
                         }
                         let (r, g, b) = ((sr + 2) >> 2, (sg + 2) >> 2, (sb + 2) >> 2);
-                        uv[bx * 2] = (((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128).clamp(16, 240) as u8;
-                        uv[bx * 2 + 1] = (((112 * r - 102 * g - 10 * b + 128) >> 8) + 128).clamp(16, 240) as u8;
+                        uv[bx * 2] =
+                            (((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128).clamp(16, 240) as u8;
+                        uv[bx * 2 + 1] =
+                            (((112 * r - 102 * g - 10 * b + 128) >> 8) + 128).clamp(16, 240) as u8;
                     }
                 }
             });

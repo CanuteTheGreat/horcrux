@@ -43,7 +43,8 @@ impl Dup {
     pub fn open(origin: Origin, index: usize) -> Result<Dup, String> {
         // SAFETY: COM calls on interfaces created here.
         unsafe {
-            let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(|e| format!("CreateDXGIFactory1: {e}"))?;
+            let factory: IDXGIFactory1 =
+                CreateDXGIFactory1().map_err(|e| format!("CreateDXGIFactory1: {e}"))?;
             let mut found: Option<(IDXGIAdapter1, IDXGIOutput)> = None;
             let mut flat = Vec::new();
             let mut a = 0;
@@ -83,7 +84,9 @@ impl Dup {
             .map_err(|e| format!("D3D11CreateDevice: {e}"))?;
             let (dev, ctx) = (dev.ok_or("no device")?, ctx.ok_or("no context")?);
             let out1: IDXGIOutput1 = out.cast().map_err(|e| e.to_string())?;
-            let dup = out1.DuplicateOutput(&dev).map_err(|e| format!("DuplicateOutput: {e}"))?;
+            let dup = out1
+                .DuplicateOutput(&dev)
+                .map_err(|e| format!("DuplicateOutput: {e}"))?;
             let d = dup.GetDesc();
             let (w, h) = (d.ModeDesc.Width, d.ModeDesc.Height);
             let desc = D3D11_TEXTURE2D_DESC {
@@ -92,7 +95,10 @@ impl Dup {
                 MipLevels: 1,
                 ArraySize: 1,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
                 Usage: D3D11_USAGE_STAGING,
                 BindFlags: 0,
                 CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
@@ -130,7 +136,9 @@ impl Capturer for Dup {
             if let Err(e) = self.dup.AcquireNextFrame(timeout_ms, &mut info, &mut res) {
                 return match e.code() {
                     DXGI_ERROR_WAIT_TIMEOUT => Grab::Idle,
-                    DXGI_ERROR_ACCESS_LOST | DXGI_ERROR_ACCESS_DENIED | DXGI_ERROR_DEVICE_REMOVED => Grab::Lost,
+                    DXGI_ERROR_ACCESS_LOST
+                    | DXGI_ERROR_ACCESS_DENIED
+                    | DXGI_ERROR_DEVICE_REMOVED => Grab::Lost,
                     _ => Grab::Err(format!("AcquireNextFrame: {e}")),
                 };
             }
@@ -146,14 +154,21 @@ impl Capturer for Dup {
             self.ctx.CopyResource(&self.staging, &tex);
             let _ = self.dup.ReleaseFrame();
             let mut m = D3D11_MAPPED_SUBRESOURCE::default();
-            if let Err(e) = self.ctx.Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut m)) {
+            if let Err(e) = self
+                .ctx
+                .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut m))
+            {
                 return Grab::Err(format!("Map: {e}"));
             }
             let (w, h) = (self.w as usize, self.h as usize);
             buf.resize(w * h * 4, 0);
             let src = m.pData as *const u8;
             for y in 0..h {
-                std::ptr::copy_nonoverlapping(src.add(y * m.RowPitch as usize), buf.as_mut_ptr().add(y * w * 4), w * 4);
+                std::ptr::copy_nonoverlapping(
+                    src.add(y * m.RowPitch as usize),
+                    buf.as_mut_ptr().add(y * w * 4),
+                    w * 4,
+                );
             }
             self.ctx.Unmap(&self.staging, 0);
             self.got_first = true;

@@ -56,7 +56,17 @@ fn enum_flags(flags: MFT_ENUM_FLAG) -> Vec<IMFActivate> {
     let mut v = Vec::new();
     // SAFETY: the returned array is CoTaskMem memory of n interface pointers.
     unsafe {
-        if MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER, flags, None, Some(&info), &mut arr, &mut n).is_ok() && !arr.is_null() {
+        if MFTEnumEx(
+            MFT_CATEGORY_VIDEO_ENCODER,
+            flags,
+            None,
+            Some(&info),
+            &mut arr,
+            &mut n,
+        )
+        .is_ok()
+            && !arr.is_null()
+        {
             for i in 0..n as usize {
                 if let Some(a) = (*arr.add(i)).take() {
                     v.push(a);
@@ -85,7 +95,10 @@ pub fn enumerate() -> Vec<Candidate> {
                 "nvenc"
             } else if vendor.contains("VEN_1002") || lname.contains("amd") {
                 "amf"
-            } else if vendor.contains("VEN_8086") || lname.contains("intel") || lname.contains("quick sync") {
+            } else if vendor.contains("VEN_8086")
+                || lname.contains("intel")
+                || lname.contains("quick sync")
+            {
                 "qsv"
             } else {
                 "mediafoundation"
@@ -165,7 +178,10 @@ impl Encoder {
         let mut notes = Vec::new();
         // SAFETY: COM calls on interfaces created here.
         unsafe {
-            let mft: IMFTransform = c.act.ActivateObject().map_err(|e| format!("{}: activate: {e}", c.name))?;
+            let mft: IMFTransform = c
+                .act
+                .ActivateObject()
+                .map_err(|e| format!("{}: activate: {e}", c.name))?;
             let mut asynchronous = false;
             if let Ok(attrs) = mft.GetAttributes() {
                 if attrs.GetUINT32(&MF_TRANSFORM_ASYNC).unwrap_or(0) == 1 {
@@ -177,7 +193,10 @@ impl Encoder {
                 let _ = attrs.SetUINT32(&MF_LOW_LATENCY, p.low_delay as u32);
             }
             let events = if asynchronous {
-                Some(mft.cast::<IMFMediaEventGenerator>().map_err(|e| e.to_string())?)
+                Some(
+                    mft.cast::<IMFMediaEventGenerator>()
+                        .map_err(|e| e.to_string())?,
+                )
             } else {
                 None
             };
@@ -191,7 +210,9 @@ impl Encoder {
             out_t.SetUINT64(&MF_MT_FRAME_SIZE, pack(p.w, p.h)).ok();
             out_t.SetUINT64(&MF_MT_FRAME_RATE, pack(p.fps, 1)).ok();
             out_t.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1)).ok();
-            out_t.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32).ok();
+            out_t
+                .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
+                .ok();
             out_t.SetUINT32(&MF_MT_MPEG2_PROFILE, p.profile).ok();
             if let Some(api) = &codec {
                 let mut set = |k: &GUID, v: VARIANT, what: &str| {
@@ -200,7 +221,11 @@ impl Encoder {
                     }
                 };
                 if p.low_delay {
-                    set(&CODECAPI_AVLowLatencyMode, var_bool(true), "low latency mode");
+                    set(
+                        &CODECAPI_AVLowLatencyMode,
+                        var_bool(true),
+                        "low latency mode",
+                    );
                 }
                 set(
                     &CODECAPI_AVEncCommonRateControlMode,
@@ -209,9 +234,17 @@ impl Encoder {
                 );
                 set(&CODECAPI_AVEncCommonMeanBitRate, var_u32(bps), "bitrate");
                 if p.max_bitrate_kbps > 0 {
-                    set(&CODECAPI_AVEncCommonMaxBitRate, var_u32(p.max_bitrate_kbps * 1000), "max bitrate");
+                    set(
+                        &CODECAPI_AVEncCommonMaxBitRate,
+                        var_u32(p.max_bitrate_kbps * 1000),
+                        "max bitrate",
+                    );
                 }
-                set(&CODECAPI_AVEncMPVDefaultBPictureCount, var_u32(0), "no B-frames");
+                set(
+                    &CODECAPI_AVEncMPVDefaultBPictureCount,
+                    var_u32(0),
+                    "no B-frames",
+                );
                 if p.gop > 0 {
                     set(&CODECAPI_AVEncMPVGOPSize, var_u32(p.gop), "GOP size");
                 }
@@ -225,17 +258,24 @@ impl Encoder {
             in_t.SetUINT64(&MF_MT_FRAME_SIZE, pack(p.w, p.h)).ok();
             in_t.SetUINT64(&MF_MT_FRAME_RATE, pack(p.fps, 1)).ok();
             in_t.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1)).ok();
-            in_t.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32).ok();
+            in_t.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
+                .ok();
             in_t.SetUINT32(&MF_MT_DEFAULT_STRIDE, p.w).ok();
-            in_t.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32).ok();
-            in_t.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32).ok();
-            in_t.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32).ok();
-            in_t.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32).ok();
+            in_t.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)
+                .ok();
+            in_t.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)
+                .ok();
+            in_t.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)
+                .ok();
+            in_t.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32)
+                .ok();
             if let Err(e) = mft.SetInputType(0, &in_t, 0) {
                 // Some MFTs only accept one of their own advertised types.
                 let mut ok = false;
                 for i in 0.. {
-                    let Ok(t) = mft.GetInputAvailableType(0, i) else { break };
+                    let Ok(t) = mft.GetInputAvailableType(0, i) else {
+                        break;
+                    };
                     if t.GetGUID(&MF_MT_SUBTYPE).ok() == Some(MFVideoFormat_NV12) {
                         t.SetUINT64(&MF_MT_FRAME_SIZE, pack(p.w, p.h)).ok();
                         t.SetUINT64(&MF_MT_FRAME_RATE, pack(p.fps, 1)).ok();
@@ -246,14 +286,18 @@ impl Encoder {
                     }
                 }
                 if !ok {
-                    return Err(format!("{}: SetInputType NV12 {}x{}: {e}", c.name, p.w, p.h));
+                    return Err(format!(
+                        "{}: SetInputType NV12 {}x{}: {e}",
+                        c.name, p.w, p.h
+                    ));
                 }
             }
             let info = mft
                 .GetOutputStreamInfo(0)
                 .map_err(|e| format!("GetOutputStreamInfo: {e}"))?;
             let provides = info.dwFlags
-                & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32 | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0 as u32)
+                & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32
+                    | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0 as u32)
                 != 0;
             let mut enc = Encoder {
                 mft,
@@ -270,8 +314,12 @@ impl Encoder {
                 force_key: false,
                 notes,
             };
-            enc.mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0).ok();
-            enc.mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0).ok();
+            enc.mft
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
+                .ok();
+            enc.mft
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
+                .ok();
             enc.refresh_header();
             Ok(enc)
         }
@@ -319,7 +367,8 @@ impl Encoder {
             let b = s.ConvertToContiguousBuffer().map_err(|e| e.to_string())?;
             let mut p = std::ptr::null_mut();
             let mut len = 0u32;
-            b.Lock(&mut p, None, Some(&mut len)).map_err(|e| e.to_string())?;
+            b.Lock(&mut p, None, Some(&mut len))
+                .map_err(|e| e.to_string())?;
             let v = std::slice::from_raw_parts(p, len as usize).to_vec();
             b.Unlock().ok();
             Ok(v)
@@ -410,7 +459,9 @@ impl Encoder {
             self.force_key = false;
             if let Some(api) = &self.codec {
                 // SAFETY: plain property set.
-                if let Err(e) = unsafe { api.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &var_u32(1)) } {
+                if let Err(e) =
+                    unsafe { api.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &var_u32(1)) }
+                {
                     self.notes.push(format!("force keyframe: {e}"));
                 }
             }
@@ -425,10 +476,13 @@ impl Encoder {
                 }
             }
             // SAFETY: the MFT asked for input.
-            unsafe { self.mft.ProcessInput(0, &sample, 0) }.map_err(|e| format!("ProcessInput: {e}"))?;
+            unsafe { self.mft.ProcessInput(0, &sample, 0) }
+                .map_err(|e| format!("ProcessInput: {e}"))?;
             self.need_input -= 1;
             let t0 = Instant::now();
-            while self.ready.is_empty() && t0.elapsed() < Duration::from_millis(self.p.output_wait_ms) {
+            while self.ready.is_empty()
+                && t0.elapsed() < Duration::from_millis(self.p.output_wait_ms)
+            {
                 self.pump(Duration::from_millis(2))?;
             }
         } else {
@@ -440,7 +494,8 @@ impl Encoder {
                 }
                 while self.take_output()? {}
                 // SAFETY: as above.
-                unsafe { self.mft.ProcessInput(0, &sample, 0) }.map_err(|e| format!("ProcessInput: {e}"))?;
+                unsafe { self.mft.ProcessInput(0, &sample, 0) }
+                    .map_err(|e| format!("ProcessInput: {e}"))?;
             }
             while self.take_output()? {}
         }
@@ -463,7 +518,9 @@ impl Drop for Encoder {
     fn drop(&mut self) {
         // SAFETY: orderly end of the stream; the MFT is released after.
         unsafe {
-            self.mft.ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0).ok();
+            self.mft
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)
+                .ok();
             self.mft.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0).ok();
         }
     }

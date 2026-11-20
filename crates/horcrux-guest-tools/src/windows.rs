@@ -90,7 +90,11 @@ impl Platform for Windows {
             os_version: os_version(),
             agent_version: env!("CARGO_PKG_VERSION").into(),
             caps: Caps {
-                codecs: if encoders.is_empty() { vec![] } else { vec!["h264".into()] },
+                codecs: if encoders.is_empty() {
+                    vec![]
+                } else {
+                    vec!["h264".into()]
+                },
                 encoders,
                 capture,
                 clipboard: true,

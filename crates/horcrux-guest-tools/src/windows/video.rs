@@ -28,7 +28,10 @@ impl Video {
             ..Default::default()
         };
         if !sv.codec.is_empty() && sv.codec != "h264" {
-            return (None, fail(format!("codec {} is not supported (h264 only)", sv.codec)));
+            return (
+                None,
+                fail(format!("codec {} is not supported (h264 only)", sv.codec)),
+            );
         }
         let stop = Arc::new(AtomicBool::new(false));
         let key = Arc::new(AtomicBool::new(false));
@@ -76,19 +79,27 @@ impl Drop for Video {
 fn open_capture(cfg: &Config, sv: &StartVideo) -> Result<Box<dyn Capturer>, String> {
     let mons = layout::monitors();
     let idx = sv.monitor as usize;
-    let m = mons.get(idx).or(mons.first()).ok_or("no display attached to the desktop")?;
+    let m = mons
+        .get(idx)
+        .or(mons.first())
+        .ok_or("no display attached to the desktop")?;
     let origin = (m.x, m.y);
-    let gdi = || Gdi::open(origin, (m.w, m.h), cfg.gdi_poll_ms as u32).map(|g| Box::new(g) as Box<dyn Capturer>);
+    let gdi = || {
+        Gdi::open(origin, (m.w, m.h), cfg.gdi_poll_ms as u32)
+            .map(|g| Box::new(g) as Box<dyn Capturer>)
+    };
     match cfg.capture.as_str() {
         "gdi" => gdi(),
-        _ => match Dup::open(origin, idx) {
-            Ok(d) => Ok(Box::new(d)),
-            Err(e) if cfg.capture == "auto" => {
-                eprintln!("horcrux-guest-agent: desktop duplication unavailable ({e}); using GDI capture");
-                gdi()
+        _ => {
+            match Dup::open(origin, idx) {
+                Ok(d) => Ok(Box::new(d)),
+                Err(e) if cfg.capture == "auto" => {
+                    eprintln!("horcrux-guest-agent: desktop duplication unavailable ({e}); using GDI capture");
+                    gdi()
+                }
+                Err(e) => Err(e),
             }
-            Err(e) => Err(e),
-        },
+        }
     }
 }
 
@@ -110,7 +121,11 @@ pub fn probe(cfg: &Config) -> (Vec<String>, Vec<String>) {
     let mut enc = Vec::new();
     if mf::startup().is_ok() {
         for c in mf::enumerate() {
-            let k = if c.hardware { c.kind.clone() } else { "software".into() };
+            let k = if c.hardware {
+                c.kind.clone()
+            } else {
+                "software".into()
+            };
             if !enc.contains(&k) {
                 enc.push(k);
             }
@@ -145,7 +160,14 @@ fn profile(name: &str) -> u32 {
 
 type Reply = mpsc::Sender<Result<VideoStatus, String>>;
 
-fn run(cfg: Config, sv: StartVideo, out: Out, stop: Arc<AtomicBool>, key: Arc<AtomicBool>, reply: Reply) {
+fn run(
+    cfg: Config,
+    sv: StartVideo,
+    out: Out,
+    stop: Arc<AtomicBool>,
+    key: Arc<AtomicBool>,
+    reply: Reply,
+) {
     if let Err(e) = mf::startup() {
         let _ = reply.send(Err(e));
         return;
@@ -161,7 +183,10 @@ fn run(cfg: Config, sv: StartVideo, out: Out, stop: Arc<AtomicBool>, key: Arc<At
     let fps = sv.fps.clamp(1, 240);
     let interval = Duration::from_micros(1_000_000 / fps as u64);
     let threads = if cfg.convert_threads == 0 {
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(4)
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(4)
     } else {
         cfg.convert_threads
     };
@@ -285,11 +310,19 @@ fn run(cfg: Config, sv: StartVideo, out: Out, stop: Arc<AtomicBool>, key: Arc<At
             let c = cap.as_mut().expect("capture is open");
             let mut fresh = false;
             let now = Instant::now();
-            let gate = if sv.fixed_rate { next } else { last_encode + interval };
+            let gate = if sv.fixed_rate {
+                next
+            } else {
+                last_encode + interval
+            };
             if gate > now {
                 std::thread::sleep(gate - now);
             }
-            let wait = if sv.fixed_rate && have_frame { 0 } else { cfg.idle_poll_ms as u32 };
+            let wait = if sv.fixed_rate && have_frame {
+                0
+            } else {
+                cfg.idle_poll_ms as u32
+            };
             match c.grab(wait, &mut bgra) {
                 Grab::New => {
                     fresh = true;
@@ -324,7 +357,15 @@ fn run(cfg: Config, sv: StartVideo, out: Out, stop: Arc<AtomicBool>, key: Arc<At
             let cap_us = now_us();
             if fresh || nv12.is_empty() {
                 let (fw, fh) = frame_size;
-                convert::bgra_to_nv12(&bgra, fw as usize, fh as usize, &mut nv12, w as usize, h as usize, threads);
+                convert::bgra_to_nv12(
+                    &bgra,
+                    fw as usize,
+                    fh as usize,
+                    &mut nv12,
+                    w as usize,
+                    h as usize,
+                    threads,
+                );
             }
             let pts = (t0.elapsed().as_nanos() / 100) as i64;
             let units = match enc.encode(&nv12, pts) {
@@ -332,7 +373,10 @@ fn run(cfg: Config, sv: StartVideo, out: Out, stop: Arc<AtomicBool>, key: Arc<At
                 Err(e) => {
                     // A hardware MFT that fails before producing anything: try the next one.
                     if !sent_any && cands.len() > 1 {
-                        log(format!("encoder {} failed ({e}); trying the next one", enc.name));
+                        log(format!(
+                            "encoder {} failed ({e}); trying the next one",
+                            enc.name
+                        ));
                         cands.remove(0).close();
                         drop(enc);
                         continue 'rebuild;

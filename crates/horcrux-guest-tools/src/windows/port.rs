@@ -46,11 +46,14 @@ pub fn open(path: &str) -> Result<crate::Port, String> {
             None,
         )
     }
-    .map_err(|e| format!("{path}: {e} (is the virtio-serial driver installed and the port enabled?)"))?;
+    .map_err(|e| {
+        format!("{path}: {e} (is the virtio-serial driver installed and the port enabled?)")
+    })?;
     let file = Arc::new(Owned(h));
     let half = |write| -> Result<Half, String> {
         // SAFETY: plain event creation.
-        let ev = unsafe { CreateEventW(None, true, false, PCWSTR::null()) }.map_err(|e| e.to_string())?;
+        let ev = unsafe { CreateEventW(None, true, false, PCWSTR::null()) }
+            .map_err(|e| e.to_string())?;
         Ok(Half {
             file: file.clone(),
             event: Owned(ev),
@@ -77,7 +80,9 @@ impl Half {
 
 fn map_err(e: windows::core::Error) -> io::Error {
     let code = e.code();
-    if code == HRESULT::from_win32(ERROR_BROKEN_PIPE.0) || code == HRESULT::from_win32(ERROR_HANDLE_EOF.0) {
+    if code == HRESULT::from_win32(ERROR_BROKEN_PIPE.0)
+        || code == HRESULT::from_win32(ERROR_HANDLE_EOF.0)
+    {
         return io::Error::new(io::ErrorKind::UnexpectedEof, e.message());
     }
     io::Error::other(e.message())

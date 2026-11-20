@@ -56,7 +56,11 @@ pub fn monitors() -> Vec<Mon> {
         let mut dm = devmode();
         // SAFETY: DeviceName is a NUL-terminated wide string; dm is valid.
         if !unsafe {
-            EnumDisplaySettingsW(PCWSTR(dd.DeviceName.as_ptr()), ENUM_CURRENT_SETTINGS, &mut dm)
+            EnumDisplaySettingsW(
+                PCWSTR(dd.DeviceName.as_ptr()),
+                ENUM_CURRENT_SETTINGS,
+                &mut dm,
+            )
         }
         .as_bool()
         {
@@ -64,7 +68,11 @@ pub fn monitors() -> Vec<Mon> {
         }
         // SAFETY: reading the position member of the display variant of the union.
         let pos = unsafe { dm.Anonymous1.Anonymous2.dmPosition };
-        let end = dd.DeviceName.iter().position(|c| *c == 0).unwrap_or(dd.DeviceName.len());
+        let end = dd
+            .DeviceName
+            .iter()
+            .position(|c| *c == 0)
+            .unwrap_or(dd.DeviceName.len());
         let mut device = dd.DeviceName[..end].to_vec();
         device.push(0);
         v.push(Mon {
@@ -93,8 +101,10 @@ fn find_mode(dev: &[u16], w: u32, h: u32, hz: u32) -> Option<DEVMODEW> {
     loop {
         let mut dm = devmode();
         // SAFETY: dev is NUL-terminated; dm is valid.
-        if !unsafe { EnumDisplaySettingsW(PCWSTR(dev.as_ptr()), ENUM_DISPLAY_SETTINGS_MODE(i), &mut dm) }
-            .as_bool()
+        if !unsafe {
+            EnumDisplaySettingsW(PCWSTR(dev.as_ptr()), ENUM_DISPLAY_SETTINGS_MODE(i), &mut dm)
+        }
+        .as_bool()
         {
             break;
         }
@@ -122,12 +132,16 @@ pub fn apply(l: &Layout, settle_ms: u64) -> Vec<String> {
     let cur = monitors();
     for (i, want) in l.monitors.iter().enumerate() {
         let Some(m) = cur.get(i) else {
-            notes.push(format!("monitor {i}: not present (no virtual display driver)"));
+            notes.push(format!(
+                "monitor {i}: not present (no virtual display driver)"
+            ));
             continue;
         };
         let size_change = want.width != 0
             && want.height != 0
-            && (want.width != m.w || want.height != m.h || (want.refresh_hz != 0 && want.refresh_hz != m.hz));
+            && (want.width != m.w
+                || want.height != m.h
+                || (want.refresh_hz != 0 && want.refresh_hz != m.hz));
         let pos_change = !m.primary && (want.x != m.x || want.y != m.y);
         if !size_change && !pos_change {
             continue;
@@ -136,14 +150,19 @@ pub fn apply(l: &Layout, settle_ms: u64) -> Vec<String> {
             match find_mode(&m.device, want.width, want.height, want.refresh_hz) {
                 Some(dm) => dm,
                 None => {
-                    notes.push(format!("monitor {i}: no {}x{} mode", want.width, want.height));
+                    notes.push(format!(
+                        "monitor {i}: no {}x{} mode",
+                        want.width, want.height
+                    ));
                     continue;
                 }
             }
         } else {
             let mut dm = devmode();
             // SAFETY: m.device is NUL-terminated.
-            let _ = unsafe { EnumDisplaySettingsW(PCWSTR(m.device.as_ptr()), ENUM_CURRENT_SETTINGS, &mut dm) };
+            let _ = unsafe {
+                EnumDisplaySettingsW(PCWSTR(m.device.as_ptr()), ENUM_CURRENT_SETTINGS, &mut dm)
+            };
             dm
         };
         if pos_change {
@@ -152,9 +171,20 @@ pub fn apply(l: &Layout, settle_ms: u64) -> Vec<String> {
             dm.Anonymous1.Anonymous2.dmPosition.y = want.y;
         }
         // SAFETY: device name and dm are valid for the call.
-        let r = unsafe { ChangeDisplaySettingsExW(PCWSTR(m.device.as_ptr()), Some(&dm), None, CDS_TYPE(0), None) };
+        let r = unsafe {
+            ChangeDisplaySettingsExW(
+                PCWSTR(m.device.as_ptr()),
+                Some(&dm),
+                None,
+                CDS_TYPE(0),
+                None,
+            )
+        };
         if r != DISP_CHANGE_SUCCESSFUL {
-            notes.push(format!("monitor {i}: ChangeDisplaySettingsEx returned {}", r.0));
+            notes.push(format!(
+                "monitor {i}: ChangeDisplaySettingsEx returned {}",
+                r.0
+            ));
         }
     }
     std::thread::sleep(std::time::Duration::from_millis(settle_ms));

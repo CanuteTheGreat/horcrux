@@ -64,8 +64,22 @@ pub fn inject(i: &Input, scale_pct: i32) {
                 (1, false) => (MOUSEEVENTF_MIDDLEUP, 0),
                 (2, true) => (MOUSEEVENTF_RIGHTDOWN, 0),
                 (2, false) => (MOUSEEVENTF_RIGHTUP, 0),
-                (3, d) => (if d { MOUSEEVENTF_XDOWN } else { MOUSEEVENTF_XUP }, XBUTTON1 as i32),
-                (4, d) => (if d { MOUSEEVENTF_XDOWN } else { MOUSEEVENTF_XUP }, XBUTTON2 as i32),
+                (3, d) => (
+                    if d {
+                        MOUSEEVENTF_XDOWN
+                    } else {
+                        MOUSEEVENTF_XUP
+                    },
+                    XBUTTON1 as i32,
+                ),
+                (4, d) => (
+                    if d {
+                        MOUSEEVENTF_XDOWN
+                    } else {
+                        MOUSEEVENTF_XUP
+                    },
+                    XBUTTON2 as i32,
+                ),
                 _ => return,
             };
             send(mouse(0, 0, data, flags));

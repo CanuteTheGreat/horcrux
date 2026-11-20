@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Horcrux Guest Tools for Windows (GPL-3.0-or-later).
+     Built with wixl (msitools) by ci/build-guest-tools-msi.sh, which passes
+     Version=<workspace version> AgentExe=<path to horcrux-guest-agent.exe>
+     DefaultConf=<path to the default guest-tools.conf>.
+     Installs the agent into %ProgramFiles%\Horcrux\Guest Tools, registers it as the
+     auto-start service HorcruxGuestTools (its command line is the service flag, which launches the agent in
+     the active console session) and drops %ProgramData%\Horcrux\guest-tools.conf. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Horcrux Guest Tools" Language="1033" Version="$(var.Version)"
+           Manufacturer="Horcrux" UpgradeCode="6f1d3a52-4b8e-4c0d-9a77-5e2c8b1f40d3">
+    <Package Description="Horcrux Guest Tools" Manufacturer="Horcrux" InstallerVersion="500"
+             Compressed="yes" InstallScope="perMachine"/>
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Horcrux Guest Tools is already installed."/>
+    <Media Id="1" Cabinet="hx.cab" EmbedCab="yes"/>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="HorcruxDir" Name="Horcrux">
+          <Directory Id="INSTALLDIR" Name="Guest Tools">
+            <Component Id="AgentExe" Guid="0b6f5a1e-7d34-4f9c-8e21-3a5d9c7b1e60" Win64="yes">
+              <File Id="AgentExeFile" Name="horcrux-guest-agent.exe" Source="$(var.AgentExe)" KeyPath="yes"/>
+              <ServiceInstall Id="HxSvcInstall" Name="HorcruxGuestTools" DisplayName="Horcrux Guest Tools"
+                              Description="Horcrux Console guest agent: display capture and H.264 encode, input, clipboard and display layout for the host."
+                              Type="ownProcess" Start="auto" ErrorControl="normal" Vital="yes"
+                              Arguments="--service"/>
+              <ServiceControl Id="HxSvcControl" Name="HorcruxGuestTools" Start="install" Stop="both" Remove="uninstall" Wait="no"/>
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="HxData" Name="Horcrux">
+          <Component Id="DefaultConf" Guid="9c2e47d8-1a63-4b5f-b0e9-6d8f2a4c7e15" Win64="yes">
+            <File Id="DefaultConfFile" Name="guest-tools.conf" Source="$(var.DefaultConf)" KeyPath="yes"/>
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Title="Horcrux Guest Tools" Level="1">
+      <ComponentRef Id="AgentExe"/>
+      <ComponentRef Id="DefaultConf"/>
+    </Feature>
+  </Product>
+</Wix>
