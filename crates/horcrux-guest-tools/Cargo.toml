@@ -1,0 +1,18 @@
+[package]
+name = "horcrux-guest-tools"
+description = "Horcrux guest tools: display capture/encode, input, clipboard and layout inside a VM for Horcrux Console"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "horcrux-guest-agent"
+path = "src/main.rs"
+
+[dependencies]
+horcrux-guest-proto = { path = "../horcrux-guest-proto" }
+serde_json = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

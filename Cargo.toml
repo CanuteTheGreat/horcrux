@@ -13,6 +13,8 @@ members = [
     "crates/horcrux-k8s",
     "crates/horcrux-core",
     "crates/horcrux-nas",
+    "crates/horcrux-guest-proto",
+    "crates/horcrux-guest-tools",
     "horcrux-api/horcrux-ui",
     "horcrux-mobile",
     "horcrux-common",
