@@ -1118,8 +1118,16 @@ impl S3GatewayManager {
         )
         .map_err(|e| Error::Internal(format!("Failed to write S3 pid file: {}", e)))?;
         // Reap the child when it exits (no zombie while the API runs).
+        // The same task records the exit: the start wait asks the child handle
+        // itself whether the server is alive, never a /proc cmdline match (a
+        // process caught between fork and exec shows the parent's cmdline and
+        // comm, which made the first poll report "exited after 0s" for a
+        // server that then started fine).
+        let exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let exited_w = exited.clone();
         tokio::spawn(async move {
             let _ = child.wait().await;
+            exited_w.store(true, std::sync::atomic::Ordering::SeqCst);
         });
 
         let started = std::time::Instant::now();
@@ -1127,7 +1135,7 @@ impl S3GatewayManager {
             std::time::Duration::from_secs(START_TIMEOUT_SECS),
             std::time::Duration::from_millis(300),
             || self.healthy(),
-            || self.running_pid().is_some(),
+            || !exited.load(std::sync::atomic::Ordering::SeqCst),
         )
         .await;
         match waited {
