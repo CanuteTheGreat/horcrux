@@ -348,8 +348,17 @@ class VM:
                        "-chardev", f"socket,id=ser0,path={self.ser_path},server=on,wait=off", "-serial", "chardev:ser0",
                        "-display", "none",
                        "-d", "cpu_reset", "-D", f"{out}/{name}-qemu-debug.log"]     # why QEMU ended: CPU reset / triple fault dump
+        self.events, self.ev_path = [], ""
         if self.hold:
             full += ["-no-shutdown"]
+            # a second, events-only QMP monitor: the SHUTDOWN event carries the reason (guest-shutdown = ACPI poweroff, guest-reset = reboot/CF9
+            # request turned into a shutdown by -no-reboot, guest-panic, host-qmp-quit) and is only delivered to a client connected at that moment;
+            # the control socket is used by one short-lived client at a time, so it cannot hold the subscription (runs 3963/3964/4033/4243: guest
+            # vanishes after the hibernate resume, registers show an idle kernel, no cpu_reset line, cause of the shutdown request unknown)
+            self.ev_path = self.qmp_path[:-4] + ".ev" if self.qmp_path.endswith(".qmp") else self.qmp_path + ".ev"
+            if os.path.exists(self.ev_path):
+                os.unlink(self.ev_path)
+            full += ["-chardev", f"socket,id=evc,path={self.ev_path},server=on,wait=off", "-mon", "chardev=evc,mode=control"]
         self.sock = None
         self.last_rx = time.time()
         self.poke = False          # serial TUI runs: send Ctrl-L when the line has been silent (see expect_screen)
@@ -398,6 +407,8 @@ class VM:
             raise SystemExit(f"cannot connect to the QEMU serial socket after 3 tries (last qemu exit={self.p.poll()}; stderr: {err or 'empty'})")
         LIVE_VMS.append(self)
         threading.Thread(target=self._rd, daemon=True).start()
+        if self.ev_path:
+            threading.Thread(target=self._ev_rd, daemon=True).start()
 
     def _rd(self):
         while True:
@@ -427,6 +438,40 @@ class VM:
                 if LUKS_PROMPT.search(win) and time.time() - self.luks_t > 10:
                     self.luks_t = time.time(); self.luks_n += 1
                     threading.Timer(1.0, lambda: self.send(VM.LUKS_UNLOCK + "\r")).start()
+
+    def _ev_rd(self):
+        """record the QMP events of the events-only monitor (SHUTDOWN reason, RESET, POWERDOWN, GUEST_PANICKED, ...) with a timestamp; diagnostics only"""
+        c = None
+        for _ in range(100):
+            try:
+                c = socket.socket(socket.AF_UNIX)
+                c.connect(self.ev_path)
+                break
+            except OSError:
+                c = None
+                if self.p.poll() is not None:
+                    return
+                time.sleep(0.2)
+        if c is None:
+            return
+        try:
+            c.settimeout(None)
+            f = c.makefile("rw")
+            f.readline()
+            f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n")
+            f.flush()
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if "event" in r:
+                    self.events.append(f"{time.strftime('%H:%M:%S')} {r['event']} {json.dumps(r.get('data', {}))}")
+        except Exception:
+            pass
 
     def send(self, s):
         try:

@@ -236,6 +236,9 @@ class ZRun(qt.Runner):
                     self.res.setdefault("rip_offsets", []).append(f"{off:x}")
             err += f" | runstate/regs: {' '.join(rs.split()[:60])}"
         tail = qt.serial_tail(vm, 40)
+        evs = list(getattr(vm, "events", []) or [])
+        if evs:
+            err += " | qmp events: " + " / ".join(evs[-12:])
         msg = f"{label}: QEMU exited during the command (exit status {rc}); qemu stderr: {err!r}; cgroup memory.events: {ev}{tail}"
         print("[DIAG] " + msg, flush=True)
         self.res.setdefault("vm_died_during_command", []).append(msg)

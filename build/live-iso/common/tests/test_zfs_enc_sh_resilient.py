@@ -94,6 +94,54 @@ class DeadVm(unittest.TestCase):
         self.assertIn("exit status 0", msg)
         self.assertEqual(len(h.res["vm_died_during_command"]), 1)
 
+    def test_report_includes_qmp_shutdown_reason(self):
+        cls = [v for v in vars(zet).values() if isinstance(v, type) and hasattr(v, "vm_death_report")][0]
+        h = cls.__new__(cls)
+        h.res = {}
+
+        class P:
+            def poll(self):
+                return -9
+
+        class V:
+            p, name, out = P(), "5-boot4-resume", "/nonexistent"
+            log = type("L", (), {"name": "/nonexistent/x"})()
+            events = ['03:16:09 SHUTDOWN {"guest": true, "reason": "guest-shutdown"}']
+        msg = h.vm_death_report(V(), "scrub-after-resume")
+        self.assertIn("qmp events", msg)
+        self.assertIn("guest-shutdown", msg)
+
+    def test_event_reader_records_events_from_a_second_monitor(self):
+        import os, socket, tempfile, threading, json, time
+        qt = zet.qt
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "x.ev")
+        srv = socket.socket(socket.AF_UNIX)
+        srv.bind(path)
+        srv.listen(1)
+
+        def server():
+            c, _ = srv.accept()
+            f = c.makefile("rw")
+            f.write(json.dumps({"QMP": {}}) + "\n")
+            f.flush()
+            f.readline()
+            f.write(json.dumps({"return": {}}) + "\n")
+            f.write(json.dumps({"event": "SHUTDOWN", "data": {"guest": True, "reason": "guest-reset"}}) + "\n")
+            f.flush()
+            time.sleep(0.5)
+            c.close()
+        threading.Thread(target=server, daemon=True).start()
+
+        class P:
+            def poll(self):
+                return None
+        v = qt.VM.__new__(qt.VM)
+        v.ev_path, v.events, v.p = path, [], P()
+        v._ev_rd()
+        self.assertEqual(len(v.events), 1)
+        self.assertIn("guest-reset", v.events[0])
+
 
 if __name__ == "__main__":
     unittest.main()
