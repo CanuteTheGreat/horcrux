@@ -116,12 +116,14 @@ PROBES=(
 )
 
 # ---- 1. everything optional on, OpenRC ------------------------------------
-run_set full "cli webui monitoring -systemd docker lxc podman lxd incus -qemu \
+run_set full "cli webui monitoring -systemd docker lxc podman lxd incus -qemu -viewer \
     kubernetes backup cluster nas smb nfs-server afp webdav ftp ldap ldap-server \
     kerberos ad timemachine s3-gateway iscsi-target rsync-server \
     nas-zfs nas-btrfs nas-mdraid nas-lvm pam"
 has usr/bin/horcrux-api
 has usr/bin/horcrux
+# USE=viewer needs qemu (REQUIRED_USE), so this -qemu set installs no viewer.
+hasnt usr/bin/horcrux-viewer
 has opt/horcrux/horcrux-ui/index.html
 ls "$IMAGE"/opt/horcrux/horcrux-ui/*.wasm >/dev/null 2>&1 || fail "web UI bundle has no .wasm"
 has opt/horcrux/horcrux-ui/favicon.ico
@@ -157,7 +159,7 @@ grep -E '^POST /api/vms ' <<<"$out" | grep -vq NOT_COMPILED \
 expect '^GET / 200' "USE=webui: UI index not served"
 
 # ---- 2. minimal, systemd ---------------------------------------------------
-run_set minimal "lxc systemd -docker -podman -qemu -webui -cli -monitoring \
+run_set minimal "lxc systemd -docker -podman -qemu -viewer -webui -cli -monitoring \
     -kubernetes -nas -backup -cluster -pam"
 has usr/bin/horcrux-api
 hasnt usr/bin/horcrux
@@ -189,7 +191,7 @@ expect '^POST /api/containers 422 NOT_COMPILED' "USE=-docker: docker container c
     || fail "USE=-qemu -incus: VM creates not refused as not compiled in"
 
 # ---- 3. podman + cluster, no docker/backup, OpenRC -------------------------
-run_set podman-cluster "podman cluster -docker -lxc -lxd -incus -qemu -systemd \
+run_set podman-cluster "podman cluster -docker -lxc -lxd -incus -qemu -viewer -systemd \
     -webui -cli -monitoring -kubernetes -nas -backup -pam"
 out=$(route_status "${PROBES[@]}")
 echo "$out"
