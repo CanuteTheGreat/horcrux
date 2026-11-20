@@ -855,6 +855,10 @@ class ZRun(qt.Runner):
             self.step("pool-healthy-after-resume", "all pools are healthy" in o and "available" in o and "KEYLEFT" not in o, o.strip().replace("\n", " | ")[:300])
             rc, o = self.scrub_wait(vm, before["boot_id"])
             self.step("scrub-clean-after-resume", rc == 0 and "with 0 errors" in o and "No known data errors" in o, o.strip().replace("\n", " | ")[:300])
+            wd = [e for e in (getattr(vm, "events", []) or []) if " WATCHDOG " in e]
+            if wd:
+                print("[DIAG] resumed guest: the emulated watchdog fired (action only logged, guest kept running): " + " / ".join(wd[-3:]), flush=True)
+                self.res["watchdog_events_after_resume"] = wd
             self.sh("poweroff", timeout=10)
             self.wait_exit(vm)
         finally:

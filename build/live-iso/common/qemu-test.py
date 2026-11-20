@@ -319,6 +319,21 @@ def sock_paths(out, name):
     return f"{d}/{h}.qmp", f"{d}/{h}.serial"
 
 
+_ACTION_FLAG = {}
+
+
+def watchdog_action_supported():
+    """does this QEMU know `-action watchdog=...` (QEMU 6.0+)? probed once per binary"""
+    q = str(ARCHS[ARCH]["qemu"])
+    if q not in _ACTION_FLAG:
+        try:
+            out = subprocess.run([q, "-help"], capture_output=True, text=True, timeout=30).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        _ACTION_FLAG[q] = "-action" in out
+    return _ACTION_FLAG[q]
+
+
 class VM:
     # a VM built while this is True keeps QEMU alive (paused) after a guest reset/poweroff (-no-reboot + -no-shutdown) so alive() can read the CPU
     # registers (HMP `info registers`) at the moment the guest vanished: with KVM a triple fault, a CF9/ACPI reset and a clean reboot all end as
@@ -359,6 +374,13 @@ class VM:
             if os.path.exists(self.ev_path):
                 os.unlink(self.ev_path)
             full += ["-chardev", f"socket,id=evc,path={self.ev_path},server=on,wait=off", "-mon", "chardev=evc,mode=control"]
+            # run 4283 (OpenRC) QMP events: `WATCHDOG {"action": "reset"}` then `SHUTDOWN guest-reset` 5 s after the resumed guest's NIC came up, cgroup
+            # oom_kill 0. The q35 iTCO watchdog is a harness-side device: no unit of this image arms it (only the test-machine payload does, and the
+            # hibernate guest is not a test machine), and its default action turns a stray TCO timeout into a guest reset that -no-reboot ends as a vanished
+            # guest. The action is only logged here (QEMU prints it, the event line records it, hibernate_phase prints it), so the resumed guest is
+            # judged on the pool/scrub assertions and a watchdog that really fires stays visible in the log.
+            if watchdog_action_supported():
+                full += ["-action", "watchdog=debug"]
         self.sock = None
         self.last_rx = time.time()
         self.poke = False          # serial TUI runs: send Ctrl-L when the line has been silent (see expect_screen)
