@@ -8,6 +8,12 @@
 //! token moved to that session. It relaunches the agent when it exits and
 //! when the console session changes (logon, logoff, fast user switching,
 //! console/RDP reconnect).
+//!
+//! The virtio-serial port device admits only administrators and SYSTEM,
+//! so the service opens the port itself and hands the agent an inherited
+//! handle (`--port_handle`, restricted to that one handle with
+//! PROC_THREAD_ATTRIBUTE_HANDLE_LIST); a standard user's agent could not
+//! open it.
 use crate::config::Config;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
@@ -140,7 +146,7 @@ fn supervise() {
             }
         }
         if child.is_none() && session != 0xFFFF_FFFF {
-            match launch(session, &args, cfg.service_login_screen) {
+            match launch(session, &args, &cfg) {
                 Ok(c) => {
                     last_fail.clear();
                     child = Some(c);
@@ -200,9 +206,23 @@ fn session_token(session: u32, login_screen: bool) -> Result<HANDLE, String> {
     }
 }
 
-fn launch(session: u32, args: &[String], login_screen: bool) -> Result<Child, String> {
+fn launch(session: u32, args: &[String], cfg: &Config) -> Result<Child, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let token = session_token(session, login_screen)?;
+    let token = session_token(session, cfg.service_login_screen)?;
+    let port = if cfg.connect.is_none() {
+        match super::port::open_inheritable(&cfg.port) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                // SAFETY: token is owned here.
+                unsafe {
+                    let _ = CloseHandle(token);
+                }
+                return Err(format!("guest-tools port: {e}"));
+            }
+        }
+    } else {
+        None
+    };
     let mut cmd = format!("\"{}\"", exe.display());
     for a in args {
         cmd.push(' ');
@@ -212,6 +232,9 @@ fn launch(session: u32, args: &[String], login_screen: bool) -> Result<Child, St
             cmd.push_str(a);
         }
     }
+    if let Some(h) = port {
+        cmd.push_str(&format!(" --port_handle={}", h.0 as usize));
+    }
     let mut cmdw = wide(&cmd);
     let mut desktop = wide("winsta0\\default");
     let mut env: *mut c_void = std::ptr::null_mut();
@@ -219,10 +242,35 @@ fn launch(session: u32, args: &[String], login_screen: bool) -> Result<Child, St
     // command line buffer is mutable and NUL-terminated as the API requires.
     unsafe {
         let have_env = CreateEnvironmentBlock(&mut env, token, false).is_ok();
-        let si = STARTUPINFOW {
-            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
-            lpDesktop: PWSTR(desktop.as_mut_ptr()),
-            ..Default::default()
+        // Inherit exactly the port handle, nothing else the service holds.
+        let mut attr_buf: Vec<u8> = Vec::new();
+        let mut attrs = LPPROC_THREAD_ATTRIBUTE_LIST::default();
+        let handles = [port.unwrap_or_default()];
+        if port.is_some() {
+            let mut size = 0usize;
+            let _ = InitializeProcThreadAttributeList(attrs, 1, 0, &mut size);
+            attr_buf.resize(size, 0);
+            attrs = LPPROC_THREAD_ATTRIBUTE_LIST(attr_buf.as_mut_ptr() as *mut c_void);
+            InitializeProcThreadAttributeList(attrs, 1, 0, &mut size)
+                .map_err(|e| format!("InitializeProcThreadAttributeList: {e}"))?;
+            UpdateProcThreadAttribute(
+                attrs,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                Some(handles.as_ptr() as *const c_void),
+                std::mem::size_of_val(&handles),
+                None,
+                None,
+            )
+            .map_err(|e| format!("UpdateProcThreadAttribute: {e}"))?;
+        }
+        let si = STARTUPINFOEXW {
+            StartupInfo: STARTUPINFOW {
+                cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
+                lpDesktop: PWSTR(desktop.as_mut_ptr()),
+                ..Default::default()
+            },
+            lpAttributeList: attrs,
         };
         let mut pi = PROCESS_INFORMATION::default();
         let r = CreateProcessAsUserW(
@@ -231,17 +279,24 @@ fn launch(session: u32, args: &[String], login_screen: bool) -> Result<Child, St
             PWSTR(cmdw.as_mut_ptr()),
             None,
             None,
-            false,
-            CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+            port.is_some(),
+            CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
             if have_env {
                 Some(env as *const c_void)
             } else {
                 None
             },
             PCWSTR::null(),
-            &si,
+            &si.StartupInfo,
             &mut pi,
         );
+        if port.is_some() {
+            DeleteProcThreadAttributeList(attrs);
+        }
+        if let Some(h) = port {
+            // the child has its own copy now
+            let _ = CloseHandle(h);
+        }
         if have_env {
             let _ = DestroyEnvironmentBlock(env);
         }

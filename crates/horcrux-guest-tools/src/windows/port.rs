@@ -31,6 +31,40 @@ static WRITE_MAX: AtomicU64 = AtomicU64::new(65536);
 static BUSY_WAIT_MS: AtomicU64 = AtomicU64::new(5);
 static BUSY_TRIES: AtomicU64 = AtomicU64::new(400);
 static WRITE_TIMEOUT_MS: AtomicU64 = AtomicU64::new(2000);
+/// Port handle inherited from the service (0 = none).
+static INHERITED: AtomicU64 = AtomicU64::new(0);
+
+/// Uses a port handle the service opened and passed down (`port_handle`):
+/// the virtio-serial device only admits administrators and SYSTEM, while
+/// the agent runs as the logged-on user so that capture, input and the
+/// clipboard work in that user's session.
+pub fn use_inherited(handle: u64) {
+    INHERITED.store(handle, Ordering::Relaxed);
+}
+
+/// Opens the port as the service (SYSTEM) for a child: an inheritable,
+/// overlapped handle the caller closes after CreateProcess.
+pub fn open_inheritable(path: &str) -> Result<HANDLE, String> {
+    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    let sa = windows::Win32::Security::SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: true.into(),
+    };
+    // SAFETY: wide is NUL-terminated and sa outlives the call.
+    unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            (GENERIC_READ | GENERIC_WRITE).0,
+            FILE_SHARE_NONE,
+            Some(&sa),
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED,
+            None,
+        )
+    }
+    .map_err(|e| format!("{path}: {e}"))
+}
 
 /// Applies the port settings (config.rs `port_write_max`,
 /// `port_busy_wait_ms`, `port_busy_tries`, `port_write_timeout_ms`).
@@ -68,6 +102,27 @@ pub struct Half {
 }
 
 pub fn open(path: &str) -> Result<crate::Port, String> {
+    let inherited = INHERITED.load(Ordering::Relaxed);
+    if inherited != 0 {
+        // A private duplicate per connection, so the agent's reconnect loop
+        // can close it without losing the inherited original.
+        let mut dup = HANDLE::default();
+        // SAFETY: the inherited handle stays open for the process lifetime.
+        unsafe {
+            let me = windows::Win32::System::Threading::GetCurrentProcess();
+            DuplicateHandle(
+                me,
+                HANDLE(inherited as usize as *mut core::ffi::c_void),
+                me,
+                &mut dup,
+                0,
+                false,
+                DUPLICATE_SAME_ACCESS,
+            )
+        }
+        .map_err(|e| format!("{path} (handle from the service): {e}"))?;
+        return halves(dup);
+    }
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
     // SAFETY: wide is NUL-terminated and outlives the call.
     let h = unsafe {
@@ -84,6 +139,10 @@ pub fn open(path: &str) -> Result<crate::Port, String> {
     .map_err(|e| {
         format!("{path}: {e} (is the virtio-serial driver installed and the port enabled?)")
     })?;
+    halves(h)
+}
+
+fn halves(h: HANDLE) -> Result<crate::Port, String> {
     let file = Arc::new(Owned(h));
     let half = |write| -> Result<Half, String> {
         // SAFETY: plain event creation.

@@ -52,6 +52,8 @@ fn main() {
         cfg.port_busy_tries,
         cfg.port_write_timeout_ms,
     );
+    #[cfg(windows)]
+    windows::port::use_inherited(cfg.port_handle);
     loop {
         let p = platform(&cfg);
         match agent::run(&cfg, p) {

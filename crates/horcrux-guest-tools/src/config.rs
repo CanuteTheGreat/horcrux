@@ -61,6 +61,9 @@ pub struct Config {
     pub port_busy_wait_ms: u64,
     /// Windows: attempts per write piece before the connection is dropped.
     pub port_busy_tries: u64,
+    /// Windows: an already open port handle inherited from the service
+    /// (set by the service on the agent it launches; 0 = open `port`).
+    pub port_handle: u64,
     /// Windows: a write the port has not taken after this long (ms) is
     /// cancelled and the message dropped (the node is not connected).
     pub port_write_timeout_ms: u64,
@@ -120,6 +123,7 @@ impl Default for Config {
             port_write_max: 65536,
             port_busy_wait_ms: 5,
             port_busy_tries: 400,
+            port_handle: 0,
             port_write_timeout_ms: 2000,
             once: false,
             print_caps: false,
@@ -237,6 +241,7 @@ impl Config {
             "port_write_max" => self.port_write_max = num(v)?.clamp(512, 16 << 20),
             "port_busy_wait_ms" => self.port_busy_wait_ms = num(v)?.max(1),
             "port_busy_tries" => self.port_busy_tries = num(v)?.max(1),
+            "port_handle" => self.port_handle = num(v)?,
             "port_write_timeout_ms" => self.port_write_timeout_ms = num(v)?.max(10),
             "once" => self.once = b(v),
             "print_caps" => self.print_caps = b(v),
