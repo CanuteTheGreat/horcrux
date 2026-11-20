@@ -424,8 +424,15 @@ fn GuestToolsBar(vm_id: String) -> impl IntoView {
         move || {
             let path = path.clone();
             spawn_local(async move {
-                if let Ok(s) = api::fetch_json::<GuestToolsStatus>(&path).await {
-                    set_st.set(Some(s));
+                match api::fetch_json::<GuestToolsStatus>(&path).await {
+                    Ok(s) => {
+                        set_st.set(Some(s));
+                        set_note.set(None);
+                    }
+                    Err(e) => set_note.set(Some(format!(
+                        "Guest tools state unavailable: {}",
+                        e.message
+                    ))),
                 }
             });
         }
@@ -468,7 +475,9 @@ fn GuestToolsBar(vm_id: String) -> impl IntoView {
     view! {
         <div class="guest-tools-bar" id="guest-tools-bar">
             {move || {
-                let s = st.get().unwrap_or_default();
+                let Some(s) = st.get() else {
+                    return view! { <span id="guest-tools-state">"Horcrux guest tools: checking..."</span> };
+                };
                 let text = match (&s.in_use, &s.last_install) {
                     (Some(t), _) => format!("Horcrux guest tools: in use ({t})"),
                     (None, Some(l)) if l.state == "installing" => {

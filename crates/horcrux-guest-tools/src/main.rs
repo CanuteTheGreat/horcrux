@@ -45,6 +45,12 @@ fn main() {
         );
         return;
     }
+    #[cfg(windows)]
+    windows::port::configure(
+        cfg.port_write_max,
+        cfg.port_busy_wait_ms,
+        cfg.port_busy_tries,
+    );
     loop {
         let p = platform(&cfg);
         match agent::run(&cfg, p) {

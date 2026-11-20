@@ -3,13 +3,38 @@
 //! A synchronous handle serialises ReadFile and WriteFile per handle (a
 //! blocking read stalls every write), so the port is opened with
 //! FILE_FLAG_OVERLAPPED and each direction waits on its own event.
+//!
+//! virtio-serial (vioser) hands one WriteFile to the host as one virtqueue
+//! request: a write spanning more pages than the ring has descriptors (a
+//! video key frame of a few hundred KB) or a write while the ring is full
+//! fails with ERROR_NO_SYSTEM_RESOURCES ("Insufficient system resources").
+//! Writes are therefore split into `port_write_max` byte pieces and a full
+//! ring is retried after `port_busy_wait_ms` (settings in config.rs).
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use windows::core::{HRESULT, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Storage::FileSystem::*;
 use windows::Win32::System::Threading::CreateEventW;
 use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+
+static WRITE_MAX: AtomicU64 = AtomicU64::new(65536);
+static BUSY_WAIT_MS: AtomicU64 = AtomicU64::new(5);
+static BUSY_TRIES: AtomicU64 = AtomicU64::new(400);
+
+/// Applies the port settings (config.rs `port_write_max`,
+/// `port_busy_wait_ms`, `port_busy_tries`).
+pub fn configure(write_max: u64, busy_wait_ms: u64, busy_tries: u64) {
+    WRITE_MAX.store(write_max.max(512), Ordering::Relaxed);
+    BUSY_WAIT_MS.store(busy_wait_ms.max(1), Ordering::Relaxed);
+    BUSY_TRIES.store(busy_tries.max(1), Ordering::Relaxed);
+}
+
+/// Length of the next write piece.
+pub fn piece(len: usize) -> usize {
+    len.min(WRITE_MAX.load(Ordering::Relaxed) as usize)
+}
 
 struct Owned(HANDLE);
 // SAFETY: a Win32 file/event handle may be used from any thread.
@@ -78,12 +103,24 @@ impl Half {
     }
 }
 
+const BUSY: &str = "port ring full";
+
+fn is_busy(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::WouldBlock && e.to_string().contains(BUSY)
+}
+
 fn map_err(e: windows::core::Error) -> io::Error {
     let code = e.code();
     if code == HRESULT::from_win32(ERROR_BROKEN_PIPE.0)
         || code == HRESULT::from_win32(ERROR_HANDLE_EOF.0)
     {
         return io::Error::new(io::ErrorKind::UnexpectedEof, e.message());
+    }
+    if code == HRESULT::from_win32(ERROR_NO_SYSTEM_RESOURCES.0) {
+        return io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!("{BUSY}: {}", e.message()),
+        );
     }
     io::Error::other(e.message())
 }
@@ -114,13 +151,26 @@ impl Write for Half {
         if buf.is_empty() {
             return Ok(0);
         }
-        let mut ov = OVERLAPPED {
-            hEvent: self.event.0,
-            ..Default::default()
-        };
-        // SAFETY: buf and ov outlive the wait inside `wait`.
-        let r = unsafe { WriteFile(self.file.0, Some(buf), None, Some(&mut ov)) };
-        self.wait(&mut ov, r)
+        let buf = &buf[..piece(buf.len())];
+        let tries = BUSY_TRIES.load(Ordering::Relaxed);
+        let mut n = 0;
+        loop {
+            let mut ov = OVERLAPPED {
+                hEvent: self.event.0,
+                ..Default::default()
+            };
+            // SAFETY: buf and ov outlive the wait inside `wait`.
+            let r = unsafe { WriteFile(self.file.0, Some(buf), None, Some(&mut ov)) };
+            match self.wait(&mut ov, r) {
+                Err(e) if is_busy(&e) && n + 1 < tries => {
+                    n += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        BUSY_WAIT_MS.load(Ordering::Relaxed),
+                    ));
+                }
+                other => return other,
+            }
+        }
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())

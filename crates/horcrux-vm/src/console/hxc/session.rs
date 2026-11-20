@@ -415,9 +415,13 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         _ => None,
     };
     let install = if link.is_none() && req.guest_tools_cd && req.settings.guest_tools_auto_install {
-        req.qga_socket
-            .clone()
-            .and_then(|qga| super::deliver::spawn_install(req.vm_id.clone(), qga))
+        req.qga_socket.clone().and_then(|qga| {
+            super::deliver::spawn_install(
+                req.vm_id.clone(),
+                qga,
+                req.settings.guest_tools_install_timeout_secs.into(),
+            )
+        })
     } else {
         None
     };

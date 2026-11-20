@@ -234,6 +234,10 @@ pub struct ConsoleSettings {
     /// MSI from the tools CD; Linux guests: the distribution's package from
     /// the CD, .deb/.rpm/.apk).
     pub guest_tools_auto_install: bool,
+    /// Longest wait for a guest tools installer started through the guest
+    /// agent (s); a guest agent that stops answering for a moment while
+    /// the installer runs is retried until then.
+    pub guest_tools_install_timeout_secs: u32,
     /// Largest clipboard text carried in either direction (bytes).
     pub clipboard_max_bytes: u32,
     /// Opus bitrate for guest audio (kbit/s).
@@ -270,6 +274,7 @@ impl Default for ConsoleSettings {
             guest_tools_retry_secs: 5,
             guest_tools_iso: "/usr/share/horcrux/guest-tools/horcrux-guest-tools.iso".into(),
             guest_tools_auto_install: true,
+            guest_tools_install_timeout_secs: 600,
             clipboard_max_bytes: 1 << 20,
             audio_bitrate_kbps: 128,
             desktop: desktop(),
@@ -346,6 +351,9 @@ impl ConsoleSettings {
         }
         if self.guest_tools_wait_ms > 30_000 {
             return Err("guest_tools_wait_ms must be at most 30000".into());
+        }
+        if !(30..=7200).contains(&self.guest_tools_install_timeout_secs) {
+            return Err("guest_tools_install_timeout_secs must be between 30 and 7200".into());
         }
         if self.guest_tools_retry_secs > 3600 {
             return Err("guest_tools_retry_secs must be at most 3600".into());

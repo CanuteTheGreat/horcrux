@@ -52,6 +52,15 @@ pub struct Config {
     pub audio_device_check_ms: u64,
     /// Wait between reconnect attempts (ms).
     pub reconnect_ms: u64,
+    /// Windows: largest single write to the virtio-serial port (bytes);
+    /// larger messages go out in pieces (vioser fails writes spanning more
+    /// pages than its ring has descriptors).
+    pub port_write_max: u64,
+    /// Windows: wait before retrying a write the port refused because its
+    /// ring was full (ms).
+    pub port_busy_wait_ms: u64,
+    /// Windows: attempts per write piece before the connection is dropped.
+    pub port_busy_tries: u64,
     /// Stop after one connection (tests).
     pub once: bool,
     /// Print the capability report and exit.
@@ -105,6 +114,9 @@ impl Default for Config {
             audio_retry_ms: 1000,
             audio_device_check_ms: 1000,
             reconnect_ms: 1000,
+            port_write_max: 65536,
+            port_busy_wait_ms: 5,
+            port_busy_tries: 400,
             once: false,
             print_caps: false,
             input_device_name: "Horcrux virtual input".into(),
@@ -218,6 +230,9 @@ impl Config {
             "audio_retry_ms" => self.audio_retry_ms = num(v)?.max(100),
             "audio_device_check_ms" => self.audio_device_check_ms = num(v)?.max(100),
             "reconnect_ms" => self.reconnect_ms = num(v)?.max(100),
+            "port_write_max" => self.port_write_max = num(v)?.clamp(512, 16 << 20),
+            "port_busy_wait_ms" => self.port_busy_wait_ms = num(v)?.max(1),
+            "port_busy_tries" => self.port_busy_tries = num(v)?.max(1),
             "once" => self.once = b(v),
             "print_caps" => self.print_caps = b(v),
             "input_device_name" => self.input_device_name = v.into(),

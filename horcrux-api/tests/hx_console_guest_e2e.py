@@ -469,9 +469,15 @@ def linux(browser):
     ui.goto(f"{BASE}/vms/{vm}/console")
     try:
         ui.wait_for_selector("#guest-tools-state", timeout=30000)
+        ui.wait_for_function("!document.querySelector('#guest-tools-state').innerText.includes('checking')",
+                             timeout=30000)
+        time.sleep(2)
         txt = ui.inner_text("#guest-tools-state")
+        note = ui.query_selector("#guest-tools-note")
+        if note:
+            txt += " / " + note.inner_text()
         btn = ui.query_selector("#install-guest-tools")
-        check(btn is not None and "guest tools" in txt.lower(),
+        check(btn is not None and ("in use" in txt or "installed" in txt),
               f"linux: the console page shows the guest tools bar ({txt!r}) with the Install button", fatal=False)
     except Exception as e:  # noqa: BLE001
         check(False, f"linux: console page guest tools bar ({e})", fatal=False)

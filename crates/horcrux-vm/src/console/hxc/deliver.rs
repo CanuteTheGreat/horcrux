@@ -26,7 +26,6 @@ use std::time::{Duration, Instant};
 
 const RETRY: Duration = Duration::from_secs(600);
 /// Longest an install may run in the guest (seconds).
-const INSTALL_SECS: u64 = 600;
 
 /// PowerShell run by the guest agent (as SYSTEM) in a Windows guest. The
 /// MSI path goes to msiexec unquoted (`E:\\windows\\horcrux-guest-tools-*.msi`
@@ -133,7 +132,12 @@ fn set_state(vm: &str, st: InstallState) {
 
 /// Run an install and record it (`by` = `auto` or the requesting user).
 /// Refused while another install of the same VM runs.
-pub async fn install_recorded(vm: &str, qga: &Path, by: &str) -> Result<InstallReport, String> {
+pub async fn install_recorded(
+    vm: &str,
+    qga: &Path,
+    by: &str,
+    timeout_secs: u64,
+) -> Result<InstallReport, String> {
     if last_install(vm)
         .map(|s| s.state == "installing")
         .unwrap_or(false)
@@ -152,7 +156,7 @@ pub async fn install_recorded(vm: &str, qga: &Path, by: &str) -> Result<InstallR
             error: None,
         },
     );
-    let r = install(qga).await;
+    let r = install(qga, timeout_secs).await;
     let (state, report, error) = match &r {
         Ok(rep) if rep.ok => ("installed", Some(rep.clone()), None),
         Ok(rep) => ("failed", Some(rep.clone()), Some(rep.message.clone())),
@@ -191,12 +195,13 @@ fn due(vm: &str) -> bool {
 pub fn spawn_install(
     vm_id: String,
     qga: PathBuf,
+    timeout_secs: u64,
 ) -> Option<tokio::task::JoinHandle<Result<String, String>>> {
     if !qga.exists() || !due(&vm_id) {
         return None;
     }
     Some(tokio::spawn(async move {
-        let r = install_recorded(&vm_id, &qga, "auto").await;
+        let r = install_recorded(&vm_id, &qga, "auto", timeout_secs).await;
         match &r {
             Ok(rep) if rep.ok => tracing::info!("console guest tools on {vm_id}: {}", rep.message),
             Ok(rep) => tracing::info!(
@@ -268,7 +273,7 @@ fn tail(b64: Option<&Value>) -> String {
 }
 
 /// Install the tools through the guest agent and wait for the installer.
-pub async fn install(qga: &Path) -> Result<InstallReport, String> {
+pub async fn install(qga: &Path, timeout_secs: u64) -> Result<InstallReport, String> {
     let os = qga_exec(qga, "guest-get-osinfo", json!({}), 10)
         .await
         .map_err(|e| e.to_string())?;
@@ -290,11 +295,19 @@ pub async fn install(qga: &Path) -> Result<InstallReport, String> {
         .get("pid")
         .and_then(Value::as_i64)
         .ok_or("guest-exec gave no pid")?;
-    for _ in 0..INSTALL_SECS {
+    // The guest agent can stop answering for a while during an install
+    // (Windows: an MSI that adds a driver); keep asking until the deadline.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    let mut last_err = String::new();
+    while tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let st = qga_exec(qga, "guest-exec-status", json!({"pid": pid}), 10)
-            .await
-            .map_err(|e| e.to_string())?;
+        let st = match qga_exec(qga, "guest-exec-status", json!({"pid": pid}), 10).await {
+            Ok(st) => st,
+            Err(e) => {
+                last_err = e.to_string();
+                continue;
+            }
+        };
         if st.get("exited").and_then(Value::as_bool) == Some(true) {
             let code = st.get("exitcode").and_then(Value::as_i64).unwrap_or(-1);
             let (ok, message) = message(&id, code);
@@ -312,7 +325,13 @@ pub async fn install(qga: &Path) -> Result<InstallReport, String> {
             });
         }
     }
-    Err(format!("installer still running after {INSTALL_SECS} s"))
+    if last_err.is_empty() {
+        Err(format!("installer still running after {timeout_secs} s"))
+    } else {
+        Err(format!(
+            "no installer result within {timeout_secs} s (last guest agent error: {last_err})"
+        ))
+    }
 }
 
 #[cfg(test)]

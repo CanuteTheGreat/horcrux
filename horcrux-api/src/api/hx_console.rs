@@ -345,8 +345,9 @@ mod qemu {
             ))
             .await;
         let (vm2, name) = (vm_id.clone(), user.username.clone());
+        let timeout = hxc_settings::get().guest_tools_install_timeout_secs.into();
         tokio::spawn(async move {
-            let r = hxc::deliver::install_recorded(&vm2, &qga, &name).await;
+            let r = hxc::deliver::install_recorded(&vm2, &qga, &name, timeout).await;
             let (ok, detail) = match &r {
                 Ok(rep) => (
                     rep.ok,

@@ -167,8 +167,11 @@ mod tests {
         drop(g);
         let none = connect(&sock, Duration::from_millis(300), 1).await.unwrap();
         assert!(none.is_none(), "no Hello -> no tools");
-        // ...and the node let go of the connection (the fake guest sees EOF)
-        t.join().unwrap();
+        // ...and the node let go of the connection (the fake guest sees EOF;
+        // join off the runtime thread so the aborted reader can finish)
+        tokio::task::spawn_blocking(move || t.join().unwrap())
+            .await
+            .unwrap();
         assert!(
             connect(&dir.path().join("missing"), Duration::from_millis(10), 1)
                 .await
