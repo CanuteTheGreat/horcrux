@@ -193,6 +193,11 @@ pub struct WanSettings {
     pub relay_port: u16,
     /// Also accept TURN over TCP (networks that block UDP).
     pub relay_tcp: bool,
+    /// With the relay on the unspecified address (0.0.0.0 / ::), answer
+    /// each UDP request from the address it reached instead of the source
+    /// address of the outgoing route (multi-homed nodes: several NICs, VM
+    /// and container bridges, VPN interfaces). Turn off only to compare.
+    pub relay_reply_from_request_address: bool,
     /// Name or address clients use for the relay (the router's public
     /// address or a DNS name). Empty: the address the client used to reach
     /// this node's web UI, or the external address UPnP/NAT-PMP reported.
@@ -268,6 +273,7 @@ impl Default for WanSettings {
             relay_listen_address: "0.0.0.0".into(),
             relay_port: 3478,
             relay_tcp: true,
+            relay_reply_from_request_address: true,
             relay_public_address: String::new(),
             relay_public_port: 0,
             relay_peer_address: String::new(),

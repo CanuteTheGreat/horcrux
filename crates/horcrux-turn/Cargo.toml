@@ -15,3 +15,8 @@ rand = { workspace = true }
 sha1 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+# Per-datagram destination address (IP_PKTINFO / IPV6_RECVPKTINFO), Linux only;
+# the desktop client uses this crate on every OS.
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { workspace = true }

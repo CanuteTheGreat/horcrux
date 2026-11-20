@@ -4,6 +4,7 @@
 //! (STUN), RFC 8656 (TURN) and RFC 5769 (test vectors); no third-party
 //! relay service anywhere.
 pub mod client;
+pub mod pktinfo;
 pub mod server;
 pub mod stun;
 
