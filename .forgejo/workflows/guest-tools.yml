@@ -82,13 +82,18 @@ jobs:
         run: |
           bash ci/build-guest-tools-msi.sh
           msi=$(ls dist/horcrux-guest-tools-*-x64.msi)
-          msiinfo export "$msi" ServiceInstall | grep -q HorcruxGuestTools
-          msiinfo export "$msi" File | grep -q horcrux-guest-agent.exe
-          for f in hxidd.dll hxidd.inf hxpad.dll hxpad.inf; do
-            msiinfo export "$msi" File | grep -q "$f" || { echo "FAIL $f not in the MSI"; exit 1; }
+          # Export each table to a file first: `msiinfo export | grep -q` makes
+          # msiinfo die of SIGPIPE once grep has matched, and pipefail turns
+          # that into a failed step (exit code 141).
+          for t in ServiceInstall File CustomAction; do
+            msiinfo export "$msi" "$t" > "/tmp/msi-$t.idt"
           done
-          msiinfo export "$msi" CustomAction | grep -q -- '--drivers install'
-          msiinfo export "$msi" CustomAction | grep -q -- '--drivers remove'
+          grep -q HorcruxGuestTools /tmp/msi-ServiceInstall.idt
+          for f in horcrux-guest-agent.exe hxidd.dll hxidd.inf hxpad.dll hxpad.inf; do
+            grep -q "$f" /tmp/msi-File.idt || { echo "FAIL $f not in the MSI"; exit 1; }
+          done
+          grep -q -- '--drivers install' /tmp/msi-CustomAction.idt
+          grep -q -- '--drivers remove' /tmp/msi-CustomAction.idt
           # the drivers are user-mode DLLs bound to the UMDF 2 / IddCx runtime only
           for d in hxidd hxpad; do
             llvm-objdump -p "dist/drivers/$d/$d.dll" | grep -E 'DLL Name|FxDriverEntryUm' | tee "/tmp/$d.imp"
