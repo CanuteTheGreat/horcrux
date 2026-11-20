@@ -10,6 +10,7 @@ mod layout;
 mod mf;
 mod port;
 pub mod service;
+pub mod shm;
 mod video;
 
 use crate::agent::{Out, Platform};
@@ -107,6 +108,7 @@ impl Platform for Windows {
                 virtual_display: false,
                 chroma444: false,
                 hdr: false,
+                shm_frames: shm::available(&self.cfg),
             },
         }
     }

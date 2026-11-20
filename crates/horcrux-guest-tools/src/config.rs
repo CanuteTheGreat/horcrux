@@ -59,6 +59,22 @@ pub struct Config {
     pub service_poll_ms: u64,
     /// Windows service: also run the agent (as SYSTEM) at the login screen.
     pub service_login_screen: bool,
+    /// Write raw frames into the Horcrux frame ring (ivshmem) while a
+    /// same-host viewer watches.
+    pub shm_frames: bool,
+    /// How often the frame ring is checked for a reader (ms).
+    pub shm_poll_ms: u64,
+    /// A reader whose clock stamp has not moved for this long is gone (ms).
+    pub shm_reader_timeout_ms: u64,
+    /// Linux: PCI sysfs directory searched for the ivshmem device.
+    pub shm_pci_dir: String,
+    /// Windows: IVSHMEM driver device interface path override (empty =
+    /// enumerate the driver's interface class).
+    /// Map the frame ring write-combined (`resource2_wc`) when the kernel
+    /// offers it: the default uncached BAR mapping makes every frame write
+    /// slow on hosts that honour the guest's memory types (AMD).
+    pub shm_write_combine: bool,
+    pub shm_device: String,
 }
 
 impl Default for Config {
@@ -90,6 +106,12 @@ impl Default for Config {
             layout_settle_ms: 500,
             service_poll_ms: 1000,
             service_login_screen: true,
+            shm_frames: true,
+            shm_poll_ms: 100,
+            shm_reader_timeout_ms: 2000,
+            shm_pci_dir: "/sys/bus/pci/devices".into(),
+            shm_device: String::new(),
+            shm_write_combine: true,
         }
     }
 }
@@ -194,6 +216,12 @@ impl Config {
             "layout_settle_ms" => self.layout_settle_ms = num(v)?,
             "service_poll_ms" => self.service_poll_ms = num(v)?.max(100),
             "service_login_screen" => self.service_login_screen = b(v),
+            "shm_frames" => self.shm_frames = b(v),
+            "shm_poll_ms" => self.shm_poll_ms = num(v)?.clamp(1, 5000),
+            "shm_reader_timeout_ms" => self.shm_reader_timeout_ms = num(v)?.max(100),
+            "shm_pci_dir" => self.shm_pci_dir = v.into(),
+            "shm_device" => self.shm_device = v.into(),
+            "shm_write_combine" => self.shm_write_combine = b(v),
             _ => return Err(format!("unknown setting {k}")),
         }
         Ok(())
