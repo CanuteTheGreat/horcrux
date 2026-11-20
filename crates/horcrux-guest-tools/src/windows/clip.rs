@@ -4,7 +4,7 @@
 //! SetClipboardData) and polls GetClipboardSequenceNumber.
 use crate::agent::Out;
 use horcrux_guest_proto::{Clipboard, Msg};
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, RecvTimeoutError, TrySendError};
 use std::time::Duration;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
@@ -48,12 +48,16 @@ fn run(rx: mpsc::Receiver<Cmd>, poll_ms: u64) {
     let mut watch: Option<(Out, usize)> = None;
     // Text this node put on / read from the clipboard last: never sent back.
     let mut last = String::new();
+    // A guest clipboard change the port queue had no room for yet.
+    let mut pending: Option<String> = None;
     // SAFETY: no arguments.
     let mut seq = unsafe { GetClipboardSequenceNumber() };
     loop {
         match rx.recv_timeout(Duration::from_millis(poll_ms)) {
             Ok(Cmd::Set(t)) => {
                 if set_text(hwnd, &t) {
+                    // the node's text replaces an older guest copy not sent yet
+                    pending = None;
                     last = normalize(&t);
                     // SAFETY: no arguments.
                     seq = unsafe { GetClipboardSequenceNumber() };
@@ -61,6 +65,7 @@ fn run(rx: mpsc::Receiver<Cmd>, poll_ms: u64) {
             }
             Ok(Cmd::Watch(o, max)) => {
                 watch = Some((o, max));
+                pending = None;
                 // Only changes from now on are sent.
                 // SAFETY: no arguments.
                 seq = unsafe { GetClipboardSequenceNumber() };
@@ -73,15 +78,29 @@ fn run(rx: mpsc::Receiver<Cmd>, poll_ms: u64) {
         let now = unsafe { GetClipboardSequenceNumber() };
         if now != seq {
             seq = now;
-            if let (Some((out, max)), Some(t)) = (&watch, get_text(hwnd)) {
+            if let (Some((_, max)), Some(t)) = (&watch, get_text(hwnd)) {
                 let t = normalize(&t);
                 if !t.is_empty() && t != last && t.len() <= *max {
                     last = t.clone();
-                    let _ = out.try_send(Msg::Clipboard(Clipboard {
-                        mime: "text/plain".into(),
-                        text: t,
-                    }));
+                    // a newer copy replaces one not sent yet
+                    pending = Some(t);
                 }
+            }
+        }
+        // The port queue is shared with video and audio, which keep it full
+        // while the node reads slower than the guest encodes. Those drop
+        // packets; a clipboard change must not be lost, so it stays pending
+        // and is retried every poll until the writer takes it (without
+        // blocking: clipboard writes from the node keep being served).
+        if let (Some((out, _)), Some(t)) = (&watch, pending.take()) {
+            match out.try_send(Msg::Clipboard(Clipboard {
+                mime: "text/plain".into(),
+                text: t,
+            })) {
+                Ok(()) => {}
+                Err(TrySendError::Full(Msg::Clipboard(c))) => pending = Some(c.text),
+                Err(TrySendError::Full(_)) => {}
+                Err(TrySendError::Disconnected(_)) => watch = None,
             }
         }
     }
