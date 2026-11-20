@@ -28,12 +28,20 @@ fn main() {
     };
     if cfg.print_caps {
         let p = platform(&cfg);
-        println!("{}", serde_json::to_string_pretty(&p.hello()).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&p.hello()).unwrap_or_default()
+        );
         return;
     }
     #[cfg(windows)]
     if cfg.service {
-        windows::service::run(std::env::args().skip(1).filter(|a| a != "--service").collect());
+        windows::service::run(
+            std::env::args()
+                .skip(1)
+                .filter(|a| a != "--service")
+                .collect(),
+        );
         return;
     }
     loop {
@@ -61,7 +69,9 @@ pub fn open_port(path: &str) -> Result<Port, String> {
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| format!("{path}: {e} (is the VM's Horcrux Console guest-tools port enabled?)"))?;
+        .map_err(|e| {
+            format!("{path}: {e} (is the VM's Horcrux Console guest-tools port enabled?)")
+        })?;
     let r = f.try_clone().map_err(|e| e.to_string())?;
     Ok((Box::new(r), Box::new(f)))
 }

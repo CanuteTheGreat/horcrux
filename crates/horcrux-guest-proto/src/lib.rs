@@ -229,14 +229,30 @@ pub struct Gamepad {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Input {
     /// QEMU "qnum" key number (PC XT set-1 scancode, 0x80 bit = E0 prefix).
-    Key { qnum: u16, down: bool },
+    Key {
+        qnum: u16,
+        down: bool,
+    },
     /// 0 left, 1 middle, 2 right, 3 back, 4 forward.
-    Button { button: u8, down: bool },
+    Button {
+        button: u8,
+        down: bool,
+    },
     /// Raw relative motion (gaming, pointer lock).
-    Rel { dx: i32, dy: i32 },
+    Rel {
+        dx: i32,
+        dy: i32,
+    },
     /// Absolute position in the given monitor's pixels.
-    Abs { x: u32, y: u32, monitor: u16 },
-    Wheel { dx: i32, dy: i32 },
+    Abs {
+        x: u32,
+        y: u32,
+        monitor: u16,
+    },
+    Wheel {
+        dx: i32,
+        dy: i32,
+    },
     Gamepad(Gamepad),
 }
 
@@ -409,9 +425,18 @@ fn encode_input(i: &Input) -> Vec<u8> {
 }
 
 fn decode_input(p: &[u8]) -> Option<Input> {
-    let i32_at = |o: usize| p.get(o..o + 4).map(|b| i32::from_le_bytes(b.try_into().unwrap()));
-    let u32_at = |o: usize| p.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
-    let i16_at = |o: usize| p.get(o..o + 2).map(|b| i16::from_le_bytes(b.try_into().unwrap()));
+    let i32_at = |o: usize| {
+        p.get(o..o + 4)
+            .map(|b| i32::from_le_bytes(b.try_into().unwrap()))
+    };
+    let u32_at = |o: usize| {
+        p.get(o..o + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
+    let i16_at = |o: usize| {
+        p.get(o..o + 2)
+            .map(|b| i16::from_le_bytes(b.try_into().unwrap()))
+    };
     Some(match *p.first()? {
         1 => Input::Key {
             qnum: u16::from_le_bytes(p.get(1..3)?.try_into().ok()?),
@@ -470,7 +495,10 @@ pub fn read_msg<R: Read>(r: &mut R) -> io::Result<Msg> {
     r.read_exact(&mut len)?;
     let len = u32::from_le_bytes(len) as usize;
     if len == 0 || len > MAX_FRAME {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("bad frame length {len}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("bad frame length {len}"),
+        ));
     }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
@@ -609,9 +637,100 @@ impl AudSplitter {
     }
 }
 
+/// Pulls Opus packets out of an Ogg stream (FFmpeg's `-f ogg` output):
+/// the `OpusHead`/`OpusTags` header packets are skipped, packets that
+/// span pages are joined. No CRC check (the pipe is local).
+#[derive(Default)]
+pub struct OggReader {
+    buf: Vec<u8>,
+    partial: Vec<u8>,
+}
+
+impl OggReader {
+    pub fn push(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
+        self.buf.extend_from_slice(data);
+        let mut out = Vec::new();
+        loop {
+            // resync to the next capture pattern
+            match self.buf.windows(4).position(|w| w == b"OggS") {
+                Some(0) => {}
+                Some(p) => {
+                    self.buf.drain(..p);
+                }
+                None => {
+                    let keep = self.buf.len().min(3);
+                    self.buf.drain(..self.buf.len() - keep);
+                    break;
+                }
+            }
+            if self.buf.len() < 27 {
+                break;
+            }
+            let nseg = self.buf[26] as usize;
+            if self.buf.len() < 27 + nseg {
+                break;
+            }
+            let lacing = self.buf[27..27 + nseg].to_vec();
+            let body: usize = lacing.iter().map(|&l| l as usize).sum();
+            if self.buf.len() < 27 + nseg + body {
+                break;
+            }
+            let mut off = 27 + nseg;
+            for l in lacing {
+                self.partial
+                    .extend_from_slice(&self.buf[off..off + l as usize]);
+                off += l as usize;
+                if l < 255 {
+                    let p = std::mem::take(&mut self.partial);
+                    if !p.starts_with(b"OpusHead") && !p.starts_with(b"OpusTags") && !p.is_empty() {
+                        out.push(p);
+                    }
+                }
+            }
+            self.buf.drain(..off);
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn page(packets: &[&[u8]]) -> Vec<u8> {
+        let mut lacing = Vec::new();
+        let mut body = Vec::new();
+        for p in packets {
+            let mut n = p.len();
+            while n >= 255 {
+                lacing.push(255u8);
+                n -= 255;
+            }
+            lacing.push(n as u8);
+            body.extend_from_slice(p);
+        }
+        let mut v = b"OggS".to_vec();
+        v.extend_from_slice(&[0u8; 22]);
+        v.push(lacing.len() as u8);
+        v.extend_from_slice(&lacing);
+        v.extend_from_slice(&body);
+        v
+    }
+
+    #[test]
+    fn ogg_opus_packets() {
+        let big = vec![7u8; 300];
+        let mut s = page(&[b"OpusHead\x01\x02"]);
+        s.extend(page(&[b"OpusTags...."]));
+        s.extend(page(&[b"\x01\x02\x03", &big]));
+        s.extend(page(&[b"\x04"]));
+        let mut r = OggReader::default();
+        let mut got = Vec::new();
+        for c in s.chunks(7) {
+            got.extend(r.push(c));
+        }
+        assert_eq!(got, vec![vec![1, 2, 3], big, vec![4]]);
+    }
 
     fn round(m: Msg) {
         let (k, p) = m.encode();
@@ -633,8 +752,15 @@ mod tests {
             },
             ..Default::default()
         }));
-        round(Msg::HostHello(HostHello { v: 1, clipboard_max_bytes: 1 << 20 }));
-        round(Msg::StartVideo(StartVideo { fps: 240, fixed_rate: true, ..Default::default() }));
+        round(Msg::HostHello(HostHello {
+            v: 1,
+            clipboard_max_bytes: 1 << 20,
+        }));
+        round(Msg::StartVideo(StartVideo {
+            fps: 240,
+            fixed_rate: true,
+            ..Default::default()
+        }));
         round(Msg::StopVideo);
         round(Msg::Keyframe);
         round(Msg::Video(VideoPacket {
@@ -646,28 +772,75 @@ mod tests {
             height: 1080,
             data: vec![0, 0, 0, 1, 0x65, 1, 2, 3],
         }));
-        round(Msg::VideoStatus(VideoStatus { running: true, encoder: "nvenc".into(), ..Default::default() }));
-        round(Msg::Clipboard(Clipboard { mime: "text/plain".into(), text: "héllo".into() }));
+        round(Msg::VideoStatus(VideoStatus {
+            running: true,
+            encoder: "nvenc".into(),
+            ..Default::default()
+        }));
+        round(Msg::Clipboard(Clipboard {
+            mime: "text/plain".into(),
+            text: "héllo".into(),
+        }));
         let l = Layout {
             monitors: vec![
-                Monitor { width: 2560, height: 1440, refresh_hz: 240, primary: true, ..Default::default() },
-                Monitor { x: 2560, width: 1920, height: 1080, refresh_hz: 60, ..Default::default() },
+                Monitor {
+                    width: 2560,
+                    height: 1440,
+                    refresh_hz: 240,
+                    primary: true,
+                    ..Default::default()
+                },
+                Monitor {
+                    x: 2560,
+                    width: 1920,
+                    height: 1080,
+                    refresh_hz: 60,
+                    ..Default::default()
+                },
             ],
         };
         round(Msg::SetLayout(l.clone()));
         round(Msg::Layout(l));
         for i in [
-            Input::Key { qnum: 0xc8, down: true },
-            Input::Button { button: 2, down: false },
+            Input::Key {
+                qnum: 0xc8,
+                down: true,
+            },
+            Input::Button {
+                button: 2,
+                down: false,
+            },
             Input::Rel { dx: -5, dy: 7 },
-            Input::Abs { x: 100, y: 200, monitor: 1 },
+            Input::Abs {
+                x: 100,
+                y: 200,
+                monitor: 1,
+            },
             Input::Wheel { dx: 0, dy: -1 },
-            Input::Gamepad(Gamepad { index: 1, buttons: 0b101, lx: -32768, ly: 32767, rx: 1, ry: -1, lt: 255, rt: 3 }),
+            Input::Gamepad(Gamepad {
+                index: 1,
+                buttons: 0b101,
+                lx: -32768,
+                ly: 32767,
+                rx: 1,
+                ry: -1,
+                lt: 255,
+                rt: 3,
+            }),
         ] {
             round(Msg::Input(i));
         }
-        round(Msg::StartAudio(StartAudio { codec: "opus".into(), sample_rate: 48000, channels: 2, bitrate_kbps: 128, frame_ms: 10 }));
-        round(Msg::Audio(AudioPacket { capture_us: 9, data: vec![1, 2, 3] }));
+        round(Msg::StartAudio(StartAudio {
+            codec: "opus".into(),
+            sample_rate: 48000,
+            channels: 2,
+            bitrate_kbps: 128,
+            frame_ms: 10,
+        }));
+        round(Msg::Audio(AudioPacket {
+            capture_us: 9,
+            data: vec![1, 2, 3],
+        }));
         round(Msg::StopAudio);
         round(Msg::Ping(42));
         round(Msg::Pong(42));
@@ -679,7 +852,14 @@ mod tests {
         let mut wire = Vec::new();
         write_msg(&mut wire, &Msg::Ping(1)).unwrap();
         wire.extend_from_slice(&frame(0x99, b"future"));
-        write_msg(&mut wire, &Msg::Clipboard(Clipboard { mime: "text/plain".into(), text: "a".into() })).unwrap();
+        write_msg(
+            &mut wire,
+            &Msg::Clipboard(Clipboard {
+                mime: "text/plain".into(),
+                text: "a".into(),
+            }),
+        )
+        .unwrap();
         let mut d = Decoder::default();
         let mut got = Vec::new();
         for chunk in wire.chunks(3) {
@@ -690,8 +870,18 @@ mod tests {
         assert_eq!(got[1], Msg::Unknown(0x99));
         assert!(matches!(got[2], Msg::Clipboard(_)));
         // unknown JSON fields from a newer peer are ignored
-        let m = Msg::decode(kind::HOST_HELLO, br#"{"v":2,"clipboard_max_bytes":5,"new":1}"#).unwrap();
-        assert_eq!(m, Msg::HostHello(HostHello { v: 2, clipboard_max_bytes: 5 }));
+        let m = Msg::decode(
+            kind::HOST_HELLO,
+            br#"{"v":2,"clipboard_max_bytes":5,"new":1}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            Msg::HostHello(HostHello {
+                v: 2,
+                clipboard_max_bytes: 5
+            })
+        );
     }
 
     #[test]

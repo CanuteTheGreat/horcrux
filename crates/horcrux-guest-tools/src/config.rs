@@ -127,7 +127,9 @@ impl Config {
             };
             let (k, v) = match k.split_once('=') {
                 Some((k, v)) => (k.to_string(), v.to_string()),
-                None if matches!(k, "once" | "print-caps" | "help" | "service") => (k.to_string(), "true".into()),
+                None if matches!(k, "once" | "print-caps" | "help" | "service") => {
+                    (k.to_string(), "true".into())
+                }
                 None => {
                     i += 1;
                     let v = args.get(i).ok_or(format!("--{k} needs a value"))?;
@@ -158,7 +160,10 @@ impl Config {
     }
 
     fn set(&mut self, k: &str, v: &str) -> Result<(), String> {
-        let num = |v: &str| v.parse::<u64>().map_err(|_| format!("{k}: not a number: {v}"));
+        let num = |v: &str| {
+            v.parse::<u64>()
+                .map_err(|_| format!("{k}: not a number: {v}"))
+        };
         let b = |v: &str| matches!(v, "true" | "1" | "yes" | "on");
         match k {
             "port" => self.port = v.into(),
@@ -183,7 +188,9 @@ impl Config {
             "h264_profile" => self.h264_profile = v.into(),
             "mf_output_wait_ms" => self.mf_output_wait_ms = num(v)?,
             "video_start_timeout_ms" => self.video_start_timeout_ms = num(v)?.max(1000),
-            "wheel_scale_pct" => self.wheel_scale_pct = v.parse().map_err(|_| format!("{k}: not a number: {v}"))?,
+            "wheel_scale_pct" => {
+                self.wheel_scale_pct = v.parse().map_err(|_| format!("{k}: not a number: {v}"))?
+            }
             "layout_settle_ms" => self.layout_settle_ms = num(v)?,
             "service_poll_ms" => self.service_poll_ms = num(v)?.max(100),
             "service_login_screen" => self.service_login_screen = b(v),
@@ -198,7 +205,12 @@ fn parse_file(text: &str) -> Vec<(String, String)> {
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .filter_map(|l| l.split_once('='))
-        .map(|(k, v)| (k.trim().replace('-', "_"), v.trim().trim_matches('"').to_string()))
+        .map(|(k, v)| {
+            (
+                k.trim().replace('-', "_"),
+                v.trim().trim_matches('"').to_string(),
+            )
+        })
         .collect()
 }
 
@@ -215,7 +227,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hxgt-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("c.conf");
-        std::fs::write(&f, "# c\nencoder = vaapi\nclipboard-poll-ms=250\ncapture=\"x11grab\"\n").unwrap();
+        std::fs::write(
+            &f,
+            "# c\nencoder = vaapi\nclipboard-poll-ms=250\ncapture=\"x11grab\"\n",
+        )
+        .unwrap();
         let c = Config::load(vec![
             "--config".into(),
             f.display().to_string(),

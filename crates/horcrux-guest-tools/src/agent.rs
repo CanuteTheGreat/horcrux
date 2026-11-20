@@ -149,5 +149,7 @@ pub fn run(cfg: &Config, mut p: Box<dyn Platform>) -> Result<(), String> {
 pub fn now_us() -> u64 {
     use std::sync::OnceLock;
     static T0: OnceLock<std::time::Instant> = OnceLock::new();
-    T0.get_or_init(std::time::Instant::now).elapsed().as_micros() as u64
+    T0.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_micros() as u64
 }
