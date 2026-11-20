@@ -31,7 +31,6 @@ pub mod hx_console;
 pub mod idle_power;
 pub mod import_cleanup;
 pub mod inventory;
-pub mod protection;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;
 pub mod lane_m;
@@ -49,6 +48,7 @@ pub mod notifications;
 pub mod ovf;
 pub mod passthrough;
 pub mod prometheus_export;
+pub mod protection;
 pub mod resource_pools;
 #[cfg(feature = "s3-gateway")]
 pub mod s3_gateway;
