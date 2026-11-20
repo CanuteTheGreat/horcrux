@@ -9,7 +9,8 @@ ARG ARCH=x86_64
 # for config protection)
 RUN rm -rf /var/db/repos/horcrux
 COPY --from=hxgentoo / /var/db/repos/horcrux/
-RUN cp -a /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/files/root/etc/portage/. /etc/portage/ \
+RUN rm -f /etc/portage/package.use/horcrux-server-headless \
+ && cp -a /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/files/root/etc/portage/. /etc/portage/ \
  && for e in /var/db/repos/horcrux/app-misc/horcrux-surface-desktop/*.ebuild /var/db/repos/horcrux/app-admin/rustinion-agent/*.ebuild; do ebuild "$e" manifest >/dev/null; done
 
 # the installer / live scripts / console menu come from the repository tree as the two PROVEN generic packages (same recipe as the hogshead

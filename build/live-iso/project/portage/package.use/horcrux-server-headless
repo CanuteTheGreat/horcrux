@@ -1,0 +1,5 @@
+# server editions only (desktop variants delete this file before they switch to a desktop profile).
+# The Horcrux Console encoder (app-emulation/horcrux-bin RDEPEND media-video/ffmpeg[vpx,x264]) needs encoders only: frames come
+# from QEMU's D-Bus display, nothing is rendered as text and no DRM device is opened. ffmpeg's default drm/fontconfig/libass/truetype
+# would pull ~35 more packages onto a headless server, among them x11-libs/libdrm, media-libs/harfbuzz[cairo] and x11-libs/cairo.
+media-video/ffmpeg -drm -fontconfig -libass -truetype
