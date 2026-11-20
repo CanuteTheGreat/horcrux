@@ -130,9 +130,7 @@ jobs:
         # (lightningcss pulls two incompatible cssparser versions; see the
         # same step in ci.yml).
         run: |
-          curl -fsSL "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar xzf -
-          sudo mv trunk /usr/local/bin/trunk
-          trunk --version
+          bash ci/install-wasm-tools.sh
 
       - name: Build UI
         # The real web UI is the workspace member horcrux-api/horcrux-ui (the
@@ -141,7 +139,7 @@ jobs:
         # touched in 133e8a0 -- it still hardcodes ws://localhost:8006 and
         # lacks every UI fix since, so releases must not package it.
         working-directory: horcrux-api/horcrux-ui
-        run: trunk build --release
+        run: trunk build --release --offline
 
       - name: Create archive
         run: |
