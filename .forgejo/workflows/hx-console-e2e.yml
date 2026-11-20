@@ -23,6 +23,10 @@ on:
       - 'horcrux-api/tests/hx_console_e2e.*'
       - 'horcrux-api/tests/hx_console_wan_e2e.*'
       - 'crates/horcrux-turn/**'
+      - 'horcrux-api/tests/hx_local_viewer_e2e.*'
+      - 'crates/horcrux-viewer/**'
+      - 'crates/horcrux-guest-proto/src/local.rs'
+      - 'crates/horcrux-guest-proto/src/ring.rs'
       - 'crates/horcrux-vm/tests/hxc_dbus_e2e.rs'
       - '.forgejo/workflows/hx-console-e2e.yml'
   workflow_dispatch: {}
@@ -101,6 +105,12 @@ jobs:
           export HXC_WIN_ISO=/tmp/win11-eval.iso
           HXC_OUT=/tmp/hxc-e2e bash horcrux-api/tests/hx_console_e2e.sh target/debug/horcrux-api horcrux-api/horcrux-ui/dist 2>&1 | tee /tmp/hxc-e2e.log
           grep -E '^(LATENCY|RESULTS)' /tmp/hxc-e2e.log || true
+
+      - name: Native viewer on the node (frame ring device, local socket, local tickets, RBAC)
+        run: |
+          set -o pipefail
+          cargo build -p horcrux-viewer
+          HXL_OUT=/tmp/hxl-e2e bash horcrux-api/tests/hx_local_viewer_e2e.sh target/debug/horcrux-api target/debug/horcrux-viewer 2>&1 | tee /tmp/hxl-e2e.log
 
       - name: QEMU D-Bus display source (frames, keyboard, pointer; no browser)
         run: |
