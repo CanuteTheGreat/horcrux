@@ -59,6 +59,39 @@ pub struct Config {
     pub service_poll_ms: u64,
     /// Windows service: also run the agent (as SYSTEM) at the login screen.
     pub service_login_screen: bool,
+    /// Windows: Horcrux virtual display (hxidd) use: `auto` (when the node
+    /// asks for it: the guest's GPU has no monitor or no outputs), `on`
+    /// (layouts always go to virtual monitors) or `off` (never; the
+    /// installer then creates no virtual display adapter).
+    pub virtual_display: String,
+    /// Windows: modes every virtual monitor offers besides the one asked
+    /// for (`WxH@HZ`, comma-separated; HZ may be fractional).
+    pub virtual_display_modes: String,
+    /// Windows: refresh rate for a layout monitor that names none (Hz).
+    pub virtual_display_default_hz: u32,
+    /// Windows: most virtual monitors created for a layout.
+    pub virtual_display_max_monitors: usize,
+    /// Windows: the virtual monitors come back at boot / on the sign-in screen.
+    pub virtual_display_persist: bool,
+    /// Windows: make the first virtual monitor the primary display.
+    pub virtual_display_primary: bool,
+    /// Windows: how long a layout waits for new virtual monitors (ms).
+    pub virtual_display_wait_ms: u64,
+    /// Windows: virtual gamepads created by `--drivers install`.
+    pub gamepads: u32,
+    /// Windows: directory holding the driver packages (default: `drivers`
+    /// next to the agent).
+    pub drivers_dir: String,
+    /// Windows: subject (CN) of the per-guest driver signing certificate.
+    pub driver_cert_subject: String,
+    /// Windows: wait for a new software device to be created (ms).
+    pub driver_device_timeout_ms: u64,
+    /// Windows: `install`, `remove` or `status` of the guest drivers, then exit.
+    pub drivers: Option<String>,
+    /// Apply this layout (`WxH@HZ[,WxH@HZ...]`), print the result and exit (tests).
+    pub layout: Option<String>,
+    /// Drive virtual gamepad 0 through a fixed sequence and exit (tests).
+    pub gamepad_test: bool,
 }
 
 impl Default for Config {
@@ -90,6 +123,23 @@ impl Default for Config {
             layout_settle_ms: 500,
             service_poll_ms: 1000,
             service_login_screen: true,
+            virtual_display: "auto".into(),
+            virtual_display_modes:
+                "3840x2160@60,3840x2160@120,2560x1440@60,2560x1440@144,2560x1440@240,\
+1920x1080@60,1920x1080@144,1920x1080@240,1680x1050@60,1600x900@60,1366x768@60,1280x720@60"
+                    .into(),
+            virtual_display_default_hz: 60,
+            virtual_display_max_monitors: 4,
+            virtual_display_persist: true,
+            virtual_display_primary: true,
+            virtual_display_wait_ms: 5000,
+            gamepads: 1,
+            drivers_dir: String::new(),
+            driver_cert_subject: "Horcrux Guest Drivers".into(),
+            driver_device_timeout_ms: 30000,
+            drivers: None,
+            layout: None,
+            gamepad_test: false,
         }
     }
 }
@@ -127,7 +177,11 @@ impl Config {
             };
             let (k, v) = match k.split_once('=') {
                 Some((k, v)) => (k.to_string(), v.to_string()),
-                None if matches!(k, "once" | "print-caps" | "help" | "service") => {
+                None if matches!(
+                    k,
+                    "once" | "print-caps" | "help" | "service" | "gamepad-test"
+                ) =>
+                {
                     (k.to_string(), "true".into())
                 }
                 None => {
@@ -194,6 +248,39 @@ impl Config {
             "layout_settle_ms" => self.layout_settle_ms = num(v)?,
             "service_poll_ms" => self.service_poll_ms = num(v)?.max(100),
             "service_login_screen" => self.service_login_screen = b(v),
+            "virtual_display" => {
+                if !matches!(v, "auto" | "on" | "off") {
+                    return Err(format!("{k}: auto, on or off, not {v}"));
+                }
+                self.virtual_display = v.into()
+            }
+            "virtual_display_modes" => self.virtual_display_modes = v.into(),
+            "virtual_display_default_hz" => {
+                self.virtual_display_default_hz = num(v)?.clamp(1, 1000) as u32
+            }
+            "virtual_display_max_monitors" => {
+                self.virtual_display_max_monitors = num(v)?.clamp(1, 16) as usize
+            }
+            "virtual_display_persist" => self.virtual_display_persist = b(v),
+            "virtual_display_primary" => self.virtual_display_primary = b(v),
+            "virtual_display_wait_ms" => self.virtual_display_wait_ms = num(v)?,
+            "gamepads" => self.gamepads = num(v)?.min(16) as u32,
+            "drivers_dir" => self.drivers_dir = v.into(),
+            "driver_cert_subject" => {
+                if v.is_empty() || v.contains(['\'', ',', '=', '"']) {
+                    return Err(format!("{k}: a plain name, not {v}"));
+                }
+                self.driver_cert_subject = v.into()
+            }
+            "driver_device_timeout_ms" => self.driver_device_timeout_ms = num(v)?.max(1000),
+            "drivers" => {
+                if !matches!(v, "install" | "remove" | "status") {
+                    return Err(format!("{k}: install, remove or status, not {v}"));
+                }
+                self.drivers = Some(v.into())
+            }
+            "layout" => self.layout = Some(v.into()),
+            "gamepad_test" => self.gamepad_test = b(v),
             _ => return Err(format!("unknown setting {k}")),
         }
         Ok(())
@@ -216,7 +303,7 @@ fn parse_file(text: &str) -> Vec<(String, String)> {
 
 const HELP: &str = "usage: horcrux-guest-agent [--config FILE] [--port PATH | --connect HOST:PORT] \
 [--capture auto|kmsgrab|x11grab|dxgi|idd] [--encoder auto|software|vaapi|nvenc|qsv|amf|mediafoundation] \
-[--ffmpeg PATH] [--once] [--print-caps]";
+[--ffmpeg PATH] [--once] [--print-caps] [--drivers install|remove|status] [--layout WxH@HZ[,...]] [--gamepad-test]";
 
 #[cfg(test)]
 mod tests {
@@ -245,6 +332,24 @@ mod tests {
         assert!(c.once);
         assert_eq!(c.ffmpeg, "ffmpeg");
         assert!(Config::load(vec!["--bogus=1".into()]).is_err());
+        assert!(Config::load(vec!["--virtual-display=maybe".into()]).is_err());
+        assert!(Config::load(vec!["--drivers".into(), "nuke".into()]).is_err());
+        assert!(Config::load(vec!["--driver-cert-subject=a,b".into()]).is_err());
+        let d = Config::load(vec![
+            "--drivers".into(),
+            "install".into(),
+            "--gamepads=40".into(),
+        ])
+        .unwrap();
+        assert_eq!(d.drivers.as_deref(), Some("install"));
+        assert_eq!(d.gamepads, 16);
+        assert_eq!(d.virtual_display, "auto");
+        assert!(!crate::hxdrv::parse_modes(&d.virtual_display_modes).is_empty());
+        assert_eq!(
+            crate::hxdrv::parse_modes(&d.virtual_display_modes).len(),
+            d.virtual_display_modes.split(',').count(),
+            "every default mode is valid"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 }

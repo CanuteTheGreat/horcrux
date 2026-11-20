@@ -84,6 +84,47 @@ pub struct HandoffRecord {
     /// IOMMU groups the VM holds (`/dev/vfio/N`).
     pub groups: Vec<String>,
     pub stopped_services: Vec<String>,
+    /// Display outputs of the handed-off GPUs as the host saw them just
+    /// before the hand-off (empty for GPUs the host never drove, e.g.
+    /// bound to vfio-pci at boot). The console uses it to decide whether
+    /// the guest needs Horcrux virtual monitors.
+    #[serde(default)]
+    pub gpu_outputs: Vec<GpuOutputs>,
+}
+
+/// DRM outputs of one GPU function.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GpuOutputs {
+    pub address: String,
+    /// Display connectors (HDMI/DP/eDP...); 0 = a GPU without outputs.
+    pub connectors: usize,
+    /// Connectors with a monitor attached.
+    pub connected: usize,
+}
+
+/// Should the guest show its desktop on Horcrux virtual monitors? Policy
+/// `always`/`never`, or `auto`: a handed-off GPU had no outputs or no
+/// monitor attached. GPUs the host never drove give no answer (`auto` then
+/// means no: the guest tools' own `virtual_display` setting can still
+/// turn it on).
+pub fn wants_virtual_display(policy: &str, rec: Option<&HandoffRecord>) -> bool {
+    match policy {
+        "always" => true,
+        "never" => false,
+        _ => rec
+            .map(|r| {
+                r.gpu_outputs
+                    .iter()
+                    .any(|o| o.connectors == 0 || o.connected == 0)
+            })
+            .unwrap_or(false),
+    }
+}
+
+/// The hand-off record of a VM run, if its GPUs were handed off.
+pub fn load_record(disk: &Path) -> Option<HandoffRecord> {
+    let t = std::fs::read_to_string(record_file(disk)).ok()?;
+    serde_json::from_str(&t).ok()
 }
 
 pub fn record_file(disk: &Path) -> PathBuf {
@@ -168,6 +209,43 @@ impl Host {
             }
         }
         out
+    }
+
+    /// DRM outputs of a GPU function; `None` when no DRM driver drives it
+    /// (vfio-pci, no driver, not a GPU).
+    pub fn outputs(&self, addr: &str) -> Option<GpuOutputs> {
+        let drm = self.sys.join("class/drm");
+        let mut names: Vec<String> = std::fs::read_dir(&drm)
+            .ok()?
+            .flatten()
+            .map(|e| base(&e.path()))
+            .collect();
+        names.sort();
+        let cards: Vec<String> = names
+            .iter()
+            .filter(|n| n.starts_with("card") && !n.contains('-'))
+            .filter(|n| link_base(&drm.join(n).join("device")).as_deref() == Some(addr))
+            .cloned()
+            .collect();
+        if cards.is_empty() {
+            return None;
+        }
+        let mut o = GpuOutputs {
+            address: addr.to_string(),
+            ..Default::default()
+        };
+        for n in &names {
+            let Some((card, _)) = n.split_once('-') else {
+                continue;
+            };
+            if cards.iter().any(|c| c == card) {
+                o.connectors += 1;
+                if read(&drm.join(n).join("status")) == "connected" {
+                    o.connected += 1;
+                }
+            }
+        }
+        Some(o)
     }
 
     /// Device files of these PCI functions (DRM nodes, NVIDIA nodes).
@@ -364,6 +442,7 @@ pub async fn acquire(host: &Host, disk: &Path, hostpci: &[VmHostPci]) -> Result<
     let (funcs, groups) = preflight(host, &devices, &cfg, true)?;
     let mut rec = HandoffRecord {
         groups,
+        gpu_outputs: funcs.iter().filter_map(|f| host.outputs(f)).collect(),
         ..Default::default()
     };
     // Helper services that keep the GPU open.
@@ -862,6 +941,65 @@ mod tests {
         fs::create_dir_all(s.join("devices/cpu_atom")).unwrap();
         fs::write(s.join("devices/cpu_atom/cpus"), "8-23").unwrap();
         fx
+    }
+
+    #[test]
+    fn outputs_count_connectors_and_monitors_per_gpu() {
+        let fx = laptop();
+        let h = fx.host();
+        assert_eq!(
+            h.outputs("0000:00:02.0"),
+            Some(GpuOutputs {
+                address: "0000:00:02.0".into(),
+                connectors: 1,
+                connected: 1
+            })
+        );
+        let d = h.outputs("0000:02:00.0").unwrap();
+        assert_eq!((d.connectors, d.connected), (2, 0));
+        assert_eq!(
+            h.outputs("0000:02:00.1"),
+            None,
+            "audio function: no DRM card"
+        );
+    }
+
+    #[test]
+    fn virtual_display_decision() {
+        let rec = |c: usize, m: usize| HandoffRecord {
+            gpu_outputs: vec![GpuOutputs {
+                address: "0000:02:00.0".into(),
+                connectors: c,
+                connected: m,
+            }],
+            ..Default::default()
+        };
+        assert!(
+            wants_virtual_display("auto", Some(&rec(0, 0))),
+            "GPU without outputs"
+        );
+        assert!(
+            wants_virtual_display("auto", Some(&rec(3, 0))),
+            "no monitor attached"
+        );
+        assert!(
+            !wants_virtual_display("auto", Some(&rec(3, 1))),
+            "a monitor is attached"
+        );
+        assert!(!wants_virtual_display("auto", None), "no hand-off record");
+        assert!(
+            !wants_virtual_display("auto", Some(&HandoffRecord::default())),
+            "never driven by the host"
+        );
+        assert!(wants_virtual_display("always", None));
+        assert!(!wants_virtual_display("never", Some(&rec(0, 0))));
+        let old: HandoffRecord =
+            serde_json::from_str(r#"{"devices":[],"groups":["14"],"stopped_services":[]}"#)
+                .unwrap();
+        assert!(
+            old.gpu_outputs.is_empty(),
+            "records written before this field still load"
+        );
     }
 
     #[test]
