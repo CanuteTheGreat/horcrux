@@ -18,6 +18,8 @@ KEYWORDS="~amd64"
 # +gnome / xfce (per-login xfconf power settings: the XFCE defaults file is owned by horcrux-surface-desktop).
 IUSE="+gnome +plain smallram xfce"
 
+# -r20: pkg_postinst restarts a RUNNING horcrux-test-klog (OpenRC or systemd) so an upgrade takes effect: a logger started by an older revision kept
+#   running its old iso-stamped, block-buffered dmesg for days and the persistent-log check failed although the package was current.
 # -r19: the kernel-install hook moved to sys-apps/horcrux-core-1-r7 (/etc/kernel/postinst.d/91-horcrux-boot-entry: every non-boot-environment Horcrux
 #   install needs it, not only test machines); netwatch also coldplugs + restarts NetworkManager when no link is up after boot and writes a boot-health
 #   report (/run/horcrux-test-boot-health, settings /etc/conf.d/horcrux-test-netwatch).
@@ -164,6 +166,11 @@ pkg_postinst() {
 		for s in horcrux-test-power horcrux-test-klog horcrux-test-netwatch horcrux-test-watchdog; do
 			rc-update add ${s} default >/dev/null 2>&1
 		done
+		if [[ -d /run/systemd/system ]]; then
+			systemctl is-active --quiet horcrux-test-klog && systemctl restart horcrux-test-klog
+		elif rc-service horcrux-test-klog status >/dev/null 2>&1; then
+			rc-service horcrux-test-klog restart >/dev/null 2>&1
+		fi
 		elog "Enabled in the default runlevel: horcrux-test-power horcrux-test-klog horcrux-test-netwatch horcrux-test-watchdog (start them now with rc-service)"
 	fi
 	elog "Apply the logind drop-in without logging anyone out: rc-service elogind reload (or loginctl: kill -HUP the elogind daemon)."
