@@ -33,7 +33,7 @@ PROJECTS = {
                      health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
                     seedfile="/etc/horcrux/admin-password",
                     services=["horcrux-api"], forward=False, dbfiles=[], logdirs=["/var/log/horcrux"]),
-    "patronus": dict(svc="patronus-web", port=8443, web_user="pxadmin", pam="patronus", admin_group="patronus-admin", health=["/login"], pwfile="/var/lib/patronus/initial-admin-password", old_pw="patronus",
+    "patronus": dict(svc="patronus-web", port=443, web_user="pxadmin", pam="patronus", admin_group="patronus-admin", health=["/login"], pwfile="/var/lib/patronus/initial-admin-password", old_pw="patronus",
                      seedfile="/var/lib/patronus/initial-admin-password",
                      services=["patronus-firewall", "patronus-applyd", "patronus-web"], forward=True,
                      dbfiles=["/var/lib/patronus/config.db"], dbuser="patronus", logdirs=["/var/log/patronus"]),
@@ -1058,7 +1058,7 @@ def serial_probe(vm, wait=45):
                     "ping -c2 -W2 10.0.2.2 >/dev/null 2>&1; echo PING-GW-$?; ip neigh | head -4 | sed 's/^/NEIGH /'; "
                     "nft list chain inet patronus input 2>&1 | grep -c 'ct state' | sed 's/^/CTRULES-/'; "
                     "echo APPLY-LOGS; tail -n 4 /var/log/patronus/*.log /var/log/horcrux/*.log 2>/dev/null | cut -c1-160; "
-                    "for p in 8443 8006; do ss -ltn | grep -q \":$p \" && echo LOCALWEB-$p-$(curl -sk -m8 -o /dev/null -w %{http_code} https://127.0.0.1:$p/ 2>&1 | tail -c 40); done; "
+                    "for p in 443 8443 8006; do ss -ltn | grep -q \":$p \" && echo LOCALWEB-$p-$(curl -sk -m8 -o /dev/null -w %{http_code} https://127.0.0.1:$p/ 2>&1 | tail -c 40); done; "
                     "echo DIAG-E-$((6*7))")
             vm.send(cmds + "\r")
             m = vm.expect_raw(r"(?s)DIAG-S-42.*?DIAG-E-42", wait)
@@ -2025,7 +2025,7 @@ class Runner:
                 self.step("first-boot-password-files-removed", "present" not in o and o.count("gone") == 2, o.strip().replace("\n", " "))
             if a.project == "patronus":
                 sc, code, _ = http(FWD_WAN, "/login", timeout=6)
-                self.step("patronus-wan-web-blocked", code == 0, f"WAN 10.0.2.15:8443 -> {code or 'no answer (dropped/refused)'}")
+                self.step("patronus-wan-web-blocked", code == 0, f"WAN 10.0.2.15:{P['port']} -> {code or 'no answer (dropped/refused)'}")
             vm.shot("installed-running")
             # the INSTALLED system's os-release: package-owned, a version + build + variant, and no "live"/"installer" anywhere in the pretty name
             rc, o = ssh(FWD_SSH, self.key, "cat /etc/os-release; qfile -q /usr/lib/os-release", timeout=30)
