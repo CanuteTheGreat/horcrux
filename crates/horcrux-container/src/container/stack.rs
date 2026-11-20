@@ -258,7 +258,7 @@ impl StackManager {
         };
         let command = match &svc.command {
             Some(ComposeCommand::Exec(argv)) => argv.clone(),
-            Some(ComposeCommand::Shell(s)) => s.split_whitespace().map(str::to_string).collect(),
+            Some(ComposeCommand::Shell(s)) => split_shell_words(s),
             None => Vec::new(),
         };
         ContainerConfig {
@@ -894,8 +894,100 @@ fn parse_mem_limit_mb(s: &str) -> Option<u64> {
     }
 }
 
+/// Split a compose string-form `command:` into argv the way a POSIX shell
+/// would for quoting (no expansion): `sh -c 'a; b'` stays three words.
+/// An unclosed quote falls back to plain whitespace splitting.
+fn split_shell_words(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut chars = input.chars();
+    let mut ok = true;
+    while let Some(c) = chars.next() {
+        match c {
+            c if c.is_whitespace() => {
+                if in_word {
+                    out.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            '\'' => {
+                in_word = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(c) => cur.push(c),
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            '"' => {
+                in_word = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some('\\') => match chars.next() {
+                            Some(e @ ('"' | '\\')) => cur.push(e),
+                            Some(e) => {
+                                cur.push('\\');
+                                cur.push(e);
+                            }
+                            None => {
+                                ok = false;
+                                break;
+                            }
+                        },
+                        Some(c) => cur.push(c),
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            '\\' => {
+                in_word = true;
+                if let Some(e) = chars.next() {
+                    cur.push(e);
+                }
+            }
+            c => {
+                in_word = true;
+                cur.push(c);
+            }
+        }
+        if !ok {
+            return input.split_whitespace().map(str::to_string).collect();
+        }
+    }
+    if in_word {
+        out.push(cur);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compose_string_command_keeps_quoted_words() {
+        assert_eq!(
+            split_shell_words("sh -c 'echo x > /data/m; sleep 86400'"),
+            vec!["sh", "-c", "echo x > /data/m; sleep 86400"]
+        );
+        assert_eq!(
+            split_shell_words("nginx -g \"daemon off;\""),
+            vec!["nginx", "-g", "daemon off;"]
+        );
+        assert_eq!(
+            split_shell_words("echo 'oops a"),
+            vec!["echo", "'oops", "a"]
+        );
+        assert!(split_shell_words("  ").is_empty());
+    }
+
     use super::*;
 
     const SIMPLE_COMPOSE: &str = r#"
