@@ -847,6 +847,31 @@ Done:
   default in `[console] wan`, the console settings API, the declarative
   config (console kind) and System > Horcrux Console > WAN access.
 - WAN e2e under netem (section 6) in CI on the KVM runner.
+- Relay replies come from the address the request reached (found by the
+  C3c Windows QA: a client inside a container on the node itself sent to the
+  node's LAN address and the relay, bound to 0.0.0.0, answered from the
+  Docker bridge address, which the client's NAT dropped). With the relay on
+  the unspecified address, `crates/horcrux-turn/src/pktinfo.rs` reads the
+  destination address of every UDP datagram (Linux: `IP_PKTINFO`, and
+  `IPV6_RECVPKTINFO` on `[::]`, where IPv4 clients of the dual-stack socket
+  arrive as IPv4-mapped peers with an `IP_PKTINFO` message) with `recvmsg`,
+  keeps it with the client's allocation, and sends every answer and every
+  relayed ChannelData/Data from that address through `sendmsg` with the
+  same ancillary data. Link-local IPv6 replies also carry the arrival
+  interface; other replies leave the interface to the routing table. A
+  relay on a specific address already answers correctly and keeps the plain
+  path, as does a platform without the socket options (only Linux is a relay
+  platform; the desktop client uses the same crate without it). TCP needs
+  nothing (connected sockets). The setting
+  `wan.relay_reply_from_request_address` (default on; System > Horcrux
+  Console > WAN access) turns it off for comparison. Tests: unit tests of
+  the socket layer (reply source set through the ancillary data, dual
+  stack) and `tests/pktinfo_netns.rs`, which puts the relay in a network
+  namespace with a route-back address (10.99.1.1) different from the
+  address the client sends to (10.99.2.1, a dummy interface), shows that the
+  answers leave from the route's address with the setting off, and from the
+  request's address with it on (STUN Binding, Allocate challenge, and a
+  Data indication relayed from a peer).
 
 C3b (2026-11-20):
 - In-process H.264 encoder (`crates/horcrux-media/src/x264.rs`): the system
@@ -946,11 +971,6 @@ Open:
   empty connection window there.
 - Windows headless run in CI against a node: needs the installed Windows test
   image of the guest-tools e2e (C2b, `hx-console-guest-e2e.yml`) on main.
-- Relay bound to the unspecified address answers from the address of the
-  outgoing route, not the one the request reached (seen with a client inside
-  a container on the node itself: the reply came from the bridge address and
-  was dropped by the client's NAT). Workaround: set `relay_listen_address`;
-  fix: answer with IP_PKTINFO / per-address sockets.
 - FlexFEC receive in the desktop client (str0m has no FEC receiver).
 - Cluster: relay on the cluster name/VIP (C4), shared relay secret across
   nodes.

@@ -11,6 +11,7 @@
 //!   peers matching the configured rules (the node's own console media
 //!   sockets), and data from or to any other address is dropped.
 //! * Never decrypts: it forwards DTLS/SRTP datagrams as they are.
+use crate::pktinfo::{Local, PktSocket};
 use crate::stun::{self, attr, method, Builder, Class, Message};
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
@@ -44,6 +45,11 @@ pub struct RelayConfig {
     /// Where clients reach the relay (UDP, and TCP when `tcp`).
     pub listen: SocketAddr,
     pub tcp: bool,
+    /// With an unspecified `listen` address, answer UDP requests from the
+    /// address they reached (per-datagram destination address) instead of
+    /// the outgoing route's source address. Has no effect on a specific
+    /// listen address (already correct) or where the platform lacks it.
+    pub reply_from_request_address: bool,
     pub realm: String,
     /// Shared secret the credentials are derived from.
     pub secret: Vec<u8>,
@@ -65,6 +71,7 @@ impl Default for RelayConfig {
         RelayConfig {
             listen: "0.0.0.0:3478".parse().expect("addr"),
             tcp: true,
+            reply_from_request_address: true,
             realm: "horcrux".into(),
             secret: Vec::new(),
             relay_ip: "127.0.0.1".parse().expect("ip"),
@@ -128,15 +135,16 @@ enum ClientKey {
 
 #[derive(Clone)]
 enum Sink {
-    Udp(Arc<UdpSocket>, SocketAddr),
+    /// Socket, client, and the local address its requests reach.
+    Udp(Arc<PktSocket>, SocketAddr, Option<Local>),
     Tcp(mpsc::Sender<Vec<u8>>),
 }
 
 impl Sink {
     fn send(&self, b: Vec<u8>) {
         match self {
-            Sink::Udp(s, a) => {
-                let _ = s.try_send_to(&b, *a);
+            Sink::Udp(s, a, l) => {
+                let _ = s.try_send_from(&b, *a, *l);
             }
             Sink::Tcp(tx) => {
                 let _ = tx.try_send(b);
@@ -218,7 +226,7 @@ impl Relay {
                 "relay secret must be at least 16 bytes",
             ));
         }
-        let udp = Arc::new(UdpSocket::bind(cfg.listen).await?);
+        let udp = Arc::new(PktSocket::bind(cfg.listen, cfg.reply_from_request_address).await?);
         let udp_addr = udp.local_addr()?;
         let tcp = if cfg.tcp {
             Some(TcpListener::bind(SocketAddr::new(cfg.listen.ip(), udp_addr.port())).await?)
@@ -244,13 +252,13 @@ impl Relay {
             tasks.push(tokio::spawn(async move {
                 let mut buf = vec![0u8; 65536];
                 loop {
-                    let Ok((n, src)) = udp.recv_from(&mut buf).await else {
+                    let Ok((n, src, local)) = udp.recv_from(&mut buf).await else {
                         tokio::time::sleep(Duration::from_millis(5)).await;
                         continue;
                     };
-                    let sink = Sink::Udp(udp.clone(), src);
+                    let sink = Sink::Udp(udp.clone(), src, local);
                     if let Some(resp) = inner.handle(ClientKey::Udp(src), src, &buf[..n], &sink) {
-                        let _ = udp.try_send_to(&resp, src);
+                        let _ = udp.try_send_from(&resp, src, local);
                     }
                 }
             }));
