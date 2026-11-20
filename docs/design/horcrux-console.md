@@ -267,6 +267,30 @@ for the next capture, so the guest half costs about one frame period.
 (decode, present) of this path are measured in C2b with a Windows guest and
 on GPU hardware.
 
+### Measured in C2b (guest tools, full path: guest encode -> node -> WebRTC -> browser)
+
+Source: `horcrux-api/tests/hx_console_guest_e2e.{sh,py}` (CI workflow
+`hx-console-guest-e2e.yml`), VMs created through the API on a single node,
+QEMU 10.2 with KVM, headless Chromium on the same host, software decode.
+Keystroke to picture = from the client sending the key until a decoded frame
+whose pixels changed. No GPU anywhere: the guests encode in software.
+
+| Measurement | Result | Conditions |
+|---|---|---|
+| Keystroke to picture, Debian 13 console, guest tools (FFmpeg kmsgrab + x264 in the guest) | median 76-101 ms, p90 151-178 ms (16/16 per run, 2 runs) | 2 vCPUs, 1280x800, shared rw-man host with other CI jobs |
+| Keystroke to picture, Windows 11 Notepad, guest tools (DXGI duplication + Media Foundation software H.264) | median 189-195 ms, p90 231-614 ms, fastest 3.5-29 ms (every keystroke seen, 3 runs) | 4 vCPUs, 1280x800, a minute after the tools were installed (Windows still busy: search indexing, first-logon tasks), same shared host |
+| In-guest encode time per frame, Windows (agent-reported) | 24-64 ms |
+| Absolute pointer + button to picture (QEMU tablet, desktop selection rectangle) | 497-617 ms | same Windows guest |
+| Guest audio | ~100 Opus packets/s received by the browser (getStats), non-zero audio energy | HDA sound card, WASAPI loopback | Media Foundation's software MFT on 4 vCPUs |
+| Data-channel round trip | 2 ms | |
+
+Reading: the fastest samples (a few ms to 29 ms) show the path itself
+adds little; the
+medians are dominated by software encode inside a 4-vCPU guest and by the
+shared CI host, not by the transport. The < 20 ms LAN gaming target needs a
+GPU encoder in the guest (NVENC/AMF/QSV, code present, untested without GPU
+hardware) and an unloaded node.
+
 ## 7. Standalone machine
 
 One box runs everything: the guest, the broker, the encoder and, if WAN access
@@ -435,6 +459,72 @@ Proven:
   clipboard both ways without echo, display mode change and restore, MSI
   install -> service in session 0 + agent in session 1, clean uninstall.
 
+### C2b status (2026-11-20)
+
+Done and proven in CI (`hx-console-guest-e2e.yml`, KVM runner):
+- Test images: `ci/windows-test-image.py` installs Windows 11 (evaluation
+  ISO) unattended with Secure Boot, TPM 2.0, virtio-win drivers and the QEMU
+  guest agent but WITHOUT the Horcrux tools (40-60 min once); the image is
+  cached per runner in the Docker volume `hxc-win-img`, keyed by both ISOs,
+  the answer file and its first-logon script (`IMAGE_VERSION`), so later runs
+  only import it. `ci/linux-test-image.py` makes a Debian 13 image (official
+  nocloud image + FFmpeg + qemu-guest-agent, no Horcrux tools) in about a
+  minute.
+- Windows end to end: VM created through the API (q35, OVMF Secure Boot,
+  TPM, guest agent, HDA sound, virtio video), disk imported with
+  `/vms/:id/import-disk`; the node attaches the tools CD; opening a viewer
+  makes the node install the MSI through the guest agent (automatic install,
+  recorded as `by: auto`) and the OPEN session links to the tools without a
+  reconnect (`guest_tools_retry_secs`); the browser then gets the
+  guest-encoded stream (`video_source: guest`, `guest_encoder:
+  mediafoundation-software`) over the real virtio-serial port; keyboard into
+  Notepad, absolute pointer + button (desktop selection rectangle), raw
+  relative motion through the tools, clipboard guest -> browser and browser
+  -> guest, the guest's Opus audio track in the browser (getStats audio
+  packetsReceived grows ~100/s), resize through the tools (Windows switches
+  modes; the stream follows).
+- Linux end to end: Debian VM created through the API; `POST
+  /api/vms/:id/console/guest-tools/install` (VM.Config; a VM.Console-only user
+  gets 403 but can read `GET .../guest-tools`) installs the .deb from the CD
+  with apt and starts the systemd unit; audit events for request and
+  result; the browser gets the guest-encoded stream (FFmpeg kmsgrab + x264)
+  and keystrokes come back in it; the VM console page shows the guest tools
+  bar with the Install button.
+- deb/rpm/apk packages of the Linux tools (nfpm, `ci/build-guest-tools-pkgs.sh`,
+  install-tested in Debian, Fedora and Alpine containers in `guest-tools.yml`)
+  on the tools CD under `linux/<arch>/`, next to the Gentoo ebuild.
+- New settings: `guest_tools_retry_secs` (in-session re-check, default 5 s),
+  `guest_tools_install_timeout_secs` (default 600 s); Windows agent:
+  `port_write_max`, `port_busy_wait_ms`, `port_busy_tries`,
+  `port_write_timeout_ms`, `port_handle` (set by the service).
+
+Found and fixed by running it on real Windows (the C2 part 1 Windows tests
+spoke TCP and ran as an administrator):
+- The virtio-serial port admits only administrators and SYSTEM, so the agent
+  the service starts as the logged-on user could never open it ("Access is
+  denied"). The service now opens the port and hands the agent an inherited
+  handle (PROC_THREAD_ATTRIBUTE_HANDLE_LIST, only that handle).
+- While the node's end is not connected QEMU throttles the port: writes never
+  complete and reads fail with ERROR_NO_SYSTEM_RESOURCES. The agent's writer
+  blocked forever and the agent never noticed the node connecting. Writes
+  now time out (`port_write_timeout_ms`) and a throttled read counts as "node
+  not connected"; large writes are split (`port_write_max`).
+- The node's port reader outlived a connection attempt to a silent guest and
+  kept QEMU's only chardev connection, so later sessions could not reach the
+  tools; the reader now ends with the link.
+- msiexec through the guest agent: the quoted MSI path did not survive the
+  agent's command line (1619); Debian: `systemctl enable` handed the OpenRC
+  script to update-rc.d, which refused it without an LSB header.
+- The guest agent pauses for seconds while the MSI installs; the install
+  wait now retries until its deadline instead of failing on the first
+  timeout.
+- With std VGA under UEFI Windows' Basic Display Adapter is fixed to the
+  firmware's mode, so resize cannot work; the test VM uses virtio video
+  (virtio-win's display driver). Resize on std VGA needs the Horcrux virtual
+  display (C2c).
+- The browser client kept the old guest size after a guest-side mode change
+  (pointer mapping); it now follows the decoded size.
+
 ### C2b: Windows guest audio (2026-11-20)
 
 The Windows agent captures the default render endpoint (or the endpoint
@@ -463,13 +553,7 @@ it; 20 ms frames; nothing after StopAudio; the Windows Audio service
 stopped under a running stream -> Log + silence at full cadence, restarted
 -> capture resumes.
 
-Still open in C2 (queued as C2b-C2d):
-- C2b: a Windows guest in Horcrux CI with the tools installed automatically
-  (CD + guest agent) and viewed through the browser client with in-guest
-  encode, including the virtio-serial transport on Windows (only TCP ran);
-  Linux guest through the full broker + browser path
-  (proven here at the port level); deb/rpm/apk packages for non-Gentoo
-  Linux guests; the API action "install guest tools".
+Still open in C2 (queued as C2c-C2d):
 - C2c: Horcrux virtual display (IddCx Indirect Display Driver, clean-room from
   Microsoft's documentation; configurable resolution/refresh incl. 240+ Hz,
   used automatically for GPUs without monitors/outputs) and the virtual HID
