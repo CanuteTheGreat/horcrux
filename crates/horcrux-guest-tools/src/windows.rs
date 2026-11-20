@@ -2,6 +2,7 @@
 //! Media Foundation H.264 encode (hardware MFTs first, the Microsoft
 //! software MFT as fallback), SendInput, clipboard, display layout, and the
 //! service wrapper that runs the agent in the console session.
+mod audio;
 mod capture;
 mod clip;
 mod convert;
@@ -28,6 +29,7 @@ pub struct Windows {
     cfg: Config,
     clip: Sender<clip::Cmd>,
     video: Option<video::Video>,
+    audio: Option<audio::Audio>,
 }
 
 impl Windows {
@@ -44,6 +46,7 @@ impl Windows {
             cfg,
             clip,
             video: None,
+            audio: None,
         }
     }
 }
@@ -103,7 +106,8 @@ impl Platform for Windows {
                 relative_mouse: true,
                 // No driver-free virtual gamepad exists on Windows.
                 gamepad: false,
-                audio: false,
+                // WASAPI loopback of a render endpoint (probed).
+                audio: audio::probe(&self.cfg),
                 virtual_display: false,
                 chroma444: false,
                 hdr: false,
@@ -161,9 +165,15 @@ impl Platform for Windows {
         input::inject(i, self.cfg.wheel_scale_pct);
     }
 
-    fn start_audio(&mut self, _: &StartAudio, _: Out) -> Result<(), String> {
-        Err("WASAPI loopback audio is not implemented in the Windows agent yet".into())
+    fn start_audio(&mut self, a: &StartAudio, out: Out) -> Result<(), String> {
+        self.stop_audio();
+        self.audio = Some(audio::Audio::start(&self.cfg, a, out)?);
+        Ok(())
     }
 
-    fn stop_audio(&mut self) {}
+    fn stop_audio(&mut self) {
+        if let Some(mut a) = self.audio.take() {
+            a.stop();
+        }
+    }
 }

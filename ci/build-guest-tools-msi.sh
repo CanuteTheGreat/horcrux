@@ -2,7 +2,8 @@
 # Build the Horcrux Guest Tools Windows MSI on Linux.
 #   cross-compiles horcrux-guest-agent for x86_64-pc-windows-gnu (release), strips it,
 #   and packs packaging/windows/horcrux-guest-tools.wxs with wixl (msitools).
-# Needs: rust target x86_64-pc-windows-gnu, gcc-mingw-w64-x86-64, msitools.
+# Needs: rust target x86_64-pc-windows-gnu, gcc-mingw-w64-x86-64, cmake (builds the bundled
+#        libopus of the audio encoder, linked statically), msitools.
 # Env: OUT_DIR (default dist), TARGET (default x86_64-pc-windows-gnu), CARGO_BUILD_ARGS,
 #      SKIP_BUILD=1 to reuse an existing build in the cargo target dir.
 # Output: $OUT_DIR/horcrux-guest-tools-<version>-x64.msi
@@ -14,6 +15,7 @@ VERSION="$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f&&/^version *=/{g
 [ -n "$VERSION" ] || { echo "cannot read the workspace version from Cargo.toml" >&2; exit 1; }
 TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 if [ -z "${SKIP_BUILD:-}" ]; then
+  command -v cmake >/dev/null || { echo "cmake is needed to build the bundled libopus" >&2; exit 1; }
   # shellcheck disable=SC2086
   cargo build -p horcrux-guest-tools --release --target "$TARGET" ${CARGO_BUILD_ARGS:-}
 fi
@@ -33,6 +35,9 @@ cat > "$WORK/guest-tools.conf" <<'CONF'
 #encoder = auto
 #clipboard_poll_ms = 250
 #service_login_screen = true
+#audio_source = default
+#audio_opus_application = lowdelay
+#audio_bitrate_kbps = 128
 CONF
 MSI="$OUT_DIR/horcrux-guest-tools-$VERSION-x64.msi"
 ROOT="$PWD"

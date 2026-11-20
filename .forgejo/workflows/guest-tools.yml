@@ -55,7 +55,7 @@ jobs:
             sleep 15
           done
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            gcc-mingw-w64-x86-64 msitools wixl xorriso qemu-system-x86 qemu-utils ffmpeg curl
+            gcc-mingw-w64-x86-64 cmake msitools wixl xorriso qemu-system-x86 qemu-utils ffmpeg curl
           ls -l /dev/kvm
 
       - name: Cache cargo registry

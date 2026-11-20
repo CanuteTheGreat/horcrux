@@ -252,7 +252,7 @@ pub fn audio_args(cfg: &Config, a: &StartAudio) -> Vec<String> {
     };
     let ch = a.channels.max(1);
     let br = if a.bitrate_kbps == 0 {
-        128
+        cfg.audio_bitrate_kbps
     } else {
         a.bitrate_kbps
     };

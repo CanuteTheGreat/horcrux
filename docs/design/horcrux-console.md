@@ -162,7 +162,7 @@ What flows where in a session with tools:
 | gamepads | client `pad` channel (W3C standard mapping) -> tools (uinput gamepad on Linux; Windows needs the virtual HID gamepad driver, see 11) |
 | clipboard | client `clip` channel <-> tools, only with VM.Console.Clipboard, size-limited (`clipboard_max_bytes`) |
 | resize / layout | client `ctl` `resize` -> tools (`xrandr` with CVT-RB modes on Linux, ChangeDisplaySettingsEx on Windows) -> `guest_layout` back |
-| audio | tools capture (PulseAudio/PipeWire via FFmpeg on Linux) -> Opus -> str0m audio track |
+| audio | tools capture (PulseAudio/PipeWire via FFmpeg on Linux; WASAPI shared-mode loopback of the default render endpoint -> libopus in the agent on Windows) -> Opus -> str0m audio track |
 | serial text | client `console` channel <-> the VM's serial socket (input needs VM.Console.Input) |
 
 Delivery: every console VM run gets the guest tools CD (`guest_tools_iso`,
@@ -306,6 +306,20 @@ Kit APIs (IddCx, HID) are used from Microsoft's documentation; the
 Windows-driver-samples repository is MS-PL, which the FSF lists as
 GPL-incompatible, so its sample code is not copied into GPL-3.0 guest tools.
 
+Chosen for the Windows guest agent's audio (C2b, checked 2026-11-20 on
+crates.io): `opus` 0.4 (MIT OR Apache-2.0, maintained, release 2026-08) over
+`opusic-sys` 0.7 (BSD-3-Clause, maintained, release 2026-11), which builds
+its bundled libopus 1.6.1 (BSD-3-Clause, Xiph.Org) with cmake and links it
+statically, so the agent stays one self-contained exe. Windows-only
+dependency: the Linux agent keeps encoding with FFmpeg and the static musl
+build does not pull it in. libopus is built without `-fstack-protector` and
+`_FORTIFY_SOURCE` (opusic-sys features `no-stack-protector`,
+`no-fortify-source`) because their runtime lives in GCC's libssp on
+mingw-w64 runtimes before v11; the encoder only reads PCM the agent produced
+itself. Rejected: `audiopus_sys` (ISC, last release 2021), `magnum-opus`
+(last release 2020). Licence texts: THIRD-PARTY-LICENSES.txt (opusic-sys's
+LICENSE is libopus's).
+
 ## 11. Phases
 
 | Phase | Content | Proof |
@@ -421,11 +435,39 @@ Proven:
   clipboard both ways without echo, display mode change and restore, MSI
   install -> service in session 0 + agent in session 1, clean uninstall.
 
+### C2b: Windows guest audio (2026-11-20)
+
+The Windows agent captures the default render endpoint (or the endpoint
+named by `audio_source`: an endpoint ID or part of its name) with WASAPI
+shared-mode loopback on its own COM thread, converts any mix format (float
+or PCM, 8-32 bit, any channel count with speaker-mask downmix, any rate
+through a windowed-sinc resampler) to the requested Opus rate and channels,
+and encodes CBR Opus (`audio_opus_application`, default restricted low
+delay; `audio_bitrate_kbps` when StartAudio leaves the bitrate at 0) in 5-60
+ms frames. Loopback delivers nothing while nothing plays, so the stream is
+clocked by the wall clock: after `audio_idle_ms` without samples the agent
+encodes silence for the elapsed time (at most `audio_max_fill_ms` at once)
+and wakes when the next idle frame is due, so the WebRTC track keeps its
+cadence. A vanished endpoint or a new default device is reported with a
+`Log` message and reopened (`audio_retry_ms`, `audio_device_check_ms`).
+`caps.audio` is probed at Hello (an endpoint exists). The conversion logic
+is platform-independent and unit-tested on Linux (`src/audio.rs`).
+
+Proven on Windows Server 2022 (eval VM with a QEMU HDA sound card,
+`win_harness.py --tests audio,audio-recover`): first packet 97 ms after
+StartAudio; 300 packets in 3 s while silent with capture times exactly
+10 ms apart (arrival median 10.0 ms, p95 14 ms); every packet 160 bytes
+(128 kbit/s CBR); a 1 kHz tone played in the guest session decodes to
+1000.0 Hz at -5.97 dBFS (played at -6.02 dBFS) with digital silence before
+it; 20 ms frames; nothing after StopAudio; the Windows Audio service
+stopped under a running stream -> Log + silence at full cadence, restarted
+-> capture resumes.
+
 Still open in C2 (queued as C2b-C2d):
 - C2b: a Windows guest in Horcrux CI with the tools installed automatically
   (CD + guest agent) and viewed through the browser client with in-guest
   encode, including the virtio-serial transport on Windows (only TCP ran);
-  WASAPI loopback audio; Linux guest through the full broker + browser path
+  Linux guest through the full broker + browser path
   (proven here at the port level); deb/rpm/apk packages for non-Gentoo
   Linux guests; the API action "install guest tools".
 - C2c: Horcrux virtual display (IddCx Indirect Display Driver, clean-room from

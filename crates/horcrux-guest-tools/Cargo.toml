@@ -43,4 +43,18 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_HiDpi",
     "Win32_System_SystemInformation",
+    "Win32_Media_Audio",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com_StructuredStorage",
 ] }
+# Opus encoder for guest audio: opus (MIT OR Apache-2.0) over opusic-sys
+# (BSD-3-Clause), which builds the bundled libopus (BSD-3-Clause) with cmake
+# and links it statically. Windows only: the Linux agent encodes with FFmpeg.
+opus = "0.4"
+# Named only to choose libopus build options: no -fstack-protector and no
+# _FORTIFY_SOURCE, whose runtime (__stack_chk_fail, __memset_chk...) lives in
+# GCC's libssp (a DLL, or a static lib with its own CRT dependencies) on
+# mingw-w64 runtimes before v11. The encoder only reads PCM produced by the
+# agent itself; the other hardening flags stay on.
+opusic-sys = { version = "0.7", features = ["no-stack-protector", "no-fortify-source"] }

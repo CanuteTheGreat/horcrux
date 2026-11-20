@@ -12,6 +12,7 @@
 //! `%ProgramData%\Horcrux\guest-tools.conf` on Windows; `key = value`
 //! lines), which overrides the defaults in [`config::Config`].
 mod agent;
+mod audio;
 mod config;
 #[cfg(target_os = "linux")]
 mod linux;

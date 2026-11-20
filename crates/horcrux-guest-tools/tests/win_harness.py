@@ -9,8 +9,14 @@ bitstream checks when present (`analyze`).
 
   win_harness.py serve --port 9000 --out DIR [--www DIR] [--up DIR] [--tests a,b,c]
   win_harness.py analyze FILE.h264 --width W --height H [--min-frames N]
+  win_harness.py analyze-audio audio.ogg [--tone-hz F]
 
-Tests (`--tests`): hello, video, video-damage, input, clipboard, layout, video-native.
+Tests (`--tests`): hello, video, video-damage, input, clipboard, layout, video-native, audio,
+audio-recover. `audio` needs a render endpoint in the guest (e.g. QEMU ich9-intel-hda + hda-output and
+the Windows Audio service running): it checks the 10 ms packet cadence while nothing plays, plays a
+tone in the guest session (System.Media.SoundPlayer) and decodes the collected Opus packets (Ogg +
+ffmpeg) to measure the tone's frequency and level; `audio-recover` stops and restarts the Windows
+Audio service under a running stream.
 `input` and `clipboard` need a way to read guest state back. Probe scripts are written to
 `--www` (served to the guest at http://10.0.2.2:8000/) and typed into the guest with the
 agent's own keyboard injection (Win+R); they answer by setting the guest clipboard (which
@@ -21,7 +27,7 @@ import argparse, base64, json, os, queue, shutil, socket, struct, subprocess, sy
 
 K = dict(HELLO=1, HOST_HELLO=2, START_VIDEO=0x10, STOP_VIDEO=0x11, KEYFRAME=0x12, VIDEO=0x13,
          VIDEO_STATUS=0x14, CLIPBOARD=0x20, SET_LAYOUT=0x30, LAYOUT=0x31, INPUT=0x40, PING=0x60,
-         PONG=0x61, LOG=0x7f)
+         PONG=0x61, LOG=0x7f, START_AUDIO=0x50, AUDIO=0x51, STOP_AUDIO=0x52)
 KN = {v: k for k, v in K.items()}
 
 # QEMU qnum (PC XT set 1; +0x80 = E0 extended) for a US layout.
@@ -68,6 +74,7 @@ class Agent:
         self.s = sock
         self.q = queue.Queue()
         self.video = []          # parsed video packets (all, in order)
+        self.audio = []          # (arrival time, capture_us, Opus packet)
         self.vlock = threading.Lock()
         self.logs = []
         self.alive = True
@@ -96,6 +103,9 @@ class Agent:
         if k == K["VIDEO"]:
             with self.vlock:
                 self.video.append(parse_video(p))
+        elif k == K["AUDIO"]:
+            with self.vlock:
+                self.audio.append((time.time(), struct.unpack_from("<Q", p)[0], p[8:]))
         elif k == K["LOG"]:
             self.logs.append(p.decode("utf-8", "replace"))
             print("  [agent log]", self.logs[-1], flush=True)
@@ -548,9 +558,243 @@ def t_layout_restore(ctx):
     return True
 
 
+# --- audio ---------------------------------------------------------------
+def ogg_crc(data):
+    crc = 0
+    for b in data:
+        crc ^= b << 24
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x04C11DB7) & 0xffffffff if crc & 0x80000000 else (crc << 1) & 0xffffffff
+    return crc
+
+
+def ogg_opus(packets, channels=2, frame_samples=480):
+    """Raw Opus packets -> an Ogg Opus file (RFC 7845), one packet per page."""
+    out, seq, gran = [], 0, 0
+
+    def page(payload, granule, flags):
+        nonlocal seq
+        segs, n = [], len(payload)
+        while n >= 255:
+            segs.append(255); n -= 255
+        segs.append(n)
+        hdr = struct.pack("<4sBBqIIIB", b"OggS", 0, flags, granule, 0x48584155, seq, 0, len(segs)) + bytes(segs)
+        crc = ogg_crc(hdr + payload)
+        hdr = hdr[:22] + struct.pack("<I", crc) + hdr[26:]
+        seq += 1
+        out.append(hdr + payload)
+
+    page(b"OpusHead" + struct.pack("<BBHIhB", 1, channels, 0, 48000, 0, 0), 0, 2)
+    page(b"OpusTags" + struct.pack("<I", 7) + b"harness" + struct.pack("<I", 0), 0, 0)
+    for i, p in enumerate(packets):
+        gran += frame_samples
+        page(p, gran, 4 if i == len(packets) - 1 else 0)
+    return b"".join(out)
+
+
+def write_tone(path, freq, amp, secs, rate=48000):
+    import math, wave
+    with wave.open(path, "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(rate)
+        fr = bytearray()
+        for i in range(int(secs * rate)):
+            s = int(amp * 32767 * math.sin(2 * math.pi * freq * i / rate))
+            fr += struct.pack("<hh", s, s)
+        w.writeframes(bytes(fr))
+
+
+def goertzel(x, rate, freq):
+    import math
+    w = 2 * math.pi * freq / rate
+    c = 2 * math.cos(w)
+    s1 = s2 = 0.0
+    for v in x:
+        s1, s2 = v + c * s1 - s2, s1
+    return 2 * math.sqrt(max(0.0, s1 * s1 + s2 * s2 - c * s1 * s2)) / len(x)
+
+
+def analyze_audio(path, tone_hz, rate=48000):
+    """Decode an Ogg Opus file with ffmpeg; find the tone and measure it. Returns (ok|None, info)."""
+    import array, math
+    if not shutil.which("ffmpeg"):
+        return None, {"error": "ffmpeg not installed here; run `win_harness.py analyze-audio` elsewhere"}
+    r = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-f", "f32le", "-ac", "2", "-ar", str(rate), "-"],
+                       capture_output=True)
+    pcm = array.array("f")
+    pcm.frombytes(r.stdout[: len(r.stdout) // 8 * 8])
+    left, right = pcm[0::2], pcm[1::2]
+    info = dict(decode_rc=r.returncode, decode_errors=r.stderr.decode()[:300], seconds=len(left) / rate)
+    blk = rate // 10   # 100 ms blocks
+    rms = [math.sqrt(sum(v * v for v in left[i:i + blk]) / blk) for i in range(0, len(left) - blk + 1, blk)]
+    info["rms_dbfs_per_100ms"] = [round(20 * math.log10(max(v, 1e-9)), 1) for v in rms]
+    loud = [i for i, v in enumerate(rms) if v > 0.01]
+    if not loud:
+        return False, info
+    a, b = loud[0] + 3, loud[-1] - 2          # inside the tone, away from its edges
+    seg_l = left[a * blk:(b + 1) * blk]
+    seg_r = right[a * blk:(b + 1) * blk]
+    zc = sum(1 for i in range(1, len(seg_l)) if seg_l[i - 1] < 0 <= seg_l[i])
+    freq = zc * rate / len(seg_l) if seg_l else 0.0
+    # refine around the zero-crossing estimate
+    best = max((goertzel(seg_l[:rate], rate, f / 10), f / 10) for f in range(int(freq * 10) - 30, int(freq * 10) + 31))
+    lvl = goertzel(seg_l, rate, best[1])
+    total = math.sqrt(sum(v * v for v in seg_l) / len(seg_l)) * math.sqrt(2)
+    quiet = [v for i, v in enumerate(rms) if i < loud[0] - 2]
+    info.update(tone_seconds=round(len(seg_l) / rate, 2), freq_hz=round(best[1], 1), freq_zc_hz=round(freq, 2),
+                tone_amplitude=round(lvl, 4), tone_dbfs=round(20 * math.log10(max(lvl, 1e-9)), 2),
+                tone_share_of_energy=round(lvl / total, 4) if total else 0,
+                right_equals_left_dbfs=round(20 * math.log10(max(goertzel(seg_r, rate, best[1]), 1e-9)), 2),
+                silence_before_dbfs=round(20 * math.log10(max(max(quiet) if quiet else 0, 1e-9)), 1))
+    ok = (r.returncode == 0 and abs(best[1] - tone_hz) <= 2 and info["tone_share_of_energy"] > 0.95
+          and info["silence_before_dbfs"] < -60)
+    return ok, info
+
+
+TONE_PLAY = r"""
+$ErrorActionPreference='Stop'
+New-Item -ItemType Directory -Force C:\hxgt | Out-Null
+Invoke-WebRequest http://10.0.2.2:8000/hx-tone.wav -OutFile C:\hxgt\hx-tone.wav
+$p=New-Object System.Media.SoundPlayer 'C:\hxgt\hx-tone.wav'
+$p.Load()
+$t0=Get-Date
+$p.PlaySync()
+$t="played $(((Get-Date)-$t0).TotalSeconds) s"
+Invoke-RestMethod -Method Put -Uri http://10.0.2.2:8001/hx-%NAME%.txt -Body $t | Out-Null
+"""
+
+SVC = r"""
+%CMD% audiosrv
+Start-Sleep 1
+Invoke-RestMethod -Method Put -Uri http://10.0.2.2:8001/hx-%NAME%.txt -Body ((Get-Service audiosrv).Status | Out-String) | Out-Null
+"""
+
+
+def audio_window(a, t0, t1):
+    with a.vlock:
+        return [p for p in a.audio if t0 <= p[0] < t1]
+
+
+def cadence(ctx, name, pk, frame_us, secs):
+    caps = [p[1] for p in pk]
+    d_cap = sorted(set(caps[i] - caps[i - 1] for i in range(1, len(caps))))
+    arr = [round((pk[i][0] - pk[i - 1][0]) * 1000, 2) for i in range(1, len(pk))]
+    exp = secs * 1e6 / frame_us
+    st = dict(packets=len(pk), expected=exp, capture_us_steps=d_cap[:10], arrival_ms_median=pct(arr, 50),
+              arrival_ms_p95=pct(arr, 95), arrival_ms_max=max(arr) if arr else None,
+              sizes=sorted(set(len(p[2]) for p in pk))[:10])
+    ctx.results[name + ".stats"] = st
+    print(f"  {name}: {st}", flush=True)
+    check(ctx, name + ".cadence", 0.95 * exp <= len(pk) <= 1.05 * exp and d_cap == [frame_us],
+          f"{len(pk)} packets in {secs} s (expected {exp:.0f}), capture_us steps {d_cap[:5]}, "
+          f"arrival gap median {st['arrival_ms_median']} ms p95 {st['arrival_ms_p95']} ms")
+    return st
+
+
+def t_audio(ctx):
+    a = ctx.a
+    check(ctx, "audio.caps", ctx.hello.get("caps", {}).get("audio") is True, "Hello caps.audio (render endpoint probed)")
+    tone_hz, amp, tone_secs = ctx.args.tone_hz, 0.5, 4
+    write_tone(os.path.join(ctx.args.www, "hx-tone.wav"), tone_hz, amp, tone_secs)
+    with a.vlock:
+        a.audio = []
+    nlogs = len(a.logs)
+    a.sendj(K["START_AUDIO"], dict(codec="opus", sample_rate=48000, channels=2, bitrate_kbps=128, frame_ms=10))
+    t_start = time.time()
+    end = t_start + 5
+    while time.time() < end and not a.audio:
+        time.sleep(0.005)
+    first_ms = (a.audio[0][0] - t_start) * 1000 if a.audio else None
+    ctx.results["audio.first_packet_ms"] = first_ms
+    check(ctx, "audio.starts", first_ms is not None and first_ms < 1000,
+          f"first packet {first_ms and round(first_ms)} ms after StartAudio (opens the endpoint first)")
+    time.sleep(0.5)
+    # 1. silent endpoint: loopback delivers nothing, the agent must keep the 10 ms cadence
+    t0 = time.time()
+    time.sleep(3.0)
+    silent = audio_window(a, t0, time.time())
+    cadence(ctx, "audio.silent", silent, 10000, 3.0)
+    sizes = set(len(p[2]) for p in silent)
+    toc = set(p[2][0] for p in silent if p[2])
+    check(ctx, "audio.cbr-opus", sizes == {160} and all((t >> 3) >= 16 and (t & 4) for t in toc),
+          f"packet sizes {sorted(sizes)} (128 kbit/s CBR 10 ms = 160 bytes), TOC bytes {[hex(t) for t in sorted(toc)]} "
+          f"(CELT, stereo)")
+    # 2. play a tone in the guest's interactive session
+    t_play = time.time()
+    r = ctx.probe("tone", TONE_PLAY.replace("%NAME%", "tone"), wait=tone_secs + 40)
+    t_played = time.time()
+    check(ctx, "audio.guest-played", bool(r and r.startswith("played")), f"guest SoundPlayer: {r!r}")
+    time.sleep(1.0)
+    during = audio_window(a, t_play, time.time())
+    cadence(ctx, "audio.playing", during, 10000, time.time() - t_play)
+    # 3. stop
+    a.send(K["STOP_AUDIO"])
+    time.sleep(0.5)
+    n_stop = len(a.audio)
+    time.sleep(1.0)
+    check(ctx, "audio.stop", len(a.audio) == n_stop, f"{len(a.audio) - n_stop} packets after StopAudio + 0.5 s")
+    with a.vlock:
+        pk = list(a.audio)
+    with open(os.path.join(ctx.out, "audio-packets.json"), "w") as f:
+        json.dump([dict(t=round(p[0] - t_start, 4), capture_us=p[1], bytes=len(p[2])) for p in pk], f)
+    path = os.path.join(ctx.out, "audio.ogg")
+    with open(path, "wb") as f:
+        f.write(ogg_opus([p[2] for p in pk]))
+    ctx.results["audio.timeline"] = dict(play_start_s=round(t_play - t_start, 3), play_end_s=round(t_played - t_start, 3))
+    ctx.results["audio.agent_logs"] = a.logs[nlogs:]
+    ok, info = analyze_audio(path, tone_hz)
+    ctx.results["audio.decode"] = info
+    if ok is None:
+        print("  (no ffmpeg here: run analyze-audio on", path, ")", flush=True)
+    else:
+        info_s = {k: v for k, v in info.items() if k != "rms_dbfs_per_100ms"}
+        check(ctx, "audio.tone", ok, f"decoded: {info_s}")
+    # 4. 20 ms frames at 64 kbit/s
+    with a.vlock:
+        a.audio = []
+    a.sendj(K["START_AUDIO"], dict(codec="opus", sample_rate=48000, channels=2, bitrate_kbps=64, frame_ms=20))
+    time.sleep(1.0)
+    t0 = time.time()
+    time.sleep(2.0)
+    p20 = audio_window(a, t0, time.time())
+    a.send(K["STOP_AUDIO"])
+    cadence(ctx, "audio.20ms", p20, 20000, 2.0)
+    check(ctx, "audio.20ms-cbr", set(len(p[2]) for p in p20) == {160}, f"sizes {sorted(set(len(p[2]) for p in p20))} (64 kbit/s x 20 ms = 160 bytes)")
+    time.sleep(0.5)
+    return True
+
+
+def t_audio_recover(ctx):
+    """The endpoint goes away (Windows Audio service stopped) and comes back: the stream keeps its
+    cadence with silence, the agent says so in a Log message and reopens the endpoint."""
+    a = ctx.a
+    with a.vlock:
+        a.audio = []
+    nlogs = len(a.logs)
+    a.sendj(K["START_AUDIO"], dict(codec="opus", sample_rate=48000, channels=2, bitrate_kbps=128, frame_ms=10))
+    time.sleep(1.5)
+    r = ctx.probe("svcstop", SVC.replace("%CMD%", "Stop-Service -Force").replace("%NAME%", "svcstop"))
+    t0 = time.time()
+    time.sleep(3.0)
+    gone = audio_window(a, t0, time.time())
+    logs_gone = a.logs[nlogs:]
+    check(ctx, "audio-recover.reported", any("audio:" in l and ("stopped" in l or "retrying" in l) for l in logs_gone),
+          f"service {r and r.strip()!r}; agent logs {logs_gone}")
+    cadence(ctx, "audio-recover.gone", gone, 10000, 3.0)
+    n2 = len(a.logs)
+    r = ctx.probe("svcstart", SVC.replace("%CMD%", "Start-Service").replace("%NAME%", "svcstart"))
+    end = time.time() + 10
+    while time.time() < end and not any("capturing" in l for l in a.logs[n2:]):
+        time.sleep(0.2)
+    check(ctx, "audio-recover.reopened", any("capturing" in l for l in a.logs[n2:]),
+          f"service {r and r.strip()!r}; agent logs {a.logs[n2:]}")
+    a.send(K["STOP_AUDIO"])
+    time.sleep(0.5)
+    return True
+
+
 TESTS = [("hello", t_hello), ("video", t_video), ("video-damage", t_video_damage), ("input", t_input),
          ("clipboard", t_clipboard), ("layout", t_layout), ("video-native", t_video_native),
-         ("layout-restore", t_layout_restore)]
+         ("layout-restore", t_layout_restore), ("audio", t_audio), ("audio-recover", t_audio_recover)]
 
 
 def serve(args):
@@ -576,7 +820,7 @@ def serve(args):
     ctx.hello = h
     a.sendj(K["HOST_HELLO"], dict(v=1, clipboard_max_bytes=1 << 20))
     sel = [t for t in args.tests.split(",") if t]
-    if {"input", "clipboard"} & set(sel):
+    if {"input", "clipboard", "audio", "audio-recover"} & set(sel):
         print("--- starting the guest-side probe poller (typed through the agent)", flush=True)
         check(ctx, "poller.start", ctx._start_poller(), "typed a PowerShell launcher into Win+R through the agent's keyboard injection")
     for name, fn in TESTS:
@@ -612,15 +856,24 @@ def main():
     s.add_argument("--wait", type=float, default=900)
     s.add_argument("--poller-wait", type=float, default=15.0, help="seconds to wait for a launcher-started poller before typing one")
     s.add_argument("--probe-settle", type=float, default=4.0, help="seconds to wait before typing a probe into the guest")
+    s.add_argument("--tone-hz", type=float, default=1000.0, help="audio test: tone the guest plays")
     an = sub.add_parser("analyze")
     an.add_argument("file")
     an.add_argument("--width", type=int, required=True)
     an.add_argument("--height", type=int, required=True)
     an.add_argument("--min-frames", type=int, default=1)
+    aa = sub.add_parser("analyze-audio")
+    aa.add_argument("file", help="audio.ogg written by the audio test")
+    aa.add_argument("--tone-hz", type=float, default=1000.0)
     args = ap.parse_args()
     if args.cmd == "analyze":
         ok, info = analyze(args.file, args.width, args.height, args.min_frames)
         print(json.dumps(info, indent=1))
+        sys.exit(0 if ok else 1)
+    if args.cmd == "analyze-audio":
+        ok, info = analyze_audio(args.file, args.tone_hz)
+        print(json.dumps(info, indent=1))
+        print("PASS" if ok else "FAIL", "audio.tone")
         sys.exit(0 if ok else 1)
     args.size = tuple(int(x) for x in args.size.split("x"))
     args.layout = tuple(int(x) for x in args.layout.split("x"))

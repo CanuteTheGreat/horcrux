@@ -27,8 +27,29 @@ pub struct Config {
     pub clipboard_poll_ms: u64,
     /// Largest clipboard text sent (bytes); the node's limit also applies.
     pub clipboard_max_bytes: usize,
-    /// Audio capture source (`default`, a PulseAudio/PipeWire source name).
+    /// Audio capture source. Linux: `default` or a PulseAudio/PipeWire
+    /// source name. Windows: `default` (the default render endpoint, followed
+    /// when it changes), an endpoint ID, or part of an endpoint's name.
     pub audio_source: String,
+    /// Opus bitrate (kbit/s) when the node's StartAudio leaves it at 0.
+    pub audio_bitrate_kbps: u32,
+    /// Windows: Opus application (`lowdelay` = restricted low delay,
+    /// `audio`, `voip`).
+    pub audio_opus_application: String,
+    /// Windows: WASAPI shared-mode buffer length (ms).
+    pub audio_buffer_ms: u64,
+    /// Windows: capture poll interval (ms).
+    pub audio_poll_ms: u64,
+    /// Windows: no samples from the endpoint for this long (ms) = idle, and
+    /// silence is sent so the stream keeps its frame cadence.
+    pub audio_idle_ms: u64,
+    /// Windows: longest gap (ms) filled with silence at once; older time is
+    /// skipped (after a stall).
+    pub audio_max_fill_ms: u64,
+    /// Windows: wait before reopening an endpoint that failed or vanished (ms).
+    pub audio_retry_ms: u64,
+    /// Windows: how often the default render endpoint is re-checked (ms).
+    pub audio_device_check_ms: u64,
     /// Wait between reconnect attempts (ms).
     pub reconnect_ms: u64,
     /// Stop after one connection (tests).
@@ -75,6 +96,14 @@ impl Default for Config {
             clipboard_poll_ms: 500,
             clipboard_max_bytes: 1 << 20,
             audio_source: "default".into(),
+            audio_bitrate_kbps: 128,
+            audio_opus_application: "lowdelay".into(),
+            audio_buffer_ms: 50,
+            audio_poll_ms: 5,
+            audio_idle_ms: 40,
+            audio_max_fill_ms: 200,
+            audio_retry_ms: 1000,
+            audio_device_check_ms: 1000,
             reconnect_ms: 1000,
             once: false,
             print_caps: false,
@@ -177,6 +206,17 @@ impl Config {
             "clipboard_poll_ms" => self.clipboard_poll_ms = num(v)?.max(50),
             "clipboard_max_bytes" => self.clipboard_max_bytes = num(v)? as usize,
             "audio_source" => self.audio_source = v.into(),
+            "audio_bitrate_kbps" => self.audio_bitrate_kbps = num(v)?.clamp(6, 510) as u32,
+            "audio_opus_application" => match v {
+                "lowdelay" | "audio" | "voip" => self.audio_opus_application = v.into(),
+                _ => return Err(format!("{k}: one of lowdelay, audio, voip")),
+            },
+            "audio_buffer_ms" => self.audio_buffer_ms = num(v)?.clamp(10, 2000),
+            "audio_poll_ms" => self.audio_poll_ms = num(v)?.clamp(1, 100),
+            "audio_idle_ms" => self.audio_idle_ms = num(v)?.max(5),
+            "audio_max_fill_ms" => self.audio_max_fill_ms = num(v)?.max(20),
+            "audio_retry_ms" => self.audio_retry_ms = num(v)?.max(100),
+            "audio_device_check_ms" => self.audio_device_check_ms = num(v)?.max(100),
             "reconnect_ms" => self.reconnect_ms = num(v)?.max(100),
             "once" => self.once = b(v),
             "print_caps" => self.print_caps = b(v),
@@ -245,6 +285,23 @@ mod tests {
         assert!(c.once);
         assert_eq!(c.ffmpeg, "ffmpeg");
         assert!(Config::load(vec!["--bogus=1".into()]).is_err());
+        assert_eq!(c.audio_opus_application, "lowdelay");
+        assert_eq!((c.audio_bitrate_kbps, c.audio_idle_ms), (128, 40));
+        let c = Config::load(vec![
+            "--config=/nonexistent".into(),
+            "--audio-opus-application=audio".into(),
+            "--audio-bitrate-kbps=9999".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            (c.audio_opus_application.as_str(), c.audio_bitrate_kbps),
+            ("audio", 510)
+        );
+        assert!(Config::load(vec![
+            "--config=/nonexistent".into(),
+            "--audio-opus-application=x".into()
+        ])
+        .is_err());
         std::fs::remove_dir_all(dir).ok();
     }
 }
