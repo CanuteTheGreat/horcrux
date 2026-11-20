@@ -95,6 +95,11 @@ fn WanFields(sig: RwSignal<ConsoleSettings>) -> impl IntoView {
                     on:change=move |ev| { let v = event_target_checked(&ev); set(&|x| x.relay_tcp = v) }/>
                 "Also accept the relay over TCP (networks that block UDP)"
             </label>
+            <label class="checkbox">
+                <input type="checkbox" name="wan-relay_reply_from_request_address" prop:checked=move || w().relay_reply_from_request_address
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|x| x.relay_reply_from_request_address = v) }/>
+                "Answer relay requests from the address they reached (several network cards or bridges)"
+            </label>
             <label>"Public address clients use (empty: the address used for this web UI)"
                 <input type="text" name="wan-relay_public_address" prop:value=move || w().relay_public_address
                     on:change=move |ev| { let v = event_target_value(&ev).trim().to_string(); set(&|x| x.relay_public_address = v.clone()) }/>
