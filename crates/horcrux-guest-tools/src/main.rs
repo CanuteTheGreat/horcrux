@@ -44,6 +44,12 @@ fn main() {
         );
         return;
     }
+    // Same-host raw frames run beside the port connection, independent of
+    // it: they serve a local viewer even while no remote session is open.
+    #[cfg(target_os = "linux")]
+    linux::shm::spawn(cfg.clone());
+    #[cfg(windows)]
+    windows::shm::spawn(cfg.clone());
     loop {
         let p = platform(&cfg);
         match agent::run(&cfg, p) {

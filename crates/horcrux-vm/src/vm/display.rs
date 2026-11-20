@@ -54,6 +54,16 @@ pub struct DisplayRuntime {
     /// Guest tools CD attached to this run (virtio-scsi, read-only).
     #[serde(default)]
     pub guest_tools_iso: Option<PathBuf>,
+    /// Horcrux frame ring for the same-host viewer: backing file of the
+    /// ivshmem device (`[console] shm_frames*`) and its size in MiB.
+    #[serde(default)]
+    pub frame_ring: Option<PathBuf>,
+    #[serde(default)]
+    pub frame_ring_mib: u32,
+    /// Guest audio goes to the Horcrux Console over QEMU's D-Bus audio
+    /// (`-audiodev dbus`) instead of being discarded.
+    #[serde(default)]
+    pub dbus_audio: bool,
 }
 
 impl DisplayRuntime {
@@ -112,6 +122,9 @@ impl DisplayRuntime {
             guest_tools_port: None,
             guest_tools_socket: None,
             guest_tools_iso: None,
+            frame_ring: None,
+            frame_ring_mib: 0,
+            dbus_audio: false,
         })
     }
 
@@ -140,6 +153,13 @@ impl DisplayRuntime {
     }
 
     pub async fn remove(disk: &Path) {
+        // The frame ring lives outside the VM's directory: its path is in
+        // the state file.
+        if let Ok(rt) = Self::load(disk).await {
+            if let Some(ring) = rt.frame_ring {
+                let _ = tokio::fs::remove_file(ring).await;
+            }
+        }
         for p in [
             Self::state_path(disk),
             Self::serial_socket(disk),
@@ -150,6 +170,76 @@ impl DisplayRuntime {
             let _ = tokio::fs::remove_file(p).await;
         }
     }
+}
+
+/// Backing file of a VM's Horcrux frame ring.
+pub fn frame_ring_path(dir: &str, vm_id: &str) -> PathBuf {
+    let safe: String = vm_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Path::new(dir).join(format!("horcrux-frames-{safe}"))
+}
+
+/// Create (or reset) a VM's frame ring before QEMU starts: a root-only
+/// file of `mib` MiB under `dir` (tmpfs or hugetlbfs) whose header the
+/// guest tools and the viewer attach to. Pages are only used as frames are
+/// written. The file is mapped to write the header because hugetlbfs has
+/// no write(2).
+pub fn create_frame_ring(
+    dir: &str,
+    vm_id: &str,
+    mib: u32,
+    slots: u32,
+    want_fps: u32,
+) -> std::io::Result<PathBuf> {
+    use nix::libc;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    let path = frame_ring_path(dir, vm_id);
+    let len = (mib as usize) << 20;
+    let _ = std::fs::remove_file(&path);
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    f.set_len(len as u64)?;
+    // SAFETY: shared mapping of the file just sized; unmapped below.
+    let p = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            f.as_raw_fd(),
+            0,
+        )
+    };
+    if p == libc::MAP_FAILED {
+        let e = std::io::Error::last_os_error();
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
+    }
+    // SAFETY: p is a fresh len-byte shared mapping, page aligned.
+    let r = unsafe { horcrux_guest_proto::ring::Ring::init(p as *mut u8, len, slots, want_fps) };
+    // SAFETY: unmapping what was mapped above; `r` is dropped first.
+    let res = r.map(drop);
+    unsafe {
+        libc::munmap(p, len);
+    }
+    if let Err(e) = res {
+        let _ = std::fs::remove_file(&path);
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, e));
+    }
+    Ok(path)
 }
 
 /// Address SPICE listens on: `HORCRUX_SPICE_LISTEN`, default 127.0.0.1.
@@ -240,6 +330,22 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
         }
     }
 
+    // Horcrux frame ring: raw frames for the same-host native viewer
+    // (guest tools write, the viewer reads; see horcrux-guest-proto ring).
+    if let Some(ring) = &rt.frame_ring {
+        let mem = format!(
+            "memory-backend-file,id=hxfbmem,size={}M,mem-path={},share=on",
+            rt.frame_ring_mib,
+            ring.display()
+        );
+        push(&[
+            "-object",
+            &mem,
+            "-device",
+            "ivshmem-plain,memdev=hxfbmem,id=hxframes",
+        ]);
+    }
+
     // Video card.
     match (display.video, pc) {
         (VideoDevice::None, true) => push(&["-vga", "none"]),
@@ -293,6 +399,9 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
     if display.sound != SoundDevice::None {
         let backend = if display.protocol == DisplayProtocol::Spice {
             "spice,id=snd0"
+        } else if rt.dbus_display && rt.dbus_audio {
+            // the Horcrux Console reads it over the D-Bus display
+            "dbus,id=snd0"
         } else {
             "none,id=snd0"
         };
@@ -417,7 +526,74 @@ mod tests {
             guest_tools_port: None,
             guest_tools_socket: None,
             guest_tools_iso: None,
+            frame_ring: None,
+            frame_ring_mib: 0,
+            dbus_audio: false,
         }
+    }
+
+    #[test]
+    fn frame_ring_file_has_a_header_the_guest_can_attach_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().to_str().unwrap();
+        let p = create_frame_ring(d, "vm/1", 8, 3, 120).unwrap();
+        assert_eq!(p, dir.path().join("horcrux-frames-vm_1"));
+        use std::os::unix::fs::PermissionsExt;
+        let md = std::fs::metadata(&p).unwrap();
+        assert_eq!(md.len(), 8 << 20);
+        assert_eq!(md.permissions().mode() & 0o777, 0o600);
+        let bytes = std::fs::read(&p).unwrap();
+        let mut aligned = vec![0u64; bytes.len() / 8];
+        // SAFETY: copying into an aligned buffer of the same size.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                aligned.as_mut_ptr() as *mut u8,
+                bytes.len(),
+            );
+            let r = horcrux_guest_proto::ring::Ring::attach(
+                aligned.as_mut_ptr() as *mut u8,
+                bytes.len(),
+            )
+            .unwrap();
+            assert_eq!(r.want_fps(), 120);
+            assert_eq!(r.layout().slot_count, 3);
+        }
+        // a stale ring from an earlier run is replaced
+        create_frame_ring(d, "vm/1", 8, 2, 60).unwrap();
+        assert!(
+            create_frame_ring(d, "vm/1", 8, 9, 60).is_err(),
+            "too many slots"
+        );
+        assert!(!dir.path().join("horcrux-frames-vm_1").exists());
+    }
+
+    #[test]
+    fn frame_ring_device_and_dbus_audio() {
+        let mut r = rt(DisplayProtocol::Vnc);
+        let a = qemu_args(&VmDisplay::default(), &VmArchitecture::X86_64, &r).join(" ");
+        assert!(
+            !a.contains("hxframes") && !a.contains("audiodev dbus"),
+            "{a}"
+        );
+        r.frame_ring = Some(PathBuf::from("/dev/shm/horcrux-frames-vm1"));
+        r.frame_ring_mib = 128;
+        r.dbus_display = true;
+        r.dbus_audio = true;
+        let d = VmDisplay {
+            sound: SoundDevice::IntelHda,
+            ..VmDisplay::default()
+        };
+        let a = qemu_args(&d, &VmArchitecture::X86_64, &r).join(" ");
+        assert!(
+            a.contains("-object memory-backend-file,id=hxfbmem,size=128M,mem-path=/dev/shm/horcrux-frames-vm1,share=on -device ivshmem-plain,memdev=hxfbmem,id=hxframes"),
+            "{a}"
+        );
+        assert!(a.contains("-audiodev dbus,id=snd0"), "{a}");
+        // without the D-Bus display there is no D-Bus audio
+        r.dbus_display = false;
+        let a = qemu_args(&d, &VmArchitecture::X86_64, &r).join(" ");
+        assert!(a.contains("-audiodev none,id=snd0"), "{a}");
     }
 
     fn joined(d: VmDisplay, p: DisplayProtocol) -> String {

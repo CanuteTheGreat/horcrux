@@ -403,6 +403,10 @@ pub async fn run() -> anyhow::Result<()> {
         tokio::spawn(async move { vms.reconcile_passthrough().await });
     }
 
+    // Horcrux Console: the same-host native viewer's local socket.
+    #[cfg(feature = "qemu")]
+    crate::api::hx_console::start_local_socket(&state).await;
+
     // Default global migration bandwidth limit: 70% of the fastest local link
     // so a live migration cannot saturate it (1 GbE .. 100 GbE).
     {

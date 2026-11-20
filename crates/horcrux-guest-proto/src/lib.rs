@@ -16,6 +16,9 @@
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
+pub mod local;
+pub mod ring;
+
 /// Protocol version spoken by this crate.
 pub const VERSION: u32 = 1;
 /// Default virtio-serial port name (`/dev/virtio-ports/<name>` in Linux
@@ -69,6 +72,10 @@ pub struct Caps {
     pub virtual_display: bool,
     pub chroma444: bool,
     pub hdr: bool,
+    /// The guest tools found the Horcrux frame ring (ivshmem, see
+    /// [`ring`]) and write raw frames into it while a same-host viewer
+    /// watches.
+    pub shm_frames: bool,
 }
 
 /// Guest -> node, first message after the port opens.

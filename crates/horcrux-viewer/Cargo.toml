@@ -1,0 +1,25 @@
+[package]
+name = "horcrux-viewer"
+description = "Horcrux Console native viewer: same-host raw frames (frame ring), input, pointer lock and gamepads"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "horcrux-viewer"
+path = "src/main.rs"
+
+[dependencies]
+horcrux-guest-proto = { path = "../horcrux-guest-proto" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+nix = { workspace = true }
+libc = "0.2"
+# Window, input and plain CPU presentation (wl_shm on Wayland, X11
+# fallback). Licences: winit Apache-2.0, softbuffer MIT OR Apache-2.0; both
+# load libwayland/libX11 at run time, so nothing links at build time.
+winit = "0.30"
+softbuffer = "0.4"
