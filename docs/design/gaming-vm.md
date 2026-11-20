@@ -375,6 +375,11 @@ Horcrux Console C1 (no guest tools, software x264, headless browser client on
 a shared CI host): data-channel RTT 2-7 ms, server encode 14-31 ms at
 1280x800, keystroke-to-picture median 73-168 ms; host CPU contention dominates
 and no gaming-path number exists yet (needs guest tools + GPU encode, C2).
+C2d (idle laptop-class node, 1280x800, software capture in a 2-vCPU guest): the
+same-host raw-frame path delivers a guest frame to the viewer in 2.0 ms
+median at 120 fps (target < 8 ms), keystroke to raw frame 24 ms median;
+guest-tools keystroke to encoded frame 16.5 ms; host-encode keystroke to
+browser picture 95 ms (desktop target < 50 ms not met yet).
 Details: docs/design/horcrux-console.md section 6.
 
 ## 15. Phases
