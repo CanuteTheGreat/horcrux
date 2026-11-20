@@ -227,6 +227,14 @@ def release_isoscan_medium(inst, disks, root="/"):
     return True
 
 
+def discard_cmd(c, disk):
+    """An ENCRYPTED install first discards (TRIM) the whole target disk: blocks the new layout never writes would otherwise keep the
+    previous system's plaintext (and an answer file on a spare partition). Devices without discard support skip it (ignored failure)."""
+    if not (c.get("zfs_encrypt") or c.get("fs") == "xfs-luks") or c.get("test_machine_no_encryption"):
+        return ""
+    return f"blkdiscard -f {shquote(disk)} >/dev/null 2>&1 || true"
+
+
 def list_disks(include_live=False):
     rc, out = sh(["lsblk", "-J", "-b", "-o", "NAME,PATH,MODEL,SIZE,TYPE,RM,TRAN,ROTA,FSTYPE,LABEL,PARTLABEL"])
     if rc != 0:
@@ -527,6 +535,10 @@ def find_answer_file(proj, cmdline):
                     p = os.path.join(mnt, name)
                     if os.path.exists(p):
                         shutil.copy(p, "/run/live-installer-answers.toml")
+                        os.chmod("/run/live-installer-answers.toml", 0o600)
+                        # never keep the answers volume mounted: it may be a partition of a target disk (re-reading the partition table
+                        # after partitioning fails while any partition of the disk is mounted)
+                        sh(["umount", mnt])
                         return "/run/live-installer-answers.toml"
         time.sleep(2)
     return None
@@ -967,11 +979,20 @@ class Installer:
 
     def partition(self):
         if self.luks():
+            for disk in self.c["disks"]:
+                dc = discard_cmd(self.c, disk)
+                if dc:
+                    self.log(f"encrypted install: discarding every block of {disk} first")
+                    self.run(["sh", "-c", dc], check=False)
             return luksroot.partition_stage(self)        # swap (if any) is an LV inside the LUKS volume, made by mkfs_stage
         swap = self.swap_mb if self.swap_mode == "hibernate" else 0      # servers: no swap partition; portables: >= RAM for the image
         self.swap_mb = swap
         for di, disk in enumerate(self.c["disks"]):
             self.run(["sh", "-c", f"swapoff -a 2>/dev/null; wipefs -a {shquote(disk)} >/dev/null 2>&1; sgdisk -Z {shquote(disk)} >/dev/null 2>&1; true"], check=False)
+            dc = discard_cmd(self.c, disk)
+            if dc:
+                self.log(f"encrypted install: discarding every block of {disk} first, so data of the previous (unencrypted) system stays unreadable")
+                self.run(["sh", "-c", dc], check=False)
             first = ["-n", "1:0:+" + ("1G" if self.zfs() else "512M"), "-t", "1:ef00", "-c", "1:ESP"] if self.efi else ["-n", "1:0:+1M", "-t", "1:ef02", "-c", "1:BIOS-boot"]
             args = ["sgdisk"] + first + ["-n", "2:0:+" + ("2G" if self.zfs() else "1G"), "-t", "2:8300", "-c", "2:boot"]
             if self.zfs():

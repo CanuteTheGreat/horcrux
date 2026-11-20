@@ -65,6 +65,12 @@ class IsoScanRelease(unittest.TestCase):
         self.assertNotIn("losetup -D", cmds)          # never every loop: the running root's squashfs loop must stay
         self.assertIn("^/run/initramfs/isoscan/", cmds)
 
+    def test_encrypted_install_discards_the_disk_first(self):
+        self.assertIn("blkdiscard -f /dev/nvme0n1", S.discard_cmd({"zfs_encrypt": True}, "/dev/nvme0n1"))
+        self.assertIn("blkdiscard", S.discard_cmd({"fs": "xfs-luks"}, "/dev/sda"))
+        self.assertEqual(S.discard_cmd({"zfs_encrypt": False, "fs": "zfs"}, "/dev/sda"), "")
+        self.assertEqual(S.discard_cmd({"zfs_encrypt": True, "test_machine_no_encryption": True}, "/dev/sda"), "")
+
     def test_ram_copy_is_preferred_by_find_squashfs(self):
         self.assertEqual(S.RAM_SQUASHFS[0], "/run/initramfs/squashed.img")
 
