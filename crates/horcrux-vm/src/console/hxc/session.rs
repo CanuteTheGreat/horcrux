@@ -110,6 +110,34 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
+    /// A handle for a session that is not a WebRTC one (the same-host
+    /// viewer, `local.rs`): returns the handle, the stop signal to watch
+    /// and the sender that marks the session done.
+    pub fn new_local(
+        id: String,
+        vm_id: String,
+        user: String,
+        profile: ConsoleProfile,
+        stats: SessionStats,
+    ) -> (SessionHandle, watch::Receiver<bool>, watch::Sender<bool>) {
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let (done_tx, done_rx) = watch::channel(false);
+        (
+            SessionHandle {
+                id,
+                vm_id,
+                user,
+                profile,
+                started: chrono::Utc::now(),
+                stats: Arc::new(Mutex::new(stats)),
+                stop: stop_tx,
+                done: done_rx,
+            },
+            stop_rx,
+            done_tx,
+        )
+    }
+
     pub fn stop(&self) {
         let _ = self.stop.send(true);
     }
@@ -386,7 +414,15 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
     // The connection to the guest's display is made before answering, so
     // a VM without the D-Bus display fails the request, not the session.
     let (disp_tx, disp_rx) = mpsc::channel::<DisplayEvent>(64);
-    let display = DbusDisplay::connect(&req.qmp_socket, &req.session_id, disp_tx, false).await?;
+    // Audio from QEMU (`-audiodev dbus`) is encoded on the node unless the
+    // guest tools send their own.
+    let display = DbusDisplay::connect(
+        &req.qmp_socket,
+        &req.session_id,
+        disp_tx,
+        req.settings.audio,
+    )
+    .await?;
     // Guest tools, when the VM has the port and the tools answer in time.
     let link = match &req.guest_tools_socket {
         Some(sock) if req.settings.guest_tools && sock.exists() => {
@@ -445,6 +481,7 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         guest_tx,
         guest_caps,
         guest_video: AtomicBool::new(false),
+        guest_audio: AtomicBool::new(false),
         guest_started: Mutex::new(Vec::new()),
     };
     let ctx = Arc::new(ctx);
@@ -490,6 +527,8 @@ struct Ctx {
     guest_caps: Option<gproto::Caps>,
     /// The guest tools are capturing + encoding: the node's encoder rests.
     guest_video: AtomicBool,
+    /// The guest tools send Opus audio: the node's audio encoder rests.
+    guest_audio: AtomicBool,
     /// What the guest tools were asked to run, re-sent when they say
     /// Hello again (their end of the port was reopened).
     guest_started: Mutex<Vec<gproto::Msg>>,
@@ -588,6 +627,7 @@ async fn guest_task(
                 let _ = to_rtc.send(ToRtc::Ctl(msg)).await;
             }
             gproto::Msg::Audio(a) => {
+                ctx.guest_audio.store(true, Ordering::Relaxed);
                 let _ = to_rtc.try_send(ToRtc::Audio(a.data));
             }
             // the duplicate Hello of the handshake (one sent when the tools
@@ -661,7 +701,7 @@ impl Ctx {
     }
 }
 
-async fn input_task(
+pub(super) async fn input_task(
     display: DbusDisplay,
     mut rx: mpsc::Receiver<InputEvent>,
     stats: Arc<Mutex<SessionStats>>,
@@ -820,6 +860,9 @@ async fn compositor(
     let mut tick = tokio::time::interval(frame_gap.min(Duration::from_millis(4)));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut codec: Option<(VideoCodec, encode::EncoderBackend)> = None;
+    // QEMU audio voices (id -> format, encoder once data flows)
+    let mut voices: HashMap<u64, (super::audio::PcmFormat, Option<super::audio::Encoder>)> =
+        HashMap::new();
     let mut last_keyframe_restart = Instant::now() - Duration::from_secs(60);
 
     loop {
@@ -873,7 +916,53 @@ async fn compositor(
                         let msg = serde_json::json!({"t": "pos", "x": x, "y": y, "on": on != 0}).to_string();
                         let _ = to_rtc.try_send(ToRtc::Cursor(msg));
                     }
-                    _ => {}
+                    DisplayEvent::AudioInit { id, bits, is_signed, is_float, freq, channels } => {
+                        let f = super::audio::PcmFormat { bits, is_signed, is_float, freq, channels };
+                        voices.insert(id, (f, None));
+                    }
+                    DisplayEvent::AudioFini { id } => {
+                        voices.remove(&id);
+                    }
+                    DisplayEvent::AudioEnabled { id, enabled } => {
+                        if !enabled {
+                            if let Some(v) = voices.get_mut(&id) { v.1 = None; }
+                        }
+                    }
+                    DisplayEvent::AudioData { id, data } => {
+                        if !settings.audio || ctx.guest_audio.load(Ordering::Relaxed) {
+                            continue;
+                        }
+                        let Some((fmt, enc)) = voices.get_mut(&id) else { continue };
+                        if enc.as_mut().map(|e| !e.alive()).unwrap_or(false) {
+                            *enc = None;
+                        }
+                        if enc.is_none() {
+                            let tx = to_rtc.clone();
+                            let c2 = ctx.clone();
+                            match super::audio::Encoder::spawn(
+                                &settings.ffmpeg_path,
+                                fmt,
+                                settings.audio_bitrate_kbps,
+                                settings.audio_frame_ms,
+                                move |p| {
+                                    if c2.guest_audio.load(Ordering::Relaxed) {
+                                        return true;
+                                    }
+                                    !matches!(tx.try_send(ToRtc::Audio(p)), Err(mpsc::error::TrySendError::Closed(_)))
+                                },
+                            ) {
+                                Ok(e) => *enc = Some(e),
+                                Err(e) => {
+                                    tracing::info!("console audio: {e}");
+                                    voices.remove(&id);
+                                    continue;
+                                }
+                            }
+                        }
+                        if let Some(e) = enc.as_ref() {
+                            let _ = e.push(data);
+                        }
+                    }
                 }
             }
             c = ctl.recv() => {
@@ -1097,7 +1186,7 @@ async fn transport(
                                 "absolute": absolute,
                                 // C2 (guest tools) adds clipboard/resize/audio.
                                 "clipboard": allow_clipboard && ctx.guest_can(|c| c.clipboard),
-                                "audio": audio.is_some() && ctx.guest_can(|c| c.audio),
+                                "audio": audio.is_some() && (settings.audio || ctx.guest_can(|c| c.audio)),
                                 "gamepad": allow_input && ctx.guest_can(|c| c.gamepad),
                                 "resize": allow_input && ctx.guest_can(|c| c.resize),
                                 "relative": ctx.guest_can(|c| c.relative_mouse),

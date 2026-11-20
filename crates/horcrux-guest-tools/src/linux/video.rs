@@ -71,7 +71,7 @@ pub fn capture_methods(cfg: &Config) -> Vec<String> {
     v
 }
 
-fn pick(cfg: &Config) -> Result<(Capture, Backend), String> {
+pub fn pick(cfg: &Config) -> Result<(Capture, Backend), String> {
     let caps = capture_methods(cfg);
     let capture = match cfg.capture.as_str() {
         "kmsgrab" => Capture::Kms,
@@ -280,7 +280,7 @@ pub fn current_size(v: &Option<Running>) -> (u32, u32) {
 
 /// Width/height from the first SPS is not parsed here; the guest's mode
 /// is read from sysfs (KMS) or xrandr instead.
-fn mode_size(capture: Capture, sv: &StartVideo) -> (u32, u32) {
+pub fn mode_size(capture: Capture, sv: &StartVideo) -> (u32, u32) {
     if sv.width > 0 && sv.height > 0 {
         return (sv.width, sv.height);
     }

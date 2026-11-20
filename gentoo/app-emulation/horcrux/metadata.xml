@@ -62,6 +62,7 @@
 		<flag name="kubernetes">Enable Kubernetes cluster management (kube-rs client for k8s/k3s clusters)</flag>
 		<flag name="cluster">Enable high availability clustering with Corosync</flag>
 		<flag name="ldap">Enable LDAP client authentication for NAS users (requires nas)</flag>
+		<flag name="viewer">Install horcrux-viewer, the native Horcrux Console window (raw frames from the VM's shared-memory frame ring on the same host, keyboard, mouse with pointer lock and gamepads)</flag>
 		<flag name="webui">Build and install WebAssembly-based web management interface</flag>
 
 		<!-- Init system (global flag) -->
