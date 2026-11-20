@@ -7,8 +7,23 @@ description="Serial console (the kernel console= UART)"
 supervisor=supervise-daemon
 command=/sbin/agetty
 depend() { after local live-installer live-product; }
+# No console= UART on the kernel command line (e.g. an installed system booted without one): nothing to supervise.
+# The service still counts as started so boot shows no failed service; the systemd twin skips via ExecCondition.
+start() {
+	if ! /usr/libexec/live-serial-dev >/dev/null; then
+		einfo "no serial console= on the kernel command line, nothing to do"
+		service_set_value skipped yes
+		return 0
+	fi
+	service_set_value skipped no
+	default_start
+}
+stop() {
+	[ "$(service_get_value skipped)" = yes ] && return 0
+	default_stop
+}
 start_pre() {
-	tty=$(/usr/libexec/live-serial-dev) || { einfo "no serial console= on the kernel command line, skipping"; return 1; }
+	tty=$(/usr/libexec/live-serial-dev) || return 0
 	if grep -q 'rd.live.image' /proc/cmdline; then
 		p=$(sed 's/-live$//' /etc/live-iso-label 2>/dev/null)
 		if grep -q "${p}.rescue=" /proc/cmdline; then
