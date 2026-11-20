@@ -60,8 +60,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libvirt-dev libpam0g-dev python3-venv
-          curl -L "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar xzf -
-          sudo mv trunk /usr/local/bin/trunk
+          bash ci/install-wasm-tools.sh
           ls -l /dev/kvm
 
       - name: Cache cargo registry
@@ -78,7 +77,7 @@ jobs:
       - name: Build API (all features) and web UI
         run: |
           cargo build --all-features -p horcrux-api --bin horcrux-api
-          (cd horcrux-api/horcrux-ui && trunk build)
+          (cd horcrux-api/horcrux-ui && trunk build --offline)
 
       - name: Incus VM consoles through the API (serial, SPICE relay, .vv)
         run: bash horcrux-api/tests/incus_e2e.sh vm target/debug/horcrux-api

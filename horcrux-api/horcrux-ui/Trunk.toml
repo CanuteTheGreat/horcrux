@@ -1,6 +1,11 @@
 [build]
 target = "index.html"
 
+# Tool versions trunk uses (wasm-bindgen follows Cargo.lock). CI installs this exact wasm-opt
+# with ci/install-wasm-tools.sh before `trunk build --offline`, so no download happens mid-build.
+[tools]
+wasm_opt = "version_131"
+
 # Proxies "/api/*" requests from the trunk dev server (default :8080) to the
 # real backend on :8006, so the frontend's relative "/api/..." URLs resolve
 # correctly during local development too - not just in production, where
