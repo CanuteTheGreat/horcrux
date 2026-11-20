@@ -14,6 +14,7 @@
 pub mod abr;
 pub mod deliver;
 pub mod encode;
+pub mod fec;
 pub mod guest;
 pub mod keymap;
 pub mod page;

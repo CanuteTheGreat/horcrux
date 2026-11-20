@@ -332,6 +332,55 @@ Reading:
   number; GPU encode and a real WAN (not netem) remain to be measured.
 - FEC is not in place yet: str0m 0.25 has no ULPFEC/FlexFEC sender, so loss
   costs a retransmission RTT (see C3 open items).
+- Superseded by the C3b rows below (in-stream encoder rate, FlexFEC,
+  playout delay, pacer timing).
+
+### Measured in C3b (in-process encoder, FlexFEC, desktop client)
+
+Same harness and host as C3 (`hx_console_wan_e2e.{sh,py}`, KVM, Chromium in a
+netns behind netem), run on 2026-11-20; every check passed.
+
+| Path (netem) | Keystroke to picture median / min / p90 | Notes |
+|---|---|---|
+| LAN direct, link adaptation off (fixed 4 Mbit/s) | 64.8 / 42.3 / 83.1 ms | libx264 in process |
+| LAN direct, adaptation on | 66.8 / 37.8 / 74.8 ms | 1 encoder for the session, rate changed in-stream (C3: 86 / 71 / 477 ms) |
+| LAN direct, adaptation on, FFmpeg CLI encoder (`x264_in_process = false`) | 92.0 / 57.7 / 113.1 ms | 4 encoder restarts in the same run |
+| LAN direct, browser jitter buffer (`low_latency_playout = false`) | 111.9 / 76.8 / 778.5 ms | 4 of 14 keystrokes wait 560-780 ms in the browser |
+| Relay UDP, 100 ms RTT, 2% loss, no FEC | 171.6 / 136.2 / 294.6 ms | 16 lost, 18 NACKs, jitter buffer 57 ms |
+| Relay UDP, 100 ms RTT, 2% loss, FlexFEC | 162.5 / 133.6 / 185.1 ms | 121 repair packets (~4%), jitter buffer 9 ms |
+| Relay UDP, 100 ms RTT, 5% loss, no FEC | 240.4 / 132.1 / 469.1 ms | 34 lost, 42 NACKs, jitter buffer 107 ms |
+| Relay UDP, 100 ms RTT, 5% loss, FlexFEC | 157.4 / 139.3 / 577.8 ms | 142 repair packets, 28 packets rebuilt by the browser over both FEC runs, jitter buffer 9 ms |
+| Desktop client, LAN direct | 42.4 / 30.7 / 53.5 ms | headless `horcrux-console`, libavcodec decode, 1280x800 (before the pacer fix: 58.6 / 42.5 / 68 ms) |
+| Desktop client, relay, 50 ms RTT | 96.5 / 70.1 / 104.5 ms | (before the pacer fix: 111 / 102 / 123 ms) |
+
+Reading:
+- Link adaptation no longer costs latency: the median with adaptation is
+  within 2 ms of the fixed rate (target was 5 ms) and the p90 spikes are gone.
+  Three causes were found and fixed: the FFmpeg CLI restart per bitrate change
+  (now libx264 through its library API, `x264_encoder_reconfig`, rate and IDR
+  in-stream; only a new picture size restarts it), the browser's jitter
+  buffer (the RTP playout-delay extension 0/0 makes it render each frame on
+  decode, setting `low_latency_playout` per profile) and str0m's pacer
+  needing one timeout per released packet, which cost a ~1 ms tokio timer
+  tick each (a 15-packet frame left ~15 ms late); due timeouts are now
+  handled inline.
+- FlexFEC turns most single losses into no-wait repairs: the browser's
+  jitter buffer stays at ~9 ms instead of 57-107 ms and the 2% p90 drops from
+  295 to 185 ms. A second run of the FEC paths gave 161.9 / 192.8 ms (2%, 11
+  packets rebuilt) and 162.2 / 191.4 ms (5%, 22 rebuilt). When two losses hit
+  one repair set a retransmission is still needed (the 578 ms p90 of the
+  first 5% run); a higher `fec_overhead_percent` (default 25) trades
+  bandwidth for that tail. The wire format is
+  `flexfec-03` (draft-ietf-payload-flexible-fec-scheme-03), which is what
+  browsers parse under that name; the e2e reads the browser's own WebRTC log
+  and fails if a repair packet is discarded or nothing is rebuilt.
+- Sample sizes are small (14-30 keystrokes per path on a shared host): read
+  differences under ~10 ms as noise. A full run of every path the same day
+  gave LAN 58.6 (adaptive) / 54.3 ms (fixed), 2% loss 180.4 -> 165.0 ms with
+  FEC (p90 289 -> 239), 5% loss 168.4 -> 156.1 ms (p90 461 -> 276).
+- The desktop client's numbers drop when the host is loaded right after the
+  screen-flood paths (one run: 159 / 287 ms medians at a reduced 850x532
+  target); the rows above are from a run on a quieter host.
 
 ## 7. Standalone machine
 
@@ -620,7 +669,7 @@ option for gaming VMs: it needs Secure Boot off, which anti-cheat refuses.
 Sources: learn.microsoft.com driver signing policy and code-signing
 attestation pages.
 
-### C3 status (2026-11-20)
+### C3 status (2026-11-20, C3b same day)
 
 Done:
 - `crates/horcrux-turn`: STUN (RFC 8489) / TURN (RFC 8656) relay and client,
@@ -653,14 +702,42 @@ Done:
   config (console kind) and System > Horcrux Console > WAN access.
 - WAN e2e under netem (section 6) in CI on the KVM runner.
 
-Open (C3b):
-- FEC: str0m 0.25 has no ULPFEC/FlexFEC sender; add FlexFEC (RFC 8627) on the
-  video stream (or upstream it to str0m), measure at 2-5% loss.
-- In-stream encoder rate changes for the host encoder (library API instead of
-  the FFmpeg CLI) so adaptation stops costing keyframes.
-- Horcrux desktop app (Linux/Windows/macOS) on the same WebRTC protocol with
-  raw mouse capture, gamepads and high refresh (the native viewer from C2d is
-  same-host only).
+C3b (2026-11-20):
+- In-process H.264 encoder (`crates/horcrux-media/src/x264.rs`): the system
+  libx264 loaded at run time (no build-time link, GPL-2+ library used through
+  its C API), baseline profile, zero-latency tuning, no reordering (POC type
+  2), bitrate/VBV and frame-rate budget changed between two frames, IDR on
+  request without a restart. Setting `x264_in_process` (default on; off =
+  the FFmpeg CLI path).
+- FlexFEC (`crates/horcrux-media/src/flexfec.rs`, `hxc/fec.rs`): clean-room
+  from draft-ietf-payload-flexible-fec-scheme-03 (the `flexfec-03` format
+  browsers parse); negotiated only when the client offers `flexfec-03`
+  (Chromium: behind its FlexFEC field trial), repair stream announced as an
+  `FEC-FR` SSRC group, per-frame interleaved repair sets, used while the RTT
+  is at least `fec_min_rtt_ms`. Settings `fec` (default on),
+  `fec_overhead_percent`, `fec_min_rtt_ms` in `[console] wan`. str0m matches
+  RID `None` against every stream of a MID, so with a repair stream the media
+  stream carries an internal RID.
+- Low-latency playout (`low_latency_playout` per profile, default on),
+  `pace_video` (frames paced by str0m's pacer, default on), due pacer
+  timeouts handled inline.
+- Horcrux desktop client for Linux (`horcrux-desktop`, binary
+  `horcrux-console`): the web client's ticket + WebSocket signalling +
+  WebRTC (str0m, direct or through the node's relay via `horcrux-turn`),
+  H.264 decode through the system libavcodec loaded at run time, winit +
+  softbuffer window, raw relative mouse while captured, gamepads via evdev,
+  display refresh reported to the node, headless mode for CI (`--headless
+  --trials N --exercise-input`, WAN e2e paths `desktop_direct` and
+  `desktop_relay_rtt50`). Settings in `~/.config/horcrux/console.toml`
+  (`horcrux-console --print-defaults`, packaged example
+  `packaging/linux/horcrux-console.toml`), ebuild
+  `gentoo/app-emulation/horcrux-console`.
+
+Open:
+- C3c: the desktop client on Windows (Media Foundation decode, XInput /
+  Windows.Gaming.Input, MSI) and macOS (VideoToolbox, GameController, .pkg),
+  a connection window and a `horcrux-console://` handler for the web UI.
+- FlexFEC receive in the desktop client (str0m has no FEC receiver).
 - Cluster: relay on the cluster name/VIP (C4), shared relay secret across
   nodes.
 - Needs real GPU hardware / a real WAN: GPU-encode numbers per path,

@@ -15,6 +15,8 @@ members = [
     "crates/horcrux-nas",
     "crates/horcrux-guest-proto",
     "crates/horcrux-turn",
+    "crates/horcrux-media",
+    "horcrux-desktop",
     "crates/horcrux-guest-tools",
     "horcrux-api/horcrux-ui",
     "horcrux-mobile",
@@ -105,6 +107,15 @@ http = { version = "1.0" }
 [profile.release]
 opt-level = "z"
 lto = "thin"
+
+# The console media helpers convert and protect every video frame: full
+# optimisation even in debug builds (the WAN e2e runs a debug build) and in
+# the size-optimised release build.
+[profile.release.package.horcrux-media]
+opt-level = 3
+
+[profile.dev.package.horcrux-media]
+opt-level = 3
 
 # The WASM web UI keeps the smallest-download settings: trunk builds it
 # with this profile (data-cargo-profile-release in horcrux-ui/index.html).

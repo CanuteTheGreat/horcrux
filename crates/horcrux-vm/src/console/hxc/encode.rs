@@ -15,7 +15,8 @@
 //! the profile's interval.
 use horcrux_common::console::{ConsoleSettings, EncoderPreference, ProfileSettings};
 use std::process::Stdio;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
@@ -379,15 +380,277 @@ impl AnnexBSplitter {
 }
 
 /// A running encoder. Raw frames go in through `submit` (the newest one
-/// wins when the encoder is busy), encoded frames come out of `frames`.
-pub struct Encoder {
+/// wins when the encoder is busy), encoded frames come out of the channel
+/// given to `spawn`.
+///
+/// Software H.264 runs in-process through the system libx264 when the
+/// settings allow it and the library loads ([`LibraryEncoder`]): rate
+/// changes and keyframe requests then apply between two frames. Everything
+/// else (VP8, VA-API, NVENC, no libx264) runs the FFmpeg program, where a
+/// new rate or a keyframe means a restart.
+pub enum Encoder {
+    Program(ProgramEncoder),
+    Library(LibraryEncoder),
+}
+
+impl Encoder {
+    pub fn spawn(
+        settings: &ConsoleSettings,
+        params: EncodeParams,
+        out: mpsc::Sender<EncodedFrame>,
+    ) -> std::io::Result<Self> {
+        if settings.x264_in_process
+            && params.codec == VideoCodec::H264
+            && params.backend == EncoderBackend::Software
+        {
+            match LibraryEncoder::spawn(settings, params.clone(), out.clone()) {
+                Ok(e) => return Ok(Self::Library(e)),
+                Err(e) => tracing::info!("console: in-process x264 not used ({e}); FFmpeg program"),
+            }
+        }
+        ProgramEncoder::spawn(&settings.ffmpeg_path, params, out).map(Self::Program)
+    }
+
+    pub fn params(&self) -> &EncodeParams {
+        match self {
+            Self::Program(e) => &e.params,
+            Self::Library(e) => &e.params,
+        }
+    }
+
+    /// `libx264` (in-process) or `ffmpeg` (program).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Program(_) => "ffmpeg",
+            Self::Library(_) => "libx264",
+        }
+    }
+
+    pub fn submit(&mut self, frame: Vec<u8>) -> Option<u64> {
+        match self {
+            Self::Program(e) => e.submit(frame),
+            Self::Library(e) => e.submit(frame),
+        }
+    }
+
+    pub fn alive(&mut self) -> bool {
+        match self {
+            Self::Program(e) => e.alive(),
+            Self::Library(e) => e.alive(),
+        }
+    }
+
+    /// Change bitrate (kbit/s) and frame rate in-stream. False when this
+    /// encoder can't (the caller restarts it).
+    pub fn set_rate(&mut self, kbps: u32, fps: u32) -> bool {
+        match self {
+            Self::Program(_) => false,
+            Self::Library(e) => {
+                e.set_rate(kbps, fps);
+                true
+            }
+        }
+    }
+
+    /// Ask for an IDR on the next frame. False when this encoder can't.
+    pub fn request_keyframe(&mut self) -> bool {
+        match self {
+            Self::Program(_) => false,
+            Self::Library(e) => {
+                e.ctl.keyframe.store(true, Ordering::Relaxed);
+                true
+            }
+        }
+    }
+}
+
+/// x264 rate control for `kbps` (target and ceiling) when frames are paced
+/// at `pace_fps` while the encoder was opened for `enc_fps`: x264's rate
+/// control budgets per frame at its own frame rate, so the numbers are
+/// scaled to give each frame `kbps / pace_fps`, and the VBV holds two such
+/// frames (at least 200 kbit), as the FFmpeg program's `-bufsize` did.
+pub fn x264_rate(
+    kbps: u32,
+    max_kbps: u32,
+    pace_fps: u32,
+    enc_fps: u32,
+) -> horcrux_media::x264::Rate {
+    let pace = pace_fps.clamp(1, enc_fps.max(1)) as u64;
+    let enc = enc_fps.max(1) as u64;
+    let scale = |k: u32| ((k.max(1) as u64 * enc / pace).min(u32::MAX as u64)) as u32;
+    horcrux_media::x264::Rate {
+        bitrate_kbps: scale(kbps),
+        maxrate_kbps: scale(max_kbps.max(kbps)),
+        bufsize_kbit: ((max_kbps.max(kbps) as u64 / pace).max(100) * 2) as u32,
+    }
+}
+
+#[derive(Default)]
+pub struct LibraryCtl {
+    rate: std::sync::Mutex<Option<(u32, u32)>>,
+    keyframe: AtomicBool,
+    dead: AtomicBool,
+}
+
+/// Software H.264 in-process (libx264 on its own thread).
+pub struct LibraryEncoder {
+    pub params: EncodeParams,
+    raw_tx: mpsc::Sender<(u64, Vec<u8>)>,
+    ctl: Arc<LibraryCtl>,
+    next_seq: u64,
+}
+
+fn x264_library(names: &[String]) -> Result<Arc<horcrux_media::x264::Library>, String> {
+    type Cache = std::sync::Mutex<
+        Option<(
+            Vec<String>,
+            Result<Arc<horcrux_media::x264::Library>, String>,
+        )>,
+    >;
+    static LIB: OnceLock<Cache> = OnceLock::new();
+    let mut g = LIB
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|e| e.to_string())?;
+    match g.as_ref() {
+        Some((n, r)) if n == names => r.clone(),
+        _ => {
+            let r = horcrux_media::x264::Library::load(names);
+            *g = Some((names.to_vec(), r.clone()));
+            r
+        }
+    }
+}
+
+impl LibraryEncoder {
+    pub fn spawn(
+        settings: &ConsoleSettings,
+        params: EncodeParams,
+        out: mpsc::Sender<EncodedFrame>,
+    ) -> Result<Self, String> {
+        let lib = x264_library(&settings.x264_library)?;
+        let config = horcrux_media::x264::Config {
+            width: params.out_width,
+            height: params.out_height,
+            fps: params.fps.max(1),
+            keyint: (params.fps * params.keyframe_interval_secs).max(1),
+            preset: params.x264_preset.clone(),
+            tune: "zerolatency".into(),
+            profile: "baseline".into(),
+            rate: x264_rate(
+                params.bitrate_kbps,
+                params.max_bitrate_kbps,
+                params.fps,
+                params.fps,
+            ),
+        };
+        let mut enc = horcrux_media::x264::Encoder::open(lib, config)?;
+        let (raw_tx, mut raw_rx) = mpsc::channel::<(u64, Vec<u8>)>(1);
+        let ctl = Arc::new(LibraryCtl::default());
+        let c = ctl.clone();
+        let p = params.clone();
+        let enc_fps = params.fps.max(1);
+        std::thread::Builder::new()
+            .name("hxc-x264".into())
+            .spawn(move || {
+                let format = match p.format {
+                    PixelFormat::Bgrx => horcrux_media::yuv::Packed::Bgrx,
+                    PixelFormat::Rgbx => horcrux_media::yuv::Packed::Rgbx,
+                    PixelFormat::Rgb565 => horcrux_media::yuv::Packed::Rgb565,
+                };
+                let (w, h) = (p.width as usize, p.height as usize);
+                let stride = w * p.format.bytes_per_pixel();
+                let (ow, oh) = (p.out_width as usize, p.out_height as usize);
+                while let Some((seq, frame)) = raw_rx.blocking_recv() {
+                    let want = c.rate.lock().ok().and_then(|mut r| r.take());
+                    if let Some((kbps, fps)) = want {
+                        if let Err(e) = enc.set_rate(x264_rate(kbps, kbps, fps, enc_fps)) {
+                            tracing::warn!("console: x264 rate change: {e}");
+                        }
+                    }
+                    let key = c.keyframe.swap(false, Ordering::Relaxed);
+                    let src = horcrux_media::yuv::Source {
+                        data: &frame,
+                        width: w,
+                        height: h,
+                        stride,
+                        format,
+                    };
+                    let res = enc.encode(
+                        |y, ys, u, us, v, vs| {
+                            horcrux_media::yuv::convert(
+                                &src,
+                                &mut horcrux_media::yuv::I420 {
+                                    y,
+                                    y_stride: ys,
+                                    u,
+                                    u_stride: us,
+                                    v,
+                                    v_stride: vs,
+                                    width: ow,
+                                    height: oh,
+                                },
+                            )
+                        },
+                        key,
+                    );
+                    match res {
+                        Ok(data) if data.is_empty() => {}
+                        Ok(data) => {
+                            if out.blocking_send(EncodedFrame { data, seq }).is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("console: x264: {e}");
+                            break;
+                        }
+                    }
+                }
+                c.dead.store(true, Ordering::Relaxed);
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            params,
+            raw_tx,
+            ctl,
+            next_seq: 0,
+        })
+    }
+
+    pub fn submit(&mut self, frame: Vec<u8>) -> Option<u64> {
+        let seq = self.next_seq;
+        match self.raw_tx.try_send((seq, frame)) {
+            Ok(()) => {
+                self.next_seq += 1;
+                Some(seq)
+            }
+            Err(_) => None,
+        }
+    }
+
+    pub fn alive(&mut self) -> bool {
+        !self.ctl.dead.load(Ordering::Relaxed)
+    }
+
+    pub fn set_rate(&mut self, kbps: u32, fps: u32) {
+        if let Ok(mut r) = self.ctl.rate.lock() {
+            *r = Some((kbps.max(1), fps.max(1)));
+        }
+        self.params.bitrate_kbps = kbps;
+        self.params.max_bitrate_kbps = kbps;
+    }
+}
+
+/// The FFmpeg program as the encoder.
+pub struct ProgramEncoder {
     pub params: EncodeParams,
     child: Child,
     raw_tx: mpsc::Sender<(u64, Vec<u8>)>,
     next_seq: u64,
 }
 
-impl Encoder {
+impl ProgramEncoder {
     pub fn spawn(
         program: &str,
         params: EncodeParams,
@@ -693,6 +956,116 @@ mod tests {
             "-hide_banner -loglevel error -nostdin -vaapi_device /dev/dri/renderD128"
         ));
         assert!(va.contains("format=nv12,hwupload") && va.contains("h264_vaapi"));
+    }
+
+    #[test]
+    fn x264_rate_scales_to_the_paced_frame_rate() {
+        // paced at the encoder's rate: as asked, two frames of VBV
+        let r = x264_rate(3000, 3000, 30, 30);
+        assert_eq!(
+            (r.bitrate_kbps, r.maxrate_kbps, r.bufsize_kbit),
+            (3000, 3000, 200)
+        );
+        let r = x264_rate(20000, 20000, 60, 60);
+        assert_eq!(r.bufsize_kbit, 666);
+        // paced at half the encoder's rate: each frame gets kbps/15
+        let r = x264_rate(3000, 3000, 15, 30);
+        assert_eq!(
+            (r.bitrate_kbps, r.maxrate_kbps, r.bufsize_kbit),
+            (6000, 6000, 400)
+        );
+        // pacing faster than the encoder's rate is clamped
+        assert_eq!(x264_rate(1000, 1000, 120, 30).bitrate_kbps, 1000);
+    }
+
+    #[test]
+    fn in_process_encoder_falls_back_to_the_program() {
+        let s = ConsoleSettings {
+            x264_library: vec!["libdoes-not-exist-hx.so".into()],
+            ffmpeg_path: "/bin/cat".into(),
+            ..Default::default()
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (tx, _rx) = mpsc::channel(4);
+            let p = params(VideoCodec::H264, EncoderBackend::Software);
+            let e = Encoder::spawn(&s, p, tx).unwrap();
+            assert_eq!(e.kind(), "ffmpeg");
+            let s2 = ConsoleSettings {
+                x264_in_process: false,
+                ffmpeg_path: "/bin/cat".into(),
+                ..Default::default()
+            };
+            let (tx, _rx) = mpsc::channel(4);
+            let p = params(VideoCodec::H264, EncoderBackend::Software);
+            assert_eq!(
+                Encoder::spawn(&s2, p, tx).unwrap().kind(),
+                "ffmpeg",
+                "setting off"
+            );
+        });
+    }
+
+    /// Where libx264 is installed (CI's Test image): the session's encoder
+    /// runs in-process, changes rate without a new keyframe and produces
+    /// one access unit per frame.
+    #[test]
+    fn in_process_encoder_changes_rate_without_restart() {
+        let s = ConsoleSettings::default();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (tx, mut rx) = mpsc::channel(4);
+            let mut p = params(VideoCodec::H264, EncoderBackend::Software);
+            p.width = 320;
+            p.height = 240;
+            p.out_width = 320;
+            p.out_height = 240;
+            let mut e = match Encoder::spawn(&s, p, tx) {
+                Ok(e @ Encoder::Library(_)) => e,
+                _ => {
+                    eprintln!("skip: no libx264 on this host");
+                    return;
+                }
+            };
+            let mut idr = Vec::new();
+            for i in 0..12u32 {
+                if i == 4 {
+                    assert!(e.set_rate(300, 15));
+                }
+                if i == 9 {
+                    assert!(e.request_keyframe());
+                }
+                let frame = vec![(i * 20) as u8; 320 * 240 * 4];
+                let seq = loop {
+                    if let Some(s) = e.submit(frame.clone()) {
+                        break s;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                };
+                let f = rx.recv().await.unwrap();
+                assert_eq!(f.seq, seq);
+                let nal = |t: u8| {
+                    f.data
+                        .windows(4)
+                        .any(|w| w[..3] == [0, 0, 1] && w[3] & 0x1f == t)
+                };
+                idr.push(nal(5));
+            }
+            assert!(e.alive());
+            assert_eq!(
+                idr,
+                vec![
+                    true, false, false, false, false, false, false, false, false, true, false,
+                    false
+                ]
+            );
+        });
     }
 
     #[test]
