@@ -185,7 +185,10 @@ class Tests:
         t = time.time()
         r = subprocess.run(cmd, capture_output=True, text=True)
         open(f"{a.out}/install.log", "w").write(r.stdout + r.stderr)
-        self.step("install-base-system", r.returncode == 0, f"answer-file install ({int(time.time()-t)}s)")
+        tail = ""
+        if r.returncode != 0:  # a bare "answer-file install (149s)" names no cause: carry the end of the install log into the step line
+            tail = " | rc=%d, last install output: %s" % (r.returncode, " / ".join((r.stdout + r.stderr).strip().splitlines()[-12:])[-1500:])
+        self.step("install-base-system", r.returncode == 0, f"answer-file install ({int(time.time()-t)}s){tail}")
         os.rename(f"{d}/target.qcow2", base)
         return base
 
