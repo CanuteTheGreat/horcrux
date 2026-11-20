@@ -272,6 +272,31 @@ pub fn ConsoleSettingsPage() -> impl IntoView {
                     <input type="number" min="6" max="510" name="audio_bitrate_kbps" prop:value=move || sig.get().audio_bitrate_kbps.to_string()
                         on:change=move |ev| { let v = num(&ev, sig.get().audio_bitrate_kbps); sig.update(|s| s.audio_bitrate_kbps = v) }/>
                 </label>
+                <label>"Audio frame length (ms; 5, 10, 20, 40 or 60)"
+                    <input type="number" min="5" max="60" name="audio_frame_ms" prop:value=move || sig.get().audio_frame_ms.to_string()
+                        on:change=move |ev| { let v = num(&ev, sig.get().audio_frame_ms); sig.update(|s| s.audio_frame_ms = v) }/>
+                </label>
+                <label class="checkbox">
+                    <input type="checkbox" name="shm_frames" prop:checked=move || sig.get().shm_frames
+                        on:change=move |ev| { let v = event_target_checked(&ev); sig.update(|s| s.shm_frames = v) }/>
+                    "Frame ring for the native viewer on this node (raw frames, no encode; applies at the next VM start)"
+                </label>
+                <label>"Frame ring directory (tmpfs or hugetlbfs)"
+                    <input type="text" name="shm_frames_dir" prop:value=move || sig.get().shm_frames_dir
+                        on:change=move |ev| { let v = event_target_value(&ev); sig.update(|s| s.shm_frames_dir = v) }/>
+                </label>
+                <label>"Frame ring size (MiB, power of two; 128 fits three 4K frames)"
+                    <input type="number" min="4" max="1024" name="shm_frames_size_mib" prop:value=move || sig.get().shm_frames_size_mib.to_string()
+                        on:change=move |ev| { let v = num(&ev, sig.get().shm_frames_size_mib); sig.update(|s| s.shm_frames_size_mib = v) }/>
+                </label>
+                <label>"Frame ring slots"
+                    <input type="number" min="2" max="8" name="shm_frames_slots" prop:value=move || sig.get().shm_frames_slots.to_string()
+                        on:change=move |ev| { let v = num(&ev, sig.get().shm_frames_slots); sig.update(|s| s.shm_frames_slots = v) }/>
+                </label>
+                <label>"Native viewer socket"
+                    <input type="text" name="local_socket" prop:value=move || sig.get().local_socket
+                        on:change=move |ev| { let v = event_target_value(&ev); sig.update(|s| s.local_socket = v) }/>
+                </label>
                 <ProfileFields name="desktop" sig=sig/>
                 <ProfileFields name="console" sig=sig/>
                 <ProfileFields name="gaming" sig=sig/>

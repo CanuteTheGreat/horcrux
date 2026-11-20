@@ -11,10 +11,12 @@
 //!   they work, libx264/libvpx otherwise).
 //! * [`session`]: the WebRTC transport (str0m) and the data channels.
 //! * [`page`]: the browser client served by the node.
+pub mod audio;
 pub mod deliver;
 pub mod encode;
 pub mod guest;
 pub mod keymap;
+pub mod local;
 pub mod page;
 pub mod qemu_dbus;
 pub mod session;
@@ -122,6 +124,31 @@ impl Broker {
         }
         if t.conn_id != conn_id {
             return Err(RedeemError::WrongConnection);
+        }
+        let t = map.remove(ticket).ok_or(RedeemError::Unknown)?;
+        if t.expires_at < now {
+            return Err(RedeemError::Expired);
+        }
+        Ok(t)
+    }
+
+    /// Redeem a local (same-host viewer) ticket: issued with
+    /// `conn_id = "local:<uid>"`, redeemable only over the local socket by
+    /// a peer with that Unix uid.
+    pub async fn redeem_local(
+        &self,
+        ticket: &str,
+        peer_uid: u32,
+    ) -> Result<HxcTicket, RedeemError> {
+        let now = chrono::Utc::now().timestamp();
+        let mut map = self.tickets.lock().await;
+        let t = map.get(ticket).ok_or(RedeemError::Unknown)?;
+        if t.conn_id != format!("local:{peer_uid}") {
+            return Err(if t.conn_id.starts_with("local:") {
+                RedeemError::WrongUser
+            } else {
+                RedeemError::WrongConnection
+            });
         }
         let t = map.remove(ticket).ok_or(RedeemError::Unknown)?;
         if t.expires_at < now {
@@ -304,6 +331,29 @@ mod tests {
             candidate_ips: Vec::new(),
             expires_at: 0,
         }
+    }
+
+    #[tokio::test]
+    async fn local_tickets_are_bound_to_the_viewer_uid() {
+        let b = Broker::new();
+        let t = b.issue(ticket("u1", "local:1000"), 60).await;
+        assert_eq!(
+            b.redeem_local(&t.ticket, 1001).await.unwrap_err(),
+            RedeemError::WrongUser
+        );
+        // not redeemable as a WebRTC ticket either
+        assert!(b.redeem(&t.ticket, "u1", "c1").await.is_err());
+        assert_eq!(b.redeem_local(&t.ticket, 1000).await.unwrap().vm_id, "vm1");
+        assert_eq!(
+            b.redeem_local(&t.ticket, 1000).await.unwrap_err(),
+            RedeemError::Unknown
+        );
+        // a WebRTC ticket is not a local one
+        let w = b.issue(ticket("u1", "c1"), 60).await;
+        assert_eq!(
+            b.redeem_local(&w.ticket, 1000).await.unwrap_err(),
+            RedeemError::WrongConnection
+        );
     }
 
     #[tokio::test]

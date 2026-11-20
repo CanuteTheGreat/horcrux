@@ -35,7 +35,7 @@ SLOT="0"
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
 # NAS storage: nas-zfs, nas-btrfs, nas-mdraid, nas-lvm
 IUSE="
-	+backup cli +cluster docker incus kubernetes ldap lxc lxd +monitoring +pam +podman +qemu systemd +webui
+	+backup cli +cluster docker incus kubernetes ldap lxc lxd +monitoring +pam +podman +qemu systemd +viewer +webui
 	nas smb nfs-server afp webdav ftp
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
@@ -46,6 +46,7 @@ IUSE="
 # NAS protocol dependencies
 REQUIRED_USE="
 	|| ( qemu lxd incus lxc docker podman nas )
+	viewer? ( qemu )
 	smb? ( nas )
 	nfs-server? ( nas )
 	afp? ( nas )
@@ -73,6 +74,10 @@ REQUIRED_USE="
 # kubernetes? pulls app-admin/helm: Helm repositories/charts/releases are
 # driven through the helm CLI.
 RDEPEND="
+	viewer? (
+		dev-libs/wayland
+		x11-libs/libxkbcommon
+	)
 	qemu? (
 		app-emulation/qemu[spice,usbredir,virtfs,vnc]
 		media-video/ffmpeg[vpx,x264]
@@ -227,6 +232,16 @@ src_compile() {
 		cargo_env "${@}" || die "cargo build failed (horcrux-cli)"
 	fi
 
+	# Horcrux Console native viewer (same-host raw frames from the VM's
+	# frame ring, WebRTC otherwise). Like the CLI it has no USE-gated Cargo
+	# features, so it is built outside ECARGO_ARGS. Window and input come
+	# from libwayland/libxkbcommon (or libX11) loaded at run time.
+	if use viewer; then
+		set -- "${CARGO}" build $(usex debug "" --release) -p horcrux-viewer
+		einfo "${@}"
+		cargo_env "${@}" || die "cargo build failed (horcrux-viewer)"
+	fi
+
 	# Build web UI if enabled
 	if use webui; then
 		# trunk (the Leptos WASM bundler) has no Gentoo ebuild anywhere in
@@ -304,6 +319,10 @@ src_install() {
 	# Install CLI if built
 	if use cli; then
 		dobin "$(cargo_target_dir)"/horcrux
+	fi
+
+	if use viewer; then
+		dobin "$(cargo_target_dir)"/horcrux-viewer
 	fi
 
 	# Install web UI if built
