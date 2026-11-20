@@ -9,6 +9,10 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq && apt-get install -y -qq ceph-mon ceph-mgr ceph-osd ceph-common uuid-runtime >/dev/null
 mkdir -p /var/run/ceph /var/log/ceph; chown ceph:ceph /var/run/ceph /var/log/ceph
 FSID=$(uuidgen); HOST=$(hostname); IP=127.0.0.1
+# The mon store lives on the CI runner's shared Docker disk. ceph-mon refuses to
+# start below mon_data_avail_crit (default 5% free), and busy runners sit at
+# 4-7% free (run 21328: "available: 4% 22 GiB"), so a throwaway test cluster
+# that needs a few hundred MB must not judge the whole host disk by percent.
 cat > /etc/ceph/ceph.conf <<C
 [global]
 fsid = $FSID
@@ -22,7 +26,8 @@ osd_pool_default_min_size = 1
 mon_allow_pool_size_one = true
 osd_crush_chooseleaf_type = 0
 bluestore_block_size = 3221225472
-mon_data_avail_warn = 1
+mon_data_avail_warn = 2
+mon_data_avail_crit = 1
 [osd]
 osd_objectstore = bluestore
 C
