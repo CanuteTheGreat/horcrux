@@ -73,6 +73,11 @@ media-sound/alsa-utils
 # --- public desktop editions
 gnome-base/gdm
 gnome-base/gnome-light
+# GNOME session pieces the desktop editions' meta packages pull in and that end up in world on installed desktops
+gnome-base/gnome-session
+gnome-base/gnome-session-openrc
+gnome-base/gnome-shell
+x11-wm/mutter
 # the FULL GNOME edition (variant gnome; owner rule 2026-11-12). Its extras meta is covered by gnome-extra/horcrux-* above.
 gnome-base/gnome
 gnome-extra/gnome-tweaks
