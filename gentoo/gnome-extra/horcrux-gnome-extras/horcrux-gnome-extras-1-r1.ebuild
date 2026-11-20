@@ -22,7 +22,9 @@ KEYWORDS="amd64 arm64"
 #   gnome-extra/gnome-user-share  needs apache with WebDAV modules; off by default in ::gentoo (the `share` USE flag)
 #   gnome-extra/gnome-tour, media-video/snapshot, gnome-extra/gnome-usage, gnome-extra/gnome-photos  not packaged in ::gentoo
 #   media-video/showtime, media-sound/decibels (GURU)  duplicate Totem and Music, which gnome-core-apps/this package already install
+# media-gfx/loupe (GNOME's image viewer) explicitly: gnome-core-apps no longer pulls it on every profile, and the edition gate requires it
 RDEPEND="
+	media-gfx/loupe
 	sys-apps/baobab
 	media-video/cheese
 	app-arch/file-roller
