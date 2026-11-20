@@ -86,6 +86,9 @@ pub struct RelayStats {
     pub allocations_total: u64,
     pub auth_failures: u64,
     pub forbidden_peers: u64,
+    /// Requests with a valid credential of an ended (revoked) session:
+    /// normal while a closing client deallocates, not an attack signal.
+    pub revoked_rejects: u64,
     pub bytes_to_peers: u64,
     pub bytes_to_clients: u64,
 }
@@ -182,6 +185,7 @@ struct Inner {
     allocations_total: AtomicU64,
     auth_failures: AtomicU64,
     forbidden: AtomicU64,
+    revoked_rejects: AtomicU64,
     to_peers: AtomicU64,
     to_clients: AtomicU64,
     next_conn: AtomicU64,
@@ -228,6 +232,7 @@ impl Relay {
             allocations_total: AtomicU64::new(0),
             auth_failures: AtomicU64::new(0),
             forbidden: AtomicU64::new(0),
+            revoked_rejects: AtomicU64::new(0),
             to_peers: AtomicU64::new(0),
             to_clients: AtomicU64::new(0),
             next_conn: AtomicU64::new(1),
@@ -307,6 +312,7 @@ impl Relay {
             allocations_total: self.inner.allocations_total.load(Ordering::Relaxed),
             auth_failures: self.inner.auth_failures.load(Ordering::Relaxed),
             forbidden_peers: self.inner.forbidden.load(Ordering::Relaxed),
+            revoked_rejects: self.inner.revoked_rejects.load(Ordering::Relaxed),
             bytes_to_peers: self.inner.to_peers.load(Ordering::Relaxed),
             bytes_to_clients: self.inner.to_clients.load(Ordering::Relaxed),
         }
@@ -464,7 +470,11 @@ impl Inner {
             .lock()
             .map(|s| s.revoked.contains_key(tag))
             .unwrap_or(true);
-        if revoked || (new_allocation && exp < unix_now()) {
+        if revoked {
+            self.revoked_rejects.fetch_add(1, Ordering::Relaxed);
+            return Auth::Reply(self.err(m, 401, "Unauthorized", None));
+        }
+        if new_allocation && exp < unix_now() {
             return fail(self);
         }
         Auth::Ok {

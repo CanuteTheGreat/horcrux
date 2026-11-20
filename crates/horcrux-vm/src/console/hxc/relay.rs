@@ -49,6 +49,7 @@ pub struct RelayStatus {
     pub allocations_total: u64,
     pub auth_failures: u64,
     pub forbidden_peers: u64,
+    pub revoked_rejects: u64,
     pub bytes_to_peers: u64,
     pub bytes_to_clients: u64,
     pub port_mapping: portmap::MappingStatus,
@@ -357,6 +358,7 @@ pub fn status(s: &ConsoleSettings) -> RelayStatus {
                 allocations_total,
                 auth_failures,
                 forbidden_peers,
+                revoked_rejects,
                 bytes_to_peers,
                 bytes_to_clients,
             } = r.relay.stats();
@@ -367,6 +369,7 @@ pub fn status(s: &ConsoleSettings) -> RelayStatus {
             st.allocations_total = allocations_total;
             st.auth_failures = auth_failures;
             st.forbidden_peers = forbidden_peers;
+            st.revoked_rejects = revoked_rejects;
             st.bytes_to_peers = bytes_to_peers;
             st.bytes_to_clients = bytes_to_clients;
         }

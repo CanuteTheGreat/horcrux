@@ -291,6 +291,48 @@ shared CI host, not by the transport. The < 20 ms LAN gaming target needs a
 GPU encoder in the guest (NVENC/AMF/QSV, code present, untested without GPU
 hardware) and an unloaded node.
 
+### Measured in C3 (WAN paths under netem, software x264, headless Chromium)
+
+Source: `horcrux-api/tests/hx_console_wan_e2e.{sh,py}` (CI job
+`hx-console-wan-e2e` in `hx-console-e2e.yml`), Alpine guest under KVM
+(QEMU 10.2), the browser in its own network namespace behind a veth link
+shaped with netem on both ends (half the RTT each way, loss each way, rate on
+the video direction with a ~100 ms queue). Keystroke to picture as in C1
+(Linux console, 1280x800, 14 keystrokes per path). Run on a shared 8-core
+build host (load 4-6) on 2026-11-20; 85/85 checks passed.
+
+| Path (netem) | Keystroke to picture median / min / p90 | ICE RTT | Lost / NACKed packets | Jitter buffer | Link estimate -> target |
+|---|---|---|---|---|---|
+| LAN direct, link adaptation off | 66 / 46 / 85 ms | 1 ms | 0 / 0 | 4 ms | fixed 4 Mbit/s |
+| LAN direct, adaptation on | 86 / 71 / 477 ms | 1 ms | 0 / 0 | 24 ms | 4.4 Mbit/s -> 3.8 Mbit/s 1280x800@30 |
+| Relay (TURN/UDP), 20 ms RTT | 110 / 89 / 120 ms | 21 ms | 0 / 0 | 33 ms | 4.3 -> 3.6 Mbit/s |
+| Relay UDP, 50 ms RTT, 1% loss | 160 / 108 / 297 ms | 51 ms | 7 / 8 | 37 ms | 4.1 -> 3.9 Mbit/s |
+| Relay UDP, 100 ms RTT, 2% loss | 273 / 176 / 862 ms | 101 ms | 9 / 10 | 52 ms | 4.6 -> 3.7 Mbit/s |
+| Direct UDP blocked -> automatic relay fallback, 40 ms | 170 / 106 / 727 ms | 41 ms | 0 / 0 | 24 ms | 4.5 -> 4.2 Mbit/s |
+| All UDP blocked -> relay over TCP, 40 ms | 130 / 98 / 680 ms | 41 ms | 0 / 0 | 20 ms | 4.2 -> 4.0 Mbit/s |
+| Relay, 3 Mbit/s link, 40 ms, screen flooded | 168 / 89 / 872 ms | 42 ms | 1 / 1 | 69 ms | 0.4-2.6 Mbit/s -> 2.3 Mbit/s, 6 fps decoded |
+| Relay, uplink setting 1 Mbit/s, 20 ms | 311 / 96 / 895 ms | 22 ms | 0 / 0 | 14 ms | capped at 1.0 Mbit/s 1280x800@19 (limit `uplink`) |
+
+Reading:
+- Every path works end to end, including UDP-blocked networks (TURN over TCP)
+  and automatic fallback; the relay forwards ciphertext only and its
+  per-session allocations are gone 0.5 s after the page closes (client `bye`).
+- Total = LAN total + the added RTT + a larger jitter buffer; loss is
+  repaired by NACK/RTX (`nack_history_packets`) at the cost of one RTT.
+- Link adaptation costs latency today: the host encoder is the FFmpeg CLI,
+  which cannot change bitrate, size or frame rate in-stream, so a new target
+  restarts it (with hysteresis: new size/fps, or bitrate -30% / +50%) and the
+  restart costs a keyframe and a few hundred ms; the p90 spikes in the table
+  are mostly those restarts plus software encode under host load. In-stream
+  rate control (encoder library API instead of the CLI; guest tools already
+  restart their own encoder in place) is the fix, listed under C3 open items.
+- The TWCC estimate is conservative when software encode is CPU-bound and the
+  screen is flooded (estimate swings 0.15-2.6 Mbit/s): decoded frame rate
+  drops to about 6 fps rather than the picture freezing. Not a GPU-encoder
+  number; GPU encode and a real WAN (not netem) remain to be measured.
+- FEC is not in place yet: str0m 0.25 has no ULPFEC/FlexFEC sender, so loss
+  costs a retransmission RTT (see C3 open items).
+
 ## 7. Standalone machine
 
 One box runs everything: the guest, the broker, the encoder and, if WAN access
@@ -577,3 +619,50 @@ code-signing certificate. Test-signing mode (bcdedit testsigning) is not an
 option for gaming VMs: it needs Secure Boot off, which anti-cheat refuses.
 Sources: learn.microsoft.com driver signing policy and code-signing
 attestation pages.
+
+### C3 status (2026-11-20)
+
+Done:
+- `crates/horcrux-turn`: STUN (RFC 8489) / TURN (RFC 8656) relay and client,
+  clean-room from the RFCs (RFC 5769 test vectors), long-term credentials with nonces, channels,
+  permissions; UDP and TCP transport to the relay (RFC 8656 framing). It is not an open relay: peers are limited to the node's own
+  console media sockets (`PeerRule`), and it never terminates DTLS/SRTP.
+- Relay built into every node (`[console] wan`, off by default): starts when
+  WAN access is enabled, also on a standalone machine; per-session
+  TURN-REST-style credentials (`<expiry>:<session tag>`, HMAC-SHA1 of a
+  0600 node secret `console-relay.key`) carried in the console ticket's ICE
+  servers, revoked when the session ends (allocations dropped at once); a
+  relay restart only when a listening setting changes.
+- Optional router mapping (opt-in `upnp`): NAT-PMP (RFC 6886) first, then
+  UPnP IGD (SSDP + SOAP AddPortMapping, UDP and TCP), renewed at half the
+  lease, removed when WAN access is turned off.
+- `force_relay` (clients only use the relay), automatic fallback when direct
+  UDP is blocked, the session's path (direct/relay) in its stats.
+- Link adaptation (`adaptive`, default on): str0m TWCC bandwidth estimate ->
+  bitrate, resolution and frame rate (quality floor in bits per pixel,
+  minimum bitrate and fps, fast step-down / slow step-up), capped by the
+  profile, by the node uplink setting for relayed sessions and by the
+  client's display refresh (frame pacing to the client display); the limit
+  in force (`link`, `uplink`, `profile`, `floor`) and the numbers are sent to
+  the client, which shows what the link allows. NACK/RTX history is a
+  setting (`nack_history_packets`).
+- `GET /api/console/relay` (Sys.Audit on /): relay listen/public address,
+  allocations, auth failures, forbidden peers, late requests of ended
+  sessions, bytes, router mapping. Every WAN value is a setting with a
+  default in `[console] wan`, the console settings API, the declarative
+  config (console kind) and System > Horcrux Console > WAN access.
+- WAN e2e under netem (section 6) in CI on the KVM runner.
+
+Open (C3b):
+- FEC: str0m 0.25 has no ULPFEC/FlexFEC sender; add FlexFEC (RFC 8627) on the
+  video stream (or upstream it to str0m), measure at 2-5% loss.
+- In-stream encoder rate changes for the host encoder (library API instead of
+  the FFmpeg CLI) so adaptation stops costing keyframes.
+- Horcrux desktop app (Linux/Windows/macOS) on the same WebRTC protocol with
+  raw mouse capture, gamepads and high refresh (the native viewer from C2d is
+  same-host only).
+- Cluster: relay on the cluster name/VIP (C4), shared relay secret across
+  nodes.
+- Needs real GPU hardware / a real WAN: GPU-encode numbers per path,
+  click-to-photon with a photodiode or high-speed camera, a real residential
+  uplink instead of netem.

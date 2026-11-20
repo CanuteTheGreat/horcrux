@@ -377,6 +377,10 @@
     requestAnimationFrame(step);
   }
 
+  window.addEventListener("pagehide", () => {
+    try { send("ctl", JSON.stringify({ t: "bye" })); } catch (_) {}
+    try { hxc.pc && hxc.pc.close(); } catch (_) {}
+  });
   const pings = new Map(); let pingId = 0;
   setInterval(() => { const id = ++pingId; pings.set(id, performance.now()); send("ctl", JSON.stringify({ t: "ping", id })); if (pings.size > 20) pings.clear(); }, 1000);
 

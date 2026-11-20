@@ -1063,30 +1063,9 @@ async fn compositor(
                             dirty = true;
                         }
                     }
-                    Some(ToCompositor::Rate(t)) => {
-                        frame_gap = Duration::from_secs_f64(1.0 / t.fps.max(1) as f64);
-                        rate = Some(t);
-                        if ctx.guest_video.load(Ordering::Relaxed) {
-                            // the guest encoder restarts with the new rate
-                            let mut sv = start_video_for(&profile);
-                            sv.bitrate_kbps = t.kbps;
-                            sv.max_bitrate_kbps = t.kbps;
-                            sv.fps = t.fps.max(1);
-                            sv.keyframe_interval_frames = sv.fps * profile.keyframe_interval_secs.max(1);
-                            let _ = ctx.to_guest(gproto::Msg::StartVideo(sv));
-                        } else if let (Some((kbps, ow, oh, fps)), Some(f)) = (running, fb.as_ref()) {
-                            // FFmpeg's CLI can't change rate or size in-stream and
-                            // a restart costs a keyframe: restart for a new size or
-                            // frame rate, or a bitrate change of -30% / +50%.
-                            let (w, h) = encode::fit(f.width, f.height, t.width.max(2), t.height.max(2));
-                            let (mw, mh) = encode::fit(f.width, f.height, settings.max_width, settings.max_height);
-                            let shape = (w.min(mw), h.min(mh), t.fps.max(1)) != (ow, oh, fps);
-                            if shape || t.kbps * 10 < kbps * 7 || t.kbps * 10 > kbps * 15 {
-                                encoder = None;
-                                submitted.clear();
-                                dirty = true;
-                            }
-                        }
+                    Some(ToCompositor::Rate(_)) => {
+                        // wake-up only: the target is read from the session stats below,
+                        // so a full channel never loses one
                     }
                     None => break,
                 }
@@ -1159,6 +1138,33 @@ async fn compositor(
                     }
                 }
             }
+        }
+        // Apply the newest link-adaptation target (set by the transport).
+        let want = ctx.stats.lock().ok().and_then(|s| s.target);
+        if let Some(t) = want.filter(|t| Some(*t) != rate) {
+        frame_gap = Duration::from_secs_f64(1.0 / t.fps.max(1) as f64);
+        rate = Some(t);
+        if ctx.guest_video.load(Ordering::Relaxed) {
+            // the guest encoder restarts with the new rate
+            let mut sv = start_video_for(&profile);
+            sv.bitrate_kbps = t.kbps;
+            sv.max_bitrate_kbps = t.kbps;
+            sv.fps = t.fps.max(1);
+            sv.keyframe_interval_frames = sv.fps * profile.keyframe_interval_secs.max(1);
+            let _ = ctx.to_guest(gproto::Msg::StartVideo(sv));
+        } else if let (Some((kbps, ow, oh, fps)), Some(f)) = (running, fb.as_ref()) {
+            // FFmpeg's CLI can't change rate or size in-stream and
+            // a restart costs a keyframe: restart for a new size or
+            // frame rate, or a bitrate change of -30% / +50%.
+            let (w, h) = encode::fit(f.width, f.height, t.width.max(2), t.height.max(2));
+            let (mw, mh) = encode::fit(f.width, f.height, settings.max_width, settings.max_height);
+            let shape = (w.min(mw), h.min(mh), t.fps.max(1)) != (ow, oh, fps);
+            if shape || t.kbps * 10 < kbps * 7 || t.kbps * 10 > kbps * 15 {
+                encoder = None;
+                submitted.clear();
+                dirty = true;
+            }
+        }
         }
     }
 }
@@ -1451,6 +1457,10 @@ async fn transport(
                                 if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&d.data)
                                 {
                                     match v.get("t").and_then(|t| t.as_str()) {
+                                        // the page is going away: end now instead of
+                                        // waiting for ICE consent to time out (which also
+                                        // holds the session's relay allocations)
+                                        Some("bye") => rtc.disconnect(),
                                         Some("ping") => {
                                             let pong =
                                                 serde_json::json!({"t": "pong", "id": v.get("id")});
