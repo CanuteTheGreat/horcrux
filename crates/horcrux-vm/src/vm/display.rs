@@ -145,6 +145,7 @@ impl DisplayRuntime {
             Self::serial_socket(disk),
             Self::qmp_socket(disk),
             Self::qga_socket(disk),
+            Self::guest_tools_socket_path(disk),
         ] {
             let _ = tokio::fs::remove_file(p).await;
         }

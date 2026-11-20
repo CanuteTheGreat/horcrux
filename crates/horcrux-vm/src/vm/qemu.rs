@@ -1309,6 +1309,7 @@ impl QemuManager {
             &runtime.serial_socket,
             &runtime.qmp_socket,
             &super::display::DisplayRuntime::qga_socket(&vm.disk_path),
+            &super::display::DisplayRuntime::guest_tools_socket_path(&vm.disk_path),
         ] {
             let _ = tokio::fs::remove_file(stale).await;
         }
@@ -2823,6 +2824,8 @@ esac
             super::super::display::DisplayRuntime::state_path(d),
             super::super::display::DisplayRuntime::serial_socket(d),
             super::super::display::DisplayRuntime::qmp_socket(d),
+            super::super::display::DisplayRuntime::qga_socket(d),
+            super::super::display::DisplayRuntime::guest_tools_socket_path(d),
         ];
         for p in &files {
             std::fs::write(p, b"x").unwrap();
