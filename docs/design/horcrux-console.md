@@ -278,7 +278,7 @@ whose pixels changed. No GPU anywhere: the guests encode in software.
 | Measurement | Result | Conditions |
 |---|---|---|
 | Keystroke to picture, Debian 13 console, guest tools (FFmpeg kmsgrab + x264 in the guest) | median 76-101 ms, p90 151-178 ms (16/16 per run, 2 runs) | 2 vCPUs, 1280x800, shared rw-man host with other CI jobs |
-| Keystroke to picture, Windows 11 Notepad, guest tools (DXGI duplication + Media Foundation software H.264) | median 189-195 ms, p90 231-614 ms, fastest 3.5-29 ms (every keystroke seen, 3 runs) | 4 vCPUs, 1280x800, a minute after the tools were installed (Windows still busy: search indexing, first-logon tasks), same shared host |
+| Keystroke to picture, Windows 11 text field (Notepad / Run box), guest tools (DXGI duplication + Media Foundation software H.264) | median 189-195 ms, p90 231-614 ms, fastest 3.5-29 ms (every keystroke seen, 3 runs) | 4 vCPUs, 1280x800, a minute after the tools were installed (Windows still busy: search indexing, first-logon tasks), same shared host |
 | In-guest encode time per frame, Windows (agent-reported) | 24-64 ms |
 | Absolute pointer + button to picture (QEMU tablet, desktop selection rectangle) | 497-617 ms | same Windows guest |
 | Guest audio | ~100 Opus packets/s received by the browser (getStats), non-zero audio energy | HDA sound card, WASAPI loopback | Media Foundation's software MFT on 4 vCPUs |
@@ -478,7 +478,7 @@ Done and proven in CI (`hx-console-guest-e2e.yml`, KVM runner):
   reconnect (`guest_tools_retry_secs`); the browser then gets the
   guest-encoded stream (`video_source: guest`, `guest_encoder:
   mediafoundation-software`) over the real virtio-serial port; keyboard into
-  Notepad, absolute pointer + button (desktop selection rectangle), raw
+  the Run box's text field, absolute pointer + button (desktop selection rectangle), raw
   relative motion through the tools, clipboard guest -> browser and browser
   -> guest, the guest's Opus audio track in the browser (getStats audio
   packetsReceived grows ~100/s), resize through the tools (Windows switches
