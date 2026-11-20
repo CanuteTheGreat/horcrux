@@ -38,10 +38,8 @@ pub fn BackupDashboard() -> impl IntoView {
                     set_backups.set(b);
                     // Only clear a stale load error: an action's failure message
                     // (backup/verify/restore) must survive the reload that follows it.
-                    if error
-                        .get_untracked()
-                        .map_or(false, |e| e.starts_with("Loading backups"))
-                    {
+                    let stale_load_error = error.get_untracked().unwrap_or_default();
+                    if stale_load_error.starts_with("Loading backups") {
                         set_error.set(None);
                     }
                 }
