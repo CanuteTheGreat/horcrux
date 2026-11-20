@@ -1,0 +1,17 @@
+[package]
+name = "horcrux-turn"
+description = "Horcrux Console relay: a self-hosted TURN server (RFC 8656 subset) and the STUN/TURN message codec its clients use (docs/design/horcrux-console.md section 12)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+crc32fast = "1"
+hmac = { workspace = true }
+md-5 = "0.10"
+rand = { workspace = true }
+sha1 = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
