@@ -18,6 +18,7 @@ members = [
     "crates/horcrux-media",
     "horcrux-desktop",
     "crates/horcrux-guest-tools",
+    "crates/horcrux-viewer",
     "horcrux-api/horcrux-ui",
     "horcrux-mobile",
     "horcrux-common",

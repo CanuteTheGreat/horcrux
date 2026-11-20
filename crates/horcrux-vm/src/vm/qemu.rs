@@ -1539,6 +1539,30 @@ impl QemuManager {
                     runtime.guest_tools_iso = Some(iso);
                 }
             }
+            runtime.dbus_audio = c.audio;
+            // Same-host raw frames: a frame ring the guest tools write and
+            // the native viewer reads. A failure only costs the local
+            // raw-frame path, never the VM start.
+            if c.shm_frames {
+                let fps = c.gaming.max_fps;
+                match super::display::create_frame_ring(
+                    &c.shm_frames_dir,
+                    &vm.id,
+                    c.shm_frames_size_mib,
+                    c.shm_frames_slots,
+                    fps,
+                ) {
+                    Ok(p) => {
+                        runtime.frame_ring = Some(p);
+                        runtime.frame_ring_mib = c.shm_frames_size_mib;
+                    }
+                    Err(e) => tracing::warn!(
+                        "VM {}: no frame ring in {} ({e}); the same-host viewer uses the stream",
+                        vm.id,
+                        c.shm_frames_dir
+                    ),
+                }
+            }
         }
         let (binary, mut args) = qemu_command(vm, &runtime, kvm, ovmf.as_ref());
         if incoming {
