@@ -10,25 +10,35 @@
 //! fails with ERROR_NO_SYSTEM_RESOURCES ("Insufficient system resources").
 //! Writes are therefore split into `port_write_max` byte pieces and a full
 //! ring is retried after `port_busy_wait_ms` (settings in config.rs).
+//!
+//! While the node's end is not connected QEMU throttles the port: pending
+//! writes never complete and reads fail with the same error. A write
+//! therefore gives up after `port_write_timeout_ms` (CancelIoEx; the
+//! message is dropped, as QEMU drops data for an absent node anyway) and a
+//! read reports end-of-file, which the agent treats as "node not
+//! connected" and keeps the port open. Before this, a writer blocked in
+//! WriteFile kept the agent from ever seeing the node connect.
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use windows::core::{HRESULT, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Storage::FileSystem::*;
-use windows::Win32::System::Threading::CreateEventW;
-use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
+use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
 static WRITE_MAX: AtomicU64 = AtomicU64::new(65536);
 static BUSY_WAIT_MS: AtomicU64 = AtomicU64::new(5);
 static BUSY_TRIES: AtomicU64 = AtomicU64::new(400);
+static WRITE_TIMEOUT_MS: AtomicU64 = AtomicU64::new(2000);
 
 /// Applies the port settings (config.rs `port_write_max`,
-/// `port_busy_wait_ms`, `port_busy_tries`).
-pub fn configure(write_max: u64, busy_wait_ms: u64, busy_tries: u64) {
+/// `port_busy_wait_ms`, `port_busy_tries`, `port_write_timeout_ms`).
+pub fn configure(write_max: u64, busy_wait_ms: u64, busy_tries: u64, write_timeout_ms: u64) {
     WRITE_MAX.store(write_max.max(512), Ordering::Relaxed);
     BUSY_WAIT_MS.store(busy_wait_ms.max(1), Ordering::Relaxed);
     BUSY_TRIES.store(busy_tries.max(1), Ordering::Relaxed);
+    WRITE_TIMEOUT_MS.store(write_timeout_ms.max(10), Ordering::Relaxed);
 }
 
 /// Length of the next write piece.
@@ -89,11 +99,36 @@ pub fn open(path: &str) -> Result<crate::Port, String> {
 }
 
 impl Half {
-    fn wait(&self, ov: &mut OVERLAPPED, started: windows::core::Result<()>) -> io::Result<usize> {
+    fn wait(
+        &self,
+        ov: &mut OVERLAPPED,
+        started: windows::core::Result<()>,
+        timeout_ms: Option<u32>,
+    ) -> io::Result<usize> {
         if let Err(e) = started {
             if e.code() != HRESULT::from_win32(ERROR_IO_PENDING.0) {
                 return Err(map_err(e));
             }
+        }
+        if let Some(ms) = timeout_ms {
+            // SAFETY: the event belongs to this half and is the one in ov.
+            if unsafe { WaitForSingleObject(self.event.0, ms) } != WAIT_OBJECT_0 {
+                // SAFETY: cancels only this operation; the wait below lets
+                // the driver finish with ov before it goes out of scope.
+                unsafe {
+                    let _ = CancelIoEx(self.file.0, Some(ov as *const OVERLAPPED));
+                }
+                let mut n = 0u32;
+                // SAFETY: as below.
+                let _ = unsafe { GetOverlappedResult(self.file.0, ov, &mut n, true) };
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("port write not taken within {ms} ms (node not connected)"),
+                ));
+            }
+        } else {
+            // SAFETY: as above.
+            let _ = unsafe { WaitForSingleObject(self.event.0, INFINITE) };
         }
         let mut n = 0u32;
         // SAFETY: ov is the OVERLAPPED the operation was started with and
@@ -136,7 +171,13 @@ impl Read for Half {
         };
         // SAFETY: buf and ov outlive the wait inside `wait`.
         let r = unsafe { ReadFile(self.file.0, Some(buf), None, Some(&mut ov)) };
-        let n = self.wait(&mut ov, r)?;
+        let n = match self.wait(&mut ov, r, None) {
+            // throttled port = the node's end is not connected
+            Err(e) if is_busy(&e) => {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, e.to_string()))
+            }
+            other => other?,
+        };
         if n == 0 && !self.write {
             // A zero-length completion on a message port is not EOF; the
             // caller's read_exact would spin, so treat it as one.
@@ -161,7 +202,8 @@ impl Write for Half {
             };
             // SAFETY: buf and ov outlive the wait inside `wait`.
             let r = unsafe { WriteFile(self.file.0, Some(buf), None, Some(&mut ov)) };
-            match self.wait(&mut ov, r) {
+            let ms = WRITE_TIMEOUT_MS.load(Ordering::Relaxed) as u32;
+            match self.wait(&mut ov, r, Some(ms)) {
                 Err(e) if is_busy(&e) && n + 1 < tries => {
                     n += 1;
                     std::thread::sleep(std::time::Duration::from_millis(

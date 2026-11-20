@@ -50,6 +50,7 @@ fn main() {
         cfg.port_write_max,
         cfg.port_busy_wait_ms,
         cfg.port_busy_tries,
+        cfg.port_write_timeout_ms,
     );
     loop {
         let p = platform(&cfg);
