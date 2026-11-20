@@ -1,0 +1,36 @@
+GNOME 50 greeter: put gnome-shell into its login-screen mode (GNOME_SHELL_SESSION_MODE=gdm) for greeter-class sessions, which gnome-session itself does but this leader bypasses
+
+diff -ruN a/data/openrc/gnome-shell b/data/openrc/gnome-shell
+--- a/data/openrc/gnome-shell	2026-11-20 02:40:01.528020669 -0800
++++ b/data/openrc/gnome-shell	2026-11-20 02:40:10.875699250 -0800
+@@ -40,6 +40,14 @@
+ 	# gsd daemons are on the OpenRC user bus: keep the shell there or gsd-media-keys cannot grab keys
+ 	export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+ 
++	# GNOME 50 / GDM 50 start the login screen as the plain "gnome" session of the greeter-class session and rely on gnome-session
++	# itself to put gnome-shell into its login-screen mode (GNOME_SHELL_SESSION_MODE=gdm). This leader does not go through
++	# gnome-session's main(), so without it gnome-shell comes up as an ordinary empty desktop of gdm-greeter: no login dialog, the
++	# keyboard types into nothing and nobody can log in.
++	if [ "${XDG_SESSION_CLASS}" = "greeter" ] && [ -z "${GNOME_SHELL_SESSION_MODE}" ]; then
++		export GNOME_SHELL_SESSION_MODE=gdm
++	fi
++
+ 	# the session's desktop identity goes into the user bus's activation environment BEFORE gnome-shell starts: the shell
+ 	# D-Bus-activates xdg-desktop-portal right away, and the portal picks its backends (ScreenCast) from XDG_CURRENT_DESKTOP
+ 	/usr/libexec/gnome-session-openrc-helper activation-env
+diff -ruN a/data/openrc/gnome-shell.gnome-login b/data/openrc/gnome-shell.gnome-login
+--- a/data/openrc/gnome-shell.gnome-login	2026-11-20 02:40:01.528020669 -0800
++++ b/data/openrc/gnome-shell.gnome-login	2026-11-20 02:40:10.879699113 -0800
+@@ -39,4 +39,12 @@
+ 	# the leader (gdm-wayland-session) runs under its own private bus; the session services and the
+ 	# gsd daemons are on the OpenRC user bus: keep the shell there or gsd-media-keys cannot grab keys
+ 	export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
++
++	# GNOME 50 / GDM 50 start the login screen as the plain "gnome" session of the greeter-class session and rely on gnome-session
++	# itself to put gnome-shell into its login-screen mode (GNOME_SHELL_SESSION_MODE=gdm). This leader does not go through
++	# gnome-session's main(), so without it gnome-shell comes up as an ordinary empty desktop of gdm-greeter: no login dialog, the
++	# keyboard types into nothing and nobody can log in.
++	if [ "${XDG_SESSION_CLASS}" = "greeter" ] && [ -z "${GNOME_SHELL_SESSION_MODE}" ]; then
++		export GNOME_SHELL_SESSION_MODE=gdm
++	fi
+ }

@@ -27,6 +27,9 @@ KEYWORDS="~alpha amd64 ~arm arm64 ~loong ~ppc ~ppc64 ~riscv ~sparc x86"
 #    hands it to every app it autostarts: NotShowIn=GNOME entries (nm-applet) started anyway and apps picked non-GNOME defaults (grey
 #    Nextcloud tray icon). gnome-session-service-wrapper now loads XDG_CURRENT_DESKTOP, XDG_SESSION_DESKTOP, DESKTOP_SESSION & co. from the
 #    session leader first (gnome-session-openrc-helper session-env). -r1.
+#  - -r2: GDM 50 launches the login screen as plain `gnome-session` of a greeter-class session and gnome-session's own main() sets
+#    GNOME_SHELL_SESSION_MODE=gdm; this OpenRC leader bypasses it, so gnome-shell came up as an empty desktop of gdm-greeter (no login
+#    dialog, nobody could log in). gnome-shell's start_pre now sets the mode for greeter-class sessions (0002).
 #    Upstream issue with this patch: https://github.com/swagtoy/gnome-session-openrc/issues/12
 COMMON_DEPEND="
 	>=dev-libs/glib-2.82.0:2
@@ -45,6 +48,7 @@ BDEPEND="
 
 PATCHES=(
 	"${FILESDIR}"/0001-horcrux-session-scoped-user-services.patch
+	"${FILESDIR}"/0002-greeter-shell-session-mode.patch
 )
 
 src_prepare() {
