@@ -33,6 +33,7 @@ class Profile(unittest.TestCase):
             self.assertIn(key, p)
         self.assertIn("zram-swap:default", p["services_add"])
         self.assertIn("elogind:boot", p["services_add"])
+        self.assertIn("bluetooth:default", p["services_add"])   # the Surface has a Bluetooth controller; bluetoothd must run for it to be usable
 
     def test_lightdm_greeter_never_runs_as_root(self):
         conf = open(os.path.join(ROOT, "..", "app-misc", "horcrux-surface-desktop", "files", "root", "etc", "lightdm", "lightdm.conf.d", "50-horcrux-surface.conf")).read()
