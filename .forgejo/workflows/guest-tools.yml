@@ -10,6 +10,10 @@ name: Horcrux guest tools (Windows MSI, Linux agent, real Linux guest)
 #   linux_guest_e2e.py boots Alpine with the tools CD and checks capture +
 #   encode, keyboard/mouse/gamepad injection and the keystroke-to-frame
 #   latency on the same host.
+# - Same-host raw frames (Horcrux frame ring): crates/horcrux-viewer/tests/
+#   shm_guest_e2e.py gives the guest the ivshmem frame ring, the Linux agent
+#   writes raw frames into it, and horcrux-viewer's headless reader measures
+#   frame-to-viewer and keystroke-to-frame times.
 # The Windows agent's own real-Windows checks are
 # crates/horcrux-guest-tools/tests/win_harness.py (Windows eval VM).
 on:
@@ -17,6 +21,7 @@ on:
     paths:
       - 'crates/horcrux-guest-proto/**'
       - 'crates/horcrux-guest-tools/**'
+      - 'crates/horcrux-viewer/**'
       - 'packaging/windows/**'
       - 'packaging/linux/**'
       - 'ci/build-guest-tools-*.sh'
@@ -67,8 +72,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-guest-tools-
 
-      - name: Unit tests (protocol, agent)
-        run: cargo test -p horcrux-guest-proto -p horcrux-guest-tools
+      - name: Unit tests (protocol, agent, native viewer)
+        run: cargo test -p horcrux-guest-proto -p horcrux-guest-tools -p horcrux-viewer
 
       - name: Windows agent + MSI
         run: |
@@ -95,6 +100,17 @@ jobs:
           python3 -u crates/horcrux-guest-tools/tests/linux_guest_e2e.py \
             target/x86_64-unknown-linux-musl/release/horcrux-guest-agent /tmp/alpine-virt.iso /tmp/lgt-out
           cat /tmp/lgt-out/linux-guest-e2e.json
+
+      - name: Same-host frame ring e2e (ivshmem, guest tools writer, native viewer reader)
+        run: |
+          cargo build -p horcrux-viewer --release
+          mkdir -p /tmp/shm-out
+          for vga in std virtio; do
+            HXSHM_VGA=$vga python3 -u crates/horcrux-viewer/tests/shm_guest_e2e.py \
+              target/x86_64-unknown-linux-musl/release/horcrux-guest-agent target/release/horcrux-viewer \
+              /tmp/alpine-virt.iso /tmp/shm-out/$vga
+            cat /tmp/shm-out/$vga/shm-guest-e2e.json
+          done
 
       - name: Checksums of what was built
         if: always()

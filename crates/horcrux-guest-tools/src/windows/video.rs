@@ -76,7 +76,7 @@ impl Drop for Video {
     }
 }
 
-fn open_capture(cfg: &Config, sv: &StartVideo) -> Result<Box<dyn Capturer>, String> {
+pub fn open_capture(cfg: &Config, sv: &StartVideo) -> Result<Box<dyn Capturer>, String> {
     let mons = layout::monitors();
     let idx = sv.monitor as usize;
     let m = mons
