@@ -495,7 +495,7 @@ pub fn PermissionMatrix(roles: Vec<api::Role>) -> impl IntoView {
                                         view! {
                                             <td class="privilege-cell">
                                                 <span class={format!("privilege-indicator {}", if has_privilege { "granted" } else { "denied" })}>
-                                                    {if has_privilege { "[OK]" } else { "[X]" }}
+                                                    {if has_privilege { "✓" } else { "✕" }}
                                                 </span>
                                             </td>
                                         }

@@ -514,19 +514,19 @@ where
                     <h4>"Component Health"</h4>
                     <div class="health-grid">
                         <div class={format!("health-item {}", if h.api_server_healthy { "healthy" } else { "unhealthy" })}>
-                            <span class="health-icon">{if h.api_server_healthy { "[OK]" } else { "[X]" }}</span>
+                            <span class="health-icon">{if h.api_server_healthy { "✓" } else { "✕" }}</span>
                             <span>"API Server"</span>
                         </div>
                         <div class={format!("health-item {}", if h.etcd_healthy { "healthy" } else { "unhealthy" })}>
-                            <span class="health-icon">{if h.etcd_healthy { "[OK]" } else { "[X]" }}</span>
+                            <span class="health-icon">{if h.etcd_healthy { "✓" } else { "✕" }}</span>
                             <span>"etcd"</span>
                         </div>
                         <div class={format!("health-item {}", if h.scheduler_healthy { "healthy" } else { "unhealthy" })}>
-                            <span class="health-icon">{if h.scheduler_healthy { "[OK]" } else { "[X]" }}</span>
+                            <span class="health-icon">{if h.scheduler_healthy { "✓" } else { "✕" }}</span>
                             <span>"Scheduler"</span>
                         </div>
                         <div class={format!("health-item {}", if h.controller_manager_healthy { "healthy" } else { "unhealthy" })}>
-                            <span class="health-icon">{if h.controller_manager_healthy { "[OK]" } else { "[X]" }}</span>
+                            <span class="health-icon">{if h.controller_manager_healthy { "✓" } else { "✕" }}</span>
                             <span>"Controller"</span>
                         </div>
                     </div>

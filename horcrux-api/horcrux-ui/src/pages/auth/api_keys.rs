@@ -230,7 +230,7 @@ pub fn ApiKeysPage() -> impl IntoView {
 
             {move || success_message.get().map(|msg| view! {
                 <div class="alert alert-success">
-                    <span class="alert-icon">"[OK]"</span>
+                    <span class="alert-icon">"✓"</span>
                     <span class="alert-message">{msg}</span>
                     <button
                         class="alert-close"
@@ -559,7 +559,7 @@ where
                                 </div>
 
                                 <div class="security-warning">
-                                    <strong>"[!] Security Notice:"</strong>
+                                    <strong>"⚠ Security Notice:"</strong>
                                     " Please copy this token now. You won't be able to see it again for security reasons."
                                 </div>
                             </div>

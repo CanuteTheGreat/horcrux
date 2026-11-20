@@ -516,7 +516,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                     }
                                                 >
                                                     {move || if selected_resources.get().contains(&("vm".to_string(), vmid_str2.clone())) {
-                                                        "[OK] Selected"
+                                                        "✓ Selected"
                                                     } else {
                                                         "Select"
                                                     }}
@@ -597,7 +597,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                     }
                                                 >
                                                     {move || if selected_resources.get().contains(&("container".to_string(), vmid_str2.clone())) {
-                                                        "[OK] Selected"
+                                                        "✓ Selected"
                                                     } else {
                                                         "Select"
                                                     }}
