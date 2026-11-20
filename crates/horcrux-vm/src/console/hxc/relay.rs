@@ -157,6 +157,7 @@ pub async fn apply(s: &ConsoleSettings) {
                 a.relay_listen_address == b.relay_listen_address
                     && a.relay_port == b.relay_port
                     && a.relay_tcp == b.relay_tcp
+                    && a.relay_reply_from_request_address == b.relay_reply_from_request_address
                     && a.relay_peer_address == b.relay_peer_address
                     && a.relay_port_min == b.relay_port_min
                     && a.relay_port_max == b.relay_port_max
@@ -204,6 +205,7 @@ pub async fn apply(s: &ConsoleSettings) {
     let cfg = RelayConfig {
         listen,
         tcp: wan.relay_tcp,
+        reply_from_request_address: wan.relay_reply_from_request_address,
         realm: wan.relay_realm.clone(),
         secret: key,
         relay_ip: relay_ip(s),
