@@ -317,6 +317,9 @@ mod qemu {
                 qmp_socket: rt.qmp_socket,
                 candidate_ips: t.candidate_ips.clone(),
                 offer_sdp: sdp.to_string(),
+                allow_clipboard: t.allow_clipboard,
+                guest_tools_socket: rt.guest_tools_socket.clone(),
+                serial_socket: Some(rt.serial_socket.clone()),
             };
             match session::start(req).await {
                 Ok((handle, answer)) => {

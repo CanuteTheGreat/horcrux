@@ -75,7 +75,7 @@ impl Default for Config {
             clipboard_poll_ms: 500,
             clipboard_max_bytes: 1 << 20,
             audio_source: "default".into(),
-            reconnect_ms: 2000,
+            reconnect_ms: 1000,
             once: false,
             print_caps: false,
             input_device_name: "Horcrux virtual input".into(),

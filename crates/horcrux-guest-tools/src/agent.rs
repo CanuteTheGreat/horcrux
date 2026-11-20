@@ -100,6 +100,10 @@ pub fn run(cfg: &Config, mut p: Box<dyn Platform>) -> Result<(), String> {
         };
         match m {
             Msg::HostHello(h) => {
+                // The node connects to its end of the port whenever a viewer
+                // opens; anything sent before that was dropped by QEMU, so
+                // every HostHello is answered with a fresh Hello.
+                let _ = tx.send(Msg::Hello(p.hello()));
                 if h.clipboard_max_bytes > 0 {
                     clip_max = clip_max.min(h.clipboard_max_bytes as usize);
                 }

@@ -1399,6 +1399,15 @@ impl QemuManager {
         // classic consoles stay as they are either way.
         let mut runtime = runtime;
         runtime.dbus_display = console_dbus_display(vm).await;
+        if runtime.dbus_display {
+            let c = crate::console::hxc_settings::get();
+            if c.guest_tools {
+                runtime.guest_tools_port = Some(c.guest_tools_port.clone());
+                runtime.guest_tools_socket = Some(
+                    super::display::DisplayRuntime::guest_tools_socket_path(&vm.disk_path),
+                );
+            }
+        }
         let (binary, mut args) = qemu_command(vm, &runtime, kvm, ovmf.as_ref());
         if incoming {
             args = with_incoming(args);

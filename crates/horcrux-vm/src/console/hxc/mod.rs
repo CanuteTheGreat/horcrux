@@ -12,6 +12,7 @@
 //! * [`session`]: the WebRTC transport (str0m) and the data channels.
 //! * [`page`]: the browser client served by the node.
 pub mod encode;
+pub mod guest;
 pub mod keymap;
 pub mod page;
 pub mod qemu_dbus;

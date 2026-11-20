@@ -203,7 +203,18 @@
   hxc.release = (button = 0) => { markInput(); send("keys", JSON.stringify({ t: "btn", b: button, down: false })); };
   video.addEventListener("keydown", (e) => key(e, true));
   video.addEventListener("keyup", (e) => key(e, false));
-  video.addEventListener("mousemove", (e) => { const p = guestXY(e); if (p) motion(1, p[0], p[1]); });
+  // Gaming profile with guest tools: pointer lock + raw relative motion.
+  const locked = () => document.pointerLockElement === video;
+  video.addEventListener("click", () => {
+    if (hxc.hello && hxc.hello.profile === "gaming" && hxc.hello.relative && !locked()) {
+      try { video.requestPointerLock({ unadjustedMovement: true }); } catch { try { video.requestPointerLock(); } catch {} }
+    }
+  });
+  hxc.relMove = (dx, dy) => { markInput(); motion(2, dx, dy); };
+  video.addEventListener("mousemove", (e) => {
+    if (locked()) { if (e.movementX || e.movementY) motion(2, e.movementX, e.movementY); return; }
+    const p = guestXY(e); if (p) motion(1, p[0], p[1]);
+  });
   video.addEventListener("mousedown", (e) => { video.focus(); e.preventDefault(); const p = guestXY(e); if (p) motion(1, p[0], p[1]); markInput(); send("keys", JSON.stringify({ t: "btn", b: e.button, down: true })); });
   video.addEventListener("mouseup", (e) => { e.preventDefault(); send("keys", JSON.stringify({ t: "btn", b: e.button, down: false })); });
   video.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -214,6 +225,67 @@
     video.focus();
   };
   document.getElementById("btn-full").onclick = () => { (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {}); };
+
+  // ---- clipboard (VM.Console.Clipboard + guest tools) ----
+  hxc.guestClipboard = null;
+  hxc.sendClipboard = (text) => send("clip", JSON.stringify({ t: "text", text }));
+  document.addEventListener("paste", (e) => {
+    const t = e.clipboardData && e.clipboardData.getData("text/plain");
+    if (t && hxc.hello && hxc.hello.clipboard) { e.preventDefault(); hxc.sendClipboard(t); }
+  });
+  function clipMsg(m) {
+    if (m.t !== "text") return;
+    hxc.guestClipboard = m.text;
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(m.text).catch(() => {});
+  }
+
+  // ---- resize the guest to the window (guest tools) ----
+  hxc.resize = (width, height, refresh_hz) => send("ctl", JSON.stringify({ t: "resize", width, height, refresh_hz: refresh_hz || 0 }));
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    if (!hxc.hello || !hxc.hello.resize || hxc.noAutoResize) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const r = video.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+      hxc.resize(Math.round(r.width * d) & ~1, Math.round(r.height * d) & ~1);
+    }, 400);
+  });
+
+  // ---- gamepads (W3C standard mapping -> pad channel) ----
+  function padBytes(p) {
+    const b = new ArrayBuffer(16), v = new DataView(b);
+    v.setUint8(0, p.index & 3);
+    let bits = 0;
+    (p.buttons || []).forEach((x, i) => { if (i < 32 && (x === true || (x && x.pressed))) bits |= (1 << i); });
+    v.setUint32(1, bits >>> 0, true);
+    const ax = (i) => Math.max(-32768, Math.min(32767, Math.round(((p.axes || [])[i] || 0) * 32767)));
+    v.setInt16(5, ax(0), true); v.setInt16(7, ax(1), true); v.setInt16(9, ax(2), true); v.setInt16(11, ax(3), true);
+    const trig = (i) => { const x = (p.buttons || [])[i]; return Math.round(255 * (x && typeof x === "object" ? x.value : x ? 1 : 0)); };
+    v.setUint8(13, trig(6)); v.setUint8(14, trig(7));
+    return b;
+  }
+  hxc.sendPad = (state) => { markInput(); send("pad", padBytes(state)); };
+  const lastPad = {};
+  function pollPads() {
+    if (hxc.hello && hxc.hello.gamepad && navigator.getGamepads) {
+      for (const p of navigator.getGamepads()) {
+        if (!p) continue;
+        const b = new Uint8Array(padBytes(p)), k = b.join(",");
+        if (lastPad[p.index] !== k) { lastPad[p.index] = k; send("pad", b.buffer); }
+      }
+    }
+    requestAnimationFrame(pollPads);
+  }
+  requestAnimationFrame(pollPads);
+
+  // ---- serial text console (console profile) ----
+  hxc.consoleText = "";
+  hxc.sendConsole = (text) => send("console", new TextEncoder().encode(text));
+  const dec = new TextDecoder();
+  function consoleMsg(data) {
+    hxc.consoleText += dec.decode(new Uint8Array(data), { stream: true });
+    if (hxc.consoleText.length > 200000) hxc.consoleText = hxc.consoleText.slice(-100000);
+  }
 
   function cursorMsg(m) {
     if (m.t === "shape") {
@@ -245,8 +317,18 @@
       hxc.server = m;
       const last = hxc.inputToFrameMs.length ? hxc.inputToFrameMs[hxc.inputToFrameMs.length - 1].toFixed(0) + " ms input-to-picture, " : "";
       statsEl.textContent = (m.width ? m.width + "x" + m.height + ", " : "") + last + (hxc.rttMs !== null ? hxc.rttMs.toFixed(1) + " ms RTT, " : "") + "encode " + (m.encode_ms || 0).toFixed(1) + " ms";
+    } else if (m.t === "source") {
+      hxc.videoSource = m.video;
+      if (m.width) hxc.guest = { width: m.width, height: m.height };
+      setState("connected", "Connected: " + (hxc.codec || "?") + " encoded in the guest, " + (hxc.hello ? hxc.hello.profile : ""));
+    } else if (m.t === "guest_video") {
+      hxc.guestVideo = m.status;
+    } else if (m.t === "guest_layout") {
+      hxc.guestLayout = m.monitors;
+    } else if (m.t === "resize_unavailable") {
+      hxc.resizeUnavailable = m.reason;
     } else if (m.t === "denied") {
-      hxc.denied.push(m); statusEl.textContent += " - input needs " + m.privilege;
+      hxc.denied.push(m); statusEl.textContent += " - " + (m.what || "input") + " needs " + m.privilege;
     } else if (m.t === "disabled") {
       statsEl.textContent = "display off";
     } else if (m.t === "error") {
@@ -267,12 +349,22 @@
     const pc = new RTCPeerConnection({ iceServers: [] });
     hxc.pc = pc;
     pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
     const mk = (name, opts) => { const c = pc.createDataChannel(name, opts); c.binaryType = "arraybuffer"; ch[name] = c; return c; };
     mk("ctl", { ordered: true }).onmessage = (e) => { try { ctlMsg(JSON.parse(e.data)); } catch {} };
     mk("keys", { ordered: true });
     mk("input", { ordered: false, maxRetransmits: 0 });
     mk("cursor", { ordered: true }).onmessage = (e) => { try { cursorMsg(JSON.parse(e.data)); } catch {} };
+    mk("clip", { ordered: true }).onmessage = (e) => { try { clipMsg(JSON.parse(e.data)); } catch {} };
+    mk("pad", { ordered: false, maxRetransmits: 0 });
+    mk("console", { ordered: true }).onmessage = (e) => consoleMsg(e.data);
     pc.ontrack = (e) => {
+      if (e.track.kind === "audio") {
+        const a = document.createElement("audio"); a.autoplay = true; a.style.display = "none";
+        a.srcObject = new MediaStream([e.track]); document.body.appendChild(a); hxc.audioEl = a;
+        a.play().catch(() => {});
+        return;
+      }
       // interactive console: play frames as soon as they decode
       try { e.receiver.jitterBufferTarget = 0; } catch {}
       try { e.receiver.playoutDelayHint = 0; } catch {}

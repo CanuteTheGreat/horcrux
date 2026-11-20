@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 horcrux-common = { path = "../../horcrux-common" }
 horcrux-core = { path = "../horcrux-core" }
+horcrux-guest-proto = { path = "../horcrux-guest-proto" }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 axum = { workspace = true }

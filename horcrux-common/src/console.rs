@@ -69,6 +69,21 @@ pub struct ProfileSettings {
     /// Frames re-sent per second while the screen is idle, so a lossy
     /// first frame is refined and late joiners see a picture (0 = off).
     pub idle_refresh_fps: u32,
+    /// Send frames at `max_fps` even when nothing changed (gaming) instead
+    /// of only when the screen changed (desktop, console).
+    pub fixed_rate: bool,
+    /// Chroma subsampling: `420` (every client) or `444` (crisp text where
+    /// the encoder and the client's decoder support it).
+    pub chroma: String,
+    /// Ask the guest tools for 10-bit HDR where the GPU and client allow.
+    pub hdr: bool,
+    /// Periodic intra refresh instead of large keyframes (smoother
+    /// bitrate on lossy links).
+    pub intra_refresh: bool,
+    /// Capture and encode inside the guest when Horcrux guest tools are
+    /// running (the node forwards the packets without transcoding);
+    /// otherwise the node encodes QEMU's display.
+    pub guest_capture: bool,
 }
 
 impl ProfileSettings {
@@ -80,13 +95,23 @@ impl ProfileSettings {
                 max_bitrate_kbps: 12000,
                 keyframe_interval_secs: 4,
                 idle_refresh_fps: 1,
+                fixed_rate: false,
+                chroma: "420".into(),
+                hdr: false,
+                intra_refresh: false,
+                guest_capture: true,
             },
             ConsoleProfile::Gaming => Self {
-                max_fps: 60,
+                max_fps: 120,
                 bitrate_kbps: 20000,
                 max_bitrate_kbps: 50000,
                 keyframe_interval_secs: 2,
                 idle_refresh_fps: 0,
+                fixed_rate: true,
+                chroma: "420".into(),
+                hdr: false,
+                intra_refresh: false,
+                guest_capture: true,
             },
             ConsoleProfile::Console => Self {
                 max_fps: 15,
@@ -94,6 +119,11 @@ impl ProfileSettings {
                 max_bitrate_kbps: 4000,
                 keyframe_interval_secs: 4,
                 idle_refresh_fps: 1,
+                fixed_rate: false,
+                chroma: "420".into(),
+                hdr: false,
+                intra_refresh: false,
+                guest_capture: false,
             },
         }
     }
@@ -112,6 +142,9 @@ impl ProfileSettings {
         }
         if self.keyframe_interval_secs == 0 || self.keyframe_interval_secs > 600 {
             return Err(format!("{name}.keyframe_interval_secs must be 1..=600"));
+        }
+        if self.chroma != "420" && self.chroma != "444" {
+            return Err(format!("{name}.chroma must be 420 or 444"));
         }
         if self.idle_refresh_fps > self.max_fps {
             return Err(format!("{name}.idle_refresh_fps must not exceed max_fps"));
@@ -178,6 +211,19 @@ pub struct ConsoleSettings {
     pub session_idle_timeout_secs: u32,
     /// Write session start/stop and denied-input events to the audit log.
     pub audit_sessions: bool,
+    /// Give every VM the Horcrux guest-tools port (virtio-serial) and use
+    /// the guest tools when they answer.
+    pub guest_tools: bool,
+    /// Name of the guest-tools virtio-serial port (the guest tools open
+    /// `/dev/virtio-ports/<name>` or `\\.\Global\<name>`).
+    pub guest_tools_port: String,
+    /// Milliseconds a new session waits for the guest tools to answer
+    /// before it uses the node's own capture.
+    pub guest_tools_wait_ms: u32,
+    /// Largest clipboard text carried in either direction (bytes).
+    pub clipboard_max_bytes: u32,
+    /// Opus bitrate for guest audio (kbit/s).
+    pub audio_bitrate_kbps: u32,
     pub desktop: ProfileSettings,
     pub gaming: ProfileSettings,
     pub console: ProfileSettings,
@@ -204,6 +250,11 @@ impl Default for ConsoleSettings {
             max_height: 2160,
             session_idle_timeout_secs: 30,
             audit_sessions: true,
+            guest_tools: true,
+            guest_tools_port: "org.horcrux.console.0".into(),
+            guest_tools_wait_ms: 1500,
+            clipboard_max_bytes: 1 << 20,
+            audio_bitrate_kbps: 128,
             desktop: desktop(),
             gaming: gaming(),
             console: console(),
@@ -265,6 +316,23 @@ impl ConsoleSettings {
         }
         if !(5..=3600).contains(&self.session_idle_timeout_secs) {
             return Err("session_idle_timeout_secs must be 5..=3600".into());
+        }
+        if self.guest_tools_port.is_empty()
+            || !self
+                .guest_tools_port
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+        {
+            return Err("guest_tools_port must be a port name such as org.horcrux.console.0".into());
+        }
+        if self.guest_tools_wait_ms > 30_000 {
+            return Err("guest_tools_wait_ms must be at most 30000".into());
+        }
+        if !(1..=64 * 1024 * 1024).contains(&self.clipboard_max_bytes) {
+            return Err("clipboard_max_bytes must be 1..=67108864".into());
+        }
+        if !(6..=510).contains(&self.audio_bitrate_kbps) {
+            return Err("audio_bitrate_kbps must be 6..=510".into());
         }
         self.desktop.validate("desktop")?;
         self.gaming.validate("gaming")?;

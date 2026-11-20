@@ -15,6 +15,8 @@
 //! Wire format of the data channels: docs/design/horcrux-console.md
 //! section 4 (`ctl` JSON, `keys` JSON, `input` binary, `cursor` JSON).
 use super::encode::{self, EncodeParams, EncodedFrame, Encoder, PixelFormat, VideoCodec};
+use super::guest::{self, GuestLink};
+use horcrux_guest_proto as gproto;
 use super::keymap;
 use super::qemu_dbus::{DbusDisplay, DisplayEvent};
 use base64::Engine as _;
@@ -23,6 +25,7 @@ use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use str0m::change::SdpOffer;
@@ -46,6 +49,12 @@ pub struct SessionRequest {
     pub candidate_ips: Vec<IpAddr>,
     pub offer_sdp: String,
     pub encoder_caps: encode::EncoderCaps,
+    /// Clipboard sync allowed (VM.Console.Clipboard).
+    pub allow_clipboard: bool,
+    /// Host end of the guest-tools port, when this VM run has one.
+    pub guest_tools_socket: Option<PathBuf>,
+    /// Host end of the VM's serial console (the `console` channel).
+    pub serial_socket: Option<PathBuf>,
 }
 
 /// Live numbers of a session (GET .../sessions, ctl `stats`).
@@ -69,6 +78,20 @@ pub struct SessionStats {
     /// Last client-reported input-to-picture latency (ms).
     pub client_input_to_frame_ms: Option<f64>,
     pub end_reason: Option<String>,
+    /// `guest` (guest tools capture + encode, forwarded without
+    /// transcoding) or `host` (QEMU display encoded on the node).
+    pub video_source: String,
+    /// Guest tools that answered: OS and agent version.
+    pub guest_tools: Option<String>,
+    /// Encoder the guest tools use (nvenc, amf, qsv, vaapi,
+    /// mediafoundation-software, software).
+    pub guest_encoder: Option<String>,
+    /// Median guest capture-to-port time (ms) over the last 60 frames.
+    pub guest_encode_ms: Option<f64>,
+    pub clipboard_in: u64,
+    pub clipboard_out: u64,
+    pub audio_packets: u64,
+    pub gamepad_in: u64,
 }
 
 pub struct SessionHandle {
@@ -94,8 +117,13 @@ impl SessionHandle {
 /// What the transport loop is told by the other tasks.
 enum ToRtc {
     Frame(EncodedFrame, Instant),
+    /// An access unit encoded in the guest, forwarded as it is.
+    GuestFrame(Vec<u8>, Instant),
     Ctl(String),
     Cursor(String),
+    Clip(String),
+    Console(Vec<u8>),
+    Audio(Vec<u8>),
 }
 
 /// What the compositor is told.
@@ -152,6 +180,76 @@ pub fn parse_motion(b: &[u8]) -> Option<InputEvent> {
             dy: y.clamp(-4096, 4096),
         }),
         _ => None,
+    }
+}
+
+/// `pad` channel binary: index u8, buttons u32 LE (W3C standard order),
+/// lx, ly, rx, ry as i16 LE, lt u8, rt u8 (16 bytes).
+pub fn parse_pad(b: &[u8]) -> Option<gproto::Gamepad> {
+    if b.len() < 16 {
+        return None;
+    }
+    let i16_at = |o: usize| i16::from_le_bytes([b[o], b[o + 1]]);
+    Some(gproto::Gamepad {
+        index: b[0].min(3),
+        buttons: u32::from_le_bytes(b[1..5].try_into().ok()?),
+        lx: i16_at(5),
+        ly: i16_at(7),
+        rx: i16_at(9),
+        ry: i16_at(11),
+        lt: b[13],
+        rt: b[14],
+    })
+}
+
+/// `ctl` resize request -> the layout asked of the guest tools:
+/// `{"t":"resize","width":W,"height":H,"refresh_hz":R}` or
+/// `{"t":"resize","monitors":[{...}, ...]}` (sizes clamped to the node's
+/// max_width/max_height).
+pub fn parse_resize(v: &serde_json::Value, max_w: u32, max_h: u32) -> Option<gproto::Layout> {
+    let one = |m: &serde_json::Value| -> Option<gproto::Monitor> {
+        let w = m.get("width")?.as_u64()? as u32;
+        let h = m.get("height")?.as_u64()? as u32;
+        if w < 64 || h < 64 {
+            return None;
+        }
+        Some(gproto::Monitor {
+            x: m.get("x").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+            y: m.get("y").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+            width: w.min(max_w) & !1,
+            height: h.min(max_h) & !1,
+            refresh_hz: m
+                .get("refresh_hz")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0)
+                .min(500) as u32,
+            primary: m.get("primary").and_then(|x| x.as_bool()).unwrap_or(false),
+        })
+    };
+    let monitors: Vec<gproto::Monitor> = match v.get("monitors").and_then(|m| m.as_array()) {
+        Some(list) => list.iter().take(16).filter_map(one).collect(),
+        None => one(v).into_iter().collect(),
+    };
+    (!monitors.is_empty()).then_some(gproto::Layout { monitors })
+}
+
+/// What the guest tools are asked to encode for this profile.
+pub fn start_video_for(p: &horcrux_common::console::ProfileSettings) -> gproto::StartVideo {
+    let fps = p.max_fps.max(1);
+    gproto::StartVideo {
+        codec: "h264".into(),
+        width: 0,
+        height: 0,
+        fps,
+        bitrate_kbps: p.bitrate_kbps,
+        max_bitrate_kbps: p.max_bitrate_kbps,
+        keyframe_interval_frames: fps * p.keyframe_interval_secs.max(1),
+        low_delay: true,
+        fixed_rate: p.fixed_rate,
+        chroma: p.chroma.clone(),
+        hdr: p.hdr,
+        intra_refresh: p.intra_refresh,
+        monitor: 0,
     }
 }
 
@@ -266,6 +364,9 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
             _ => {}
         }
     }
+    if req.settings.audio {
+        cfg = cfg.enable_opus(true, false);
+    }
     let mut rtc = cfg.build(Instant::now());
     for s in &sockets {
         let addr = s.local_addr().map_err(|e| e.to_string())?;
@@ -282,8 +383,28 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
     // a VM without the D-Bus display fails the request, not the session.
     let (disp_tx, disp_rx) = mpsc::channel::<DisplayEvent>(64);
     let display = DbusDisplay::connect(&req.qmp_socket, &req.session_id, disp_tx, false).await?;
+    // Guest tools, when the VM has the port and the tools answer in time.
+    let link = match &req.guest_tools_socket {
+        Some(sock) if req.settings.guest_tools && sock.exists() => {
+            let wait = Duration::from_millis(req.settings.guest_tools_wait_ms as u64);
+            match guest::connect(sock, wait, req.settings.clipboard_max_bytes).await {
+                Ok(l) => l,
+                Err(e) => {
+                    tracing::debug!("console guest tools: {e}");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
 
-    let stats = Arc::new(Mutex::new(SessionStats::default()));
+    let stats = Arc::new(Mutex::new(SessionStats {
+        video_source: "host".into(),
+        guest_tools: link
+            .as_ref()
+            .map(|l| format!("{} {} (agent {})", l.hello.os, l.hello.os_version, l.hello.agent_version)),
+        ..Default::default()
+    }));
     let (stop_tx, stop_rx) = watch::channel(false);
     let (done_tx, done_rx) = watch::channel(false);
     let handle = SessionHandle {
@@ -302,11 +423,21 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
     let (input_tx, input_rx) = mpsc::channel::<InputEvent>(256);
 
     let absolute = display.absolute;
+    let (guest_tx, guest_rx, guest_caps) = match link {
+        Some(GuestLink { hello, tx, rx }) => (Some(tx), Some(rx), Some(hello.caps)),
+        None => (None, None, None),
+    };
     let ctx = Ctx {
         req,
         stats: stats.clone(),
+        guest_tx,
+        guest_caps,
+        guest_video: AtomicBool::new(false),
     };
     let ctx = Arc::new(ctx);
+    if let Some(rx) = guest_rx {
+        tokio::spawn(guest_task(ctx.clone(), rx, to_rtc_tx.clone()));
+    }
     tokio::spawn(input_task(display, input_rx, stats.clone()));
     tokio::spawn(compositor(
         ctx.clone(),
@@ -315,6 +446,7 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         to_rtc_tx.clone(),
         stop_rx.clone(),
     ));
+    let to_rtc_self = to_rtc_tx.clone();
     tokio::spawn(async move {
         let reason = transport(
             ctx.clone(),
@@ -325,6 +457,7 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
             input_tx,
             stop_rx,
             absolute,
+            to_rtc_self,
         )
         .await;
         if let Ok(mut s) = ctx.stats.lock() {
@@ -339,6 +472,143 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
 struct Ctx {
     req: SessionRequest,
     stats: Arc<Mutex<SessionStats>>,
+    /// To the guest tools, when they answered.
+    guest_tx: Option<mpsc::Sender<gproto::Msg>>,
+    guest_caps: Option<gproto::Caps>,
+    /// The guest tools are capturing + encoding: the node's encoder rests.
+    guest_video: AtomicBool,
+}
+
+impl Ctx {
+    fn to_guest(&self, m: gproto::Msg) -> bool {
+        match &self.guest_tx {
+            Some(tx) => tx.try_send(m).is_ok(),
+            None => false,
+        }
+    }
+    fn guest_can(&self, f: impl Fn(&gproto::Caps) -> bool) -> bool {
+        self.guest_caps.as_ref().map(f).unwrap_or(false)
+    }
+}
+
+/// Messages from the guest tools: encoded frames go straight to the
+/// transport (no transcoding), the rest becomes data-channel messages.
+async fn guest_task(
+    ctx: Arc<Ctx>,
+    mut rx: mpsc::Receiver<gproto::Msg>,
+    to_rtc: mpsc::Sender<ToRtc>,
+) {
+    let mut enc: VecDeque<f64> = VecDeque::new();
+    while let Some(m) = rx.recv().await {
+        match m {
+            gproto::Msg::Video(p) => {
+                if !ctx.guest_video.load(Ordering::Relaxed) {
+                    // first packet must be decodable on its own
+                    if !p.keyframe {
+                        let _ = ctx.to_guest(gproto::Msg::Keyframe);
+                        continue;
+                    }
+                    ctx.guest_video.store(true, Ordering::Relaxed);
+                    if let Ok(mut s) = ctx.stats.lock() {
+                        s.video_source = "guest".into();
+                        if p.width > 0 {
+                            s.guest_width = p.width;
+                            s.guest_height = p.height;
+                        }
+                    }
+                    let msg = serde_json::json!({"t": "source", "video": "guest", "width": p.width, "height": p.height}).to_string();
+                    let _ = to_rtc.send(ToRtc::Ctl(msg)).await;
+                }
+                enc.push_back(p.encode_us as f64 / 1000.0);
+                if enc.len() > 60 {
+                    enc.pop_front();
+                }
+                if let Ok(mut s) = ctx.stats.lock() {
+                    let mut v: Vec<f64> = enc.iter().copied().collect();
+                    v.sort_by(|a, b| a.total_cmp(b));
+                    s.guest_encode_ms = v.get(v.len() / 2).copied();
+                }
+                // a full queue drops the frame rather than adding delay
+                let _ = to_rtc.try_send(ToRtc::GuestFrame(p.data, Instant::now()));
+            }
+            gproto::Msg::VideoStatus(st) => {
+                if let Ok(mut s) = ctx.stats.lock() {
+                    if st.running {
+                        s.guest_encoder = Some(st.encoder.clone());
+                    }
+                }
+                if let Some(e) = &st.error {
+                    tracing::info!("console guest tools video: {e}; using the node's capture");
+                    ctx.guest_video.store(false, Ordering::Relaxed);
+                    if let Ok(mut s) = ctx.stats.lock() {
+                        s.video_source = "host".into();
+                    }
+                }
+                let msg = serde_json::json!({"t": "guest_video", "status": st}).to_string();
+                let _ = to_rtc.send(ToRtc::Ctl(msg)).await;
+            }
+            gproto::Msg::Clipboard(c) => {
+                if ctx.req.allow_clipboard && c.text.len() <= ctx.req.settings.clipboard_max_bytes as usize {
+                    if let Ok(mut s) = ctx.stats.lock() {
+                        s.clipboard_out += 1;
+                    }
+                    let msg = serde_json::json!({"t": "text", "text": c.text}).to_string();
+                    let _ = to_rtc.send(ToRtc::Clip(msg)).await;
+                }
+            }
+            gproto::Msg::Layout(l) => {
+                let msg = serde_json::json!({"t": "guest_layout", "monitors": l.monitors}).to_string();
+                let _ = to_rtc.send(ToRtc::Ctl(msg)).await;
+            }
+            gproto::Msg::Audio(a) => {
+                let _ = to_rtc.try_send(ToRtc::Audio(a.data));
+            }
+            gproto::Msg::Log(l) => tracing::debug!("console guest tools: {l}"),
+            _ => {}
+        }
+    }
+    // tools went away: back to the node's own capture
+    ctx.guest_video.store(false, Ordering::Relaxed);
+    if let Ok(mut s) = ctx.stats.lock() {
+        s.video_source = "host".into();
+    }
+}
+
+/// The VM's serial console for the `console` channel.
+async fn serial_task(
+    sock: PathBuf,
+    mut input: mpsc::Receiver<Vec<u8>>,
+    to_rtc: mpsc::Sender<ToRtc>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let s = match tokio::net::UnixStream::connect(&sock).await {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = serde_json::json!({"t": "error", "message": format!("serial console: {e} (another serial viewer may be open)")}).to_string();
+            let _ = to_rtc.send(ToRtc::Ctl(msg)).await;
+            return;
+        }
+    };
+    let (mut rd, mut wr) = s.into_split();
+    let w = tokio::spawn(async move {
+        while let Some(b) = input.recv().await {
+            if wr.write_all(&b).await.is_err() {
+                break;
+            }
+        }
+    });
+    let mut buf = vec![0u8; 4096];
+    loop {
+        match rd.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if to_rtc.send(ToRtc::Console(buf[..n].to_vec())).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    w.abort();
 }
 
 impl Ctx {
@@ -564,6 +834,9 @@ async fn compositor(
             }
             c = ctl.recv() => {
                 match c {
+                    Some(ToCompositor::KeyframeRequest) if ctx.guest_video.load(Ordering::Relaxed) => {
+                        let _ = ctx.to_guest(gproto::Msg::Keyframe);
+                    }
                     Some(ToCompositor::KeyframeRequest) => {
                         // FFmpeg's CLI can't be asked for an IDR mid-stream;
                         // a fresh encoder starts with one. Rate-limited.
@@ -589,7 +862,18 @@ async fn compositor(
             }
             _ = tick.tick() => {
                 if to_rtc.is_closed() { break; }
+                if ctx.guest_video.load(Ordering::Relaxed) {
+                    // the guest tools encode; the node's encoder rests
+                    if encoder.is_some() {
+                        encoder = None;
+                        submitted.clear();
+                    }
+                    continue;
+                }
                 let Some(f) = fb.as_ref() else { continue };
+                if profile.fixed_rate {
+                    dirty = true;
+                }
                 let idle_due = idle_gap.map(|g| last_sent.elapsed() >= g).unwrap_or(false);
                 if !dirty && !idle_due { continue; }
                 if last_sent.elapsed() < frame_gap { continue; }
@@ -635,6 +919,7 @@ async fn transport(
     input: mpsc::Sender<InputEvent>,
     mut stop: watch::Receiver<bool>,
     absolute: bool,
+    to_rtc_self: mpsc::Sender<ToRtc>,
 ) -> String {
     let (net_tx, mut net_rx) = mpsc::channel::<(Vec<u8>, SocketAddr, SocketAddr)>(256);
     let mut readers = Vec::new();
@@ -662,6 +947,10 @@ async fn transport(
     let idle_timeout = Duration::from_secs(settings.session_idle_timeout_secs as u64);
     let mut last_rx = Instant::now();
     let mut video: Option<(Mid, Pt, VideoCodec)> = None;
+    let mut audio: Option<(Mid, Pt)> = None;
+    let mut pending_out: VecDeque<(&'static str, Vec<u8>, bool)> = VecDeque::new();
+    let mut serial_tx: Option<mpsc::Sender<Vec<u8>>> = None;
+    let allow_clipboard = ctx.req.allow_clipboard;
     let mut channels: HashMap<String, ChannelId> = HashMap::new();
     let mut labels: HashMap<ChannelId, String> = HashMap::new();
     let mut pending_ctl: Vec<String> = Vec::new();
@@ -708,6 +997,31 @@ async fn transport(
                                 s.codec = Some(codec);
                                 s.encoder = Some(backend);
                             }
+                            // guest tools encode H.264 in the guest
+                            if codec == VideoCodec::H264
+                                && ctx.profile().guest_capture
+                                && ctx.guest_can(|c| c.codecs.iter().any(|x| x == "h264") && !c.capture.is_empty())
+                            {
+                                let sv = start_video_for(ctx.profile());
+                                let _ = ctx.to_guest(gproto::Msg::StartVideo(sv));
+                            }
+                        }
+                    }
+                    Event::MediaAdded(m) if m.kind == MediaKind::Audio && audio.is_none() => {
+                        let opus = rtc.writer(m.mid).and_then(|w| {
+                            w.payload_params().find(|p| p.spec().codec == Codec::Opus).map(|p| p.pt())
+                        });
+                        if let Some(pt) = opus {
+                            audio = Some((m.mid, pt));
+                            if settings.audio && ctx.guest_can(|c| c.audio) {
+                                let _ = ctx.to_guest(gproto::Msg::StartAudio(gproto::StartAudio {
+                                    codec: "opus".into(),
+                                    sample_rate: 48000,
+                                    channels: 2,
+                                    bitrate_kbps: settings.audio_bitrate_kbps,
+                                    frame_ms: 10,
+                                }));
+                            }
                         }
                     }
                     Event::KeyframeRequest(_) => {
@@ -732,10 +1046,22 @@ async fn transport(
                                 "input": allow_input,
                                 "absolute": absolute,
                                 // C2 (guest tools) adds clipboard/resize/audio.
-                                "clipboard": false,
-                                "audio": false,
+                                "clipboard": allow_clipboard && ctx.guest_can(|c| c.clipboard),
+                                "audio": audio.is_some() && ctx.guest_can(|c| c.audio),
+                                "gamepad": allow_input && ctx.guest_can(|c| c.gamepad),
+                                "resize": allow_input && ctx.guest_can(|c| c.resize),
+                                "relative": ctx.guest_can(|c| c.relative_mouse),
+                                "guest_tools": ctx.guest_caps.is_some(),
+                                "console": ctx.req.serial_socket.is_some(),
                             });
                             pending_ctl.insert(0, hello.to_string());
+                        }
+                        if label == "console" && serial_tx.is_none() {
+                            if let Some(sock) = ctx.req.serial_socket.clone() {
+                                let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
+                                serial_tx = Some(tx);
+                                tokio::spawn(serial_task(sock, rx, to_rtc_self.clone()));
+                            }
                         }
                         // A new viewer needs a keyframe.
                         let _ = to_comp.try_send(ToCompositor::KeyframeRequest);
@@ -745,6 +1071,49 @@ async fn transport(
                         let ev = match label {
                             "keys" => std::str::from_utf8(&d.data).ok().and_then(parse_keys),
                             "input" => parse_motion(&d.data),
+                            "clip" => {
+                                let text = serde_json::from_slice::<serde_json::Value>(&d.data)
+                                    .ok()
+                                    .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(str::to_string));
+                                match text {
+                                    Some(t) if allow_clipboard && t.len() <= settings.clipboard_max_bytes as usize => {
+                                        if ctx.to_guest(gproto::Msg::Clipboard(gproto::Clipboard { mime: "text/plain".into(), text: t })) {
+                                            if let Ok(mut s) = ctx.stats.lock() {
+                                                s.clipboard_in += 1;
+                                            }
+                                        }
+                                    }
+                                    Some(_) if !allow_clipboard => {
+                                        pending_ctl.push(r#"{"t":"denied","what":"clipboard","privilege":"VM.Console.Clipboard"}"#.into());
+                                    }
+                                    _ => {}
+                                }
+                                None
+                            }
+                            "pad" => {
+                                if let Some(g) = parse_pad(&d.data) {
+                                    if allow_input {
+                                        if ctx.to_guest(gproto::Msg::Input(gproto::Input::Gamepad(g))) {
+                                            if let Ok(mut s) = ctx.stats.lock() {
+                                                s.gamepad_in += 1;
+                                            }
+                                        }
+                                    } else if let Ok(mut s) = ctx.stats.lock() {
+                                        s.input_denied += 1;
+                                    }
+                                }
+                                None
+                            }
+                            "console" => {
+                                if allow_input {
+                                    if let Some(tx) = &serial_tx {
+                                        let _ = tx.try_send(d.data.to_vec());
+                                    }
+                                } else if let Ok(mut s) = ctx.stats.lock() {
+                                    s.input_denied += 1;
+                                }
+                                None
+                            }
                             "ctl" => {
                                 if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&d.data)
                                 {
@@ -769,6 +1138,13 @@ async fn transport(
                                         Some("keyframe") => {
                                             let _ = to_comp.try_send(ToCompositor::KeyframeRequest);
                                         }
+                                        Some("resize") if allow_input => {
+                                            if let Some(l) = parse_resize(&v, settings.max_width, settings.max_height) {
+                                                if !ctx.to_guest(gproto::Msg::SetLayout(l)) {
+                                                    pending_ctl.push(r#"{"t":"resize_unavailable","reason":"no Horcrux guest tools in this VM"}"#.into());
+                                                }
+                                            }
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -786,7 +1162,15 @@ async fn transport(
                                         _ => s.pointer_in += 1,
                                     }
                                 }
-                                let _ = input.try_send(ev);
+                                // raw relative motion through the guest tools
+                                // (no pointer acceleration in Linux uinput)
+                                let via_guest = matches!(ev, InputEvent::Rel { .. })
+                                    && ctx.guest_can(|c| c.relative_mouse);
+                                if let (true, InputEvent::Rel { dx, dy }) = (via_guest, &ev) {
+                                    let _ = ctx.to_guest(gproto::Msg::Input(gproto::Input::Rel { dx: *dx, dy: *dy }));
+                                } else {
+                                    let _ = input.try_send(ev);
+                                }
                             } else {
                                 if let Ok(mut s) = ctx.stats.lock() {
                                     s.input_denied += 1;
@@ -819,6 +1203,14 @@ async fn transport(
                 }
                 continue;
             }
+        }
+        if let Some((label, data, binary)) = pending_out.pop_front() {
+            if let Some(id) = channels.get(label).copied() {
+                if let Some(mut ch) = rtc.channel(id) {
+                    let _ = ch.write(binary, &data);
+                }
+            }
+            continue;
         }
         if let Some(msg) = pending_cursor.take() {
             if let Some(id) = channels.get("cursor").copied() {
@@ -866,6 +1258,48 @@ async fn transport(
             }
             m = from_tasks.recv() => {
                 match m {
+                    Some(ToRtc::GuestFrame(data, at)) => {
+                        if let Some((mid, pt, VideoCodec::H264)) = video {
+                            let now = Instant::now();
+                            let rtp = MediaTime::new(
+                                (now - start).as_micros() as u64 * 90 / 1000,
+                                str0m::media::Frequency::NINETY_KHZ,
+                            );
+                            let len = data.len();
+                            if let Some(w) = rtc.writer(mid) {
+                                if let Err(e) = w.write(pt, now, rtp, data) {
+                                    tracing::debug!("console video write: {e}");
+                                }
+                            }
+                            let _ = at;
+                            if let Ok(mut s) = ctx.stats.lock() {
+                                s.frames_sent += 1;
+                                s.bytes_sent += len as u64;
+                            }
+                        }
+                    }
+                    Some(ToRtc::Audio(data)) => {
+                        if let Some((mid, pt)) = audio {
+                            let now = Instant::now();
+                            let t = MediaTime::new(
+                                (now - start).as_micros() as u64 * 48 / 1000,
+                                str0m::media::Frequency::FORTY_EIGHT_KHZ,
+                            );
+                            if let Some(w) = rtc.writer(mid) {
+                                let _ = w.write(pt, now, t, data);
+                            }
+                            if let Ok(mut s) = ctx.stats.lock() {
+                                s.audio_packets += 1;
+                            }
+                        }
+                    }
+                    Some(ToRtc::Clip(m)) => pending_out.push_back(("clip", m.into_bytes(), false)),
+                    Some(ToRtc::Console(b)) => {
+                        if pending_out.len() < 256 {
+                            pending_out.push_back(("console", b, true));
+                        }
+                    }
+                    Some(ToRtc::Frame(_, _)) if ctx.guest_video.load(Ordering::Relaxed) => {}
                     Some(ToRtc::Frame(frame, at)) => {
                         if let Some((mid, pt, _)) = video {
                             let now = Instant::now();

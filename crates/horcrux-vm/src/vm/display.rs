@@ -45,6 +45,12 @@ pub struct DisplayRuntime {
     /// the D-Bus display; see console::hxc).
     #[serde(default)]
     pub dbus_display: bool,
+    /// Horcrux guest-tools virtio-serial port (name, host socket), when
+    /// the console's guest tools are enabled for this run.
+    #[serde(default)]
+    pub guest_tools_port: Option<String>,
+    #[serde(default)]
+    pub guest_tools_socket: Option<PathBuf>,
 }
 
 impl DisplayRuntime {
@@ -62,6 +68,11 @@ impl DisplayRuntime {
 
     pub fn qmp_socket(disk: &Path) -> PathBuf {
         disk.with_extension("qmp.sock")
+    }
+
+    /// Host end of the Horcrux guest tools' virtio-serial port.
+    pub fn guest_tools_socket_path(disk: &Path) -> PathBuf {
+        disk.with_extension("hxgt.sock")
     }
 
     /// Host end of the guest agent's virtio-serial channel.
@@ -95,6 +106,8 @@ impl DisplayRuntime {
             serial_log: Self::serial_log(disk),
             qmp_socket: Self::qmp_socket(disk),
             dbus_display: false,
+            guest_tools_port: None,
+            guest_tools_socket: None,
         })
     }
 
@@ -189,6 +202,23 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
         push(&["-display", "dbus,p2p=yes"]);
     } else {
         push(&["-display", "none"]);
+    }
+    // Horcrux guest tools: their own virtio-serial port; the console
+    // broker connects to the socket while a viewer is open.
+    if let (Some(name), Some(sock)) = (&rt.guest_tools_port, &rt.guest_tools_socket) {
+        let chr = format!(
+            "socket,id=hxgt0,path={},server=on,wait=off",
+            sock.display()
+        );
+        let port = format!("virtserialport,bus=hxgt-vs.0,chardev=hxgt0,name={name}");
+        push(&[
+            "-device",
+            "virtio-serial-pci,id=hxgt-vs",
+            "-chardev",
+            &chr,
+            "-device",
+            &port,
+        ]);
     }
 
     // Video card.
@@ -365,11 +395,27 @@ mod tests {
             serial_log: "/vms/a.serial.log".into(),
             qmp_socket: "/vms/a.qmp.sock".into(),
             dbus_display: false,
+            guest_tools_port: None,
+            guest_tools_socket: None,
         }
     }
 
     fn joined(d: VmDisplay, p: DisplayProtocol) -> String {
         qemu_args(&d, &VmArchitecture::X86_64, &rt(p)).join(" ")
+    }
+
+    #[test]
+    fn guest_tools_port_when_enabled() {
+        let mut r = rt(DisplayProtocol::Vnc);
+        let a = qemu_args(&VmDisplay::default(), &VmArchitecture::X86_64, &r).join(" ");
+        assert!(!a.contains("hxgt"), "{a}");
+        r.guest_tools_port = Some("org.horcrux.console.0".into());
+        r.guest_tools_socket = Some(PathBuf::from("/vms/a.hxgt.sock"));
+        let a = qemu_args(&VmDisplay::default(), &VmArchitecture::X86_64, &r).join(" ");
+        assert!(
+            a.contains("-device virtio-serial-pci,id=hxgt-vs -chardev socket,id=hxgt0,path=/vms/a.hxgt.sock,server=on,wait=off -device virtserialport,bus=hxgt-vs.0,chardev=hxgt0,name=org.horcrux.console.0"),
+            "{a}"
+        );
     }
 
     #[test]
