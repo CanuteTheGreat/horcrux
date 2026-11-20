@@ -50,7 +50,10 @@ def main():
             page.goto(f"{BASE}/login")
             page.fill("#login-username", "admin")
             page.fill("#login-password", "admin")
-            page.click("button[type=submit]")
+            page.locator("#login-submit").click()
+            # Navigating away before the login call returns drops the token and
+            # the page then lists no guests.
+            page.wait_for_url(f"{BASE}/")
             page.goto(f"{BASE}/backup")
             expect(page.locator("#backup-target option[value='%s']" % VID)).to_have_count(1, timeout=30000)
             page.select_option("#backup-target", VID)
