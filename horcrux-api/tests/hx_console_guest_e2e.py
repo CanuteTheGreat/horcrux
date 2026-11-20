@@ -116,13 +116,13 @@ check(s["guest_tools_iso"] == TOOLS_ISO and s["guest_tools_retry_secs"] == 3,
       "console settings: guest tools CD, automatic install, in-session retry (3 s)")
 
 
-def make_vm(vm_id, image, hw, memory, cpus, sound="none"):
+def make_vm(vm_id, image, hw, memory, cpus, sound="none", video="std"):
     call("POST", f"/vms/{vm_id}/stop", token=ADMIN, ok=None)
     call("DELETE", f"/vms/{vm_id}", token=ADMIN, ok=None)
     call("POST", "/vms", {
         "id": vm_id, "name": vm_id, "hypervisor": "qemu", "architecture": "x86_64",
         "cpus": cpus, "memory": memory, "disk_size": hw.pop("disk_size"), "status": "stopped",
-        "display": {"protocol": "vnc", "video": "std", "sound": sound},
+        "display": {"protocol": "vnc", "video": video, "sound": sound},
         "hardware": hw,
     }, token=ADMIN)
     t = time.time()
@@ -263,7 +263,7 @@ def windows(browser):
     make_vm(vm, WIN, {
         "disk_size": 64, "nets": [], "boot": ["disk"], "machine": "q35", "firmware": "ovmf",
         "secure_boot": True, "tpm": True, "guest_agent": True, "cpu_type": "host",
-    }, memory=4096, cpus=4, sound="ich9-intel-hda")
+    }, memory=4096, cpus=4, sound="ich9-intel-hda", video="virtio")
     t0 = time.time()
     st = wait_agent(vm, 600)
     check(st.get("guest_agent"), f"windows: guest agent answers {time.time() - t0:.0f} s after start ({st.get('guest_os')})")
@@ -295,30 +295,6 @@ def windows(browser):
     RESULTS["windows_video"] = {"guest": g, "rtp": vs}
     print(f"   windows video {g} {vs}", flush=True)
 
-    # absolute pointer + buttons: a rubber band on the desktop
-    quiet(page)
-    page.evaluate("window.hxc.move(300, 300)")
-    time.sleep(0.5)
-    page.evaluate("window.hxc.press(300, 300, 0)")
-    time.sleep(0.2)
-    abs_ms = region_trial(page, 420, 420, "window.hxc.move(520, 520)", timeout=8, size=160)
-    page.evaluate("window.hxc.release(0)")
-    check(abs_ms is not None, f"windows: absolute pointer + left button reach Windows (selection rectangle drawn, "
-                              f"{abs_ms} ms to the picture)", fatal=False)
-    # raw relative motion through the tools while the button is held
-    quiet(page)
-    page.evaluate("window.hxc.move(200, 200); window.hxc.press(200, 200, 0)")
-    time.sleep(0.3)
-    rel = []
-    for _ in range(4):
-        rel.append(region_trial(page, None, None, "window.hxc.relMove(60, 40)", timeout=5))
-        time.sleep(0.3)
-    page.evaluate("window.hxc.release(0)")
-    stats = session_stats(vm)
-    check(any(r is not None for r in rel) and stats.get("pointer_in", 0) > 0,
-          f"windows: raw relative motion through the guest tools grows the selection ({rel})", fatal=False)
-    page.evaluate(key("Escape"))
-
     # keyboard: Notepad via Win+R, then typed text with latency
     page.evaluate(combo("MetaLeft", "KeyR"))
     time.sleep(2.5)
@@ -344,6 +320,8 @@ def windows(browser):
     gc = page.evaluate("window.hxc.guestClipboard")
     check(gc is not None and typed in gc, f"windows: guest clipboard reaches the browser ({gc!r})", fatal=False)
     # browser -> guest: paste over the selection, copy it back
+    # (the tools never echo what the browser set, so the text cut back is
+    # the pasted text plus typed characters)
     sent = "from the browser 7"
     page.evaluate(f"window.hxc.sendClipboard({json.dumps(sent)})")
     time.sleep(1.5)
@@ -351,6 +329,8 @@ def windows(browser):
     time.sleep(0.3)
     page.evaluate(combo("ControlLeft", "KeyV"))
     time.sleep(1)
+    type_text(page, " ok")
+    time.sleep(0.5)
     page.evaluate("window.hxc.guestClipboard = null")
     page.evaluate(combo("ControlLeft", "KeyA"))
     time.sleep(0.3)
@@ -359,10 +339,42 @@ def windows(browser):
     while time.time() < end and not page.evaluate("window.hxc.guestClipboard"):
         time.sleep(0.3)
     back = page.evaluate("window.hxc.guestClipboard")
-    check(back is not None and sent in back,
+    check(back is not None and sent + " ok" in back,
           f"windows: browser clipboard reaches the guest (pasted into Notepad, cut back: {back!r})", fatal=False)
     stats = session_stats(vm)
     RESULTS["windows_clipboard"] = {"in": stats.get("clipboard_in"), "out": stats.get("clipboard_out")}
+
+    # absolute pointer + buttons: a rubber band on the desktop
+    # (Notepad closed first: Win+D shows the desktop)
+    page.evaluate(combo("MetaLeft", "KeyD"))
+    time.sleep(2)
+    quiet(page, 1500, 20)
+    abs_ms = None
+    for _ in range(3):
+        page.evaluate("window.hxc.move(300, 300)")
+        time.sleep(0.5)
+        page.evaluate("window.hxc.press(300, 300, 0)")
+        time.sleep(0.3)
+        abs_ms = region_trial(page, 420, 420, "window.hxc.move(520, 520)", timeout=15, size=200)
+        page.evaluate("window.hxc.release(0)")
+        if abs_ms is not None:
+            break
+        quiet(page, 1500, 10)
+    check(abs_ms is not None, f"windows: absolute pointer + left button reach Windows (selection rectangle drawn, "
+                              f"{abs_ms} ms to the picture)", fatal=False)
+    # raw relative motion through the tools while the button is held
+    quiet(page)
+    page.evaluate("window.hxc.move(200, 200); window.hxc.press(200, 200, 0)")
+    time.sleep(0.3)
+    rel = []
+    for _ in range(4):
+        rel.append(region_trial(page, None, None, "window.hxc.relMove(60, 40)", timeout=5))
+        time.sleep(0.3)
+    page.evaluate("window.hxc.release(0)")
+    stats = session_stats(vm)
+    check(any(r is not None for r in rel) and stats.get("pointer_in", 0) > 0,
+          f"windows: raw relative motion through the guest tools grows the selection ({rel})", fatal=False)
+    page.evaluate(key("Escape"))
 
     # resize through the tools
     for (w, h) in ((1280, 720), (1280, 1024), (1024, 768)):
