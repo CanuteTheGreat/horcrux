@@ -37,6 +37,28 @@ pub struct Config {
     pub print_caps: bool,
     /// Name given to the virtual input devices.
     pub input_device_name: String,
+    /// Windows: run as a service that launches the agent in the console session.
+    pub service: bool,
+    /// Windows: BGRA->NV12 conversion threads (0 = up to 4, by CPU count).
+    pub convert_threads: usize,
+    /// Windows: GDI capture poll interval (ms).
+    pub gdi_poll_ms: u64,
+    /// Windows: idle wait for a changed frame before re-checking requests (ms).
+    pub idle_poll_ms: u64,
+    /// Windows: H.264 profile (`baseline`, `main`, `high`).
+    pub h264_profile: String,
+    /// Windows: longest wait for an asynchronous (hardware) MFT output (ms).
+    pub mf_output_wait_ms: u64,
+    /// Windows: how long StartVideo waits for capture + encoder init (ms).
+    pub video_start_timeout_ms: u64,
+    /// Windows: wheel scale in percent (negative inverts).
+    pub wheel_scale_pct: i32,
+    /// Windows: wait after a display mode change before reporting the layout (ms).
+    pub layout_settle_ms: u64,
+    /// Windows service: how often the console session is checked (ms).
+    pub service_poll_ms: u64,
+    /// Windows service: also run the agent (as SYSTEM) at the login screen.
+    pub service_login_screen: bool,
 }
 
 impl Default for Config {
@@ -57,6 +79,17 @@ impl Default for Config {
             once: false,
             print_caps: false,
             input_device_name: "Horcrux virtual input".into(),
+            service: false,
+            convert_threads: 0,
+            gdi_poll_ms: 8,
+            idle_poll_ms: 33,
+            h264_profile: "main".into(),
+            mf_output_wait_ms: 100,
+            video_start_timeout_ms: 15000,
+            wheel_scale_pct: 100,
+            layout_settle_ms: 500,
+            service_poll_ms: 1000,
+            service_login_screen: true,
         }
     }
 }
@@ -94,7 +127,7 @@ impl Config {
             };
             let (k, v) = match k.split_once('=') {
                 Some((k, v)) => (k.to_string(), v.to_string()),
-                None if matches!(k, "once" | "print-caps" | "help") => (k.to_string(), "true".into()),
+                None if matches!(k, "once" | "print-caps" | "help" | "service") => (k.to_string(), "true".into()),
                 None => {
                     i += 1;
                     let v = args.get(i).ok_or(format!("--{k} needs a value"))?;
@@ -143,6 +176,17 @@ impl Config {
             "once" => self.once = b(v),
             "print_caps" => self.print_caps = b(v),
             "input_device_name" => self.input_device_name = v.into(),
+            "service" => self.service = b(v),
+            "convert_threads" => self.convert_threads = num(v)? as usize,
+            "gdi_poll_ms" => self.gdi_poll_ms = num(v)?.max(1),
+            "idle_poll_ms" => self.idle_poll_ms = num(v)?.max(1),
+            "h264_profile" => self.h264_profile = v.into(),
+            "mf_output_wait_ms" => self.mf_output_wait_ms = num(v)?,
+            "video_start_timeout_ms" => self.video_start_timeout_ms = num(v)?.max(1000),
+            "wheel_scale_pct" => self.wheel_scale_pct = v.parse().map_err(|_| format!("{k}: not a number: {v}"))?,
+            "layout_settle_ms" => self.layout_settle_ms = num(v)?,
+            "service_poll_ms" => self.service_poll_ms = num(v)?.max(100),
+            "service_login_screen" => self.service_login_screen = b(v),
             _ => return Err(format!("unknown setting {k}")),
         }
         Ok(())

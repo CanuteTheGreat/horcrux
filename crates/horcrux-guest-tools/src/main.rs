@@ -31,6 +31,11 @@ fn main() {
         println!("{}", serde_json::to_string_pretty(&p.hello()).unwrap_or_default());
         return;
     }
+    #[cfg(windows)]
+    if cfg.service {
+        windows::service::run(std::env::args().skip(1).filter(|a| a != "--service").collect());
+        return;
+    }
     loop {
         let p = platform(&cfg);
         match agent::run(&cfg, p) {
