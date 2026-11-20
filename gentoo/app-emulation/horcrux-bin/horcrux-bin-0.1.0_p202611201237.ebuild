@@ -28,13 +28,15 @@ HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 # installed. The plain 0.1.0 stays as the fallback for a tree without a stamped ebuild (image builds from a local tarball).
 # The two HORCRUX_MANAGER_SHA256_* values are filled in by the bump script (empty here): a tarball FETCHED by URL must match the build
 # this version was cut for (a replaced daily asset fails loudly instead of installing under the wrong version).
-HORCRUX_MANAGER_SHA256_x86_64="5512c0e25236a481c7eb996c0621dfeaa51fb3988b72ab7b36e25cfcecac00f0"
+HORCRUX_MANAGER_SHA256_x86_64="36b938ceecd05f2d89cc67225315e53b4075dfe1a0289f824748d48670807962"
 HORCRUX_MANAGER_SHA256_aarch64="d7aeedf94e753553ca993094224cbd70bd2dbc3b64accf4c697a14e5ff7b97c7"
 RESTRICT="network-sandbox mirror strip"    # tarball fetch at src_unpack; the binaries are already stripped/cross built
 LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="amd64 arm64 riscv"
 
+# ffmpeg[vpx,x264]: the Horcrux Console encodes guest screens with an ffmpeg child process (H.264, VP8 fallback);
+# QEMU's D-Bus display (gio + gdbus-codegen, always on in the Gentoo ebuild) is its frame source.
 # qemu[zstd]: qcow2 images with zstd compression (libvirt / virt-manager default on some distros) are imported with qemu-img; without
 # USE=zstd qemu-img answers "unknown compression type: 1" and the VM importer cannot read the disk (owner-ws 2026-11-12).
 RDEPEND="
@@ -43,6 +45,7 @@ RDEPEND="
 	app-arch/zstd
 	app-emulation/libvirt[qemu]
 	app-emulation/qemu[spice,usbredir,virtfs,vnc,zstd]
+	media-video/ffmpeg[vpx,x264]
 	net-dns/dnsmasq
 	net-fs/nfs-utils
 	net-misc/bridge-utils
