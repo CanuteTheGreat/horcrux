@@ -2,6 +2,8 @@
 //!
 //! * `GET|PUT /api/console/settings`: the node's `[console]` settings
 //!   (Sys.Audit / Sys.Modify on `/`).
+//! * `GET /api/console/relay`: the node's relay (WAN access) and port
+//!   mapping status (Sys.Audit on `/`).
 //! * `GET /api/console/:vm/hxc`: the browser client.
 //! * `GET /api/console/:vm/hxc/status`: can this VM be viewed, and why not.
 //! * `POST /api/console/:vm/hxc/ticket` `{conn_id, profile?}`: a console
@@ -26,6 +28,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     let r = Router::new().route("/api/console/settings", get(get_settings).put(put_settings));
     #[cfg(feature = "qemu")]
     let r = r
+        .route("/api/console/relay", get(qemu::relay_status))
         .route("/api/console/:vm_id/hxc", get(qemu::page))
         .route("/api/console/:vm_id/hxc/status", get(qemu::status))
         .route(
@@ -50,6 +53,8 @@ async fn put_settings(
     Json(new): Json<ConsoleSettings>,
 ) -> Result<Json<ConsoleSettings>, ApiError> {
     let saved = hxc_settings::set(new).map_err(ApiError::ValidationError)?;
+    #[cfg(feature = "qemu")]
+    crate::console::hxc::relay::apply(&saved).await;
     state
         .audit_logger
         .log(crate::audit::AuditEvent {
@@ -130,8 +135,17 @@ mod qemu {
         profile: Option<ConsoleProfile>,
     }
 
+    pub async fn relay_status() -> Json<hxc::relay::RelayStatus> {
+        Json(hxc::relay::status(&hxc_settings::get()))
+    }
+
     #[derive(serde::Serialize)]
     pub struct TicketResponse {
+        /// ICE servers (the node's relay with this session's credentials)
+        /// when WAN access is on; empty otherwise.
+        ice_servers: Vec<hxc::relay::IceServer>,
+        /// `relay` when clients must use the relay only, else `all`.
+        ice_transport_policy: &'static str,
         ticket: String,
         expires_at: i64,
         profile: ConsoleProfile,
@@ -171,6 +185,16 @@ mod qemu {
             .and_then(|h| h.to_str().ok())
             .map(str::to_string);
         let ips = hxc::candidate_ips(&settings, host.as_deref()).await;
+        let relay_tag = if hxc::relay::running() {
+            uuid::Uuid::new_v4().simple().to_string()
+        } else {
+            String::new()
+        };
+        let ice_servers = if relay_tag.is_empty() {
+            Vec::new()
+        } else {
+            hxc::relay::ice_servers(host.as_deref(), &relay_tag)
+        };
         let t = broker()
             .issue(
                 HxcTicket {
@@ -184,12 +208,20 @@ mod qemu {
                     allow_clipboard: has(Privilege::VmConsoleClipboard),
                     allow_mic: has(Privilege::VmConsoleAudioMic),
                     candidate_ips: ips,
+                    relay_tag,
                     expires_at: 0,
                 },
                 settings.ticket_lifetime_secs,
             )
             .await;
+        let policy = if !ice_servers.is_empty() && hxc::relay::force_relay() {
+            "relay"
+        } else {
+            "all"
+        };
         Ok(Json(TicketResponse {
+            ice_servers,
+            ice_transport_policy: policy,
             ticket: t.ticket,
             expires_at: t.expires_at,
             profile: t.profile,
@@ -322,6 +354,7 @@ mod qemu {
                 serial_socket: Some(rt.serial_socket.clone()),
                 qga_socket: Some(crate::vm::display::DisplayRuntime::qga_socket(&disk)),
                 guest_tools_cd: rt.guest_tools_iso.is_some(),
+                relay_tag: (!t.relay_tag.is_empty()).then(|| t.relay_tag.clone()),
             };
             match session::start(req).await {
                 Ok((handle, answer)) => {
@@ -335,8 +368,8 @@ mod qemu {
                                 &t.vm_id,
                                 format!("console session started ({})", t.profile.name()),
                                 Some(format!(
-                                    "input={} clipboard={} path=direct candidates={:?}",
-                                    t.allow_input, t.allow_clipboard, t.candidate_ips
+                                    "input={} clipboard={} relay_offered={} candidates={:?}",
+                                    t.allow_input, t.allow_clipboard, !t.relay_tag.is_empty(), t.candidate_ips
                                 )),
                                 Some(session_id.clone()),
                             ))
@@ -360,8 +393,9 @@ mod qemu {
                                     &vm,
                                     "console session ended".into(),
                                     Some(format!(
-                                        "reason={} frames={} bytes={} keys={} pointer={} input_denied={}",
+                                        "reason={} path={} frames={} bytes={} keys={} pointer={} input_denied={}",
                                         s.end_reason.unwrap_or_default(),
+                                        s.path.unwrap_or_else(|| "none".into()),
                                         s.frames_sent,
                                         s.bytes_sent,
                                         s.keys_in,

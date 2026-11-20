@@ -302,6 +302,8 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             "ticket" | "ws" => Requirement::Authenticated,
             // Horcrux Console node settings ([console] in config.toml)
             "settings" => read_write(m, P::SysAudit, P::SysModify, "/"),
+            // the node's console relay (WAN access) status
+            "relay" => read_write(m, P::SysAudit, P::SysModify, "/"),
             "" => need(P::SysAudit, "/"),
             vm => need(P::VmConsole, format!("/vms/{}", vm)),
         },
@@ -670,6 +672,10 @@ mod tests {
         assert_eq!(
             priv_of(requirement("DELETE", "/api/containers/runtimes")),
             (P::VmAllocate, "/containers/runtimes".into())
+        );
+        assert_eq!(
+            priv_of(requirement("GET", "/api/console/relay")),
+            (P::SysAudit, "/".into())
         );
     }
 

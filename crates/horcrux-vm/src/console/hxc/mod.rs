@@ -11,12 +11,15 @@
 //!   they work, libx264/libvpx otherwise).
 //! * [`session`]: the WebRTC transport (str0m) and the data channels.
 //! * [`page`]: the browser client served by the node.
+pub mod abr;
 pub mod deliver;
 pub mod encode;
 pub mod guest;
 pub mod keymap;
 pub mod page;
+pub mod portmap;
 pub mod qemu_dbus;
+pub mod relay;
 pub mod session;
 pub use super::hxc_settings as settings;
 
@@ -45,6 +48,9 @@ pub struct HxcTicket {
     /// ICE host candidates for this client (from the address it used to
     /// reach the node when the ticket was issued).
     pub candidate_ips: Vec<IpAddr>,
+    /// Names this ticket's relay credentials (revoked when the session
+    /// ends); empty when the relay is off.
+    pub relay_tag: String,
     pub expires_at: i64,
 }
 
@@ -302,6 +308,7 @@ mod tests {
             allow_clipboard: false,
             allow_mic: false,
             candidate_ips: Vec::new(),
+            relay_tag: String::new(),
             expires_at: 0,
         }
     }

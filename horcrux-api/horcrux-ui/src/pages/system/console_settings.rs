@@ -10,6 +10,178 @@ fn num<T: std::str::FromStr + Copy>(ev: &leptos::ev::Event, old: T) -> T {
     event_target_value(ev).trim().parse().unwrap_or(old)
 }
 
+/// The relay as the node reports it (GET /api/console/relay).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct RelayStatus {
+    #[serde(default)]
+    running: bool,
+    #[serde(default)]
+    listen: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    allocations: u64,
+    #[serde(default)]
+    port_mapping: serde_json::Value,
+}
+
+/// WAN access: the node's relay, port mapping and link adaptation.
+#[component]
+fn WanFields(sig: RwSignal<ConsoleSettings>) -> impl IntoView {
+    let (relay, set_relay) = create_signal(None::<RelayStatus>);
+    let refresh = move || {
+        spawn_local(async move {
+            if let Ok(r) = api::fetch_json::<RelayStatus>("/console/relay").await {
+                set_relay.set(Some(r));
+            }
+        })
+    };
+    refresh();
+    let status = move || {
+        relay.get().map(|r| {
+            let map = &r.port_mapping;
+            let mapping = match map.get("method").and_then(|m| m.as_str()) {
+                Some(m) => format!(
+                    "; router mapping via {m}: {}:{}",
+                    map.get("external_address").and_then(|v| v.as_str()).unwrap_or("?"),
+                    map.get("external_port").and_then(|v| v.as_u64()).unwrap_or(0)
+                ),
+                None => match map.get("error").and_then(|e| e.as_str()) {
+                    Some(e) => format!("; router mapping failed: {e}"),
+                    None => String::new(),
+                },
+            };
+            if r.running {
+                format!(
+                    "Relay running on {} ({} client(s) relayed now){mapping}",
+                    r.listen.unwrap_or_default(),
+                    r.allocations
+                )
+            } else if let Some(e) = r.error {
+                format!("Relay not running: {e}")
+            } else {
+                "Relay off: clients connect directly (LAN only).".to_string()
+            }
+        })
+    };
+    let w = move || sig.get().wan;
+    let set = move |f: &dyn Fn(&mut horcrux_common::console::WanSettings)| sig.update(|s| f(&mut s.wan));
+    view! {
+        <fieldset class="hxc-wan" id="hxc-wan">
+            <legend>"WAN access (from anywhere)"</legend>
+            <p class="help">
+                "Clients outside this network reach console sessions through this node's own relay "
+                "(TURN, built into Horcrux; it only forwards encrypted media and never decrypts it). "
+                "The router must forward the relay port to this node, or let Horcrux ask the router "
+                "(UPnP / NAT-PMP). Remote quality is limited by this site's upload speed."
+            </p>
+            <p id="hxc-relay-status" class="notice">{status}</p>
+            <label class="checkbox">
+                <input type="checkbox" name="wan-enabled" prop:checked=move || w().enabled
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|x| x.enabled = v) }/>
+                "Allow WAN access (run the relay)"
+            </label>
+            <label>"Relay port (UDP and TCP)"
+                <input type="number" min="1" max="65535" name="wan-relay_port" prop:value=move || w().relay_port.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().relay_port); set(&|x| x.relay_port = v) }/>
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name="wan-relay_tcp" prop:checked=move || w().relay_tcp
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|x| x.relay_tcp = v) }/>
+                "Also accept the relay over TCP (networks that block UDP)"
+            </label>
+            <label>"Public address clients use (empty: the address used for this web UI)"
+                <input type="text" name="wan-relay_public_address" prop:value=move || w().relay_public_address
+                    on:change=move |ev| { let v = event_target_value(&ev).trim().to_string(); set(&|x| x.relay_public_address = v.clone()) }/>
+            </label>
+            <label>"Public port, when the router forwards a different one (0: same)"
+                <input type="number" min="0" max="65535" name="wan-relay_public_port" prop:value=move || w().relay_public_port.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().relay_public_port); set(&|x| x.relay_public_port = v) }/>
+            </label>
+            <label>"Address relayed media is sent from (empty: automatic)"
+                <input type="text" name="wan-relay_peer_address" prop:value=move || w().relay_peer_address
+                    on:change=move |ev| { let v = event_target_value(&ev).trim().to_string(); set(&|x| x.relay_peer_address = v.clone()) }/>
+            </label>
+            <label>"Relayed client ports, first"
+                <input type="number" min="1" max="65535" name="wan-relay_port_min" prop:value=move || w().relay_port_min.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().relay_port_min); set(&|x| x.relay_port_min = v) }/>
+            </label>
+            <label>"Relayed client ports, last"
+                <input type="number" min="1" max="65535" name="wan-relay_port_max" prop:value=move || w().relay_port_max.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().relay_port_max); set(&|x| x.relay_port_max = v) }/>
+            </label>
+            <label>"Relay realm"
+                <input type="text" name="wan-relay_realm" prop:value=move || w().relay_realm
+                    on:change=move |ev| { let v = event_target_value(&ev); set(&|x| x.relay_realm = v.clone()) }/>
+            </label>
+            <label>"Session relay credentials valid for (s)"
+                <input type="number" min="10" max="86400" name="wan-relay_credential_lifetime_secs" prop:value=move || w().relay_credential_lifetime_secs.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().relay_credential_lifetime_secs); set(&|x| x.relay_credential_lifetime_secs = v) }/>
+            </label>
+            <label>"Most relayed clients at once"
+                <input type="number" min="1" max="4096" name="wan-relay_max_allocations" prop:value=move || w().relay_max_allocations.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().relay_max_allocations); set(&|x| x.relay_max_allocations = v) }/>
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name="wan-force_relay" prop:checked=move || w().force_relay
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|x| x.force_relay = v) }/>
+                "Always use the relay (clients never connect directly)"
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name="wan-upnp" prop:checked=move || w().upnp
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|x| x.upnp = v) }/>
+                "Ask the router to forward the relay port (UPnP / NAT-PMP)"
+            </label>
+            <label>"Router mapping lease (s)"
+                <input type="number" min="120" max="86400" name="wan-upnp_lease_secs" prop:value=move || w().upnp_lease_secs.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().upnp_lease_secs); set(&|x| x.upnp_lease_secs = v) }/>
+            </label>
+            <label>"Router address (empty: the default gateway)"
+                <input type="text" name="wan-upnp_gateway" prop:value=move || w().upnp_gateway
+                    on:change=move |ev| { let v = event_target_value(&ev).trim().to_string(); set(&|x| x.upnp_gateway = v.clone()) }/>
+            </label>
+            <label>"UPnP discovery address"
+                <input type="text" name="wan-upnp_ssdp_address" prop:value=move || w().upnp_ssdp_address
+                    on:change=move |ev| { let v = event_target_value(&ev).trim().to_string(); set(&|x| x.upnp_ssdp_address = v.clone()) }/>
+            </label>
+            <label>"This site's upload speed (kbit/s, 0: unknown) - remote sessions never exceed it"
+                <input type="number" min="0" name="wan-uplink_kbps" prop:value=move || w().uplink_kbps.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().uplink_kbps); set(&|x| x.uplink_kbps = v) }/>
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name="wan-adaptive" prop:checked=move || w().adaptive
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|x| x.adaptive = v) }/>
+                "Fit bitrate, resolution and frame rate to the measured link"
+            </label>
+            <label>"Lowest bitrate (kbit/s)"
+                <input type="number" min="50" name="wan-min_kbps" prop:value=move || w().min_kbps.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().min_kbps); set(&|x| x.min_kbps = v) }/>
+            </label>
+            <label>"Quality floor (thousandths of a bit per pixel)"
+                <input type="number" min="1" max="2000" name="wan-min_millibits_per_pixel" prop:value=move || w().min_millibits_per_pixel.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().min_millibits_per_pixel); set(&|x| x.min_millibits_per_pixel = v) }/>
+            </label>
+            <label>"Lowest frame rate (desktop and console profiles)"
+                <input type="number" min="1" max="120" name="wan-min_fps" prop:value=move || w().min_fps.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().min_fps); set(&|x| x.min_fps = v) }/>
+            </label>
+            <label>"Step down at most every (ms)"
+                <input type="number" min="100" name="wan-down_interval_ms" prop:value=move || w().down_interval_ms.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().down_interval_ms); set(&|x| x.down_interval_ms = v) }/>
+            </label>
+            <label>"Step up after a better link for (ms)"
+                <input type="number" min="100" name="wan-up_interval_ms" prop:value=move || w().up_interval_ms.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().up_interval_ms); set(&|x| x.up_interval_ms = v) }/>
+            </label>
+            <label>"Video packets kept for retransmission"
+                <input type="number" min="100" max="65536" name="wan-nack_history_packets" prop:value=move || w().nack_history_packets.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().nack_history_packets); set(&|x| x.nack_history_packets = v) }/>
+            </label>
+            <button type="button" class="btn" id="hxc-relay-refresh" on:click=move |_| refresh()>"Refresh relay status"</button>
+        </fieldset>
+    }
+}
+
 #[component]
 fn ProfileFields(name: &'static str, sig: RwSignal<ConsoleSettings>) -> impl IntoView {
     let get = move || {
@@ -260,6 +432,7 @@ pub fn ConsoleSettingsPage() -> impl IntoView {
                     <input type="number" min="6" max="510" name="audio_bitrate_kbps" prop:value=move || sig.get().audio_bitrate_kbps.to_string()
                         on:change=move |ev| { let v = num(&ev, sig.get().audio_bitrate_kbps); sig.update(|s| s.audio_bitrate_kbps = v) }/>
                 </label>
+                <WanFields sig=sig/>
                 <ProfileFields name="desktop" sig=sig/>
                 <ProfileFields name="console" sig=sig/>
                 <ProfileFields name="gaming" sig=sig/>

@@ -45,7 +45,7 @@
   const hxc = window.hxc = {
     state: "starting", hello: null, guest: { width: 0, height: 0 }, codec: null,
     framesDecoded: 0, rttMs: null, inputToFrameMs: [], inputToFrameCount: 0, lastError: null, denied: [],
-    server: null,
+    server: null, link: null, refreshHz: null,
   };
   function setState(s, text) {
     hxc.state = s; statusEl.dataset.state = s; statusEl.textContent = text;
@@ -316,7 +316,9 @@
     } else if (m.t === "stats") {
       hxc.server = m;
       const last = hxc.inputToFrameMs.length ? hxc.inputToFrameMs[hxc.inputToFrameMs.length - 1].toFixed(0) + " ms input-to-picture, " : "";
-      statsEl.textContent = (m.width ? m.width + "x" + m.height + ", " : "") + last + (hxc.rttMs !== null ? hxc.rttMs.toFixed(1) + " ms RTT, " : "") + "encode " + (m.encode_ms || 0).toFixed(1) + " ms";
+      statsEl.textContent = (m.width ? m.width + "x" + m.height + ", " : "") + last + (hxc.rttMs !== null ? hxc.rttMs.toFixed(1) + " ms RTT, " : "") + "encode " + (m.encode_ms || 0).toFixed(1) + " ms" + linkText();
+    } else if (m.t === "link") {
+      hxc.link = m;
     } else if (m.t === "source") {
       hxc.videoSource = m.video;
       if (m.width) hxc.guest = { width: m.width, height: m.height };
@@ -336,6 +338,30 @@
     }
   }
 
+  // What the link allows (adaptation on the node): path, estimate, what
+  // is sent and what limits it.
+  function linkText() {
+    const l = hxc.link; if (!l) return "";
+    const mbit = (k) => (k / 1000).toFixed(k >= 10000 ? 0 : 1) + " Mbit/s";
+    let t = " | " + (l.path === "relay" ? "via relay (WAN)" : l.path === "direct" ? "direct" : "");
+    if (l.estimate_kbps) t += ", link ~" + mbit(l.estimate_kbps);
+    if (l.target) {
+      const why = { link: "the link", uplink: "the node's upload", profile: "the profile", floor: "the minimum" }[l.target.limit] || l.target.limit;
+      t += ", sending " + l.target.width + "x" + l.target.height + " " + l.target.fps + " fps at " + mbit(l.target.kbps) + " (limited by " + why + ")";
+    }
+    return t;
+  }
+  hxc.linkText = linkText;
+  // Display refresh rate (frames are paced to it): count animation frames.
+  function measureRefresh() {
+    let n = 0; const t0 = performance.now();
+    const step = (t) => { n++; if (t - t0 < 1000) requestAnimationFrame(step); else {
+      const hz = Math.round(n * 1000 / (t - t0));
+      if (hz > 0) { hxc.refreshHz = hz; send("ctl", JSON.stringify({ t: "display", refresh_hz: hz })); }
+    } };
+    requestAnimationFrame(step);
+  }
+
   const pings = new Map(); let pingId = 0;
   setInterval(() => { const id = ++pingId; pings.set(id, performance.now()); send("ctl", JSON.stringify({ t: "ping", id })); if (pings.size > 20) pings.clear(); }, 1000);
 
@@ -346,12 +372,15 @@
     const sig = await openSignalling();
     hxc.connId = sig.connId;
     const t = await ticket(sig.connId);
-    const pc = new RTCPeerConnection({ iceServers: [] });
+    hxc.iceServers = t.ice_servers || [];
+    const pc = new RTCPeerConnection({ iceServers: hxc.iceServers, iceTransportPolicy: t.ice_transport_policy || "all" });
     hxc.pc = pc;
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
     const mk = (name, opts) => { const c = pc.createDataChannel(name, opts); c.binaryType = "arraybuffer"; ch[name] = c; return c; };
-    mk("ctl", { ordered: true }).onmessage = (e) => { try { ctlMsg(JSON.parse(e.data)); } catch {} };
+    const ctl = mk("ctl", { ordered: true });
+    ctl.onmessage = (e) => { try { ctlMsg(JSON.parse(e.data)); } catch {} };
+    ctl.onopen = () => measureRefresh();
     mk("keys", { ordered: true });
     mk("input", { ordered: false, maxRetransmits: 0 });
     mk("cursor", { ordered: true }).onmessage = (e) => { try { cursorMsg(JSON.parse(e.data)); } catch {} };
@@ -377,7 +406,8 @@
       if (pc.connectionState === "disconnected") setState("reconnecting", "Connection interrupted...");
     };
     await pc.setLocalDescription(await pc.createOffer());
-    await waitIce(pc, 1500);
+    // relayed candidates need two round trips to the relay
+    await waitIce(pc, hxc.iceServers.length ? 4000 : 1500);
     const answer = await new Promise((res) => {
       sig.pending.set("offer", res);
       sig.ws.send(JSON.stringify({ type: "console.offer", ticket: t.ticket, sdp: pc.localDescription.sdp }));
