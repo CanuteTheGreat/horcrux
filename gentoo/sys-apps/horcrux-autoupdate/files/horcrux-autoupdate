@@ -7,7 +7,7 @@
   horcrux-autoupdate check    exit 0 ok / 1 warning / 2 critical, one line of text: for health checks and monitoring agents
   horcrux-autoupdate pending  list the world updates still pending
 
-One run: lock, `emaint sync -a`, boot-environment snapshot (ZFS root), `emerge -uDN --with-bdeps=y @world` (binary packages from the
+One run: lock, `emaint sync -a`, boot-environment snapshot (ZFS root), `emerge -uDN @world` (build-time dependencies only with WITH_BDEPS=yes) (binary packages from the
 binhost preferred, source build as the fallback), a guarded `emerge --depclean`, `@preserved-rebuild`, `etc-update --preen`. Low CPU and I/O priority.
 Results land in STATE_DIR (status.json, failed, reboot-required) and LOG_DIR (one log per run). A new kernel, microcode or other package that
 needs a reboot is recorded in `reboot-required` (also /run/reboot-required); nothing is rebooted and nothing pops up.
@@ -50,6 +50,8 @@ DEFAULTS = {
     "SNAPSHOT": "yes",            # boot-environment / ZFS snapshot before the update (ZFS root only)
     "DEPCLEAN": "safe",           # safe | no. safe = only when `--pretend` shows no protected package and no more than DEPCLEAN_MAX removals
     "DEPCLEAN_MAX": "20",
+    "WITH_BDEPS": "no",           # yes: also update/install the BUILD dependencies of installed packages (--with-bdeps=y). Off by default: with binary
+                                  # packages they are never used, and on a server they pull ~80 compilers/headers/X11 libraries that depclean then refuses to remove
     "DEPCLEAN_KEEP": "sys-kernel/* sys-fs/zfs-kmod sys-fs/zfs sys-boot/* x11-drivers/nvidia-drivers sys-firmware/* app-emulation/horcrux* sys-apps/horcrux*",
     "PRESERVED_REBUILD": "yes",
     "ETC_UPDATE": "preen",        # preen (trivial changes only) | all (--automode -5: replaces edited files) | off
@@ -211,8 +213,12 @@ def emerge_opts(conf):
     return o
 
 
+def bdeps_opt(conf):
+    return "--with-bdeps=y" if yes(conf.get("WITH_BDEPS", "no")) else "--with-bdeps=n"
+
+
 def world_args(conf):
-    return emerge_opts(conf) + ["--update", "--deep", "--newuse", "--with-bdeps=y", "--keep-going", "@world"]
+    return emerge_opts(conf) + ["--update", "--deep", "--newuse", bdeps_opt(conf), "--keep-going", "@world"]
 
 
 def on_battery():
@@ -570,7 +576,7 @@ def do_run(conf, reason="manual", runner=sh):
         # pending count, after everything
         if failed_step != "snapshot":
             rc, lines = runner(prio(["emerge", "--ask=n", "--color=n", "--nospinner", "--pretend", "--update", "--deep", "--newuse",
-                                     "--with-bdeps=y", "@world"]), None, full=True)
+                                     bdeps_opt(conf), "@world"]), None, full=True)
             if rc == 0:
                 st["pending"] = len(parse_pending("\n".join(lines)))
         log.write(f"result: {'failed ' + failed_step if failed_step else 'ok'}\n")
@@ -589,8 +595,8 @@ def do_run(conf, reason="manual", runner=sh):
     return st
 
 
-def pretend_text():
-    return "\n".join(sh(["emerge", "--ask=n", "--color=n", "--nospinner", "--pretend", "--update", "--deep", "--newuse", "--with-bdeps=y", "@world"],
+def pretend_text(conf=None):
+    return "\n".join(sh(["emerge", "--ask=n", "--color=n", "--nospinner", "--pretend", "--update", "--deep", "--newuse", bdeps_opt(conf or read_conf()), "@world"],
                          None, full=True)[1])
 
 
