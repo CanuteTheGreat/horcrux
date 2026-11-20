@@ -96,8 +96,36 @@ class ZRun(qt.Runner):
                 sys.exit(1)
 
     # --- answers
+    @property
+    def user(self):
+        return self.z.user or ("owner" if self.z.desktop else "hxadmin")
+
+    def first_login_change(self):
+        """--first-login-password: the account must have an EMPTY, EXPIRED password (no temporary password anywhere), and login(1) must force the
+        user to choose one. The harness then chooses USER_PW, so every later desktop step logs in as usual."""
+        u = self.user
+        rc, o = self.sh(f"getent shadow {u} | cut -d: -f2,3; "
+                        f"(sleep 2; printf '%s\\n' '{USER_PW}'; sleep 1; printf '%s\\n' '{USER_PW}'; sleep 4; printf 'id\\nexit\\n') | script -qec 'login {u}' /dev/null | tr -d '\\r' | tail -6; "
+                        f"echo AFTER; getent shadow {u} | cut -d: -f2 | cut -c1-3", timeout=90)
+        before, _, after = o.partition("AFTER")
+        self.step("account-has-empty-expired-password-until-first-login", before.strip().startswith(":0") and after.strip()[:1] == "$" and "uid=" in before,
+                  o.strip().replace("\n", " | ")[:300])
+
+    def private_machine_checks(self):
+        """--private-machine: the owner's per-machine image (never published): hostname, T2 firmware from the machine layer, home Wi-Fi carried to iwd,
+        agent account + passwordless sudo for the owner, no lab/test-machine package"""
+        rc, o = self.sh("hostname; ls /lib/firmware/brcm 2>/dev/null | grep -ci apple; ls /var/lib/iwd/*.psk 2>/dev/null | wc -l; "
+                        "ls /etc/NetworkManager/system-connections | wc -l; getent passwd hermes-agent | cut -d: -f1; "
+                        f"sudo -l -U {self.user} 2>/dev/null | grep -c NOPASSWD; qlist -IC app-misc/horcrux-test-machine | wc -l; "
+                        "grep -c 'wifi.backend=iwd' /etc/NetworkManager/conf.d/10-horcrux.conf; "
+                        f"id -nG {self.user}")
+        l = o.strip().splitlines() + [""] * 10
+        ok = (l[0] == self.z.hostname.split(".")[0] and int(l[1] or 0) > 0 and int(l[2] or 0) >= self.z.expect_wifi and int(l[3] or 0) >= self.z.expect_wifi
+              and l[4] == "hermes-agent" and int(l[5] or 0) > 0 and l[6] == "0" and l[7] == "1" and "portage" in l[8].split() and "wheel" in l[8].split())
+        self.step("private-machine-layer", ok, "hostname|apple-fw|iwd-psk|nm-profiles|agent|nopasswd|test-machine-pkgs|iwd-backend|groups: " + " | ".join(l[:9]))
+
     def toml(self, pubkey, pwhash):
-        t = ["[global]", 'keyboard = "us"', 'timezone = "UTC"', 'hostname = "zfs-enc.test.lan"', 'email = "ops@example.test"',
+        t = ["[global]", 'keyboard = "us"', 'timezone = "UTC"', f'hostname = "{self.z.hostname}"', 'email = "ops@example.test"',
              f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', "ssh_password_auth = false", f't2 = "{self.z.t2}"']
         if self.z.desktop:
             t.append('install_type = "desktop"')
@@ -108,7 +136,11 @@ class ZRun(qt.Runner):
               f'passphrase = "{PASSPHRASE}"', "", "[network.management]", 'mode = "dhcp"', ""]
         # desktop: the owner's login user; server: the web-UI administrator (the web UI signs in system users, so the installer requires one)
         uh = subprocess.check_output(["openssl", "passwd", "-6", "-salt", "qemuuser1", USER_PW]).decode().strip()
-        t += ["[user]", "name = \"" + ("owner" if self.z.desktop else "hxadmin") + "\"", f'password_hash = "{uh}"', ""]
+        if self.z.first_login_password:
+            # private machine images: no password yet, the owner chooses it at the first login (empty + expired)
+            t += ["[user]", f'name = "{self.user}"', "password_at_first_login = true", ""]
+        else:
+            t += ["[user]", f'name = "{self.user}"', f'password_hash = "{uh}"', ""]
         return "\n".join(t)
 
     def run(self):
@@ -390,8 +422,13 @@ class ZRun(qt.Runner):
         self.step("root-on-zfs-boot-environment", "rpool/ROOT/horcrux" in o and "ext4" in o and "vfat" in o, o.replace("\n", " | ")[:200])
         rc, o = self.sh("swapon --noheadings --show=NAME,TYPE; echo ---; zfs list -H -t volume; true")
         self.step("no-swap-on-zfs", "zd" not in o.split("---")[0] and "/dev/zvol" not in o, f"swap: {o.split('---')[0].strip() or 'none (zram-init not in image)'}")
-        rc, o = self.sh("ls /lib/firmware/brcm 2>/dev/null | grep -ci apple; true")
-        self.step("no-apple-firmware-on-the-public-image", o.strip().splitlines()[-1] == "0", f"apple files under /lib/firmware/brcm: {o.strip()}")
+        if a.private_machine:
+            self.private_machine_checks()
+        else:
+            rc, o = self.sh("ls /lib/firmware/brcm 2>/dev/null | grep -ci apple; true")
+            self.step("no-apple-firmware-on-the-public-image", o.strip().splitlines()[-1] == "0", f"apple files under /lib/firmware/brcm: {o.strip()}")
+        if a.first_login_password:
+            self.first_login_change()
         qt.no_autologin_config_gate(self.sh, self.step)             # OWNER RULE: no display-manager autologin in the installed configs (GDM/LightDM/SDDM/agetty)
         qt.shadow_reuse_gate(self.sh, self.step, PASSPHRASE)       # SECURITY: no account (user, root, ...) may have the disk passphrase as its password
         rc, o = self.sh(f"grep -rIlF -- '{PASSPHRASE}' /etc /boot /var/log /root /var/lib/horcrux /run 2>/dev/null | head; echo done")
@@ -1136,14 +1173,14 @@ class ZRun(qt.Runner):
         o = ""
         while time.time() < end:
             rc, o = self.sh("pgrep -x gdm >/dev/null && echo GDM; pgrep -x gnome-shell >/dev/null && echo SHELL; pgrep -x NetworkManager >/dev/null && echo NM; "
-                            + init_cmds.running_list_sh("gdm|xdm|elogind|logind|NetworkManager|dbus") + "; id owner")
+                            + init_cmds.running_list_sh("gdm|xdm|elogind|logind|NetworkManager|dbus") + f"; id {self.user}")
             if "GDM" in o and "SHELL" in o:
                 break
             time.sleep(6)
         self.step("desktop-gdm-and-gnome-shell-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | ")[:300])
-        qt.greeter_no_session_gate(self.sh, self.step, "owner", "gdm", wait=60)         # OWNER RULE: after the disk unlock the greeter shows, no user session exists before a greeter login
+        qt.greeter_no_session_gate(self.sh, self.step, self.user, "gdm", wait=60)         # OWNER RULE: after the disk unlock the greeter shows, no user session exists before a greeter login
         self.desktop_exec_check()
-        qt.HG.portage_group_gate(self.sh, self.step, "owner", wait=int(qt.T(300)))       # the desktop user is an administrator: portage group, equery + eix (owner 2026-11-17)
+        qt.HG.portage_group_gate(self.sh, self.step, self.user, wait=int(qt.T(300)))       # the desktop user is an administrator: portage group, equery + eix (owner 2026-11-17)
         if getattr(self.z, "public", False):
             self.public_image_checks()
         self.keyring_pam_checks()
@@ -1196,6 +1233,11 @@ def main():
     ap.add_argument("--expect-t2-refusal", action="store_true", help="(with --fake-t2) the image has no T2 kernel: assert the installer refuses")
     ap.add_argument("--t2", default="no", help="answer file t2 = no|auto|yes (default no: the normal tests ignore a T2 device)")
     ap.add_argument("--rtc-base", default="2026-07-01T12:00:00", help="desktop runs: start EVERY boot with this (months-off) hardware clock; '' disables the clock gates")
+    ap.add_argument("--hostname", default="zfs-enc.test.lan", help="answer-file hostname (private machine images: the machine's name)")
+    ap.add_argument("--user", default="", help="the login account (default owner on --desktop, hxadmin on --server)")
+    ap.add_argument("--first-login-password", action="store_true", help="answer file [user] password_at_first_login: empty + expired password, chosen at the first login")
+    ap.add_argument("--private-machine", action="store_true", help="an owner per-machine image (never published): machine layer checks instead of the public-image firmware check")
+    ap.add_argument("--expect-wifi", type=int, default=0, help="(--private-machine) Wi-Fi profiles the image carries: at least this many iwd known networks")
     ap.add_argument("--mem", type=int, default=4096)
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"))
     ap.add_argument("--disk-gb", type=int, default=24)
