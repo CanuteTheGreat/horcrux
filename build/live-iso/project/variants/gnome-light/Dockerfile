@@ -21,6 +21,8 @@ COPY project/variants/gnome-light/packages.txt /tmp/packages-desktop.txt
 RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=distfiles-${ARCH},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; \
+    # the server-only ffmpeg USE trim (project/portage/package.use/horcrux-server-headless) does not apply to a desktop
+    rm -f /etc/portage/package.use/horcrux-server-headless; \
     case "${INIT}" in systemd) rm -f /etc/portage/package.use/init-openrc; eselect profile set default/linux/amd64/23.0/desktop/gnome/systemd ;; \
       *) rm -f /etc/portage/package.use/init-systemd; eselect profile set default/linux/amd64/23.0/desktop/gnome ;; esac; \
     export FEATURES="-ccache"; \
