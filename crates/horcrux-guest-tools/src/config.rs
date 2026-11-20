@@ -115,6 +115,21 @@ pub struct Config {
     pub virtual_display_wait_ms: u64,
     /// Windows: virtual gamepads created by `--drivers install`.
     pub gamepads: u32,
+    /// Windows: how viewer gamepads reach games: `hid` (the Horcrux virtual
+    /// HID gamepad: DirectInput, SDL, Windows.Gaming.Input; no Microsoft
+    /// signature needed) or `xinput` (the optional ViGEm bus driver, an
+    /// Xbox 360 class controller for XInput-only games; set up with
+    /// `--drivers install-xinput`).
+    pub gamepad_backend: String,
+    /// Windows: the ViGEm bus setup program `--drivers install-xinput` runs
+    /// (default: `optional\ViGEmBus_*.exe` next to the agent).
+    pub vigem_installer: String,
+    /// Windows: SHA-256 the setup program must have (lowercase hex). The
+    /// default is the final upstream release; the setup's Authenticode
+    /// signature is checked as well.
+    pub vigem_sha256: String,
+    /// Windows: signer (certificate subject text) the setup program must carry.
+    pub vigem_signer: String,
     /// Windows: directory holding the driver packages (default: `drivers`
     /// next to the agent).
     pub drivers_dir: String,
@@ -129,6 +144,10 @@ pub struct Config {
     /// Drive virtual gamepad 0 through a fixed sequence and exit (tests).
     pub gamepad_test: bool,
 }
+
+/// ViGEmBus 1.22.0 (final upstream release, 2023-11-02), the all-in-one
+/// x64/x86/arm64 setup `ViGEmBus_1.22.0_x64_x86_arm64.exe`.
+pub const VIGEM_SHA256: &str = "89220a7865076b342892f98865f3499fb7c4cfd673159e89d352c360fd014c6a";
 
 impl Default for Config {
     fn default() -> Self {
@@ -183,6 +202,10 @@ impl Default for Config {
             virtual_display_primary: true,
             virtual_display_wait_ms: 5000,
             gamepads: 1,
+            gamepad_backend: "hid".into(),
+            vigem_installer: String::new(),
+            vigem_sha256: VIGEM_SHA256.into(),
+            vigem_signer: "Nefarius Software Solutions".into(),
             drivers_dir: String::new(),
             driver_cert_subject: "Horcrux Guest Drivers".into(),
             driver_device_timeout_ms: 30000,
@@ -330,6 +353,21 @@ impl Config {
             "virtual_display_primary" => self.virtual_display_primary = b(v),
             "virtual_display_wait_ms" => self.virtual_display_wait_ms = num(v)?,
             "gamepads" => self.gamepads = num(v)?.min(16) as u32,
+            "gamepad_backend" => {
+                if !matches!(v, "hid" | "xinput") {
+                    return Err(format!("{k}: hid or xinput, not {v}"));
+                }
+                self.gamepad_backend = v.into()
+            }
+            "vigem_installer" => self.vigem_installer = v.into(),
+            "vigem_sha256" => {
+                let v = v.to_ascii_lowercase();
+                if v.len() != 64 || !v.bytes().all(|c| c.is_ascii_hexdigit()) {
+                    return Err(format!("{k}: 64 hex digits"));
+                }
+                self.vigem_sha256 = v
+            }
+            "vigem_signer" => self.vigem_signer = v.into(),
             "drivers_dir" => self.drivers_dir = v.into(),
             "driver_cert_subject" => {
                 if v.is_empty() || v.contains(['\'', ',', '=', '"']) {
@@ -339,8 +377,13 @@ impl Config {
             }
             "driver_device_timeout_ms" => self.driver_device_timeout_ms = num(v)?.max(1000),
             "drivers" => {
-                if !matches!(v, "install" | "remove" | "status") {
-                    return Err(format!("{k}: install, remove or status, not {v}"));
+                if !matches!(
+                    v,
+                    "install" | "remove" | "status" | "install-xinput" | "remove-xinput"
+                ) {
+                    return Err(format!(
+                        "{k}: install, remove, status, install-xinput or remove-xinput, not {v}"
+                    ));
                 }
                 self.drivers = Some(v.into())
             }
@@ -368,7 +411,7 @@ fn parse_file(text: &str) -> Vec<(String, String)> {
 
 const HELP: &str = "usage: horcrux-guest-agent [--config FILE] [--port PATH | --connect HOST:PORT] \
 [--capture auto|kmsgrab|x11grab|dxgi|idd] [--encoder auto|software|vaapi|nvenc|qsv|amf|mediafoundation] \
-[--ffmpeg PATH] [--once] [--print-caps] [--drivers install|remove|status] [--layout WxH@HZ[,...]] [--gamepad-test]";
+[--ffmpeg PATH] [--once] [--print-caps] [--drivers install|remove|status|install-xinput|remove-xinput] [--layout WxH@HZ[,...]] [--gamepad-test]";
 
 #[cfg(test)]
 mod tests {
@@ -425,6 +468,16 @@ mod tests {
         .unwrap();
         assert_eq!(d.drivers.as_deref(), Some("install"));
         assert_eq!(d.gamepads, 16);
+        assert_eq!(d.gamepad_backend, "hid", "XInput stays opt-in");
+        assert!(Config::load(vec!["--gamepad-backend=ps5".into()]).is_err());
+        assert!(Config::load(vec!["--vigem-sha256=abc".into()]).is_err());
+        assert_eq!(
+            Config::load(vec!["--drivers=install-xinput".into()])
+                .unwrap()
+                .drivers
+                .as_deref(),
+            Some("install-xinput")
+        );
         assert_eq!(d.virtual_display, "auto");
         assert!(!crate::hxdrv::parse_modes(&d.virtual_display_modes).is_empty());
         assert_eq!(

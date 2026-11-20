@@ -555,25 +555,118 @@ stopped under a running stream -> Log + silence at full cadence, restarted
 -> capture resumes.
 
 Still open in C2 (queued as C2d):
-- C2c: done, see "C2c status" below (XInput and attestation signing open).
+- C2c: done, see "C2c status" below. Signing without a paid certificate: see
+  "Windows driver signing without a paid certificate" (XInput via the optional
+  ViGEmBus component and the Windows on Arm package are in; an Arm64 guest run
+  is open).
 - C2d: the same-host ivshmem raw-frame path and the native viewer window on a
   Horcrux desktop (Wayland), QEMU (no-tools) audio to Opus, a latency run on
   an unloaded node for the host-encode path.
 - Needs real GPU hardware: NVENC/AMF/QSV inside a Windows guest, VA-API/NVENC
   inside a Linux guest, HDR, 4:4:4 in hardware encoders, 240 Hz capture.
 
-Driver signing (C2c): the IddCx virtual display and a virtual HID gamepad
-are user-mode (UMDF 2) drivers. On x64 Windows a UMDF driver package installs
-without test mode when its catalog is signed with a code-signing certificate
-the guest trusts (Horcrux can add its own publisher certificate to the
-guest's TrustedPublisher/Root stores during the MSI install, guest by guest).
-Installing without that per-guest trust, on Windows on Arm, and with
-stricter Code Integrity policies needs Microsoft's attestation signing
-through Partner Center (Hardware Dev Center), which requires an EV
-code-signing certificate. Test-signing mode (bcdedit testsigning) is not an
-option for gaming VMs: it needs Secure Boot off, which anti-cheat refuses.
-Sources: learn.microsoft.com driver signing policy and code-signing
-attestation pages.
+### Windows driver signing without a paid certificate (decision 2026-11-20)
+
+Microsoft's attestation signing (Partner Center, Hardware Dev Center) needs
+an EV code-signing certificate, which costs money every year. Horcrux does not
+enrol in it. The rule instead: use the least privileged mechanism that does the
+job, in this order, and say plainly what each step costs the guest's owner.
+
+| # | Mechanism | Used for | Needs a Microsoft signature? | Status |
+|---|---|---|---|---|
+| 1 | Plain user-mode APIs (no driver) | clipboard, resize, capture (Desktop Duplication / swap-chain), H.264 encode (Media Foundation), keyboard/mouse (`SendInput`), audio (WASAPI) | no | shipped |
+| 2 | Inbox Microsoft drivers | the HID pass-through (`mshidumdf`) and the UMDF reflector under our pad; IddCx under our display | already signed by Microsoft | shipped |
+| 3 | Our own UMDF 2 (user-mode) drivers, signed per guest | `hxidd` virtual display, `hxpad` virtual HID gamepad | no: a user-mode driver package only needs a catalog signature the guest trusts | x64 proven on a real guest; Arm64 builds in CI, not yet run on an Arm64 guest |
+| 4 | Drivers somebody else already had signed, redistributable under their licence | virtio (Red Hat's virtio-win), optional XInput bus (ViGEmBus) | yes, and they have it | see below |
+| 5 | A kernel driver of our own | nothing needs one today | yes | not built; see "What is left" |
+
+Step 3 in detail. At install the MSI runs `--drivers install` as SYSTEM: a
+code-signing certificate is generated for that one guest, its public part goes
+into LocalMachine Root and TrustedPublisher, both driver catalogs are signed,
+and the private key is deleted at once (non-exportable, then removed), so
+nothing else can ever be signed with it. Uninstall removes the certificate.
+Honest costs: the guest trusts one extra self-made publisher for code signing
+(anyone with admin rights in the guest can see it, and the key no longer
+exists); a guest whose Code Integrity policy (a WDAC/HVCI policy that pins
+publishers) refuses unknown publishers refuses it; nothing about Secure Boot,
+test mode, the hypervisor signature or the CPUID bits is touched. The status
+output (`--drivers status`, field `signing`) reports `secure_boot` and
+`test_signing` as read from the guest, so the UI can show the guest's state
+without changing it.
+
+Step 4a: virtio-win (Red Hat/Fedora). The sources are BSD-3-Clause; the
+Windows 10+ binaries are signed with Microsoft's attestation signature by Red
+Hat, and the project ships ARM64 builds (`win10_arm64` and `win11_arm64` in
+kvm-guest-drivers-windows). Horcrux already fetches the virtio-win ISO into
+the node's ISO library for installs and attaches it to the guest. It does not
+re-host the image: the packaging README states origin and signing but no
+explicit licence for the binary image, so a pinned download by the node is
+the conservative form. Storage, network, balloon, serial, RNG, input and vsock
+therefore need no signature of ours. (virtio-win's own `viogpu` display driver
+is not used: it is a basic display driver, not the IddCx virtual display the
+streaming path needs.)
+
+Step 4b: XInput. XInput lists only Xbox-class (XUSB) devices, and an
+Xbox-class device exists only through a kernel driver that Microsoft signed.
+Horcrux will not present Microsoft's vendor ids through a driver of its own.
+So the Horcrux HID pad (DirectInput, SDL, Windows.Gaming.Input, Steam Input)
+is the default, and XInput-only games are served by an opt-in third-party
+component:
+
+- ViGEmBus 1.22.0 by Nefarius Software Solutions, BSD-3-Clause, x64, x86 and
+  Arm64 in one setup, a production-signed release. Upstream retired the
+  project in 2023 (repository archived), so no further updates or
+  compatibility fixes are to be expected; the UI says so.
+- Packaged as an optional MSI feature (`ADDLOCAL=Main,XInput`, off by
+  default), unmodified, with its licence and a README next to it; never run
+  automatically. `horcrux-guest-agent --drivers install-xinput` runs it after
+  checking the setup's SHA-256 (setting `vigem_sha256`) and the publisher of
+  its Authenticode signature (`vigem_signer`); a different or tampered file is
+  refused. It then sets `gamepad_backend = xinput` and removes the Horcrux HID
+  pads (two pads would show up as two players). `--drivers remove-xinput`
+  reverses it; the bus is uninstalled only if Horcrux installed it (marker
+  file), a bus the owner installed is left alone.
+- The agent talks to the bus through its public IOCTL interface (ViGEmClient
+  `BusShared.h`, MIT; the layouts are unit-tested against the header) and the
+  bus drops the controllers when the agent exits.
+- Costs, stated once: a third-party kernel driver with an Xbox 360 identity
+  in the guest; some anti-cheat systems object to virtual-controller drivers
+  (check the game's rules before enabling it; it stays off by default); no
+  rumble feedback to the viewer yet; ViGEmBus 1.22.0's own setup refuses
+  Windows Server (a launch condition in the setup), so it is for Windows 10/11
+  client guests, which is what gaming guests are.
+- Proof so far (Windows Server 2022 eval guest, 2026-11-20): the MSI feature
+  path runs `--drivers install-xinput` as SYSTEM; the setup's SHA-256 and
+  Authenticode checks pass for the real file (publisher "Nefarius Software
+  Solutions e.U.", status Valid) and refuse a wrong hash, a wrong publisher
+  and a file with one byte appended; the setup's own refusal on Server is
+  reported with its reason (`ViGEm Bus Driver can not be installed on the
+  following Windows versions ... Windows Server x64`), leaves no marker and
+  keeps the Horcrux HID pad; MSI uninstall removes everything (devices,
+  packages, certificate, files). NOT yet proven: the bus install and the
+  XInput feed (`XInputGetState` through `--gamepad-test` with
+  `gamepad_backend = xinput`) on a Windows 10/11 client guest; the IOCTL
+  layouts are unit-tested against the bus header only.
+
+Windows on Arm. The drivers and the agent are cross-built for Arm64 in CI
+(drivers with clang-cl against the Arm64 WDK libraries, the agent with
+llvm-mingw as linker) and packed into an `-arm64.msi` (wixl has no Arm64 mode,
+so the template is patched to `Arm64;1033`; CI checks that). The INFs carry
+`NTarm64` models. The signing path is the same per-guest UMDF path as on x64,
+and Windows applies the same package signature policy to user-mode drivers on
+Arm64, but no Arm64 Windows guest exists in CI, so a run there is still to be
+done. Steps for whoever has an Arm64 host and guest: install the `-arm64.msi`,
+then `horcrux-guest-agent --drivers status` must list both packages, the
+`signing` block and `gamepads: 1`.
+
+What is left, and the self-signed path for it. If a kernel driver of our own
+is ever needed (nothing is today), the options without a Microsoft signature
+are test-signing (`bcdedit /set testsigning on`: refused while Secure Boot is
+on, shows a watermark, and anti-cheat systems refuse to run in it) or a guest
+with Secure Boot off. Horcrux never switches either on by itself and never
+hides the hypervisor or spoofs hardware to get around a game's checks: a title
+that will not run in a VM is listed per game, not evaded. A kernel driver
+would follow the same rule as ours: no Microsoft vendor ids.
 
 ### C2c status (Windows guest drivers, 2026-11-20)
 
@@ -649,13 +742,13 @@ Proof on the Windows Server 2022 eval VM (`tests/win_harness.py`, new tests
   re-created by the service at start.
 
 Open:
-- **XInput**: XInput only lists Xbox-class (XUSB) devices; the HID pad shows in
-  joy.cpl/DirectInput/raw HID; `XInputGetState` answers
-  ERROR_DEVICE_NOT_CONNECTED. XInput support needs a kernel-mode XUSB-class
-  Horcrux driver (never Microsoft's ids), which needs attestation signing.
-- **Attestation signing** (Partner Center + EV code-signing certificate):
-  needed for kernel drivers (XInput), Windows on Arm, and guests whose Code
-  Integrity policy refuses a self-trusted publisher. Owner decision.
+- **XInput**: solved without a driver of ours (optional third-party ViGEmBus
+  component, see "Windows driver signing without a paid certificate"). Open:
+  the bus install + `XInputGetState` feed proof on a Windows 10/11 client
+  guest (the eval Server guest is refused by the bus setup), rumble feedback
+  to the viewer, a UI toggle for the XInput option.
+- **Windows on Arm**: the package builds in CI; a run on an Arm64 Windows guest
+  is open (no Arm64 Windows runner or Arm64 Horcrux node in CI).
 - **C2b CI Windows guest**: add the three harness tests to that job once it is
   on main.
 - **Real GPU hardware**: 240 Hz with a hardware encoder (NVENC/AMF/QSV) on a

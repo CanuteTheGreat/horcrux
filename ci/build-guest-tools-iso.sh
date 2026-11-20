@@ -2,6 +2,7 @@
 # Build the Horcrux guest tools CD image (what Horcrux attaches to a VM so
 # the tools can be installed from inside it):
 #   windows/horcrux-guest-tools-<version>-x64.msi   (ci/build-guest-tools-msi.sh)
+#   windows/horcrux-guest-tools-<version>-arm64.msi (same, TARGET=aarch64-pc-windows-gnullvm; when built)
 #   linux/horcrux-guest-agent                       (static x86_64 musl build)
 #   linux/horcrux-guest-agent.initd + .service + guest-tools.conf
 #   linux/x86_64/horcrux-guest-tools.{deb,rpm,apk}  (ci/build-guest-tools-pkgs.sh)
@@ -22,6 +23,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/windows" "$WORK/linux"
 cp "$MSI" "$WORK/windows/"
+for a in "$OUT_DIR"/horcrux-guest-tools-*-arm64.msi; do [ -f "$a" ] && cp "$a" "$WORK/windows/"; done
 cp "$LINUX_AGENT" "$WORK/linux/horcrux-guest-agent"
 strip "$WORK/linux/horcrux-guest-agent" 2>/dev/null || true
 cp packaging/linux/horcrux-guest-agent.initd packaging/linux/horcrux-guest-agent.service \

@@ -282,8 +282,149 @@ pub fn pad_report(g: &Gamepad) -> [u8; PAD_CONTROL_REPORT_LEN] {
     r
 }
 
+/// XUSB_REPORT as the ViGEm bus takes it (12 bytes, little endian):
+/// wButtons u16, bLeftTrigger u8, bRightTrigger u8, sThumbLX/LY/RX/RY i16.
+pub const XUSB_REPORT_LEN: usize = 12;
+
+/// Viewer gamepad (W3C standard order, stick Y grows downwards) -> the
+/// XInput report layout (stick Y grows upwards, the usual Xbox bit values).
+/// 0 A, 1 B, 2 X, 3 Y, 4 LB, 5 RB, 8 Back, 9 Start, 10 L3, 11 R3, 12-15
+/// d-pad up/down/left/right, 16 Guide; the triggers are the analog fields.
+pub fn xusb_report(g: &Gamepad) -> [u8; XUSB_REPORT_LEN] {
+    const MAP: [(u32, u16); 15] = [
+        (0, 0x1000),
+        (1, 0x2000),
+        (2, 0x4000),
+        (3, 0x8000),
+        (4, 0x0100),
+        (5, 0x0200),
+        (8, 0x0020),
+        (9, 0x0010),
+        (10, 0x0040),
+        (11, 0x0080),
+        (12, 0x0001),
+        (13, 0x0002),
+        (14, 0x0004),
+        (15, 0x0008),
+        (16, 0x0400),
+    ];
+    let mut buttons = 0u16;
+    for (w3c, x) in MAP {
+        if g.buttons & (1 << w3c) != 0 {
+            buttons |= x;
+        }
+    }
+    // up+down / left+right cancel, like the HID hat
+    if buttons & 0x0003 == 0x0003 {
+        buttons &= !0x0003;
+    }
+    if buttons & 0x000c == 0x000c {
+        buttons &= !0x000c;
+    }
+    let up = |v: i16| v.saturating_neg();
+    let mut r = [0u8; XUSB_REPORT_LEN];
+    r[0..2].copy_from_slice(&buttons.to_le_bytes());
+    r[2] = g.lt;
+    r[3] = g.rt;
+    r[4..6].copy_from_slice(&g.lx.to_le_bytes());
+    r[6..8].copy_from_slice(&up(g.ly).to_le_bytes());
+    r[8..10].copy_from_slice(&g.rx.to_le_bytes());
+    r[10..12].copy_from_slice(&up(g.ry).to_le_bytes());
+    r
+}
+
+/// The ViGEm bus driver's public IOCTL interface (ViGEmClient
+/// `km/BusShared.h`, MIT): CTL_CODE(FILE_DEVICE_BUS_EXTENDER = 0x2A,
+/// 0x801 + index, METHOD_BUFFERED, FILE_WRITE_DATA).
+pub mod vigem {
+    pub const COMMON_VERSION: u32 = 0x0001;
+    pub const TARGET_XBOX360_WIRED: u32 = 0;
+    const fn ctl(index: u32) -> u32 {
+        (0x2A << 16) | (2 << 14) | ((0x801 + index) << 2)
+    }
+    pub const IOCTL_PLUGIN_TARGET: u32 = ctl(0x000);
+    pub const IOCTL_UNPLUG_TARGET: u32 = ctl(0x001);
+    pub const IOCTL_CHECK_VERSION: u32 = ctl(0x002);
+    pub const IOCTL_WAIT_DEVICE_READY: u32 = ctl(0x003);
+    pub const IOCTL_XUSB_SUBMIT_REPORT: u32 = ctl(0x201);
+
+    pub fn u32s(v: &[u32]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    /// VIGEM_PLUGIN_TARGET: Size, SerialNo, TargetType (ULONG each), VendorId,
+    /// ProductId (USHORT; 0 = the bus's own Xbox 360 ids).
+    pub fn plugin_target(serial: u32) -> Vec<u8> {
+        let mut b = u32s(&[16, serial, TARGET_XBOX360_WIRED]);
+        b.extend([0u8; 4]);
+        b
+    }
+
+    /// XUSB_SUBMIT_REPORT: Size, SerialNo, then the 12-byte XUSB_REPORT.
+    pub fn submit_report(serial: u32, report: &[u8; super::XUSB_REPORT_LEN]) -> Vec<u8> {
+        let mut b = u32s(&[20, serial]);
+        b.extend_from_slice(report);
+        b
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vigem_ioctls_and_layouts_match_the_bus_header() {
+        use super::vigem::*;
+        // worked out from BusShared.h by hand
+        assert_eq!(IOCTL_PLUGIN_TARGET, 0x002A_A004);
+        assert_eq!(IOCTL_UNPLUG_TARGET, 0x002A_A008);
+        assert_eq!(IOCTL_CHECK_VERSION, 0x002A_A00C);
+        assert_eq!(IOCTL_WAIT_DEVICE_READY, 0x002A_A010);
+        assert_eq!(IOCTL_XUSB_SUBMIT_REPORT, 0x002A_A808);
+        let p = plugin_target(3);
+        assert_eq!(p.len(), 16);
+        assert_eq!(&p[0..4], &16u32.to_le_bytes());
+        assert_eq!(&p[4..8], &3u32.to_le_bytes());
+        assert_eq!(&p[8..12], &0u32.to_le_bytes());
+        let s = submit_report(3, &[7u8; super::XUSB_REPORT_LEN]);
+        assert_eq!(s.len(), 20);
+        assert_eq!(&s[0..4], &20u32.to_le_bytes());
+        assert_eq!(&s[8..], &[7u8; 12]);
+    }
+
+    #[test]
+    fn xusb_report_maps_buttons_and_flips_stick_y() {
+        use super::*;
+        let g = Gamepad {
+            buttons: (1 << 0) | (1 << 3) | (1 << 4) | (1 << 9) | (1 << 12) | (1 << 15) | (1 << 16),
+            lx: -32768,
+            ly: 1000,
+            rx: 32767,
+            ry: -32768,
+            lt: 7,
+            rt: 255,
+            ..Default::default()
+        };
+        let r = xusb_report(&g);
+        assert_eq!(
+            u16::from_le_bytes([r[0], r[1]]),
+            0x1000 | 0x8000 | 0x0100 | 0x0010 | 0x0001 | 0x0008 | 0x0400
+        );
+        assert_eq!((r[2], r[3]), (7, 255));
+        assert_eq!(i16::from_le_bytes([r[4], r[5]]), -32768);
+        assert_eq!(i16::from_le_bytes([r[6], r[7]]), -1000, "Y is flipped");
+        assert_eq!(i16::from_le_bytes([r[8], r[9]]), 32767);
+        assert_eq!(
+            i16::from_le_bytes([r[10], r[11]]),
+            32767,
+            "i16::MIN flips without overflow"
+        );
+        let opp = xusb_report(&Gamepad {
+            buttons: (1 << 12) | (1 << 13) | (1 << 14) | (1 << 15),
+            ..Default::default()
+        });
+        assert_eq!(u16::from_le_bytes([opp[0], opp[1]]), 0, "opposites cancel");
+        assert_eq!(xusb_report(&Gamepad::default()), [0u8; XUSB_REPORT_LEN]);
+    }
+
     use super::*;
     use std::mem::size_of;
 

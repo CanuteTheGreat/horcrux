@@ -22,9 +22,12 @@ DriverVer   = 11/20/2026,@DRIVERVER@
 PnpLockdown = 1
 
 [Manufacturer]
-%Mfg% = HxModels, NTamd64.10.0...17134
+%Mfg% = HxModels, NTamd64.10.0...17134, NTarm64.10.0...17134
 
 [HxModels.NTamd64.10.0...17134]
+%DeviceDesc% = HxPad_Install, HorcruxVirtualGamepad
+
+[HxModels.NTarm64.10.0...17134]
 %DeviceDesc% = HxPad_Install, HorcruxVirtualGamepad
 
 [SourceDisksNames]
