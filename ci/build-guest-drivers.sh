@@ -10,15 +10,30 @@
 # a per-install Horcrux certificate (see src/windows/drivers.rs), so the
 # packages here are unsigned.
 #
+# ARCH=x64 (default) or arm64 (Windows on Arm guests): the same sources and
+# INFs, cross-compiled for the other architecture. The headers come from the
+# x64 WDK package (they are architecture independent); the libraries from the
+# architecture's own packages.
+#
 # Needs: clang (clang-cl driver mode), lld (lld-link), python3, curl, unzip.
-# Env: OUT_DIR (default dist/drivers), KIT_DIR (default ~/.cache/horcrux-wdk),
+# Env: ARCH (x64|arm64), OUT_DIR (default dist/drivers, dist/drivers-arm64),
+#      KIT_DIR (default ~/.cache/horcrux-wdk),
 #      CLANG (default clang), LLD_LINK (default lld-link), DRIVER_VERSION
 #      (default <workspace version>.0).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 SRC="$ROOT/crates/horcrux-guest-tools/drivers/windows"
-OUT_DIR="${OUT_DIR:-dist/drivers}"
+ARCH="${ARCH:-x64}"
+case "$ARCH" in
+  x64)   OUT_DIR="${OUT_DIR:-dist/drivers}"
+         CL_TARGET=x86_64-pc-windows-msvc; MACHINE=x64; ARCH_DEFS=(/D_AMD64_ /DAMD64)
+         WDK_LIBARCH=x64; SDK_LIBARCH=x64 ;;
+  arm64) OUT_DIR="${OUT_DIR:-dist/drivers-arm64}"
+         CL_TARGET=aarch64-pc-windows-msvc; MACHINE=arm64; ARCH_DEFS=(/D_ARM64_ /DARM64)
+         WDK_LIBARCH=ARM64; SDK_LIBARCH=arm64 ;;
+  *) echo "ARCH must be x64 or arm64, not $ARCH" >&2; exit 2 ;;
+esac
 KIT_DIR="${KIT_DIR:-$HOME/.cache/horcrux-wdk}"
 CLANG="${CLANG:-clang}"
 LLD_LINK="${LLD_LINK:-lld-link}"
@@ -31,6 +46,12 @@ microsoft.windows.wdk.x64 10.0.26100.6584 c393d03dfb640b5c92f546b32f6770ef68cd3a
 microsoft.windows.sdk.cpp 10.0.26100.7705 ff455660bee071a744715a9665666fa29c07681579d3d815959a9eec5a556424
 microsoft.windows.sdk.cpp.x64 10.0.26100.7705 ad6ce90ff94010699d29548b3c2b1e52c89eb81143e2199155d9a5c38001b52b
 "
+if [ "$ARCH" = arm64 ]; then
+  KITS="$KITS
+microsoft.windows.wdk.arm64 10.0.26100.6584 e705b2a63eab891def8f98087666f93e8f21da8e3b5def81a624b83fef5bdae9
+microsoft.windows.sdk.cpp.arm64 10.0.26100.7705 03bc0c03d439cef85074bbcd425f9d5d3a6d3b467967acd21da3ba6dfeeafa67
+"
+fi
 mkdir -p "$KIT_DIR"
 while read -r name ver sum; do
   [ -n "$name" ] || continue
@@ -48,7 +69,13 @@ done <<< "$KITS"
 
 WDK="$KIT_DIR/microsoft.windows.wdk.x64-10.0.26100.6584/c"
 SDK="$KIT_DIR/microsoft.windows.sdk.cpp-10.0.26100.7705/c"
-SDK64="$KIT_DIR/microsoft.windows.sdk.cpp.x64-10.0.26100.7705/c"
+if [ "$ARCH" = arm64 ]; then
+  WDKLIB="$KIT_DIR/microsoft.windows.wdk.arm64-10.0.26100.6584/c"
+  SDKLIB="$KIT_DIR/microsoft.windows.sdk.cpp.arm64-10.0.26100.7705/c"
+else
+  WDKLIB="$WDK"
+  SDKLIB="$KIT_DIR/microsoft.windows.sdk.cpp.x64-10.0.26100.7705/c"
+fi
 KV=10.0.26100.0
 UMDF_MINOR=25   # UMDF 2.25 = Windows 10 1803+; matches UmdfLibraryVersion in the INFs
 IDDCX_MINOR=4   # IddCx 1.4 = Windows 10 1903+ / Server 2022 / Windows 11
@@ -63,15 +90,15 @@ INC_DIRS=(
   "$SRC/include"
 )
 LIB_DIRS=(
-  "$SDK64/um/x64"
-  "$WDK/Lib/wdf/umdf/x64/2.$UMDF_MINOR"
-  "$WDK/Lib/$KV/um/x64/iddcx/1.$IDDCX_MINOR"
-  "$WDK/Lib/$KV/um/x64"
+  "$SDKLIB/um/$SDK_LIBARCH"
+  "$WDKLIB/Lib/wdf/umdf/$WDK_LIBARCH/2.$UMDF_MINOR"
+  "$WDKLIB/Lib/$KV/um/$WDK_LIBARCH/iddcx/1.$IDDCX_MINOR"
+  "$WDKLIB/Lib/$KV/um/$WDK_LIBARCH"
 )
 
 # The kits are written for a case-insensitive file system: give every
 # #include / library name that differs only in case a symlink.
-CASE="$KIT_DIR/case-$KV"
+CASE="$KIT_DIR/case-$KV-$ARCH"
 python3 - "$CASE" "${INC_DIRS[@]}" -- "${LIB_DIRS[@]}" -- "$SRC" <<'PY'
 import os, re, sys
 case = sys.argv[1]
@@ -111,18 +138,18 @@ for d in libs:
             if not os.path.lexists(dst): os.symlink(os.path.join(d, f), dst)
 PY
 
-CFLAGS=(--driver-mode=cl --target=x86_64-pc-windows-msvc -fms-compatibility-version=19.40
+CFLAGS=(--driver-mode=cl --target=$CL_TARGET -fms-compatibility-version=19.40
   /nologo /c /O2 /GS- /Zl /GR- /EHs-c- /W3 /Gy /Zc:wchar_t /std:c++17 /utf-8
   -Wno-ignored-pragma-intrinsic -Wno-pragma-pack -Wno-unknown-pragmas -Wno-microsoft-anon-tag
   -Wno-nonportable-include-path -Wno-duplicate-decl-specifier -Wno-ignored-attributes -Wno-microsoft-enum-forward-reference
-  /D_AMD64_ /DAMD64 /D_WIN64 /DUNICODE /D_UNICODE /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00
+  "${ARCH_DEFS[@]}" /D_WIN64 /DUNICODE /D_UNICODE /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00
   /DNTDDI_VERSION=0x0A000007 /DUMDF_VERSION_MAJOR=2 /DUMDF_VERSION_MINOR=$UMDF_MINOR
   /DIDDCX_VERSION_MAJOR=1 /DIDDCX_VERSION_MINOR=$IDDCX_MINOR /DHX_DRIVER_VERSION_STR="\"$DRIVER_VERSION\"")
 # DRIVER_CFLAGS: extra compiler flags, e.g. -DHX_TRACE for a debug trace build
 # shellcheck disable=SC2206
 CFLAGS+=(${DRIVER_CFLAGS:-})
 for d in "${INC_DIRS[@]}" "$CASE/inc"; do CFLAGS+=("-imsvc$d"); done
-LFLAGS=(/nologo /dll /machine:x64 /subsystem:windows,10.0 /noentry /nodefaultlib /opt:ref /opt:icf
+LFLAGS=(/nologo /dll /machine:$MACHINE /subsystem:windows,10.0 /noentry /nodefaultlib /opt:ref /opt:icf
   /guard:no /stack:0x100000,0x100000 /dynamicbase /nxcompat /export:FxDriverEntryUm)
 for d in "${LIB_DIRS[@]}" "$CASE/lib"; do LFLAGS+=("/libpath:$d"); done
 
@@ -142,7 +169,7 @@ build() { # name libs...
   mkdir -p "$OUT/$name"
   cp "$WORK/$name.dll" "$OUT/$name/"
   sed "s/@DRIVERVER@/$DRIVER_VERSION/" "$SRC/$name/$name.inf" > "$OUT/$name/$name.inf"
-  echo "built $OUT/$name ($(stat -c %s "$OUT/$name/$name.dll") bytes, version $DRIVER_VERSION)"
+  echo "built $OUT/$name [$ARCH] ($(stat -c %s "$OUT/$name/$name.dll") bytes, version $DRIVER_VERSION)"
 }
 build hxidd iddcxstub.lib avrt.lib dxgi.lib d3d11.lib
 if [ -f "$SRC/hxpad/hxpad.cpp" ]; then build hxpad; fi

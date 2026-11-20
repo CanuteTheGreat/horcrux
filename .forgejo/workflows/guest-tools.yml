@@ -24,6 +24,8 @@ on:
       - 'packaging/linux/**'
       - 'ci/build-guest-tools-*.sh'
       - 'ci/build-guest-drivers.sh'
+      - 'ci/install-llvm-mingw.sh'
+      - 'ci/fetch-vigem.sh'
       - '.forgejo/workflows/guest-tools.yml'
   workflow_dispatch: {}
 
@@ -47,7 +49,7 @@ jobs:
       - name: Install Rust toolchain
         uses: https://github.com/dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu,x86_64-unknown-linux-musl
+          targets: x86_64-pc-windows-gnu,aarch64-pc-windows-gnullvm,x86_64-unknown-linux-musl
 
       - name: Install tools
         run: |
@@ -58,7 +60,7 @@ jobs:
           done
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             gcc-mingw-w64-x86-64 msitools wixl xorriso qemu-system-x86 qemu-utils ffmpeg curl \
-            clang lld llvm unzip
+            clang lld llvm unzip xz-utils
           ls -l /dev/kvm
 
       - name: Cache cargo registry
@@ -69,6 +71,8 @@ jobs:
             ~/.cargo/git
             target
             ~/.cache/horcrux-wdk
+            ~/.cache/horcrux-llvm-mingw
+            ~/.cache/horcrux-vigem
           key: ${{ runner.os }}-cargo-guest-tools-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-guest-tools-
@@ -90,14 +94,42 @@ jobs:
           for f in horcrux-guest-agent.exe hxidd.dll hxidd.inf hxpad.dll hxpad.inf; do
             grep -q "$f" /tmp/msi-File.idt || { echo "FAIL $f not in the MSI"; exit 1; }
           done
+          # the optional third-party XInput bus: shipped unmodified with its
+          # licence, in a feature that is off by default
+          msiinfo export "$msi" Feature > /tmp/msi-Feature.idt
+          for f in ViGEmBus_1.22.0_x64_x86_arm64.exe ViGEmBus-LICENSE.txt README-ViGEmBus.txt; do
+            grep -q "$f" /tmp/msi-File.idt || { echo "FAIL $f not in the MSI"; exit 1; }
+          done
+          grep -P '^XInput\t' /tmp/msi-Feature.idt | awk -F'\t' '$6 != 2 {exit 1}'
+          grep -q -- '--drivers install-xinput' /tmp/msi-CustomAction.idt
           grep -q -- '--drivers install' /tmp/msi-CustomAction.idt
           grep -q -- '--drivers remove' /tmp/msi-CustomAction.idt
           # the drivers are user-mode DLLs bound to the UMDF 2 / IddCx runtime only
           for d in hxidd hxpad; do
-            llvm-objdump -p "dist/drivers/$d/$d.dll" | grep -E 'DLL Name|FxDriverEntryUm' | tee "/tmp/$d.imp"
+            llvm-objdump -p "dist/drivers-x64/$d/$d.dll" | grep -E 'DLL Name|FxDriverEntryUm' | tee "/tmp/$d.imp"
             grep -q FxDriverEntryUm "/tmp/$d.imp"
             ! grep -i -E 'msvcr|vcruntime|ucrtbase|api-ms-win-crt' "/tmp/$d.imp"
           done
+          echo "ok - $msi"
+
+      - name: Windows on Arm package (agent + drivers + MSI)
+        # cross-built (llvm-mingw as the linker; wixl has no arm64 mode, the
+        # template is patched). No Arm64 Windows runner exists: this proves the
+        # build and the package structure, not a run on an Arm64 guest.
+        run: |
+          TARGET=aarch64-pc-windows-gnullvm bash ci/build-guest-tools-msi.sh
+          msi=$(ls dist/horcrux-guest-tools-*-arm64.msi)
+          msiinfo suminfo "$msi" | grep -i 'template.*Arm64'
+          msiinfo export "$msi" File > /tmp/msi-arm-File.idt
+          for f in horcrux-guest-agent.exe hxidd.dll hxidd.inf hxpad.dll hxpad.inf; do
+            grep -q "$f" /tmp/msi-arm-File.idt || { echo "FAIL $f not in the arm64 MSI"; exit 1; }
+          done
+          for d in hxidd hxpad; do
+            llvm-readobj --file-headers "dist/drivers-arm64/$d/$d.dll" | grep -q 'IMAGE_FILE_MACHINE_ARM64'
+            llvm-objdump -p "dist/drivers-arm64/$d/$d.dll" | grep -q FxDriverEntryUm
+            grep -q NTarm64 "dist/drivers-arm64/$d/$d.inf"
+          done
+          llvm-readobj --file-headers target/aarch64-pc-windows-gnullvm/release/horcrux-guest-agent.exe | grep -q 'IMAGE_FILE_MACHINE_ARM64'
           echo "ok - $msi"
 
       - name: Linux agent (static) + guest tools CD
@@ -123,4 +155,4 @@ jobs:
         # No artifact upload: the Forgejo artifact backend fails the finalize
         # step of upload-artifact on this instance (see docs.yml). Shipping the
         # tools to nodes is the packaging work of phase C2b.
-        run: sha256sum dist/horcrux-guest-tools-*-x64.msi dist/horcrux-guest-tools.iso target/x86_64-unknown-linux-musl/release/horcrux-guest-agent 2>/dev/null || true
+        run: sha256sum dist/horcrux-guest-tools-*.msi dist/horcrux-guest-tools.iso target/x86_64-unknown-linux-musl/release/horcrux-guest-agent 2>/dev/null || true

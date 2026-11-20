@@ -5,9 +5,11 @@
 //! Signing (v1): the packages are signed in the guest with a certificate
 //! generated for this guest only (sign-drivers.ps1; the private key is
 //! deleted right after), which Windows trusts through LocalMachine Root and
-//! TrustedPublisher. That installs user-mode (UMDF) drivers on x64 without
-//! test mode and with Secure Boot on. Microsoft attestation signing would
-//! replace it for production (docs/design/horcrux-console.md, C2c).
+//! TrustedPublisher. That installs user-mode (UMDF) drivers on x64 and Arm64
+//! without test mode and with Secure Boot on. No Microsoft signing programme
+//! is used; see docs/design/horcrux-console.md, "Windows driver signing
+//! without a paid certificate". `install-xinput`/`remove-xinput` handle the
+//! optional third-party ViGEm bus (XInput) in the same module.
 //!
 //! The devices are software devices (SwDeviceCreate) that live until
 //! removed: one virtual display adapter (no monitors until the agent asks
@@ -221,7 +223,13 @@ fn device_ids(cfg: &Config) -> Vec<(String, &'static str, &'static str)> {
             "Horcrux Virtual Display",
         ));
     }
-    for i in 0..cfg.gamepads {
+    // the xinput backend feeds the ViGEm bus instead: a second (HID) pad
+    // would show up as a second player in games that read both
+    for i in 0..if cfg.gamepad_backend == "xinput" {
+        0
+    } else {
+        cfg.gamepads
+    } {
         v.push((
             format!("HxPad{i}"),
             "HorcruxVirtualGamepad",
@@ -310,6 +318,298 @@ pub fn install(cfg: &Config) -> Result<(), String> {
     Ok(())
 }
 
+/// Replace (or append) `key = value` in the guest-tools settings file.
+fn set_conf_key(key: &str, value: &str) -> Result<(), String> {
+    let file = crate::config::config_file();
+    let old = std::fs::read_to_string(&file).unwrap_or_default();
+    let mut found = false;
+    let mut out: Vec<String> = old
+        .lines()
+        .map(|l| {
+            let t = l.trim();
+            let is_key = !t.starts_with('#')
+                && t.split_once('=')
+                    .is_some_and(|(k, _)| k.trim().replace('-', "_") == key);
+            if is_key {
+                found = true;
+                format!("{key} = {value}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    if !found {
+        out.push(format!("{key} = {value}"));
+    }
+    if let Some(dir) = Path::new(&file).parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(&file, out.join("\r\n") + "\r\n").map_err(|e| format!("{file}: {e}"))
+}
+
+fn vigem_installer(cfg: &Config) -> Result<PathBuf, String> {
+    if !cfg.vigem_installer.is_empty() {
+        return Ok(PathBuf::from(&cfg.vigem_installer));
+    }
+    let dir = exe_dir().join("optional");
+    std::fs::read_dir(&dir)
+        .ok()
+        .and_then(|rd| {
+            rd.flatten().map(|e| e.path()).find(|p| {
+                let n = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase())
+                    .unwrap_or_default();
+                n.starts_with("vigembus") && n.ends_with(".exe")
+            })
+        })
+        .ok_or(format!(
+            "no ViGEm bus setup program in {} (or set vigem_installer)",
+            dir.display()
+        ))
+}
+
+/// SHA-256 of a file as the inbox `certutil` prints it (lowercase hex).
+fn sha256_of(f: &Path) -> Result<String, String> {
+    let out = run(Command::new(system32("certutil.exe"))
+        .arg("-hashfile")
+        .arg(f)
+        .arg("SHA256"))?;
+    out.lines()
+        .map(|l| l.replace(' ', "").to_ascii_lowercase())
+        .find(|l| l.len() == 64 && l.bytes().all(|c| c.is_ascii_hexdigit()))
+        .ok_or(format!("certutil gave no hash: {}", out.trim()))
+}
+
+/// Refuse a setup program that is not the pinned one or is not validly
+/// signed by the expected publisher. Both checks run: the hash pins the
+/// exact file, the signature shows who vouches for the kernel driver in it.
+fn check_vigem_installer(cfg: &Config, f: &Path) -> Result<(), String> {
+    let got = sha256_of(f)?;
+    if got != cfg.vigem_sha256 {
+        return Err(format!(
+            "{}: SHA-256 {got} is not the expected {} (vigem_sha256)",
+            f.display(),
+            cfg.vigem_sha256
+        ));
+    }
+    let script = "$s = Get-AuthenticodeSignature -LiteralPath $args[0]; \
+         Write-Output ('STATUS=' + $s.Status); \
+         if ($s.SignerCertificate) { Write-Output ('SIGNER=' + $s.SignerCertificate.Subject) }";
+    let out = run(
+        Command::new(system32(r"WindowsPowerShell\v1.0\powershell.exe")).args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!(
+                "& {{ {script} }} '{}'",
+                f.display().to_string().replace('\'', "''")
+            ),
+        ]),
+    )?;
+    let status = out
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("STATUS="))
+        .unwrap_or("");
+    let signer = out
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("SIGNER="))
+        .unwrap_or("");
+    if status != "Valid" || !signer.contains(&cfg.vigem_signer) {
+        return Err(format!(
+            "{}: signature {status:?} by {signer:?}, expected a valid one from {:?} (vigem_signer)",
+            f.display(),
+            cfg.vigem_signer
+        ));
+    }
+    Ok(())
+}
+
+/// Wait until the ViGEm bus appears (or vanishes) after setup/uninstall.
+fn wait_vigem(present: bool, timeout_ms: u64) -> bool {
+    let end = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        if super::xinput::bus_present() == present {
+            return true;
+        }
+        if std::time::Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
+/// Present while the ViGEm bus on this guest was put there by us; only then
+/// do we remove it again (a bus the guest owner installed is theirs).
+fn vigem_marker() -> PathBuf {
+    Path::new(&crate::config::config_file()).with_file_name("xinput-installed-by-horcrux")
+}
+
+/// Run the ViGEm uninstall when we installed it. Returns whether it ran.
+fn uninstall_vigem_if_ours(cfg: &Config) -> Result<bool, String> {
+    if !vigem_marker().exists() {
+        return Ok(false);
+    }
+    if super::xinput::bus_present() {
+        let f = vigem_installer(cfg)?;
+        check_vigem_installer(cfg, &f)?;
+        let out = Command::new(&f)
+            .args(["/uninstall", "/quiet", "/norestart", "/log"])
+            .arg(vigem_log())
+            .output()
+            .map_err(|e| format!("{}: {e}", f.display()))?;
+        let code = out.status.code().unwrap_or(-1);
+        if code != 0 && code != 3010 {
+            return Err(format!(
+                "{} /uninstall exited {code}: {}",
+                f.display(),
+                vigem_log_hint()
+            ));
+        }
+        wait_vigem(false, cfg.driver_device_timeout_ms);
+    }
+    let _ = std::fs::remove_file(vigem_marker());
+    Ok(true)
+}
+
+/// Where the ViGEm setup program writes its log (next to the settings file).
+fn vigem_log() -> PathBuf {
+    Path::new(&crate::config::config_file()).with_file_name("vigem-setup.log")
+}
+
+/// The setup's own explanation of a failure: its (Windows Installer) log lines
+/// that say why, e.g. the launch condition that refuses Windows Server.
+fn vigem_log_hint() -> String {
+    let text = std::fs::read(vigem_log())
+        .map(|b| String::from_utf8_lossy(&b).replace('\0', ""))
+        .unwrap_or_default();
+    let mut seen: Vec<String> = Vec::new();
+    for l in text.lines() {
+        let low = l.to_ascii_lowercase();
+        if low.contains("can not be installed")
+            || low.contains("cannot be installed")
+            || low.contains("installation failed")
+            || low.contains("error 0x")
+        {
+            // "MSI (s) (..) [..]: Product: Name -- Reason": keep the reason
+            let l = l.rsplit(" -- ").next().unwrap_or(l).trim().to_string();
+            if !l.is_empty() && !seen.contains(&l) {
+                seen.push(l);
+            }
+        }
+    }
+    if seen.is_empty() {
+        format!("(setup log: {})", vigem_log().display())
+    } else {
+        format!(
+            "{} (setup log: {})",
+            seen.iter().take(3).cloned().collect::<Vec<_>>().join(" | "),
+            vigem_log().display()
+        )
+    }
+}
+
+/// `--drivers install-xinput`: install the third-party ViGEm bus driver
+/// (opt-in; see the module docs of `xinput`), switch the agent's gamepad
+/// backend to it and drop the Horcrux HID pads so games see one controller.
+pub fn install_xinput(cfg: &Config) -> Result<(), String> {
+    let f = vigem_installer(cfg)?;
+    check_vigem_installer(cfg, &f)?;
+    if !super::xinput::bus_present() {
+        let marker = vigem_marker();
+        if let Some(dir) = marker.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(
+            &marker,
+            "ViGEm bus installed by horcrux-guest-agent --drivers install-xinput\r\n",
+        )
+        .map_err(|e| format!("{}: {e}", marker.display()))?;
+        let out = Command::new(&f)
+            .args(["/quiet", "/norestart", "/log"])
+            .arg(vigem_log())
+            .output()
+            .map_err(|e| format!("{}: {e}", f.display()))?;
+        // 0 = installed, 3010 = installed, restart pending
+        let code = out.status.code().unwrap_or(-1);
+        if code != 0 && code != 3010 {
+            let _ = std::fs::remove_file(vigem_marker()); // nothing was installed
+            return Err(format!(
+                "{} exited {code}: {}",
+                f.display(),
+                vigem_log_hint()
+            ));
+        }
+        if !wait_vigem(true, cfg.driver_device_timeout_ms) {
+            return Err(format!(
+                "ViGEm bus setup finished (exit {code}) but the bus did not appear{}",
+                if code == 3010 {
+                    "; a restart is pending"
+                } else {
+                    ""
+                }
+            ));
+        }
+    }
+    set_conf_key("gamepad_backend", "xinput")?;
+    let pnputil = system32("pnputil.exe");
+    for i in 0..cfg.gamepads.max(16) {
+        let _ =
+            run(Command::new(&pnputil)
+                .args(["/remove-device", &format!(r"SWD\{ENUMERATOR}\HxPad{i}")]));
+    }
+    println!("xinput backend ready (ViGEm bus present; Horcrux HID pads removed)");
+    Ok(())
+}
+
+/// `--drivers remove-xinput`: back to the Horcrux HID gamepad.
+pub fn remove_xinput(cfg: &Config) -> Result<(), String> {
+    set_conf_key("gamepad_backend", "hid")?;
+    if !uninstall_vigem_if_ours(cfg)? && super::xinput::bus_present() {
+        println!("the ViGEm bus was not installed by Horcrux: left in place");
+    }
+    // bring the HID pads back when the Horcrux drivers are installed
+    let mut hid = cfg.clone();
+    hid.gamepad_backend = "hid".into();
+    for (inst, hw, desc) in device_ids(&hid) {
+        if hw == "HorcruxVirtualGamepad" && !published("hxpad").is_empty() && !device_present(&inst)
+        {
+            let id = create_device(&inst, hw, desc, cfg.driver_device_timeout_ms as u32)?;
+            println!("device {id}");
+        }
+    }
+    println!("xinput backend removed");
+    Ok(())
+}
+
+/// Facts the guest's owner needs to judge the signing situation, read from
+/// the running system (never changed by us).
+fn security_state() -> serde_json::Value {
+    let reg = |args: &[&str]| run(Command::new(system32("reg.exe")).args(args)).unwrap_or_default();
+    let sb = reg(&[
+        "query",
+        r"HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State",
+        "/v",
+        "UEFISecureBootEnabled",
+    ]);
+    let secure_boot = if sb.contains("0x1") {
+        serde_json::json!(true)
+    } else if sb.contains("0x0") {
+        serde_json::json!(false)
+    } else {
+        serde_json::Value::Null // legacy BIOS or unreadable
+    };
+    // test mode shows as a watermark; the loader option is in the BCD store
+    let bcd = run(Command::new(system32("bcdedit.exe")).args(["/enum", "{current}"]))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let test_signing = bcd
+        .lines()
+        .any(|l| l.trim_start().starts_with("testsigning") && l.contains("yes"));
+    serde_json::json!({"secure_boot": secure_boot, "test_signing": test_signing})
+}
+
 /// Delete our driver packages from the driver store (devices using them
 /// lose their driver). Returns the published names removed.
 fn remove_packages() -> Vec<String> {
@@ -348,6 +648,9 @@ fn remove_certs(subject: &str, keep: Option<&str>) {
 }
 
 pub fn remove(cfg: &Config) -> Result<(), String> {
+    if let Err(e) = uninstall_vigem_if_ours(cfg) {
+        eprintln!("horcrux-guest-agent: {e}");
+    }
     let pnputil = system32("pnputil.exe");
     // every instance we may have created (gamepads may have been lowered since)
     let mut ids: Vec<String> = vec!["HxIdd0".into()];
@@ -396,5 +699,10 @@ pub fn status() -> String {
         "gamepads".into(),
         serde_json::json!(super::pad::Pads::open().count()),
     );
+    s.insert(
+        "xinput_bus".into(),
+        serde_json::json!(super::xinput::bus_present()),
+    );
+    s.insert("signing".into(), security_state());
     serde_json::to_string_pretty(&s).unwrap_or_default()
 }

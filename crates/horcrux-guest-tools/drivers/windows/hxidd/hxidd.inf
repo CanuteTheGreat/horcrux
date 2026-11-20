@@ -19,9 +19,12 @@ DriverVer   = 11/20/2026,@DRIVERVER@
 PnpLockdown = 1
 
 [Manufacturer]
-%Mfg% = HxModels, NTamd64.10.0...18362
+%Mfg% = HxModels, NTamd64.10.0...18362, NTarm64.10.0...18362
 
 [HxModels.NTamd64.10.0...18362]
+%DeviceDesc% = HxIdd_Install, HorcruxVirtualDisplay
+
+[HxModels.NTarm64.10.0...18362]
 %DeviceDesc% = HxIdd_Install, HorcruxVirtualDisplay
 
 [SourceDisksNames]

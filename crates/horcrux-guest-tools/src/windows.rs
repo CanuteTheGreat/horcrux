@@ -14,6 +14,7 @@ mod pad;
 mod port;
 pub mod service;
 mod video;
+mod xinput;
 
 use crate::agent::{Out, Platform};
 use crate::config::Config;
@@ -36,6 +37,7 @@ pub struct Windows {
     /// The node asked for virtual monitors (HostHello.virtual_display).
     host_virtual: bool,
     pads: Option<pad::Pads>,
+    xbus: Option<xinput::Bus>,
 }
 
 impl Windows {
@@ -54,6 +56,7 @@ impl Windows {
             video: None,
             host_virtual: false,
             pads: None,
+            xbus: None,
         };
         w.restore_virtual_modes();
         w
@@ -148,6 +151,27 @@ impl Windows {
     }
 
     fn gamepad(&mut self, g: &Gamepad) {
+        if self.cfg.gamepad_backend == "xinput" {
+            if self.xbus.is_none() {
+                match xinput::Bus::open() {
+                    Ok(b) => self.xbus = Some(b),
+                    Err(e) => {
+                        static ONCE: AtomicBool = AtomicBool::new(false);
+                        if !ONCE.swap(true, Ordering::SeqCst) {
+                            eprintln!("horcrux-guest-agent: gamepad input ignored: {e}");
+                        }
+                        return;
+                    }
+                }
+            }
+            if let Some(b) = &mut self.xbus {
+                if let Err(e) = b.write(g, self.cfg.gamepads) {
+                    eprintln!("horcrux-guest-agent: {e}");
+                    self.xbus = None; // reopen next time (bus restarted)
+                }
+            }
+            return;
+        }
         if self.pads.as_ref().map(|p| p.count()).unwrap_or(0) == 0 {
             self.pads = Some(pad::Pads::open());
         }
@@ -182,6 +206,8 @@ pub fn one_shot(cfg: &Config) -> Option<i32> {
         return Some(match a.as_str() {
             "install" => report(drivers::install(cfg)),
             "remove" => report(drivers::remove(cfg)),
+            "install-xinput" => report(drivers::install_xinput(cfg)),
+            "remove-xinput" => report(drivers::remove_xinput(cfg)),
             _ => {
                 println!("{}", drivers::status());
                 0
@@ -210,7 +236,16 @@ pub fn one_shot(cfg: &Config) -> Option<i32> {
     }
     if cfg.gamepad_test {
         let pads = pad::Pads::open();
-        if pads.count() == 0 {
+        let mut xbus = None;
+        if cfg.gamepad_backend == "xinput" {
+            match xinput::Bus::open() {
+                Ok(b) => xbus = Some(b),
+                Err(e) => {
+                    eprintln!("horcrux-guest-agent: {e}");
+                    return Some(1);
+                }
+            }
+        } else if pads.count() == 0 {
             eprintln!("horcrux-guest-agent: no Horcrux virtual gamepad");
             return Some(1);
         }
@@ -238,7 +273,11 @@ pub fn one_shot(cfg: &Config) -> Option<i32> {
             ("released", Gamepad::default(), 500),
         ];
         for (name, g, ms) in steps {
-            if let Err(e) = pads.write(&g) {
+            let r = match &mut xbus {
+                Some(b) => b.write(&g, cfg.gamepads.max(1)),
+                None => pads.write(&g),
+            };
+            if let Err(e) = r {
                 eprintln!("horcrux-guest-agent: {e}");
                 return Some(1);
             }
@@ -290,7 +329,11 @@ impl Platform for Windows {
         if virtual_display {
             capture.push("idd".into());
         }
-        let gamepad = pad::Pads::open().count() > 0;
+        let gamepad = if self.cfg.gamepad_backend == "xinput" {
+            xinput::bus_present()
+        } else {
+            pad::Pads::open().count() > 0
+        };
         Hello {
             v: proto::VERSION,
             os: "windows".into(),

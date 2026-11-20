@@ -11,7 +11,11 @@
      ...\Guest Tools\drivers and installed by the agent's "drivers install" command (as SYSTEM:
      a per-guest signing certificate whose private key is deleted right after, see
      crates/horcrux-guest-tools/src/windows/drivers.rs). Property HXDRIVERS=0 skips them
-     (msiexec /i ... HXDRIVERS=0); a driver failure never fails the tools install. -->
+     (msiexec /i ... HXDRIVERS=0); a driver failure never fails the tools install.
+     Optional feature XInput (never on by default: msiexec /i ... ADDLOCAL=Main,XInput) also
+     installs the unmodified third-party ViGEmBus setup under ...\Guest Tools\optional and
+     runs "drivers install-xinput" (hash + signature checked first), for XInput-only games.
+     Windows on Arm: wixl -a arm64 with Drivers=<ARM64 build>; the files are the same. -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="Horcrux Guest Tools" Language="1033" Version="$(var.Version)"
            Manufacturer="Horcrux" UpgradeCode="6f1d3a52-4b8e-4c0d-9a77-5e2c8b1f40d3">
@@ -33,6 +37,13 @@
                               Arguments="--service"/>
               <ServiceControl Id="HxSvcControl" Name="HorcruxGuestTools" Start="install" Stop="both" Remove="uninstall" Wait="no"/>
             </Component>
+            <Directory Id="HxOptionalDir" Name="optional">
+              <Component Id="HxVigem" Guid="5e7a9c13-2d48-4b60-8f1a-c3b0d6e92a74" Win64="yes">
+                <File Id="HxVigemExe" Name="ViGEmBus_1.22.0_x64_x86_arm64.exe" Source="$(var.Optional)/ViGEmBus_1.22.0_x64_x86_arm64.exe" KeyPath="yes"/>
+                <File Id="HxVigemLicense" Name="ViGEmBus-LICENSE.txt" Source="$(var.Optional)/ViGEmBus-LICENSE.txt"/>
+                <File Id="HxVigemReadme" Name="README-ViGEmBus.txt" Source="$(var.Optional)/README-ViGEmBus.txt"/>
+              </Component>
+            </Directory>
             <Directory Id="HxDriversDir" Name="drivers">
               <Directory Id="HxIddDir" Name="hxidd">
                 <Component Id="HxIdd" Guid="3d8e1c47-5b2a-4f60-9e13-7c4a2b9d0f51" Win64="yes">
@@ -65,9 +76,15 @@
       <ComponentRef Id="HxIdd"/>
       <ComponentRef Id="HxPad"/>
     </Feature>
+    <!-- off unless asked for (Level above the default install level) -->
+    <Feature Id="XInput" Title="XInput controller support (third-party ViGEmBus driver)" Level="2">
+      <ComponentRef Id="HxVigem"/>
+    </Feature>
 
     <!-- deferred + no impersonation = runs as SYSTEM inside the install transaction -->
     <CustomAction Id="HxDriversInstall" FileKey="AgentExeFile" ExeCommand="--drivers install"
+                  Execute="deferred" Impersonate="no" Return="ignore"/>
+    <CustomAction Id="HxXinputInstall" FileKey="AgentExeFile" ExeCommand="--drivers install-xinput"
                   Execute="deferred" Impersonate="no" Return="ignore"/>
     <CustomAction Id="HxDriversRemove" FileKey="AgentExeFile" ExeCommand="--drivers remove"
                   Execute="deferred" Impersonate="no" Return="ignore"/>
@@ -76,6 +93,7 @@
     <InstallExecuteSequence>
       <Custom Action="HxDriversRemove" Sequence="3490">REMOVE~="ALL"</Custom>
       <Custom Action="HxDriversInstall" Sequence="4010">NOT REMOVE~="ALL" AND HXDRIVERS="1"</Custom>
+      <Custom Action="HxXinputInstall" Sequence="4020">NOT REMOVE~="ALL" AND &amp;XInput=3</Custom>
     </InstallExecuteSequence>
   </Product>
 </Wix>

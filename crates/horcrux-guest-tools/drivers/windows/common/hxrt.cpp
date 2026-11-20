@@ -14,6 +14,18 @@
  */
 extern "C" {
 
+#if defined(__aarch64__)
+/* Arm64: the CFG hooks get the call target in x15; "dispatch" branches to it. */
+__attribute__((naked)) void hx_guard_check_nop(void)
+{
+    __asm__ volatile("ret");
+}
+
+__attribute__((naked)) void hx_guard_dispatch_nop(void)
+{
+    __asm__ volatile("br x15");
+}
+#else
 __attribute__((naked)) void hx_guard_check_nop(void)
 {
     __asm__ volatile("ret");
@@ -23,6 +35,7 @@ __attribute__((naked)) void hx_guard_dispatch_nop(void)
 {
     __asm__ volatile("jmp *%rax");
 }
+#endif
 
 void *__guard_check_icall_fptr = (void *)hx_guard_check_nop;
 void *__guard_dispatch_icall_fptr = (void *)hx_guard_dispatch_nop;
