@@ -112,6 +112,10 @@ pub struct SessionStats {
     pub nacks: u64,
     /// Refresh rate of the client's display (frames are paced to it).
     pub client_refresh_hz: Option<u32>,
+    /// Node encoder starts (each one begins with a keyframe) and what the
+    /// running one produces: [width, height, fps, kbit/s].
+    pub encoder_starts: u64,
+    pub encoded: Option<[u32; 4]>,
 }
 
 pub struct SessionHandle {
@@ -846,6 +850,8 @@ async fn compositor(
     let mut frame_gap = Duration::from_secs_f64(1.0 / profile.max_fps.max(1) as f64);
     // adaptation target (bitrate, output size, frame rate), when set
     let mut rate: Option<abr::Target> = None;
+    // (kbit/s, output width, output height, fps) of the running encoder
+    let mut running: Option<(u32, u32, u32, u32)> = None;
     let idle_gap = (profile.idle_refresh_fps > 0)
         .then(|| Duration::from_secs_f64(1.0 / profile.idle_refresh_fps as f64));
     // Wake often and send as soon as the guest drew something and the
@@ -936,11 +942,18 @@ async fn compositor(
                             sv.fps = t.fps.max(1);
                             sv.keyframe_interval_frames = sv.fps * profile.keyframe_interval_secs.max(1);
                             let _ = ctx.to_guest(gproto::Msg::StartVideo(sv));
-                        } else if encoder.is_some() {
-                            // FFmpeg's CLI can't change rate or size in-stream
-                            encoder = None;
-                            submitted.clear();
-                            dirty = true;
+                        } else if let (Some((kbps, ow, oh, fps)), Some(f)) = (running, fb.as_ref()) {
+                            // FFmpeg's CLI can't change rate or size in-stream and
+                            // a restart costs a keyframe: restart for a new size or
+                            // frame rate, or a bitrate change of -30% / +50%.
+                            let (w, h) = encode::fit(f.width, f.height, t.width.max(2), t.height.max(2));
+                            let (mw, mh) = encode::fit(f.width, f.height, settings.max_width, settings.max_height);
+                            let shape = (w.min(mw), h.min(mh), t.fps.max(1)) != (ow, oh, fps);
+                            if shape || t.kbps * 10 < kbps * 7 || t.kbps * 10 > kbps * 15 {
+                                encoder = None;
+                                submitted.clear();
+                                dirty = true;
+                            }
                         }
                     }
                     None => break,
@@ -989,6 +1002,11 @@ async fn compositor(
                         let (w, h) = encode::fit(f.width, f.height, t.width.max(2), t.height.max(2));
                         params.out_width = params.out_width.min(w);
                         params.out_height = params.out_height.min(h);
+                    }
+                    running = Some((params.bitrate_kbps, params.out_width, params.out_height, params.fps));
+                    if let Ok(mut s) = ctx.stats.lock() {
+                        s.encoder_starts += 1;
+                        s.encoded = Some([params.out_width, params.out_height, params.fps, params.bitrate_kbps]);
                     }
                     match Encoder::spawn(&settings.ffmpeg_path, params, enc_tx.clone()) {
                         Ok(e) => encoder = Some(e),
@@ -1463,7 +1481,8 @@ async fn transport(
                         "encode_ms": s.encode_ms_avg, "codec": s.codec, "encoder": s.encoder,
                         "width": s.guest_width, "height": s.guest_height, "path": s.path,
                         "estimate_kbps": s.link_estimate_kbps, "target": s.target,
-                        "rtt_ms": s.rtt_ms, "loss_pct": s.loss_pct, "nacks": s.nacks});
+                        "rtt_ms": s.rtt_ms, "loss_pct": s.loss_pct, "nacks": s.nacks,
+                        "encoded": s.encoded, "encoder_starts": s.encoder_starts});
                     pending_ctl.push(msg.to_string());
                 }
                 let _ = rtc.handle_input(Input::Timeout(Instant::now()));

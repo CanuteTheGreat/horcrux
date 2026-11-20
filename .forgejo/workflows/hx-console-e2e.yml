@@ -21,6 +21,8 @@ on:
       - 'horcrux-api/horcrux-ui/src/pages/system/console_settings.rs'
       - 'horcrux-common/src/console.rs'
       - 'horcrux-api/tests/hx_console_e2e.*'
+      - 'horcrux-api/tests/hx_console_wan_e2e.*'
+      - 'crates/horcrux-turn/**'
       - 'crates/horcrux-vm/tests/hxc_dbus_e2e.rs'
       - '.forgejo/workflows/hx-console-e2e.yml'
   workflow_dispatch: {}
@@ -105,3 +107,55 @@ jobs:
           # the e2e step above downloaded and checksummed the Alpine ISO
           HXC_TEST_ISO="$HOME/.cache/hxc/alpine-virt.iso" \
             cargo test -p horcrux-vm --features qemu --test hxc_dbus_e2e -- --ignored --nocapture
+
+  hx-console-wan-e2e:
+    # Phase C3: the same real guest viewed from a Chromium in its own network
+    # namespace behind a netem-shaped link (RTT/loss/rate per condition):
+    # direct (LAN), through the node's built-in TURN relay (UDP, automatic
+    # fallback when direct UDP is blocked, TCP when all UDP is blocked),
+    # link adaptation under a rate limit and a configured uplink cap, relay
+    # credentials revoked at session end. LATENCY/PATH lines per path.
+    name: Horcrux Console WAN (relay, netem, link adaptation)
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-26.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Install tools
+        run: |
+          for i in 1 2 3; do
+            sudo apt-get update -qq || true
+            apt-cache policy ffmpeg | grep -q 'Candidate: [0-9]' && break
+            sleep 15
+          done
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            build-essential clang libvirt-dev libpam0g-dev qemu-system-x86 qemu-utils \
+            qemu-system-modules-opengl ffmpeg python3-venv curl iproute2 iptables
+          ls -l /dev/kvm
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-hx-console-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-hx-console-
+
+      - name: Relay unit tests (STUN/TURN codec, RFC 5769 vectors, allocations)
+        run: cargo test -p horcrux-turn
+
+      - name: Build horcrux-api (all features)
+        run: cargo build -p horcrux-api --all-features
+
+      - name: WAN e2e (netem paths, relay, adaptation)
+        run: |
+          set -o pipefail
+          HXC_OUT=/tmp/hxc-wan bash horcrux-api/tests/hx_console_wan_e2e.sh target/debug/horcrux-api 2>&1 | tee /tmp/hxc-wan.log
+          grep -E '^(LATENCY|RESULTS)' /tmp/hxc-wan.log || true

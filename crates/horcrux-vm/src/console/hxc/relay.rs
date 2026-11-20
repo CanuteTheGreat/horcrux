@@ -141,26 +141,46 @@ fn set_error(e: Option<String>) {
 pub async fn apply(s: &ConsoleSettings) {
     let _serial = APPLY.lock().await;
     let wan = s.wan.clone();
-    {
+    let keep = {
         let mut g = match RELAY.lock() {
             Ok(g) => g,
             Err(_) => return,
         };
+        // Only what the listening relay itself uses needs a restart; the
+        // rest (force_relay, public address, adaptation) is read per
+        // ticket/session.
         let same = g
             .as_ref()
             .map(|r| {
-                r.wan == wan
+                let (a, b) = (&r.wan, &wan);
+                a.relay_listen_address == b.relay_listen_address
+                    && a.relay_port == b.relay_port
+                    && a.relay_tcp == b.relay_tcp
+                    && a.relay_peer_address == b.relay_peer_address
+                    && a.relay_port_min == b.relay_port_min
+                    && a.relay_port_max == b.relay_port_max
+                    && a.relay_realm == b.relay_realm
+                    && a.relay_max_allocations == b.relay_max_allocations
                     && r.udp_min == s.udp_port_min
                     && r.udp_max == s.udp_port_max
                     && r.candidates == s.candidate_addresses
             })
             .unwrap_or(false);
         if wan.enabled && same {
-            return;
+            if let Some(r) = g.as_mut() {
+                r.wan = wan.clone();
+            }
+            true
+        } else {
+            if g.take().is_some() {
+                tracing::info!("console relay stopped");
+            }
+            false
         }
-        if g.take().is_some() {
-            tracing::info!("console relay stopped");
-        }
+    };
+    if keep {
+        portmap::apply(&wan).await;
+        return;
     }
     portmap::apply(&wan).await;
     if !wan.enabled {
@@ -192,7 +212,19 @@ pub async fn apply(s: &ConsoleSettings) {
         max_allocations: wan.relay_max_allocations as usize,
         ..Default::default()
     };
-    match Relay::start(cfg).await {
+    // A relay that was just stopped releases its sockets when its tasks
+    // are dropped by the runtime: retry the bind for a moment.
+    let mut started = Relay::start(cfg.clone()).await;
+    for _ in 0..25 {
+        match &started {
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                started = Relay::start(cfg.clone()).await;
+            }
+            _ => break,
+        }
+    }
+    match started {
         Ok(relay) => {
             tracing::info!(
                 "console relay listening on {} (relayed address {})",

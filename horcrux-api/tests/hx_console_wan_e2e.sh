@@ -90,8 +90,6 @@ $SUDO ip -n $NS link set hxwan1 up
 $SUDO ip -n $NS link set lo up
 $SUDO tc qdisc add dev hxwan0 root netem delay 0ms
 $SUDO ip netns exec $NS tc qdisc add dev hxwan1 root netem delay 0ms
-$SUDO ip netns exec $NS ping -c1 -W2 10.77.0.1 >/dev/null || { echo "FAIL veth link"; exit 1; }
-echo "ok - client network namespace $NS behind a netem-shaped veth link"
 
 ui_env=()
 [ -n "$UI" ] && ui_env=(HORCRUX_UI_DIR="$(readlink -f "$UI")")
@@ -104,6 +102,8 @@ env HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_DATA_DIR="$DATA" \
 echo $! > "$DATA/api.pid"
 for i in $(seq 1 90); do curl -skf https://127.0.0.1:8006/api/health >/dev/null && break; sleep 1; done
 curl -skf https://127.0.0.1:8006/api/health >/dev/null || { echo "FAIL API did not start"; tail -50 "$DATA/api.log"; exit 1; }
+$SUDO ip netns exec $NS curl -skf https://10.77.0.1:8006/api/health >/dev/null || { echo "FAIL the client namespace cannot reach the node"; exit 1; }
+echo "ok - client network namespace $NS reaches the node over a netem-shaped veth link"
 
 rc=0
 HXC_NS=$NS HXC_ALPINE_ISO="$DATA/images/alpine-virt.iso" HXC_OUT="$OUT" SUDO="$SUDO" \
