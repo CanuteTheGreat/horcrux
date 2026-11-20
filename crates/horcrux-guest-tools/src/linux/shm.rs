@@ -163,6 +163,10 @@ pub fn raw_args(cfg: &Config, capture: Capture, fps: u32, display: Option<&str>)
             display.unwrap_or(":0"),
         ]),
     }
+    // kmsgrab does not hold its `-framerate` once the frame copy-out gets
+    // faster than the frame period (measured: 376 frames/s asked for 120,
+    // which starved a 2-vCPU guest); cap the output rate explicitly.
+    push(&["-fpsmax", &fps]);
     push(&["-pix_fmt", "bgr0", "-f", "rawvideo", "pipe:1"]);
     a
 }
@@ -395,7 +399,10 @@ mod tests {
             a.contains("-framerate 240 -f kmsgrab -i - -vf hwdownload,format=bgr0"),
             "{a}"
         );
-        assert!(a.ends_with("-pix_fmt bgr0 -f rawvideo pipe:1"), "{a}");
+        assert!(
+            a.ends_with("-fpsmax 240 -pix_fmt bgr0 -f rawvideo pipe:1"),
+            "{a}"
+        );
         assert!(!a.contains("libx264"));
     }
 }
