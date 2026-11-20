@@ -1175,6 +1175,12 @@ fn statvfs(path: &str) -> Option<(u64, u64, u64)> {
     Some((total, total.saturating_sub(free), avail))
 }
 
+fn is_listable_mount(mount_point: &str) -> bool {
+    std::fs::metadata(mount_point)
+        .map(|m| m.is_dir())
+        .unwrap_or(false)
+}
+
 fn disks() -> Vec<DiskUsage> {
     const REAL: &[&str] = &[
         "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "vfat", "ntfs", "exfat", "nfs",
@@ -1191,6 +1197,11 @@ fn disks() -> Vec<DiskUsage> {
             continue;
         }
         let mp = f[1].replace("\\040", " ");
+        // A bind-mounted single file (/etc/hostname, /etc/hosts in a container)
+        // is not a filesystem a user can fill up: list directories only.
+        if !is_listable_mount(&mp) {
+            continue;
+        }
         if let Some((total, used, avail)) = statvfs(&mp) {
             if total > 0 {
                 out.push(DiskUsage {
@@ -1284,6 +1295,18 @@ pub(crate) fn data_dir_usage_percent() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bind_mounted_file_is_not_a_listed_filesystem() {
+        let dir = std::env::temp_dir().join(format!("hx-mnt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("hostname");
+        std::fs::write(&file, "x").unwrap();
+        assert!(is_listable_mount(dir.to_str().unwrap()));
+        assert!(!is_listable_mount(file.to_str().unwrap()));
+        assert!(!is_listable_mount("/nonexistent-hx-mount"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn zone_names_come_clean_out_of_the_localtime_link() {
