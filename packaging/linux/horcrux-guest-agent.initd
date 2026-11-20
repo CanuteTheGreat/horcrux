@@ -1,4 +1,15 @@
 #!/sbin/openrc-run
+### BEGIN INIT INFO
+# Provides:          horcrux-guest-agent
+# Required-Start:    $local_fs
+# Required-Stop:     $local_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Horcrux guest tools agent
+### END INIT INFO
+# (LSB header: on a systemd host that also carries this OpenRC script,
+# `systemctl enable` hands the same-named SysV script to update-rc.d, which
+# refuses a script without runlevels; the native unit is what runs there.)
 # Horcrux guest tools (Horcrux Console: in-guest capture/encode, input,
 # clipboard, display layout). Settings: /etc/horcrux/guest-tools.conf.
 

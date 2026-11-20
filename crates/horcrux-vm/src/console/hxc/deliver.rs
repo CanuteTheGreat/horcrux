@@ -75,7 +75,9 @@ else
 fi
 [ $rc -eq 0 ] || exit $rc
 if [ -d /run/systemd/system ]; then
-  systemctl daemon-reload; systemctl enable --now horcrux-guest-agent.service || exit 6
+  systemctl daemon-reload
+  systemctl enable horcrux-guest-agent.service || echo "systemctl enable failed; the agent runs until the next boot" >&2
+  systemctl restart horcrux-guest-agent.service || exit 6
 elif command -v rc-service >/dev/null 2>&1; then
   rc-update add horcrux-guest-agent default >/dev/null; rc-service horcrux-guest-agent restart || exit 6
 fi
@@ -336,7 +338,8 @@ mod tests {
                 ".rpm",
                 ".apk",
                 "app-emulation/horcrux-guest-tools",
-                "systemctl daemon-reload; systemctl enable --now horcrux-guest-agent.service",
+                "systemctl enable horcrux-guest-agent.service",
+                "systemctl restart horcrux-guest-agent.service || exit 6",
                 "rc-update add horcrux-guest-agent default",
                 "LABEL=\"HXTOOLS\"",
             ] {
