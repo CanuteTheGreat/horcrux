@@ -80,10 +80,15 @@ fn open(cfg: &Config) -> Result<crate::Port, String> {
 /// Serve one connection until the node closes it.
 pub fn run(cfg: &Config, mut p: Box<dyn Platform>) -> Result<(), String> {
     let (mut r, mut w) = open(cfg)?;
+    // The virtio-serial port stays open across viewers: when the node's
+    // end disconnects, reads return end-of-file and writes fail until it
+    // reconnects (reopening would discard what the node sends meanwhile).
+    // A TCP connection (tests) ends with its peer.
+    let persistent = cfg.connect.is_none();
     let (tx, rx) = mpsc::sync_channel::<Msg>(64);
     let writer = std::thread::spawn(move || {
         while let Ok(m) = rx.recv() {
-            if proto::write_msg(&mut w, &m).is_err() {
+            if proto::write_msg(&mut w, &m).is_err() && !persistent {
                 break;
             }
         }
@@ -95,6 +100,13 @@ pub fn run(cfg: &Config, mut p: Box<dyn Platform>) -> Result<(), String> {
     let result = loop {
         let m = match proto::read_msg(&mut r) {
             Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && persistent => {
+                // node not connected: stop sending, wait for its HostHello
+                p.stop_video();
+                p.stop_audio();
+                std::thread::sleep(std::time::Duration::from_millis(cfg.reconnect_ms.min(250)));
+                continue;
+            }
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break Ok(()),
             Err(e) => break Err(format!("port: {e}")),
         };

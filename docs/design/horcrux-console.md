@@ -1,8 +1,7 @@
 # Horcrux Console: one remote display for every VM, container and host
 
-Status: design (2026-11-18). Nothing in this document is built yet except the
-existing fallback consoles it keeps (noVNC/VNC, SPICE relay, serial and LXD
-consoles in `crates/horcrux-vm/src/console/`). Phases are in section 11.
+Status: C1 and the first part of C2 are built (2026-11-19); section 11 lists
+what each phase delivered and what is still open.
 
 ## 1. Why one component
 
@@ -327,3 +326,98 @@ Moved to C2: native viewer window on a Horcrux desktop (Wayland), audio
 forwarding to the client (QEMU audio is received but not sent), the `clip` and
 `console` data channels, and a latency run on an unloaded node. Needs real GPU
 hardware: VA-API and NVENC encode (code paths present, only software x264 ran).
+
+### C2 status (part 1, 2026-11-19)
+
+Done:
+- Guest tools wire protocol (`crates/horcrux-guest-proto`, section 4.1) and
+  the guest-tools port on every console VM (`[console] guest_tools`,
+  `guest_tools_port`; virtio-serial, host end `<disk>.hxgt.sock`).
+- Broker: connects to the tools when a viewer opens (`guest_tools_wait_ms`),
+  asks for in-guest capture + encode with the profile's settings
+  (`StartVideo`: fps, CBR low delay, no B-frames, GOP, fixed rate, chroma,
+  HDR, intra refresh) and forwards the guest's H.264 access units into the
+  WebRTC track without transcoding; its own encoder rests meanwhile and takes
+  over again if the tools stop or fail. Keyframe requests go to the guest.
+  Re-sends the stream requests when the tools reopen their end.
+- Data channels `clip` (VM.Console.Clipboard, `clipboard_max_bytes`), `pad`
+  (W3C standard gamepad -> tools), `console` (the VM's serial console; input
+  needs VM.Console.Input), `ctl` `resize` (-> tools layout), raw relative
+  mouse through the tools under pointer lock, guest Opus audio on a WebRTC
+  audio track. The web client has pointer lock for `gaming`, gamepad polling,
+  paste -> guest clipboard, guest clipboard -> browser, window-size resize,
+  audio playback, the serial text channel.
+- `gaming` profile: 120 fps fixed rate by default (up to 360), CBR, no
+  B-frames, 2 s GOP; per-profile `fixed_rate`, `chroma` (420/444), `hdr`,
+  `intra_refresh`, `guest_capture` settings (config.toml, API, declarative
+  config, System > Horcrux Console).
+- Linux guest tools (`horcrux-guest-agent`, static musl build; package
+  `app-emulation/horcrux-guest-tools` with OpenRC and systemd services):
+  FFmpeg kmsgrab (console or any KMS desktop) or x11grab capture, NVENC /
+  VA-API / libx264 encode, uinput keyboard + relative mouse + absolute
+  pointer + up to 4 gamepads, clipboard (wl-clipboard/xclip) and layout
+  (xrandr with CVT-RB modes for any size and refresh) through the active
+  graphical session, PulseAudio/PipeWire -> Opus.
+- Windows guest tools (same binary for x86_64-pc-windows-gnu, MSI built with
+  wixl, service `HorcruxGuestTools` that starts the agent in the active
+  console session): DXGI Desktop Duplication (GDI fallback) -> Media
+  Foundation H.264 (hardware MFTs = NVENC/AMF/QSV first, Microsoft software
+  MFT fallback; low-latency CBR, no B-frames, forced keyframes), SendInput
+  keyboard/mouse (scancodes, extended keys, absolute over the virtual
+  desktop, raw relative), CF_UNICODETEXT clipboard with a change listener,
+  display modes through ChangeDisplaySettingsEx, overlapped I/O on the
+  virtio-serial port.
+- Delivery: the guest tools CD (`guest_tools_iso`, label HXTOOLS, virtio-scsi)
+  is attached to console VMs; with `guest_tools_auto_install` the node installs
+  the MSI through the QEMU guest agent when a viewer opens and no tools answer
+  (Windows). CI builds the MSI, the static Linux agent and the CD image
+  (`guest-tools.yml`, ci/build-guest-tools-{msi,iso}.sh).
+
+Proven:
+- Linux, real VM through the virtio-serial guest-tools port
+  (`crates/horcrux-guest-tools/tests/linux_guest_e2e.py`, CI `guest-tools.yml`,
+  Alpine 3.24 guest with the tools CD, KVM): probed capabilities (kmsgrab,
+  software encoder, gamepad, relative mouse; no clipboard/resize claimed
+  without a graphical session), in-guest kmsgrab + x264 stream that ffprobe
+  decodes at the guest's mode (1280x800, every packet a frame, first packet
+  an IDR), keyframe on request, a shell command typed through the tools'
+  uinput keyboard, a uinput gamepad and raw relative motion reaching
+  /dev/input/mice, keystroke-to-encoded-frame latency (section 6).
+- Windows Server 2022 (Windows eval VM, real desktop session, harness
+  `crates/horcrux-guest-tools/tests/win_harness.py` speaking the protocol over
+  TCP): Hello/caps, 1280x720 30 fps Media Foundation software H.264 that
+  ffprobe decodes (181/181 frames, Main profile, no B-frames), keyframe 29 ms
+  after the request, damage-only mode (0 packets idle), native size, SendInput
+  keyboard incl. extended keys, absolute and relative mouse, Unicode
+  clipboard both ways without echo, display mode change and restore, MSI
+  install -> service in session 0 + agent in session 1, clean uninstall.
+
+Still open in C2 (queued as C2b-C2d):
+- C2b: a Windows guest in Horcrux CI with the tools installed automatically
+  (CD + guest agent) and viewed through the browser client with in-guest
+  encode, including the virtio-serial transport on Windows (only TCP ran);
+  WASAPI loopback audio; Linux guest through the full broker + browser path
+  (proven here at the port level); deb/rpm/apk packages for non-Gentoo
+  Linux guests; the API action "install guest tools".
+- C2c: Horcrux virtual display (IddCx Indirect Display Driver, clean-room from
+  Microsoft's documentation; configurable resolution/refresh incl. 240+ Hz,
+  used automatically for GPUs without monitors/outputs) and the virtual HID
+  gamepad for Windows; both are drivers and need signing (below).
+- C2d: the same-host ivshmem raw-frame path and the native viewer window on a
+  Horcrux desktop (Wayland), QEMU (no-tools) audio to Opus, a latency run on
+  an unloaded node for the host-encode path.
+- Needs real GPU hardware: NVENC/AMF/QSV inside a Windows guest, VA-API/NVENC
+  inside a Linux guest, HDR, 4:4:4 in hardware encoders, 240 Hz capture.
+
+Driver signing (C2c): the IddCx virtual display and a virtual HID gamepad
+are user-mode (UMDF 2) drivers. On x64 Windows a UMDF driver package installs
+without test mode when its catalog is signed with a code-signing certificate
+the guest trusts (Horcrux can add its own publisher certificate to the
+guest's TrustedPublisher/Root stores during the MSI install, guest by guest).
+Installing without that per-guest trust, on Windows on Arm, and with
+stricter Code Integrity policies needs Microsoft's attestation signing
+through Partner Center (Hardware Dev Center), which requires an EV
+code-signing certificate. Test-signing mode (bcdedit testsigning) is not an
+option for gaming VMs: it needs Secure Boot off, which anti-cheat refuses.
+Sources: learn.microsoft.com driver signing policy and code-signing
+attestation pages.

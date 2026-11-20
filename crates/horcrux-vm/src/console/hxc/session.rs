@@ -445,6 +445,7 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         guest_tx,
         guest_caps,
         guest_video: AtomicBool::new(false),
+        guest_started: Mutex::new(Vec::new()),
     };
     let ctx = Arc::new(ctx);
     if let Some(rx) = guest_rx {
@@ -489,9 +490,19 @@ struct Ctx {
     guest_caps: Option<gproto::Caps>,
     /// The guest tools are capturing + encoding: the node's encoder rests.
     guest_video: AtomicBool,
+    /// What the guest tools were asked to run, re-sent when they say
+    /// Hello again (their end of the port was reopened).
+    guest_started: Mutex<Vec<gproto::Msg>>,
 }
 
 impl Ctx {
+    /// Start a guest stream and remember it for a re-Hello.
+    fn start_in_guest(&self, m: gproto::Msg) -> bool {
+        if let Ok(mut v) = self.guest_started.lock() {
+            v.push(m.clone());
+        }
+        self.to_guest(m)
+    }
     fn to_guest(&self, m: gproto::Msg) -> bool {
         match &self.guest_tx {
             Some(tx) => tx.try_send(m).is_ok(),
@@ -511,6 +522,7 @@ async fn guest_task(
     to_rtc: mpsc::Sender<ToRtc>,
 ) {
     let mut enc: VecDeque<f64> = VecDeque::new();
+    let linked_at = Instant::now();
     while let Some(m) = rx.recv().await {
         match m {
             gproto::Msg::Video(p) => {
@@ -577,6 +589,19 @@ async fn guest_task(
             }
             gproto::Msg::Audio(a) => {
                 let _ = to_rtc.try_send(ToRtc::Audio(a.data));
+            }
+            // the duplicate Hello of the handshake (one sent when the tools
+            // opened the port, one answering HostHello) is not a reopen
+            gproto::Msg::Hello(_) if linked_at.elapsed() < Duration::from_secs(2) => {}
+            gproto::Msg::Hello(_) => {
+                let again: Vec<gproto::Msg> = ctx
+                    .guest_started
+                    .lock()
+                    .map(|v| v.clone())
+                    .unwrap_or_default();
+                for m in again {
+                    let _ = ctx.to_guest(m);
+                }
             }
             gproto::Msg::Log(l) => tracing::debug!("console guest tools: {l}"),
             _ => {}
@@ -1024,7 +1049,7 @@ async fn transport(
                                 })
                             {
                                 let sv = start_video_for(ctx.profile());
-                                let _ = ctx.to_guest(gproto::Msg::StartVideo(sv));
+                                let _ = ctx.start_in_guest(gproto::Msg::StartVideo(sv));
                             }
                         }
                     }
@@ -1037,13 +1062,15 @@ async fn transport(
                         if let Some(pt) = opus {
                             audio = Some((m.mid, pt));
                             if settings.audio && ctx.guest_can(|c| c.audio) {
-                                let _ = ctx.to_guest(gproto::Msg::StartAudio(gproto::StartAudio {
-                                    codec: "opus".into(),
-                                    sample_rate: 48000,
-                                    channels: 2,
-                                    bitrate_kbps: settings.audio_bitrate_kbps,
-                                    frame_ms: 10,
-                                }));
+                                let _ = ctx.start_in_guest(gproto::Msg::StartAudio(
+                                    gproto::StartAudio {
+                                        codec: "opus".into(),
+                                        sample_rate: 48000,
+                                        channels: 2,
+                                        bitrate_kbps: settings.audio_bitrate_kbps,
+                                        frame_ms: 10,
+                                    },
+                                ));
                             }
                         }
                     }

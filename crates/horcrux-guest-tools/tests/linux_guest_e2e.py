@@ -291,9 +291,10 @@ else:
 send_json(START_VIDEO, {"codec": "h264", "fps": 60, "bitrate_kbps": 2000, "max_bitrate_kbps": 2000,
                         "keyframe_interval_frames": 600, "low_delay": True, "fixed_rate": True, "chroma": "420"})
 status, packets = None, []
+sv_sent = time.time()
 kf_req_at, kf_latency = None, None
 t0 = time.time()
-for kind, p, t in recv_msgs(6.0):
+for kind, p, t in recv_msgs(8.0):
     if kind == VIDEO_STATUS:
         status = json.loads(p)
     elif kind == VIDEO:
@@ -303,6 +304,12 @@ for kind, p, t in recv_msgs(6.0):
                         "data": p[20:]})
         if kf_req_at and keyframe and kf_latency is None and t > kf_req_at:
             kf_latency = (t - kf_req_at) * 1000
+    if status is None and not packets and time.time() - sv_sent > 3:
+        # the tools may have been between two connections: ask again
+        send_json(HOST_HELLO, {"v": 1, "clipboard_max_bytes": 1 << 20})
+        send_json(START_VIDEO, {"codec": "h264", "fps": 60, "bitrate_kbps": 2000, "max_bitrate_kbps": 2000,
+                                "keyframe_interval_frames": 600, "low_delay": True, "fixed_rate": True, "chroma": "420"})
+        sv_sent = time.time()
     if kf_req_at is None and time.time() - t0 > 3 and len(packets) > 10:
         kf_req_at = time.time()
         send(KEYFRAME)
@@ -352,12 +359,19 @@ stype("echo 0 > /sys/class/graphics/fbcon/cursor_blink; setterm -blink off >/dev
 time.sleep(1)
 send_json(START_VIDEO, {"codec": "h264", "fps": 60, "bitrate_kbps": 2000, "max_bitrate_kbps": 2000,
                         "keyframe_interval_frames": 600, "low_delay": True, "fixed_rate": True, "chroma": "420"})
-time.sleep(1.5)
-if packets:
-    idle = sorted(pk["size"] for pk in packets[-60:] if not pk["key"])
-    base = idle[len(idle) // 2] if idle else 50
+# baseline from THIS stream (the restart sends an IDR and a few large
+# frames first): 2 s of idle P-frames after 1.5 s of settling
+for _ in recv_msgs(1.5):
+    pass
+idle = sorted(len(p) - 20 for kind, p, t in recv_msgs(2.0) if kind == VIDEO and not p[0] & 1)
+if len(idle) < 30:
+    fail("latency", f"only {len(idle)} idle frames in 2 s (fixed-rate 60 fps expected)")
+else:
+    base = idle[len(idle) // 2]
+    thr = max(3 * base, base + 200)
+    # negative control: with no input, no frame may cross the threshold
+    false_hits = sum(1 for kind, p, t in recv_msgs(2.0) if kind == VIDEO and not p[0] & 1 and len(p) - 20 > thr)
     for i in range(40):
-        # drain
         for _ in recv_msgs(0.3):
             pass
         ch = "x" if i % 2 == 0 else "\b"
@@ -368,18 +382,22 @@ if packets:
         else:
             ttype("x", gap=0)
         for kind, p, t in recv_msgs(1.0):
-            if kind == VIDEO and len(p) - 20 > max(3 * base, base + 200):
+            if kind == VIDEO and not p[0] & 1 and len(p) - 20 > thr:
                 lat.append((t - sent) * 1000)
                 break
     send(STOP_VIDEO)
-    if len(lat) >= 20:
+    if false_hits:
+        fail("latency", f"change detector fires without input ({false_hits} frames over {thr} bytes in 2 s idle)")
+    elif len(lat) >= 20:
         lat.sort()
         results["latency_ms"] = {"samples": len(lat), "median": lat[len(lat) // 2], "min": lat[0],
-                                 "p95": lat[int(len(lat) * 0.95) - 1], "idle_p_frame_bytes": base}
+                                 "p95": lat[int(len(lat) * 0.95) - 1], "idle_p_frame_bytes": base,
+                                 "threshold_bytes": thr}
         ok("latency", f"keystroke -> changed encoded frame at the node: median {lat[len(lat) // 2]:.1f} ms, "
-           f"min {lat[0]:.1f} ms over {len(lat)} samples (60 fps, software x264 in a 2-vCPU guest)")
+           f"min {lat[0]:.1f} ms, p95 {lat[int(len(lat) * 0.95) - 1]:.1f} ms over {len(lat)} samples "
+           f"(idle P-frame {base} B, threshold {thr} B, 0 false hits idle; 60 fps software x264, 2-vCPU guest)")
     else:
-        fail("latency", f"only {len(lat)} samples (idle P-frame {base} bytes)")
+        fail("latency", f"only {len(lat)} of 40 keystrokes produced a changed frame (idle P-frame {base} B)")
 
 # ---- gamepad + relative mouse ----
 send(INPUT, struct.pack("<BBIhhhhBB", 6, 0, 0b1, 1000, -1000, 0, 0, 0, 255))
@@ -393,9 +411,10 @@ for _ in range(3):
     time.sleep(0.2)
 time.sleep(1)
 s = serial_text()
-pads = [l for l in s.splitlines() if l.startswith("PADS ")]
-if pads and pads[-1].split()[1:] and int(pads[-1].split()[1]) >= 3 and int(pads[-1].split()[2]) >= 1:
-    ok("gamepad", f"uinput devices: {pads[-1]} (keyboard+mouse, pointer, gamepad)")
+import re
+pads = re.findall(r"PADS (\d+) (\d+)", s)
+if pads and int(pads[-1][0]) >= 3 and int(pads[-1][1]) >= 1:
+    ok("gamepad", f"uinput devices: {pads[-1][0]} Horcrux devices, {pads[-1][1]} gamepad (keyboard+mouse, pointer, gamepad)")
 else:
     fail("gamepad", f"{pads}")
 # a PS/2-format packet with dx=7 (0x07) and dy=-3 (0xfd) from /dev/input/mice
