@@ -169,6 +169,189 @@ fn console() -> ProfileSettings {
     ProfileSettings::for_profile(ConsoleProfile::Console)
 }
 
+/// WAN access and link adaptation (phase C3, docs/design/horcrux-console.md
+/// section 12): the node's own relay (TURN) so clients outside the LAN reach
+/// console sessions through one port, optional UPnP/NAT-PMP port mapping,
+/// and adaptive bitrate/resolution/frame rate fitted to the measured link.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WanSettings {
+    /// Run the node's relay (TURN) so clients anywhere can connect. Off by
+    /// default; a standalone machine needs nothing else (plus one forwarded
+    /// port, or `upnp`).
+    pub enabled: bool,
+    /// Address the relay listens on (UDP, and TCP when `relay_tcp`).
+    pub relay_listen_address: String,
+    /// Relay port (UDP and TCP).
+    pub relay_port: u16,
+    /// Also accept TURN over TCP (networks that block UDP).
+    pub relay_tcp: bool,
+    /// Name or address clients use for the relay (the router's public
+    /// address or a DNS name). Empty: the address the client used to reach
+    /// this node's web UI, or the external address UPnP/NAT-PMP reported.
+    pub relay_public_address: String,
+    /// Port clients use for the relay when the router forwards a different
+    /// external port. 0: `relay_port` (or the mapped port).
+    pub relay_public_port: u16,
+    /// Address the relayed sockets bind to; the node's console sockets must
+    /// reach it. Empty: the node's first non-loopback IPv4 address.
+    pub relay_peer_address: String,
+    /// Local UDP ports for relayed allocations (one per client).
+    pub relay_port_min: u16,
+    pub relay_port_max: u16,
+    /// TURN realm.
+    pub relay_realm: String,
+    /// Seconds a session's relay credentials may be used for a new
+    /// allocation (they are revoked when the session ends).
+    pub relay_credential_lifetime_secs: u32,
+    /// Concurrent relayed clients.
+    pub relay_max_allocations: u32,
+    /// Clients use the relay only (no direct attempts): hides the client
+    /// address from the node's media sockets and proves the WAN path.
+    pub force_relay: bool,
+    /// Ask the router for a port mapping (UPnP IGD or NAT-PMP/PCP) for the
+    /// relay port while WAN access is on. Opt-in.
+    pub upnp: bool,
+    /// Lease asked for a mapping (seconds); renewed at half-time.
+    pub upnp_lease_secs: u32,
+    /// Router to ask (`ip` or `ip:port` for NAT-PMP). Empty: the default
+    /// route's gateway.
+    pub upnp_gateway: String,
+    /// Where UPnP discovery (SSDP) is sent.
+    pub upnp_ssdp_address: String,
+    /// The node's upload capacity (kbit/s). Relayed (WAN) sessions never
+    /// exceed it; 0: unknown, the link estimate alone limits them.
+    pub uplink_kbps: u32,
+    /// Fit bitrate, resolution and frame rate to the measured link
+    /// (congestion control estimate) instead of fixed profile rates.
+    pub adaptive: bool,
+    /// Lowest video bitrate adaptation goes to (kbit/s).
+    pub min_kbps: u32,
+    /// Picture quality floor in thousandths of a bit per pixel: below it the
+    /// resolution (gaming: first) or the frame rate (desktop) is lowered.
+    pub min_millibits_per_pixel: u32,
+    /// Lowest frame rate desktop/console adaptation goes to.
+    pub min_fps: u32,
+    /// Milliseconds between two downward changes (an encoder change costs a
+    /// keyframe).
+    pub down_interval_ms: u32,
+    /// Milliseconds the estimate must stay higher before stepping up.
+    pub up_interval_ms: u32,
+    /// Video packets kept for retransmission on a client's NACK (and for
+    /// bandwidth probing); larger covers longer round trips at high rates.
+    pub nack_history_packets: u32,
+}
+
+impl Default for WanSettings {
+    fn default() -> Self {
+        WanSettings {
+            enabled: false,
+            relay_listen_address: "0.0.0.0".into(),
+            relay_port: 3478,
+            relay_tcp: true,
+            relay_public_address: String::new(),
+            relay_public_port: 0,
+            relay_peer_address: String::new(),
+            relay_port_min: 61300,
+            relay_port_max: 61399,
+            relay_realm: "horcrux".into(),
+            relay_credential_lifetime_secs: 120,
+            relay_max_allocations: 64,
+            force_relay: false,
+            upnp: false,
+            upnp_lease_secs: 3600,
+            upnp_gateway: String::new(),
+            upnp_ssdp_address: "239.255.255.250:1900".into(),
+            uplink_kbps: 0,
+            adaptive: true,
+            min_kbps: 250,
+            min_millibits_per_pixel: 50,
+            min_fps: 10,
+            down_interval_ms: 1000,
+            up_interval_ms: 4000,
+            nack_history_packets: 4096,
+        }
+    }
+}
+
+impl WanSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.relay_listen_address.parse::<std::net::IpAddr>().is_err() {
+            return Err("wan.relay_listen_address must be an IP address".into());
+        }
+        if self.relay_port == 0 {
+            return Err("wan.relay_port must not be 0".into());
+        }
+        if !self.relay_peer_address.is_empty()
+            && self.relay_peer_address.parse::<std::net::IpAddr>().is_err()
+        {
+            return Err("wan.relay_peer_address must be empty or an IP address".into());
+        }
+        if self.relay_public_address.len() > 253
+            || !self
+                .relay_public_address
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ".-:[]".contains(c))
+        {
+            return Err("wan.relay_public_address must be a host name or an IP address".into());
+        }
+        if self.relay_port_min == 0 || self.relay_port_min > self.relay_port_max {
+            return Err("wan.relay_port_min must be non-zero and not above relay_port_max".into());
+        }
+        if (self.relay_port_min..=self.relay_port_max).contains(&self.relay_port) {
+            return Err("wan.relay_port must lie outside relay_port_min..relay_port_max".into());
+        }
+        if self.relay_realm.is_empty()
+            || self.relay_realm.len() > 64
+            || !self
+                .relay_realm
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c))
+        {
+            return Err("wan.relay_realm must be 1-64 letters, digits, '.', '-' or '_'".into());
+        }
+        if !(10..=86_400).contains(&self.relay_credential_lifetime_secs) {
+            return Err("wan.relay_credential_lifetime_secs must be 10..=86400".into());
+        }
+        if !(1..=4096).contains(&self.relay_max_allocations) {
+            return Err("wan.relay_max_allocations must be 1..=4096".into());
+        }
+        if !(120..=86_400).contains(&self.upnp_lease_secs) {
+            return Err("wan.upnp_lease_secs must be 120..=86400".into());
+        }
+        if !self.upnp_gateway.is_empty()
+            && self.upnp_gateway.parse::<std::net::IpAddr>().is_err()
+            && self.upnp_gateway.parse::<std::net::SocketAddr>().is_err()
+        {
+            return Err("wan.upnp_gateway must be empty, an IP address or ip:port".into());
+        }
+        if self.upnp_ssdp_address.parse::<std::net::SocketAddr>().is_err() {
+            return Err("wan.upnp_ssdp_address must be ip:port".into());
+        }
+        if self.uplink_kbps != 0 && self.uplink_kbps < 100 {
+            return Err("wan.uplink_kbps must be 0 (unknown) or at least 100".into());
+        }
+        if !(50..=100_000).contains(&self.min_kbps) {
+            return Err("wan.min_kbps must be 50..=100000".into());
+        }
+        if !(1..=2000).contains(&self.min_millibits_per_pixel) {
+            return Err("wan.min_millibits_per_pixel must be 1..=2000".into());
+        }
+        if !(100..=65_536).contains(&self.nack_history_packets) {
+            return Err("wan.nack_history_packets must be 100..=65536".into());
+        }
+        if !(1..=120).contains(&self.min_fps) {
+            return Err("wan.min_fps must be 1..=120".into());
+        }
+        if !(100..=60_000).contains(&self.down_interval_ms)
+            || !(100..=600_000).contains(&self.up_interval_ms)
+        {
+            return Err("wan.down_interval_ms must be 100..=60000 and up_interval_ms 100..=600000".into());
+        }
+        Ok(())
+    }
+}
+
 /// Node-wide Horcrux Console settings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -246,6 +429,8 @@ pub struct ConsoleSettings {
     pub clipboard_max_bytes: u32,
     /// Opus bitrate for guest audio (kbit/s).
     pub audio_bitrate_kbps: u32,
+    /// WAN access (relay, port mapping) and link adaptation.
+    pub wan: WanSettings,
     pub desktop: ProfileSettings,
     pub gaming: ProfileSettings,
     pub console: ProfileSettings,
@@ -282,6 +467,7 @@ impl Default for ConsoleSettings {
             guest_tools_auto_install_retry_secs: 600,
             clipboard_max_bytes: 1 << 20,
             audio_bitrate_kbps: 128,
+            wan: WanSettings::default(),
             desktop: desktop(),
             gaming: gaming(),
             console: console(),
@@ -372,6 +558,13 @@ impl ConsoleSettings {
         if !(6..=510).contains(&self.audio_bitrate_kbps) {
             return Err("audio_bitrate_kbps must be 6..=510".into());
         }
+        self.wan.validate()?;
+        if (self.wan.relay_port_min..=self.wan.relay_port_max).contains(&self.udp_port_min)
+            || (self.wan.relay_port_min..=self.wan.relay_port_max).contains(&self.udp_port_max)
+            || (self.udp_port_min..=self.udp_port_max).contains(&self.wan.relay_port_min)
+        {
+            return Err("wan.relay_port_min..relay_port_max must not overlap udp_port_min..udp_port_max".into());
+        }
         self.desktop.validate("desktop")?;
         self.gaming.validate("gaming")?;
         self.console.validate("console")?;
@@ -416,6 +609,24 @@ mod tests {
         assert!(bad(&|s| s.gaming.bitrate_kbps = 60000));
         assert!(bad(&|s| s.x264_preset = "fast; rm -rf /".into()));
         assert!(bad(&|s| s.ticket_lifetime_secs = 1));
+        assert!(bad(&|s| s.wan.relay_listen_address = "any".into()));
+        assert!(bad(&|s| s.wan.relay_public_address = "evil host; x".into()));
+        assert!(bad(&|s| s.wan.relay_port = 61310));
+        assert!(bad(&|s| s.wan.relay_port_min = 61250));
+        assert!(bad(&|s| s.wan.uplink_kbps = 10));
+        assert!(bad(&|s| s.wan.relay_credential_lifetime_secs = 0));
+    }
+
+    #[test]
+    fn wan_defaults_off_and_partial_documents_keep_defaults() {
+        let s = ConsoleSettings::default();
+        assert!(!s.wan.enabled && !s.wan.upnp && !s.wan.force_relay && s.wan.adaptive);
+        let partial: ConsoleSettings =
+            serde_json::from_str(r#"{"wan":{"enabled":true,"uplink_kbps":50000}}"#).unwrap();
+        assert!(partial.wan.enabled);
+        assert_eq!(partial.wan.uplink_kbps, 50000);
+        assert_eq!(partial.wan.relay_port, 3478);
+        partial.validate().unwrap();
     }
 
     #[test]

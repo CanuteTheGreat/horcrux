@@ -14,6 +14,7 @@
 //!
 //! Wire format of the data channels: docs/design/horcrux-console.md
 //! section 4 (`ctl` JSON, `keys` JSON, `input` binary, `cursor` JSON).
+use super::abr::{self, Abr, AbrConfig};
 use super::encode::{self, EncodeParams, EncodedFrame, Encoder, PixelFormat, VideoCodec};
 use super::guest::{self, GuestLink};
 use super::keymap;
@@ -33,6 +34,7 @@ use str0m::channel::ChannelId;
 use str0m::format::Codec;
 use str0m::media::{MediaKind, MediaTime, Mid, Pt};
 use str0m::net::{Protocol, Receive};
+use str0m::bwe::{Bitrate, BweKind};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, watch};
@@ -59,6 +61,8 @@ pub struct SessionRequest {
     pub qga_socket: Option<PathBuf>,
     /// The guest tools CD is attached to this VM run.
     pub guest_tools_cd: bool,
+    /// The ticket's relay credentials tag (revoked when the session ends).
+    pub relay_tag: Option<String>,
 }
 
 /// Live numbers of a session (GET .../sessions, ctl `stats`).
@@ -96,6 +100,18 @@ pub struct SessionStats {
     pub clipboard_out: u64,
     pub audio_packets: u64,
     pub gamepad_in: u64,
+    /// `direct` or `relay` (the node's TURN relay, WAN).
+    pub path: Option<String>,
+    /// Congestion-control estimate of the link (kbit/s).
+    pub link_estimate_kbps: Option<u32>,
+    /// What adaptation currently sends.
+    pub target: Option<abr::Target>,
+    /// Round trip and loss reported by the client's receiver reports.
+    pub rtt_ms: Option<f64>,
+    pub loss_pct: Option<f64>,
+    pub nacks: u64,
+    /// Refresh rate of the client's display (frames are paced to it).
+    pub client_refresh_hz: Option<u32>,
 }
 
 pub struct SessionHandle {
@@ -136,6 +152,8 @@ enum ToRtc {
 /// What the compositor is told.
 enum ToCompositor {
     KeyframeRequest,
+    /// Adaptation changed the bitrate, output size or frame rate.
+    Rate(abr::Target),
 }
 
 /// Client input, decoded from the data channels.
@@ -384,6 +402,13 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
     if req.settings.audio {
         cfg = cfg.enable_opus(true, false);
     }
+    let profile = req.settings.profile(req.profile);
+    if req.settings.wan.adaptive {
+        cfg = cfg.enable_bwe(Some(Bitrate::kbps(profile.bitrate_kbps as u64)));
+    }
+    cfg = cfg
+        .set_send_buffer_video(req.settings.wan.nack_history_packets as usize)
+        .set_stats_interval(Some(Duration::from_secs(1)));
     let mut rtc = cfg.build(Instant::now());
     for s in &sockets {
         let addr = s.local_addr().map_err(|e| e.to_string())?;
@@ -465,7 +490,9 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         }) => (Some(tx), Some(rx), Some(hello.caps), Some(reader)),
         None => (None, None, None, None),
     };
+    let relay_addrs = super::relay::relay_candidates(&req.offer_sdp);
     let ctx = Ctx {
+        relay_addrs,
         req,
         stats: stats.clone(),
         guest_tx: Mutex::new(guest_tx),
@@ -539,6 +566,9 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
             s.end_reason = Some(reason);
             s.connected = false;
         }
+        if let Some(tag) = ctx.req.relay_tag.as_deref() {
+            super::relay::revoke(tag);
+        }
         let _ = done_tx.send(true);
     });
     Ok((handle, answer_sdp))
@@ -546,6 +576,8 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
 
 struct Ctx {
     req: SessionRequest,
+    /// The client's relayed ICE candidates (media from them = WAN path).
+    relay_addrs: Vec<SocketAddr>,
     stats: Arc<Mutex<SessionStats>>,
     /// To the guest tools, when they answered.
     guest_tx: Mutex<Option<mpsc::Sender<gproto::Msg>>>,
@@ -943,7 +975,9 @@ async fn compositor(
     let mut submitted: VecDeque<(u64, Instant)> = VecDeque::new();
     let mut dirty = false;
     let mut last_sent = Instant::now() - Duration::from_secs(3600);
-    let frame_gap = Duration::from_secs_f64(1.0 / profile.max_fps.max(1) as f64);
+    let mut frame_gap = Duration::from_secs_f64(1.0 / profile.max_fps.max(1) as f64);
+    // adaptation target (bitrate, output size, frame rate), when set
+    let mut rate: Option<abr::Target> = None;
     let idle_gap = (profile.idle_refresh_fps > 0)
         .then(|| Duration::from_secs_f64(1.0 / profile.idle_refresh_fps as f64));
     // Wake often and send as soon as the guest drew something and the
@@ -1023,6 +1057,24 @@ async fn compositor(
                             dirty = true;
                         }
                     }
+                    Some(ToCompositor::Rate(t)) => {
+                        frame_gap = Duration::from_secs_f64(1.0 / t.fps.max(1) as f64);
+                        rate = Some(t);
+                        if ctx.guest_video.load(Ordering::Relaxed) {
+                            // the guest encoder restarts with the new rate
+                            let mut sv = start_video_for(&profile);
+                            sv.bitrate_kbps = t.kbps;
+                            sv.max_bitrate_kbps = t.kbps;
+                            sv.fps = t.fps.max(1);
+                            sv.keyframe_interval_frames = sv.fps * profile.keyframe_interval_secs.max(1);
+                            let _ = ctx.to_guest(gproto::Msg::StartVideo(sv));
+                        } else if encoder.is_some() {
+                            // FFmpeg's CLI can't change rate or size in-stream
+                            encoder = None;
+                            submitted.clear();
+                            dirty = true;
+                        }
+                    }
                     None => break,
                 }
             }
@@ -1061,7 +1113,15 @@ async fn compositor(
                     let chosen = ctx.stats.lock().ok().and_then(|s| s.codec.zip(s.encoder));
                     let Some((c, b)) = chosen.or(codec) else { continue };
                     codec = Some((c, b));
-                    let params = EncodeParams::new(c, b, f.width, f.height, f.format, &profile, settings);
+                    let mut params = EncodeParams::new(c, b, f.width, f.height, f.format, &profile, settings);
+                    if let Some(t) = rate {
+                        params.bitrate_kbps = t.kbps.max(100);
+                        params.max_bitrate_kbps = t.kbps.max(100);
+                        params.fps = t.fps.max(1);
+                        let (w, h) = encode::fit(f.width, f.height, t.width.max(2), t.height.max(2));
+                        params.out_width = params.out_width.min(w);
+                        params.out_height = params.out_height.min(h);
+                    }
                     match Encoder::spawn(&settings.ffmpeg_path, params, enc_tx.clone()) {
                         Ok(e) => encoder = Some(e),
                         Err(e) => {
@@ -1112,6 +1172,28 @@ fn hello_msg(ctx: &Ctx, audio: bool, absolute: bool) -> String {
         "console": ctx.req.serial_socket.is_some(),
     })
     .to_string()
+}
+
+/// Re-plan with the last link estimate after a cap changed (path, display
+/// rate): estimates only arrive when the link changes.
+fn replan(
+    abr: &mut Abr,
+    ctx: &Ctx,
+    to_comp: &mpsc::Sender<ToCompositor>,
+    pending_ctl: &mut Vec<String>,
+    link_msg: &dyn Fn(&SessionStats) -> String,
+) {
+    if abr.last_estimate_kbps == 0 {
+        return;
+    }
+    if let Ok(mut s) = ctx.stats.lock() {
+        abr.set_source(s.guest_width, s.guest_height);
+        if let Some(t) = abr.on_estimate(abr.last_estimate_kbps, Instant::now()) {
+            s.target = Some(t);
+            let _ = to_comp.try_send(ToCompositor::Rate(t));
+            pending_ctl.push(link_msg(&s));
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1165,6 +1247,21 @@ async fn transport(
     let mut stats_tick = tokio::time::interval(Duration::from_secs(2));
     let allow_input = ctx.req.allow_input;
     let mut denied_reported = false;
+    let wan = &settings.wan;
+    let tprofile = ctx.profile().clone();
+    let mut abr = Abr::new(AbrConfig::new(
+        wan,
+        tprofile.max_bitrate_kbps,
+        tprofile.max_fps,
+        ctx.req.profile == ConsoleProfile::Gaming,
+    ));
+    let mut path: Option<&'static str> = None;
+    let link_msg = |stats: &SessionStats| {
+        serde_json::json!({"t": "link", "path": stats.path, "estimate_kbps": stats.link_estimate_kbps,
+            "target": stats.target, "uplink_kbps": wan.uplink_kbps, "rtt_ms": stats.rtt_ms,
+            "loss_pct": stats.loss_pct, "adaptive": wan.adaptive})
+        .to_string()
+    };
 
     let reason = loop {
         // Drain str0m's output until it asks for a timeout.
@@ -1181,6 +1278,31 @@ async fn transport(
                     Event::Connected => {
                         if let Ok(mut s) = ctx.stats.lock() {
                             s.connected = true;
+                        }
+                        if wan.adaptive {
+                            rtc.bwe().set_bitrate(
+                                Bitrate::kbps(wan.min_kbps as u64),
+                                Bitrate::kbps(tprofile.max_bitrate_kbps as u64),
+                            );
+                        }
+                    }
+                    Event::EgressBitrateEstimate(BweKind::Twcc { estimate, .. }) => {
+                        let kbps = (estimate.as_u64() / 1000).min(u32::MAX as u64) as u32;
+                        if let Ok(mut s) = ctx.stats.lock() {
+                            s.link_estimate_kbps = Some(kbps);
+                            abr.set_source(s.guest_width, s.guest_height);
+                            if let Some(t) = abr.on_estimate(kbps, Instant::now()) {
+                                s.target = Some(t);
+                                let _ = to_comp.try_send(ToCompositor::Rate(t));
+                                pending_ctl.push(link_msg(&s));
+                            }
+                        }
+                    }
+                    Event::MediaEgressStats(m) if video.map(|v| v.0 == m.mid).unwrap_or(false) => {
+                        if let Ok(mut s) = ctx.stats.lock() {
+                            s.rtt_ms = m.rtt.map(|d| d.as_secs_f64() * 1000.0).or(s.rtt_ms);
+                            s.loss_pct = m.loss.map(|l| l as f64 * 100.0).or(s.loss_pct);
+                            s.nacks = m.nacks;
                         }
                     }
                     Event::IceConnectionStateChange(IceConnectionState::Disconnected) => {
@@ -1331,6 +1453,17 @@ async fn transport(
                                         Some("keyframe") => {
                                             let _ = to_comp.try_send(ToCompositor::KeyframeRequest);
                                         }
+                                        Some("display") => {
+                                            // pace frames to the client's display
+                                            if let Some(hz) = v.get("refresh_hz").and_then(|x| x.as_u64()) {
+                                                let hz = (hz as u32).clamp(1, 500);
+                                                if let Ok(mut s) = ctx.stats.lock() {
+                                                    s.client_refresh_hz = Some(hz);
+                                                }
+                                                abr.set_max_fps(hz.min(tprofile.max_fps));
+                                                replan(&mut abr, &ctx, &to_comp, &mut pending_ctl, &link_msg);
+                                            }
+                                        }
                                         Some("resize") if allow_input => {
                                             if let Some(l) = parse_resize(
                                                 &v,
@@ -1435,6 +1568,16 @@ async fn transport(
             pkt = net_rx.recv() => {
                 let Some((data, source, destination)) = pkt else { break "sockets closed".into() };
                 last_rx = Instant::now();
+                let p = if ctx.relay_addrs.contains(&source) { "relay" } else { "direct" };
+                if path != Some(p) {
+                    path = Some(p);
+                    abr.set_uplink((p == "relay" && wan.uplink_kbps > 0).then_some(wan.uplink_kbps));
+                    if let Ok(mut s) = ctx.stats.lock() {
+                        s.path = Some(p.to_string());
+                        pending_ctl.push(link_msg(&s));
+                    }
+                    replan(&mut abr, &ctx, &to_comp, &mut pending_ctl, &link_msg);
+                }
                 if let Ok(contents) = data.as_slice().try_into() {
                     let input = Input::Receive(Instant::now(), Receive { proto: Protocol::Udp, source, destination, contents });
                     if rtc.accepts(&input) {
@@ -1451,7 +1594,9 @@ async fn transport(
                 if let Ok(s) = ctx.stats.lock() {
                     let msg = serde_json::json!({"t": "stats", "frames": s.frames_sent, "bytes": s.bytes_sent,
                         "encode_ms": s.encode_ms_avg, "codec": s.codec, "encoder": s.encoder,
-                        "width": s.guest_width, "height": s.guest_height});
+                        "width": s.guest_width, "height": s.guest_height, "path": s.path,
+                        "estimate_kbps": s.link_estimate_kbps, "target": s.target,
+                        "rtt_ms": s.rtt_ms, "loss_pct": s.loss_pct, "nacks": s.nacks});
                     pending_ctl.push(msg.to_string());
                 }
                 let _ = rtc.handle_input(Input::Timeout(Instant::now()));

@@ -9,6 +9,7 @@ license.workspace = true
 horcrux-common = { path = "../../horcrux-common" }
 horcrux-core = { path = "../horcrux-core" }
 horcrux-guest-proto = { path = "../horcrux-guest-proto" }
+horcrux-turn = { path = "../horcrux-turn", optional = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 axum = { workspace = true }
@@ -39,6 +40,6 @@ tempfile = { workspace = true }
 # the runtime gate (horcrux_core::features::require_vm_hypervisor) reads
 # horcrux-core's cfg, so `-p horcrux-vm --features qemu` (cargo-mutants,
 # per-crate tests) must not end up with a VmManager that refuses QEMU.
-qemu = ["horcrux-core/qemu", "dep:str0m", "dep:zbus"]
+qemu = ["horcrux-core/qemu", "dep:str0m", "dep:zbus", "dep:horcrux-turn"]
 lxd = ["dep:tokio-tungstenite", "horcrux-core/lxd"]
 incus = ["dep:tokio-tungstenite", "horcrux-core/incus"]

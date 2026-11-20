@@ -402,6 +402,9 @@ pub async fn run() -> anyhow::Result<()> {
         let vms = state.vm_manager.clone();
         tokio::spawn(async move { vms.reconcile_passthrough().await });
     }
+    // Horcrux Console relay (WAN access), when turned on.
+    #[cfg(feature = "qemu")]
+    crate::console::hxc::relay::apply_spawn(&crate::console::hxc_settings::get());
 
     // Default global migration bandwidth limit: 70% of the fastest local link
     // so a live migration cannot saturate it (1 GbE .. 100 GbE).

@@ -104,7 +104,11 @@ async fn run_change(
 
         ("console", Action::Update) => {
             let w = spec.console.clone().ok_or("not in spec")?;
-            crate::console::hxc_settings::set(w)?;
+            let saved = crate::console::hxc_settings::set(w)?;
+            #[cfg(feature = "qemu")]
+            crate::console::hxc::relay::apply_spawn(&saved);
+            #[cfg(not(feature = "qemu"))]
+            let _ = saved;
             Ok(Some(
                 "applies to new console sessions; enabling/disabling the D-Bus display \
                  takes effect at each VM's next start"
