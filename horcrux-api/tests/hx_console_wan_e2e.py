@@ -84,7 +84,8 @@ def shape(rtt_ms=0, loss=0.0, rate_kbit=None):
         if loss:
             argv += ["loss", f"{loss:g}%"]
         if rate_kbit and not ns:
-            argv += ["rate", f"{rate_kbit}kbit", "limit", "200"]
+            # ~100 ms of queue, like a home router's upload buffer
+            argv += ["rate", f"{rate_kbit}kbit", "limit", str(max(10, rate_kbit // 100))]
         run(argv, ns=ns)
 
 
@@ -222,6 +223,8 @@ def wait_allocations(n, timeout=15):
 CONDITIONS = [
     # name, netem (rtt ms, loss %, rate kbit), wan settings, blocked UDP ports, expectation
     ("lan_direct", (0, 0, None), dict(enabled=False), None, dict(path="direct")),
+    # same path without link adaptation (no congestion control / pacer): A/B for its latency cost
+    ("lan_direct_fixed_rate", (0, 0, None), dict(enabled=False, adaptive=False), None, dict(path="direct")),
     ("wan_relay_rtt20", (20, 0, None), dict(enabled=True, force_relay=True), None, dict(path="relay", proto="udp")),
     ("wan_relay_rtt50_loss1", (50, 1, None), dict(enabled=True, force_relay=True), None, dict(path="relay", proto="udp")),
     ("wan_relay_rtt100_loss2", (100, 2, None), dict(enabled=True, force_relay=True), None, dict(path="relay", proto="udp")),
@@ -287,8 +290,11 @@ with sync_playwright() as pw:
             check(rs["running"], f"{name}: the relay runs ({rs.get('listen')})")
         shape(rtt, loss, rate)
         block(blocked)
+        _, probe_ticket = call("POST", f"/console/{VM}/hxc/ticket", {"conn_id": "probe"}, token=ADMIN)
+        print("DEBUG ticket", json.dumps({k: probe_ticket.get(k) for k in ("ice_servers", "ice_transport_policy")})[:400], flush=True)
         page = open_console(name)
         ice = page.evaluate("window.hxc.iceServers")
+        print("DEBUG page ice", json.dumps([{"urls": x.get("urls"), "user": bool(x.get("username"))} for x in (ice or [])]), flush=True)
         if wan.get("enabled"):
             check(ice and any("turn:10.77.0.1:3478" in u for u in ice[0]["urls"]) and ice[0]["username"],
                   f"{name}: the ticket carries the node's relay with session credentials")
@@ -307,38 +313,46 @@ with sync_playwright() as pw:
         rtt_dc = page.evaluate("window.hxc.rttMs")
         path = link.get("path") or server.get("path")
         check(path == want["path"], f"{name}: the node sees the {want['path']} path (got {path})")
-        want_local = "relay" if want["path"] == "relay" else "host"
-        check(cs["local_candidate"] == want_local,
-              f"{name}: the browser's selected candidate is {want_local} (got {cs['local_candidate']}, {cs['relay_protocol']})")
+        # direct: host, or prflx when the browser hid its address behind mDNS
+        ok_local = ("relay",) if want["path"] == "relay" else ("host", "prflx", "srflx")
+        check(cs["local_candidate"] in ok_local,
+              f"{name}: the browser's selected local candidate is {cs['local_candidate']} ({cs['relay_protocol']})")
         if want.get("proto"):
             check(cs["relay_protocol"] == want["proto"], f"{name}: relay reached over {want['proto']}")
         res = {"conditions": {"rtt_ms": rtt, "loss_pct": loss, "rate_kbit": rate, "blocked_udp": blocked},
-               "path": path, "keystroke_to_picture": summary(lat), "datachannel_rtt_ms": rtt_dc and round(rtt_dc, 1),
-               "client": cs, "node": {k: server.get(k) for k in ("estimate_kbps", "target", "rtt_ms", "loss_pct", "nacks", "encode_ms", "codec", "encoder")}}
+               "path": path, "keystroke_to_picture": summary(lat), "samples_ms": [x and round(x) for x in lat], "datachannel_rtt_ms": rtt_dc and round(rtt_dc, 1),
+               "client": cs, "node": {k: server.get(k) for k in ("estimate_kbps", "target", "rtt_ms", "loss_pct", "nacks", "encode_ms", "codec", "encoder", "encoded", "encoder_starts")}}
         if want.get("flood"):
             # fill the screen continuously so the encoder needs more than the link allows
             type_text(page, "while true; do cat /proc/cpuinfo; done\n")
-            ok = False
-            end = time.time() + 60
-            target = None
-            while time.time() < end:
+            # let congestion control settle, then sample for 15 s
+            time.sleep(15)
+            series = []
+            frames0 = page.evaluate("window.hxc.framesDecoded")
+            for _ in range(15):
                 time.sleep(1)
                 link = page.evaluate("window.hxc.link") or {}
-                target = link.get("target")
-                if target and target["kbps"] <= want["max_kbps"] and (not want.get("limit") or target["limit"] == want["limit"]):
-                    ok = True
-                    break
-            frames0 = page.evaluate("window.hxc.framesDecoded")
-            time.sleep(3)
+                srv = page.evaluate("window.hxc.server") or {}
+                series.append({"estimate_kbps": link.get("estimate_kbps"), "target": link.get("target"),
+                               "encoded": srv.get("encoded")})
             frames1 = page.evaluate("window.hxc.framesDecoded")
             cs2 = page.evaluate(CLIENT_STATS)
-            res["adapted"] = {"target": target, "estimate_kbps": link.get("estimate_kbps"),
-                              "fps_while_flooding": round((frames1 - frames0) / 3.0, 1), "client": cs2}
+            target = series[-1]["target"]
+            ok = all(x["target"] and x["target"]["kbps"] <= want["max_kbps"] for x in series[-5:]) and (
+                not want.get("limit") or target["limit"] == want["limit"])
+            est = [x["estimate_kbps"] for x in series if x["estimate_kbps"]]
+            res["adapted"] = {"target": target, "estimate_kbps_median": est and statistics.median(est),
+                              "estimate_kbps_range": est and [min(est), max(est)],
+                              "encoded": series[-1]["encoded"],
+                              "fps_while_flooding": round((frames1 - frames0) / 15.0, 1), "client": cs2}
+            enc = series[-1]["encoded"]
+            check(enc and target and enc[0] <= target["width"] + 2 and enc[3] <= max(target["kbps"], 100),
+                  f"{name}: the node encodes at the target ({enc} vs {target})")
             page.evaluate("window.hxc.sendKey('ControlLeft', true);" + key("KeyC") + "window.hxc.sendKey('ControlLeft', false);")
             time.sleep(0.5)
             type_text(page, "clear\n")
             check(ok, f"{name}: adaptation brings the target to {target} (limit {want.get('limit', 'link')}, at most {want['max_kbps']} kbit/s)")
-            check(frames1 - frames0 >= 5, f"{name}: frames keep arriving while adapted ({frames1 - frames0} in 3 s)")
+            check(frames1 - frames0 >= 20, f"{name}: frames keep arriving while adapted ({frames1 - frames0} in 15 s)")
         page.screenshot(path=f"{OUT}/{name}.png")
         RESULTS[name] = res
         print("PATH " + json.dumps({name: res}), flush=True)

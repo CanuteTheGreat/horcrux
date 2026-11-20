@@ -171,6 +171,7 @@ mod qemu {
     pub async fn ticket(
         State(state): State<Arc<AppState>>,
         Path(vm_id): Path<String>,
+        uri: axum::http::Uri,
         headers: HeaderMap,
         user: Option<Extension<AuthUser>>,
         principal: Option<Extension<crate::auth::store::Principal>>,
@@ -194,10 +195,13 @@ mod qemu {
                 .map(|Extension(pr)| pr.has(p, &acl_path))
                 .unwrap_or(false)
         };
+        // HTTP/1.1 sends Host; HTTP/2 (browsers over TLS) carries the
+        // authority in the request URI instead.
         let host = headers
             .get(axum::http::header::HOST)
             .and_then(|h| h.to_str().ok())
-            .map(str::to_string);
+            .map(str::to_string)
+            .or_else(|| uri.authority().map(|a| a.to_string()));
         let ips = hxc::candidate_ips(&settings, host.as_deref()).await;
         let relay_tag = if hxc::relay::running() {
             uuid::Uuid::new_v4().simple().to_string()
