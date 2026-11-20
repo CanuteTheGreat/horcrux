@@ -410,7 +410,9 @@ Proven:
   TCP): Hello/caps, 1280x720 30 fps Media Foundation software H.264 that
   ffprobe decodes (181/181 frames, Main profile, no B-frames), keyframe 29 ms
   after the request, damage-only mode (0 packets idle), native size, SendInput
-  keyboard incl. extended keys, absolute and relative mouse, Unicode
+  keyboard incl. extended keys, absolute pointer to the exact pixel, raw
+  relative motion (moves the cursor; Windows pointer acceleration scales it,
+  which games reading raw input do not see), Unicode
   clipboard both ways without echo, display mode change and restore, MSI
   install -> service in session 0 + agent in session 1, clean uninstall.
 
