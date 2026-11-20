@@ -174,6 +174,77 @@ package). Linux guests install the `app-emulation/horcrux-guest-tools`
 package (OpenRC and systemd service files included); the CD carries the
 static agent and service files for distributions without a package yet.
 
+## 4.2 Same-host frame ring (C2d)
+
+When the viewer runs on the node that runs the VM, frames skip encode and
+decode: the guest tools write raw pixels into shared memory and the native
+viewer copies them out. Designed from first principles for Horcrux; no code
+or layout is taken from any other shared-memory frame transport
+(`crates/horcrux-guest-proto/src/ring.rs`).
+
+- Device: every console VM gets `-object memory-backend-file,id=hxfbmem,
+  size=<shm_frames_size_mib>M,mem-path=<shm_frames_dir>/horcrux-frames-<vm>,
+  share=on` and `-device ivshmem-plain,memdev=hxfbmem,id=hxframes` when
+  `[console] shm_frames` is on (default on; size a power of two, default
+  128 MiB = three 3840x2160 frames; `shm_frames_slots` 2-8, default 3;
+  directory default `/dev/shm`, a hugetlbfs mount works too). The node
+  creates the file root-only (0600) and writes the header before QEMU
+  starts, removes it when the VM stops, and never touches it otherwise.
+- Layout: 4 KiB header (magic `HXFRAME1`, version, region size, slot count,
+  wanted fps, slot offset/stride, cursor offset, `latest = seq << 8 | slot`,
+  reader clock, reader slot, reader fps, writer heartbeat/state/info), a
+  cursor slot (256-byte header + up to 256x256 BGRA) and the frame slots
+  (256-byte header: `seq_begin`, `seq_end`, size, stride, DRM fourcc, flags,
+  capture/publish times and the reader clock copied at publish, then the
+  pixels). Little-endian, every shared field a 32/64-bit atomic.
+- Consistency: the writer sets `seq_begin = n`, writes pixels and fields,
+  `seq_end = n`, then `latest`; the reader accepts a copy only when both
+  sequence numbers equal `n` before and after it. The writer never reuses
+  the slot named by `latest` or `reader_slot`, so with three slots a reader
+  that keeps up never retries.
+- Demand-driven: the viewer stamps its CLOCK_MONOTONIC into the header on
+  every poll; the guest tools capture only while that stamp moves
+  (`shm_reader_timeout_ms`, default 2 s) and stop otherwise, so an idle
+  ring costs nothing. A stamp left behind by a viewer that went away does
+  not count.
+- Guest side: Linux maps BAR 2 through sysfs (`resource2_wc`,
+  write-combined, `shm_write_combine`: through the uncached mapping a
+  1280x800 frame took 65 ms to write on an AMD host, write-combined 2.7 ms) and captures with FFmpeg kmsgrab
+  or x11grab as raw BGRX; Windows uses the virtio-win IVSHMEM driver
+  (`IOCTL_IVSHMEM_REQUEST_MMAP`, write-combined) and DXGI Desktop
+  Duplication. Capabilities report `shm_frames`.
+- Trust: each side checks every size the other wrote against the slot
+  before copying, so a hostile guest can only produce wrong pixels.
+
+## 4.3 Local viewer socket (C2d)
+
+The native viewer (`horcrux-viewer`, `crates/horcrux-viewer`, USE flag
+`viewer` of app-emulation/horcrux) signs in with a Horcrux account and asks
+for a local ticket: `POST /api/console/<vm>/hxc/local-ticket {uid, profile?}`
+(same RBAC as any console ticket: VM.Console, input only with
+VM.Console.Input). The ticket is single use, short lived and bound to the
+viewer's Unix uid. The viewer connects to `[console] local_socket` (default
+`/run/horcrux/console.sock`); the node reads the peer's uid (SO_PEERCRED),
+redeems the ticket and answers `WELCOME` with the frame ring's file
+descriptor attached (SCM_RIGHTS), so the ring file itself stays root-only.
+Framing is the guest-tools framing (`len u32 LE`, `kind u8`, payload;
+`crates/horcrux-guest-proto/src/local.rs`); input uses the WebRTC data
+channel encodings (`keys` JSON, `input` binary motion, `pad` 16-byte
+gamepad, `ctl` ping), cursor and layout come back as JSON. Keyboard and
+absolute pointer go through QEMU's D-Bus input like the WebRTC path; raw
+relative motion and gamepads go to the guest tools. Sessions appear in the
+console session list with `video_source = shm` and are audited (start, end,
+refused tickets).
+
+The viewer window (winit + softbuffer, Wayland or X11, no GPU needed) shows
+the newest ring frame scaled to fit, sends keyboard and mouse, grabs the
+pointer for raw relative motion (Ctrl+Alt+`grab_key`, on by default for
+the `gaming` profile), toggles fullscreen (Ctrl+Alt+`fullscreen_key`) and
+forwards up to four evdev gamepads in the W3C standard layout. Every value
+is a setting (`~/.config/horcrux/viewer.conf`, flags override).
+`horcrux-viewer measure` is the same reader without a window (tests and
+latency runs).
+
 ## 5. Security model
 
 - Only authenticated Horcrux users (password + 2FA/SSO per account policy)

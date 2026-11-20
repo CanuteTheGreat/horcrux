@@ -340,6 +340,54 @@ async fn serve_listener<I: zbus::object_server::Interface>(
         .await
 }
 
+/// Register for QEMU's audio output (`-audiodev dbus`). Best effort and
+/// bounded: a VM without D-Bus audio answers RegisterOutListener with an
+/// error and never connects to our listener, so the listener side must not
+/// be awaited unconditionally (that hung the whole console connect).
+async fn audio_out(
+    conn: &zbus::Connection,
+    session: &str,
+    tx: mpsc::Sender<DisplayEvent>,
+) -> Option<zbus::Connection> {
+    let proxy = AudioProxy::new(conn).await.ok()?;
+    let (ours, theirs) = pair().ok()?;
+    let serve = tokio::spawn(serve_listener(
+        ours,
+        "/org/qemu/Display1/AudioOutListener",
+        AudioOutListener { tx },
+    ));
+    let wait = std::time::Duration::from_secs(5);
+    let reg = tokio::time::timeout(
+        wait,
+        proxy.register_out_listener(zvariant::Fd::from(&theirs)),
+    )
+    .await;
+    drop(theirs);
+    match reg {
+        Ok(Ok(())) => match tokio::time::timeout(wait, serve).await {
+            Ok(Ok(Ok(l))) => Some(l),
+            Ok(Ok(Err(e))) => {
+                tracing::debug!("audio listener for {session}: {e}");
+                None
+            }
+            _ => {
+                tracing::debug!("audio listener for {session}: QEMU did not connect");
+                None
+            }
+        },
+        Ok(Err(e)) => {
+            serve.abort();
+            tracing::debug!("no D-Bus audio for {session}: {e}");
+            None
+        }
+        Err(_) => {
+            serve.abort();
+            tracing::debug!("no D-Bus audio for {session}: RegisterOutListener timed out");
+            None
+        }
+    }
+}
+
 impl DbusDisplay {
     /// Connect to the VM whose QMP socket is `qmp_socket`. Events (frames,
     /// cursor, audio when `audio`) arrive on `tx`.
@@ -401,21 +449,7 @@ impl DbusDisplay {
 
         let mut audio_listener = None;
         if audio {
-            if let Ok(proxy) = AudioProxy::new(&conn).await {
-                let (ours, theirs) = pair().map_err(|e| e.to_string())?;
-                let serve = serve_listener(
-                    ours,
-                    "/org/qemu/Display1/AudioOutListener",
-                    AudioOutListener { tx },
-                );
-                let register = proxy.register_out_listener(zvariant::Fd::from(&theirs));
-                let (l, reg) = tokio::join!(serve, register);
-                match (l, reg) {
-                    (Ok(l), Ok(())) => audio_listener = Some(l),
-                    (_, Err(e)) => tracing::debug!("no D-Bus audio for {session}: {e}"),
-                    (Err(e), _) => tracing::debug!("audio listener for {session}: {e}"),
-                }
-            }
+            audio_listener = audio_out(&conn, session, tx).await;
         }
 
         let keyboard = KeyboardProxy::new(&conn)
