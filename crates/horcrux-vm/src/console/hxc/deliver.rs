@@ -28,12 +28,15 @@ const RETRY: Duration = Duration::from_secs(600);
 /// Longest an install may run in the guest (seconds).
 const INSTALL_SECS: u64 = 600;
 
-/// PowerShell run by the guest agent (as SYSTEM) in a Windows guest.
+/// PowerShell run by the guest agent (as SYSTEM) in a Windows guest. The
+/// MSI path goes to msiexec unquoted (`E:\\windows\\horcrux-guest-tools-*.msi`
+/// has no spaces): quotes embedded in the script did not survive the
+/// guest agent's command line and msiexec answered 1619 (package not found).
 pub const WINDOWS_INSTALL: &str = "$ErrorActionPreference='Stop'; \
 $v=Get-Volume -FileSystemLabel HXTOOLS | Select-Object -First 1; \
 if(-not $v -or -not $v.DriveLetter){throw 'the Horcrux guest tools CD (HXTOOLS) is not attached'}; \
 $m=Get-ChildItem ($v.DriveLetter + ':\\\\windows\\\\horcrux-guest-tools-*-x64.msi') | Sort-Object Name | Select-Object -Last 1; \
-$p=Start-Process msiexec.exe -ArgumentList @('/i',('\\\"'+$m.FullName+'\\\"'),'/qn','/norestart') -Wait -PassThru; \
+$p=Start-Process msiexec.exe -ArgumentList @('/i',$m.FullName,'/qn','/norestart') -Wait -PassThru; \
 exit $p.ExitCode";
 
 /// POSIX sh run by the guest agent (as root) in a Linux guest. Exit codes:

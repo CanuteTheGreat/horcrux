@@ -451,15 +451,21 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
 
     let absolute = display.absolute;
     let linked = link.is_some();
-    let (guest_tx, guest_rx, guest_caps) = match link {
-        Some(GuestLink { hello, tx, rx }) => (Some(tx), Some(rx), Some(hello.caps)),
-        None => (None, None, None),
+    let (guest_tx, guest_rx, guest_caps, reader) = match link {
+        Some(GuestLink {
+            hello,
+            tx,
+            rx,
+            reader,
+        }) => (Some(tx), Some(rx), Some(hello.caps), Some(reader)),
+        None => (None, None, None, None),
     };
     let ctx = Ctx {
         req,
         stats: stats.clone(),
         guest_tx: Mutex::new(guest_tx),
         guest_caps: Mutex::new(guest_caps),
+        guest_reader: Mutex::new(reader),
         guest_video: AtomicBool::new(false),
         guest_started: Mutex::new(Vec::new()),
     };
@@ -539,6 +545,8 @@ struct Ctx {
     /// To the guest tools, when they answered.
     guest_tx: Mutex<Option<mpsc::Sender<gproto::Msg>>>,
     guest_caps: Mutex<Option<gproto::Caps>>,
+    /// Keeps the port connection while the session holds the tools.
+    guest_reader: Mutex<Option<guest::ReaderGuard>>,
     /// The guest tools are capturing + encoding: the node's encoder rests.
     guest_video: AtomicBool,
     /// What the guest tools were asked to run, re-sent when they say
@@ -612,7 +620,15 @@ async fn link_watch(
                 link.hello.os, link.hello.os_version, link.hello.agent_version
             ));
         }
-        let GuestLink { hello, tx, rx } = link;
+        let GuestLink {
+            hello,
+            tx,
+            rx,
+            reader,
+        } = link;
+        if let Ok(mut g) = ctx.guest_reader.lock() {
+            *g = Some(reader);
+        }
         if let Ok(mut g) = ctx.guest_caps.lock() {
             *g = Some(hello.caps);
         }

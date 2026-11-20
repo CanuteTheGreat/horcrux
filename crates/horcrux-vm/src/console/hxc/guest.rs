@@ -18,6 +18,20 @@ pub struct GuestLink {
     pub tx: mpsc::Sender<Msg>,
     /// Messages from the guest tools (after Hello).
     pub rx: mpsc::Receiver<Msg>,
+    /// Ends the port reader (and so the connection) with the link.
+    pub reader: ReaderGuard,
+}
+
+/// Aborts the task reading the port when dropped. QEMU's socket chardev
+/// serves one connection at a time: a reader left blocked on a silent
+/// guest (no tools) kept the connection, so no later session or retry
+/// could reach the tools once they were installed (connect: EAGAIN).
+pub struct ReaderGuard(tokio::task::JoinHandle<()>);
+
+impl Drop for ReaderGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 impl GuestLink {
@@ -52,7 +66,7 @@ pub async fn connect(
             }
         }
     });
-    tokio::spawn(async move {
+    let reader = ReaderGuard(tokio::spawn(async move {
         let mut dec = Decoder::default();
         let mut buf = vec![0u8; 1 << 16];
         loop {
@@ -70,7 +84,7 @@ pub async fn connect(
                 }
             }
         }
-    });
+    }));
     let hh = Msg::HostHello(HostHello {
         v: VERSION,
         clipboard_max_bytes,
@@ -86,6 +100,7 @@ pub async fn connect(
                     hello,
                     tx: to_guest,
                     rx: from_guest,
+                    reader,
                 }));
             }
             Ok(Some(_)) => continue,
@@ -131,8 +146,16 @@ mod tests {
             write_msg(&mut s, &Msg::Pong(5)).unwrap();
             // keep the port open but silent, like a guest without tools
             let l2 = l;
-            let (_s2, _) = l2.accept().unwrap();
-            std::thread::sleep(Duration::from_millis(600));
+            let (mut s2, _) = l2.accept().unwrap();
+            s2.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut b = [0u8; 256];
+            loop {
+                match std::io::Read::read(&mut s2, &mut b) {
+                    Ok(0) => break,
+                    Ok(_) => continue,
+                    Err(e) => panic!("the node kept a silent guest's connection: {e}"),
+                }
+            }
         });
         let mut g = connect(&sock, Duration::from_secs(2), 77)
             .await
@@ -144,6 +167,7 @@ mod tests {
         drop(g);
         let none = connect(&sock, Duration::from_millis(300), 1).await.unwrap();
         assert!(none.is_none(), "no Hello -> no tools");
+        // ...and the node let go of the connection (the fake guest sees EOF)
         t.join().unwrap();
         assert!(
             connect(&dir.path().join("missing"), Duration::from_millis(10), 1)
