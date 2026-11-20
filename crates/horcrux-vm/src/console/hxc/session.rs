@@ -59,6 +59,9 @@ pub struct SessionRequest {
     pub qga_socket: Option<PathBuf>,
     /// The guest tools CD is attached to this VM run.
     pub guest_tools_cd: bool,
+    /// Ask the guest tools for Horcrux virtual monitors
+    /// (`virtual_display` setting + the GPU hand-off record).
+    pub virtual_display: bool,
 }
 
 /// Live numbers of a session (GET .../sessions, ctl `stats`).
@@ -231,6 +234,7 @@ pub fn parse_resize(v: &serde_json::Value, max_w: u32, max_h: u32) -> Option<gpr
                 .unwrap_or(0)
                 .min(500) as u32,
             primary: m.get("primary").and_then(|x| x.as_bool()).unwrap_or(false),
+            virtual_display: false,
         })
     };
     let monitors: Vec<gproto::Monitor> = match v.get("monitors").and_then(|m| m.as_array()) {
@@ -404,7 +408,14 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
     let link = match &req.guest_tools_socket {
         Some(sock) if req.settings.guest_tools && sock.exists() => {
             let wait = Duration::from_millis(req.settings.guest_tools_wait_ms as u64);
-            match guest::connect(sock, wait, req.settings.clipboard_max_bytes).await {
+            match guest::connect(
+                sock,
+                wait,
+                req.settings.clipboard_max_bytes,
+                req.virtual_display,
+            )
+            .await
+            {
                 Ok(l) => l,
                 Err(e) => {
                     tracing::debug!("console guest tools: {e}");

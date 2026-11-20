@@ -1,0 +1,79 @@
+; hxidd.inf - Horcrux Virtual Display (IddCx indirect display driver, UMDF 2)
+; Part of Horcrux Guest Tools. SPDX-License-Identifier: GPL-3.0-or-later
+; Written from Microsoft's INF / WDF directive documentation.
+;
+; The device is a software device (SWD) created by horcrux-guest-agent
+; ("drivers install"), hardware id HorcruxVirtualDisplay. Settings in the
+; hardware key (defaults below; the agent may override them at install):
+;   MaxMonitors     most monitors the adapter offers (1..16)
+;   ShareAcquireMs  wait for the agent's frame-share lock (0 = skip the frame)
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = Display
+ClassGuid   = {4d36e968-e325-11ce-bfc1-08002be10318}
+ClassVer    = 2.0
+Provider    = %Mfg%
+CatalogFile = hxidd.cat
+DriverVer   = 11/20/2026,@DRIVERVER@
+PnpLockdown = 1
+
+[Manufacturer]
+%Mfg% = HxModels, NTamd64.10.0...18362
+
+[HxModels.NTamd64.10.0...18362]
+%DeviceDesc% = HxIdd_Install, HorcruxVirtualDisplay
+
+[SourceDisksNames]
+1 = %Disk%
+
+[SourceDisksFiles]
+hxidd.dll = 1
+
+[DestinationDirs]
+HxIdd_Files = 13
+
+[HxIdd_Files]
+hxidd.dll
+
+[HxIdd_Install.NT]
+CopyFiles = HxIdd_Files
+
+[HxIdd_Install.NT.hw]
+AddReg = HxIdd_HwReg
+
+[HxIdd_HwReg]
+; the indirect display kernel filter that IddCx devices run under
+HKR,,"UpperFilters",0x00010000,"IndirectKmd"
+HKR,,"MaxMonitors",0x00010003,4
+HKR,,"ShareAcquireMs",0x00010003,0
+; control interface: SYSTEM, administrators, interactive users (the agent)
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
+
+[HxIdd_Install.NT.Services]
+AddService = WUDFRd, 0x000001fa, HxIdd_WudfRd
+
+[HxIdd_WudfRd]
+DisplayName   = %WudfRdName%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\WUDFRd.sys
+
+[HxIdd_Install.NT.Wdf]
+UmdfService                = hxidd, HxIdd_Umdf
+UmdfServiceOrder           = hxidd
+UmdfKernelModeClientPolicy = AllowKernelModeClients
+; own host process: IddCx state is per device
+UmdfHostProcessSharing     = ProcessSharingDisabled
+
+[HxIdd_Umdf]
+UmdfLibraryVersion = 2.25.0
+ServiceBinary      = %13%\hxidd.dll
+UmdfExtensions     = IddCx0102
+
+[Strings]
+Mfg        = "Horcrux"
+Disk       = "Horcrux Guest Tools"
+DeviceDesc = "Horcrux Virtual Display"
+WudfRdName = "Windows Driver Foundation - User-mode Driver Framework Reflector"

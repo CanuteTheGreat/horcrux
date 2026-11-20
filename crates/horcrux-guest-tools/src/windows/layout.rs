@@ -14,6 +14,17 @@ pub struct Mon {
     pub h: u32,
     pub hz: u32,
     pub primary: bool,
+    /// Adapter description (`Horcrux Virtual Display` for hxidd monitors).
+    pub adapter: String,
+}
+
+/// Adapter description of the Horcrux virtual display (hxidd.inf DeviceDesc).
+pub const VIRTUAL_ADAPTER: &str = "Horcrux Virtual Display";
+
+impl Mon {
+    pub fn is_virtual(&self) -> bool {
+        self.adapter.contains(VIRTUAL_ADAPTER)
+    }
 }
 
 impl Mon {
@@ -25,6 +36,7 @@ impl Mon {
             height: self.h,
             refresh_hz: self.hz,
             primary: self.primary,
+            virtual_display: self.is_virtual(),
         }
     }
 }
@@ -75,6 +87,12 @@ pub fn monitors() -> Vec<Mon> {
             .unwrap_or(dd.DeviceName.len());
         let mut device = dd.DeviceName[..end].to_vec();
         device.push(0);
+        let send = dd
+            .DeviceString
+            .iter()
+            .position(|c| *c == 0)
+            .unwrap_or(dd.DeviceString.len());
+        let adapter = String::from_utf16_lossy(&dd.DeviceString[..send]);
         v.push(Mon {
             device,
             x: pos.x,
@@ -83,6 +101,7 @@ pub fn monitors() -> Vec<Mon> {
             h: dm.dmPelsHeight,
             hz: dm.dmDisplayFrequency,
             primary: dd.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE != 0,
+            adapter,
         });
     }
     v
@@ -128,8 +147,17 @@ fn find_mode(dev: &[u16], w: u32, h: u32, hz: u32) -> Option<DEVMODEW> {
 /// Apply the requested size/refresh/position to each existing display
 /// whose mode exists. Returns a log line per change that could not be made.
 pub fn apply(l: &Layout, settle_ms: u64) -> Vec<String> {
+    apply_to(l, settle_ms, false)
+}
+
+/// As [`apply`], on the Horcrux virtual monitors only (`only_virtual`) or
+/// on every display.
+pub fn apply_to(l: &Layout, settle_ms: u64, only_virtual: bool) -> Vec<String> {
     let mut notes = Vec::new();
-    let cur = monitors();
+    let cur: Vec<Mon> = monitors()
+        .into_iter()
+        .filter(|m| !only_virtual || m.is_virtual())
+        .collect();
     for (i, want) in l.monitors.iter().enumerate() {
         let Some(m) = cur.get(i) else {
             notes.push(format!(
@@ -189,4 +217,53 @@ pub fn apply(l: &Layout, settle_ms: u64) -> Vec<String> {
     }
     std::thread::sleep(std::time::Duration::from_millis(settle_ms));
     notes
+}
+
+/// Make the first Horcrux virtual monitor the primary display (the desktop,
+/// taskbar and full-screen games go there); other displays are placed to
+/// its right. Returns why it could not, if it could not.
+pub fn make_virtual_primary(settle_ms: u64) -> Result<(), String> {
+    let cur = monitors();
+    let Some(v) = cur.iter().find(|m| m.is_virtual()) else {
+        return Err("no virtual monitor".into());
+    };
+    if v.primary {
+        return Ok(());
+    }
+    let mut x = v.w as i32;
+    for m in &cur {
+        let mut dm = devmode();
+        // SAFETY: m.device is NUL-terminated; dm is valid.
+        let _ = unsafe {
+            EnumDisplaySettingsW(PCWSTR(m.device.as_ptr()), ENUM_CURRENT_SETTINGS, &mut dm)
+        };
+        dm.dmFields |= DM_POSITION;
+        let mut flags = CDS_UPDATEREGISTRY | CDS_NORESET;
+        if m.device == v.device {
+            dm.Anonymous1.Anonymous2.dmPosition.x = 0;
+            dm.Anonymous1.Anonymous2.dmPosition.y = 0;
+            flags |= CDS_SET_PRIMARY;
+        } else {
+            dm.Anonymous1.Anonymous2.dmPosition.x = x;
+            dm.Anonymous1.Anonymous2.dmPosition.y = 0;
+            x += m.w as i32;
+        }
+        // SAFETY: device name and dm are valid for the call.
+        let r = unsafe {
+            ChangeDisplaySettingsExW(PCWSTR(m.device.as_ptr()), Some(&dm), None, flags, None)
+        };
+        if r != DISP_CHANGE_SUCCESSFUL {
+            return Err(format!(
+                "ChangeDisplaySettingsEx (primary) returned {}",
+                r.0
+            ));
+        }
+    }
+    // SAFETY: applies the staged registry settings.
+    let r = unsafe { ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None) };
+    std::thread::sleep(std::time::Duration::from_millis(settle_ms));
+    if r != DISP_CHANGE_SUCCESSFUL {
+        return Err(format!("ChangeDisplaySettingsEx (apply) returned {}", r.0));
+    }
+    Ok(())
 }

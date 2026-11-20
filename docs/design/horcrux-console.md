@@ -554,11 +554,8 @@ it; 20 ms frames; nothing after StopAudio; the Windows Audio service
 stopped under a running stream -> Log + silence at full cadence, restarted
 -> capture resumes.
 
-Still open in C2 (queued as C2c-C2d):
-- C2c: Horcrux virtual display (IddCx Indirect Display Driver, clean-room from
-  Microsoft's documentation; configurable resolution/refresh incl. 240+ Hz,
-  used automatically for GPUs without monitors/outputs) and the virtual HID
-  gamepad for Windows; both are drivers and need signing (below).
+Still open in C2 (queued as C2d):
+- C2c: done, see "C2c status" below (XInput and attestation signing open).
 - C2d: the same-host ivshmem raw-frame path and the native viewer window on a
   Horcrux desktop (Wayland), QEMU (no-tools) audio to Opus, a latency run on
   an unloaded node for the host-encode path.
@@ -577,3 +574,92 @@ code-signing certificate. Test-signing mode (bcdedit testsigning) is not an
 option for gaming VMs: it needs Secure Boot off, which anti-cheat refuses.
 Sources: learn.microsoft.com driver signing policy and code-signing
 attestation pages.
+
+### C2c status (Windows guest drivers, 2026-11-20)
+
+Two user-mode drivers in the Windows guest tools, written from Microsoft's
+IddCx, UMDF 2 and HID documentation and the WDK header declarations only
+(GPL-3.0-or-later; no Windows-driver-samples code):
+`crates/horcrux-guest-tools/drivers/windows/{hxidd,hxpad,include,common}`.
+
+- **hxidd, Horcrux virtual display** (IddCx 1.4, UMDF 2.25, Windows 10 1903+ /
+  Server 2022 / Windows 11). One software display adapter (`SWD\HorcruxEnum\HxIdd0`,
+  Display class) with 1-16 monitors that exist only while the guest tools ask
+  for them. A private control interface (`include/hxdrv.h`, mirrored in
+  `src/hxdrv.rs`, size-checked on both sides) sets the monitors and their mode
+  lists (any WxH, refresh in millihertz, 240+ Hz) and reports the committed
+  mode, swap-chain frames and errors. Monitors can persist across reboots
+  (driver setting); the agent puts them back in their requested mode at start
+  because Windows picks its own mode for a returning monitor without EDID.
+  With `capture = idd` every swap-chain frame is copied on the GPU into a
+  named keyed-mutex texture (`Global\HorcruxIdd{id}Frame{generation}`, readable
+  by SYSTEM, administrators, interactive and local-service users) that the
+  agent opens directly: an alternative to Desktop Duplication.
+- **hxpad, Horcrux virtual gamepad** (UMDF 2 HID minidriver under the inbox
+  MsHidUmdf.sys). Report 1 is a standard Game Pad collection (16 buttons, 11 used in
+  Xbox-style order; hat, 16-bit sticks, 8-bit triggers); report 2 is a vendor
+  output collection the agent writes `Msg::Input Gamepad` states to. Vendor/
+  product id default to 0 (Horcrux owns no USB vendor id; no vendor's ids are
+  borrowed) and, like the strings, are settings in the device's hardware key.
+- **Agent**: `virtual_display = auto|on|off` (auto = when the node's
+  `HostHello.virtual_display` asks), the mode list, default rate, monitor cap,
+  persistence, primary-display choice and timeouts are guest-tools settings;
+  `SetLayout` sizes the virtual monitors and the `Layout` reply marks them
+  (`Monitor.virtual_display`). `Caps.virtual_display`/`Caps.gamepad` are probed
+  (driver present), not assumed. `--drivers install|remove|status`,
+  `--layout WxH@HZ[,...]` and `--gamepad-test` are one-shot commands.
+- **Node**: `[console] virtual_display = auto|always|never` (API, declarative
+  config, UI). `auto` asks for virtual monitors when the GPU hand-off record
+  (`crates/horcrux-vm/src/vm/handoff.rs`, new `gpu_outputs`: DRM connectors and
+  attached monitors per handed-off GPU, read from sysfs before the hand-off)
+  shows a GPU without outputs or without a monitor.
+- **Build** (`ci/build-guest-drivers.sh`): clang-cl + lld-link on Linux against
+  Microsoft's WDK/SDK nuget packages (pinned versions and sha256, downloaded at
+  build time, never shipped); no Windows build host and no use of the
+  Rustinion Windows runner. The MSI (`ci/build-guest-tools-msi.sh`) carries
+  both packages; CI (`guest-tools.yml`) checks the MSI tables and that both
+  DLLs only import system DLLs and export `FxDriverEntryUm`.
+- **Signing v1**: at install the MSI runs the agent's `--drivers install` as
+  SYSTEM: a code-signing certificate is generated for that guest, its public
+  part goes to LocalMachine Root + TrustedPublisher, both catalogs are signed,
+  and the private key is deleted at once (nothing else can be signed with it).
+  Works on x64 with Secure Boot on and without test mode. Uninstall removes
+  the devices, packages and certificate. `HXDRIVERS=0` skips the drivers.
+
+Proof on the Windows Server 2022 eval VM (`tests/win_harness.py`, new tests
+`virtual-display`, `video-virtual`, `gamepad`; harness flags
+`--virtual-display --expect-gamepad [--expect-capture idd]`):
+- MSI install from the customer path: both devices OK, catalogs `Valid`,
+  certificate in Root/TrustedPublisher without a private key, service running.
+- A virtual monitor at 2560x1440@240 becomes the primary display (EnumDisplaySettings
+  and Win32_VideoController report 2560x1440@240; mode list incl. 3840x2160@120
+  and 1920x1080@240) and comes back at 2560x1440@240 after a guest restart.
+- Capture + encode of it at 2560x1440, 60 fps, software H.264 (no GPU in the
+  VM): Desktop Duplication 294 frames in 6 s (encode median 18.6 ms), IDD
+  swap-chain capture 350 of 360 frames (encode median 12.6 ms, p95 15.6 ms);
+  both streams decode cleanly with ffprobe (294/294 and 350/350 frames,
+  2560x1440, no B-frames), IDR 31-37 ms after a keyframe request.
+- Gamepad states sent as `Msg::Input` reach the game-controller API joy.cpl and
+  DirectInput games use (winmm `joyGetPosEx`): buttons, hat (45 degree
+  up-right = 4500), both sticks and both analog triggers, for every state.
+- Bugs found and fixed by these runs: UMDF queues refuse an internal-IOCTL
+  callback (hxpad did not start, code 10); a monitor re-plug with the swap
+  thread still running hit an IddCx verifier stop (the thread is now stopped
+  before the departure); software devices lost after a hard power-off are
+  re-created by the service at start.
+
+Open:
+- **XInput**: XInput only lists Xbox-class (XUSB) devices; the HID pad shows in
+  joy.cpl/DirectInput/raw HID; `XInputGetState` answers
+  ERROR_DEVICE_NOT_CONNECTED. XInput support needs a kernel-mode XUSB-class
+  Horcrux driver (never Microsoft's ids), which needs attestation signing.
+- **Attestation signing** (Partner Center + EV code-signing certificate):
+  needed for kernel drivers (XInput), Windows on Arm, and guests whose Code
+  Integrity policy refuses a self-trusted publisher. Owner decision.
+- **C2b CI Windows guest**: add the three harness tests to that job once it is
+  on main.
+- **Real GPU hardware**: 240 Hz with a hardware encoder (NVENC/AMF/QSV) on a
+  passed-through GPU without outputs, the zero-copy encode from the shared
+  texture (today the agent maps it to system memory for the software encoder),
+  and the `auto` decision on a real headless GPU (`gpu_outputs` is unit-tested
+  against sysfs fixtures only).

@@ -90,6 +90,16 @@ fn open_capture(cfg: &Config, sv: &StartVideo) -> Result<Box<dyn Capturer>, Stri
     };
     match cfg.capture.as_str() {
         "gdi" => gdi(),
+        "idd" => {
+            // the n-th Horcrux virtual monitor = hxidd monitor id n
+            let vid = mons.iter().take(idx + 1).filter(|m| m.is_virtual()).count();
+            let id = if m.is_virtual() {
+                vid.saturating_sub(1)
+            } else {
+                0
+            } as u32;
+            super::idd::IddShared::open(id).map(|c| Box::new(c) as Box<dyn Capturer>)
+        }
         _ => {
             match Dup::open(origin, idx) {
                 Ok(d) => Ok(Box::new(d)),

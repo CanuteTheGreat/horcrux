@@ -12,11 +12,13 @@ bitstream checks when present (`analyze`).
   win_harness.py analyze-audio audio.ogg [--tone-hz F]
 
 Tests (`--tests`): hello, video, video-damage, input, clipboard, layout, video-native, audio,
-audio-recover. `audio` needs a render endpoint in the guest (e.g. QEMU ich9-intel-hda + hda-output and
+audio-recover, virtual-display, video-virtual, gamepad. `audio` needs a render endpoint in the guest (e.g. QEMU ich9-intel-hda + hda-output and
 the Windows Audio service running): it checks the 10 ms packet cadence while nothing plays, plays a
 tone in the guest session (System.Media.SoundPlayer) and decodes the collected Opus packets (Ogg +
 ffmpeg) to measure the tone's frequency and level; `audio-recover` stops and restarts the Windows
-Audio service under a running stream.
+Audio service under a running stream. virtual-display, video-virtual and gamepad need the Horcrux
+guest drivers: `--virtual-display` makes the HostHello ask for virtual monitors, as the node does when
+the guest's GPU has no monitor or outputs; `--expect-gamepad` when hxpad is installed.
 `input` and `clipboard` need a way to read guest state back. Probe scripts are written to
 `--www` (served to the guest at http://10.0.2.2:8000/) and typed into the guest with the
 agent's own keyboard injection (Win+R); they answer by setting the guest clipboard (which
@@ -284,7 +286,9 @@ def t_hello(ctx):
     ctx.results["hello_json"] = h
     c = h.get("caps", {})
     check(ctx, "hello.os", h.get("os") == "windows" and h.get("v") == 1, f"os={h.get('os')} ver={h.get('os_version')} agent={h.get('agent_version')}")
-    check(ctx, "hello.caps", c.get("clipboard") and c.get("resize") and c.get("relative_mouse") and not c.get("gamepad"),
+    check(ctx, "hello.caps", c.get("clipboard") and c.get("resize") and c.get("relative_mouse")
+          and bool(c.get("gamepad")) == ctx.args.expect_gamepad
+          and (not ctx.args.virtual_display or bool(c.get("virtual_display"))),
           json.dumps(c))
     return True
 
@@ -789,12 +793,114 @@ def t_audio_recover(ctx):
           f"service {r and r.strip()!r}; agent logs {a.logs[n2:]}")
     a.send(K["STOP_AUDIO"])
     time.sleep(0.5)
+
+
+def t_virtual_display(ctx):
+    """SetLayout at the virtual size/rate: the agent creates a Horcrux virtual monitor in that
+    mode (the guest GPU's own outputs are left alone) and reports it in Layout."""
+    a = ctx.a
+    w, h, hz = ctx.args.virtual_mode
+    a.drain("LAYOUT")
+    a.sendj(K["SET_LAYOUT"], dict(monitors=[dict(x=0, y=0, width=w, height=h, refresh_hz=hz, primary=True)]))
+    now = a.wait("LAYOUT", 30)
+    mons = (now or {}).get("monitors", [])
+    v = [i for i, m in enumerate(mons) if m.get("virtual_display")]
+    ctx.results["virtual.layout"] = now
+    hit = [i for i in v if (mons[i]["width"], mons[i]["height"], mons[i]["refresh_hz"]) == (w, h, hz)]
+    check(ctx, "virtual-display.mode", bool(hit), f"asked {w}x{h}@{hz}, guest reports {json.dumps(mons)}")
+    if hit:
+        ctx.virtual_index = hit[0]
+        check(ctx, "virtual-display.primary", mons[hit[0]].get("primary") is True, json.dumps(mons[hit[0]]))
+    return bool(hit)
+
+
+def t_video_virtual(ctx):
+    """Capture + encode of the virtual monitor at its native size."""
+    i = getattr(ctx, "virtual_index", None)
+    if i is None:
+        check(ctx, "video-virtual.monitor", False, "no virtual monitor (run virtual-display first)")
+        return False
+    w, h, hz = ctx.args.virtual_mode
+    fps = min(hz, ctx.args.virtual_fps)
+    ok = t_video_common(ctx, "video-virtual", ctx.args.secs, w, h, True, width=w, height=h, fps=fps,
+                        monitor=i, bitrate_kbps=20000, max_bitrate_kbps=40000)
+    st = (ctx.results.get("video-virtual.stats") or {}).get("status") or {}
+    if ctx.args.expect_capture:
+        check(ctx, "video-virtual.capture", st.get("capture") == ctx.args.expect_capture,
+              f"capture={st.get('capture')} (expected {ctx.args.expect_capture})")
+    return ok
+
+
+GAMEPAD_PROBE = r"""
+if (-not ('HxJoy' -as [type])) { Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices;
+public static class HxJoy {
+  [StructLayout(LayoutKind.Sequential)] public struct JI { public int Size, Flags, X, Y, Z, R, U, V, Buttons, ButtonNumber, POV, R1, R2; }
+  [DllImport("winmm.dll")] public static extern int joyGetPosEx(int id, ref JI ji);
+}
+"@ }
+$seen = @{}
+$t0 = Get-Date
+while (((Get-Date) - $t0).TotalSeconds -lt __SECS__) {
+  for ($i = 0; $i -lt 4; $i++) {
+    $j = New-Object HxJoy+JI; $j.Size = [Runtime.InteropServices.Marshal]::SizeOf($j); $j.Flags = 0xff
+    if ([HxJoy]::joyGetPosEx($i, [ref]$j) -eq 0) { $seen["$i $($j.X) $($j.Y) $($j.Z) $($j.R) $($j.U) $($j.V) $($j.Buttons) $($j.POV)"] = 1 }
+  }
+  Start-Sleep -Milliseconds 50
+}
+Invoke-RestMethod -Method Put -Uri http://10.0.2.2:8001/hx-gamepad.txt -Body (($seen.Keys | Sort-Object) -join "`n") | Out-Null
+"""
+
+
+def t_gamepad(ctx):
+    """Gamepad states sent as Msg::Input arrive at the guest's game-controller API (winmm
+    joyGetPosEx, what joy.cpl and DirectInput games read)."""
+    a = ctx.a
+    secs = 6
+    pad = lambda buttons=0, lx=0, ly=0, rx=0, ry=0, lt=0, rt=0: struct.pack("<BBIhhhhBB", 6, 0, buttons, lx, ly, rx, ry, lt, rt)
+    states = [pad(buttons=1 | 1 << 3, lx=32767, ry=-32768, lt=255),      # A + Y, left stick right, right stick up, LT
+              pad(buttons=1 << 12 | 1 << 15, ly=32767, rx=32767, rt=128)]  # d-pad up+right, left stick down, right stick right, half RT
+    # winmm axis names for the pad's HID usages: X/Y = left stick, Z = left trigger,
+    # R (rudder) = right trigger, U = right stick Y, V = right stick X
+    expect = [dict(X=65535, Y=32767, Z=65535, R=0, U=0, V=32767, buttons=0x1 | 0x8, pov=65535),
+              dict(X=32767, Y=65535, Z=0, R=32896, U=32767, V=65535, buttons=0, pov=4500)]
+    done = threading.Event()
+
+    def feed():
+        k = 0
+        while not done.is_set():
+            a.send(K["INPUT"], states[(k // 25) % 2])   # 0.5 s each, 50 Hz
+            k += 1
+            time.sleep(0.02)
+        a.send(K["INPUT"], pad())
+
+    th = threading.Thread(target=feed, daemon=True)
+    th.start()
+    out = ctx.probe("gamepad", GAMEPAD_PROBE.replace("__SECS__", str(secs)), wait=secs + 40)
+    done.set()
+    th.join(2)
+    seen = []
+    for line in (out or "").splitlines():
+        f = line.split()
+        if len(f) == 9:
+            seen.append(dict(id=int(f[0]), X=int(f[1]), Y=int(f[2]), Z=int(f[3]), R=int(f[4]), U=int(f[5]), V=int(f[6]),
+                             buttons=int(f[7]), pov=int(f[8])))
+    ctx.results["gamepad.seen"] = seen
+
+    def near(a_, b_):
+        return abs(a_ - b_) <= 300
+
+    for n, e in enumerate(expect):
+        hit = [s_ for s_ in seen if all(near(s_[k], v) for k, v in e.items() if k not in ("buttons", "pov"))
+               and s_["buttons"] == e["buttons"] and (e["pov"] is None or s_["pov"] == e["pov"])]
+        check(ctx, f"gamepad.state{n}", bool(hit), f"expected {e}; joyGetPosEx saw {seen}")
     return True
 
 
 TESTS = [("hello", t_hello), ("video", t_video), ("video-damage", t_video_damage), ("input", t_input),
          ("clipboard", t_clipboard), ("layout", t_layout), ("video-native", t_video_native),
-         ("layout-restore", t_layout_restore), ("audio", t_audio), ("audio-recover", t_audio_recover)]
+         ("layout-restore", t_layout_restore), ("audio", t_audio), ("audio-recover", t_audio_recover),
+         ("virtual-display", t_virtual_display), ("video-virtual", t_video_virtual), ("gamepad", t_gamepad)]
 
 
 def serve(args):
@@ -818,9 +924,9 @@ def serve(args):
         print("FAIL no Hello", flush=True)
         return 1
     ctx.hello = h
-    a.sendj(K["HOST_HELLO"], dict(v=1, clipboard_max_bytes=1 << 20))
+    a.sendj(K["HOST_HELLO"], dict(v=1, clipboard_max_bytes=1 << 20, virtual_display=args.virtual_display))
     sel = [t for t in args.tests.split(",") if t]
-    if {"input", "clipboard", "audio", "audio-recover"} & set(sel):
+    if {"input", "clipboard", "audio", "audio-recover", "gamepad"} & set(sel):
         print("--- starting the guest-side probe poller (typed through the agent)", flush=True)
         check(ctx, "poller.start", ctx._start_poller(), "typed a PowerShell launcher into Win+R through the agent's keyboard injection")
     for name, fn in TESTS:
@@ -852,6 +958,11 @@ def main():
     s.add_argument("--size", default="1280x720")
     s.add_argument("--layout", default="1024x768")
     s.add_argument("--fps", type=int, default=30)
+    s.add_argument("--virtual-display", action="store_true", help="HostHello asks for Horcrux virtual monitors")
+    s.add_argument("--virtual-mode", default="2560x1440@240", help="virtual-display test mode WxH@HZ")
+    s.add_argument("--virtual-fps", type=int, default=60, help="video-virtual encode rate (capped at the mode's HZ)")
+    s.add_argument("--expect-capture", default="", help="video-virtual: capture source the agent must report")
+    s.add_argument("--expect-gamepad", action="store_true", help="hello: the agent reports a virtual gamepad")
     s.add_argument("--secs", type=int, default=6)
     s.add_argument("--wait", type=float, default=900)
     s.add_argument("--poller-wait", type=float, default=15.0, help="seconds to wait for a launcher-started poller before typing one")
@@ -877,6 +988,8 @@ def main():
         sys.exit(0 if ok else 1)
     args.size = tuple(int(x) for x in args.size.split("x"))
     args.layout = tuple(int(x) for x in args.layout.split("x"))
+    wh, hz = args.virtual_mode.split("@")
+    args.virtual_mode = tuple(int(x) for x in wh.split("x")) + (int(hz),)
     sys.exit(serve(args))
 
 

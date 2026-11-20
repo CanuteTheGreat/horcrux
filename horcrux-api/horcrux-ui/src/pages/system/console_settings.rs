@@ -264,6 +264,14 @@ pub fn ConsoleSettingsPage() -> impl IntoView {
                         on:change=move |ev| { let v = event_target_checked(&ev); sig.update(|s| s.guest_tools_auto_install = v) }/>
                     "Install the guest tools automatically through the QEMU guest agent (Windows MSI; Linux .deb/.rpm/.apk)"
                 </label>
+                <label>"Virtual display (Windows guests)"
+                    <select name="virtual_display" prop:value=move || sig.get().virtual_display
+                        on:change=move |ev| { let v = event_target_value(&ev); sig.update(|s| s.virtual_display = v) }>
+                        <option value="auto">"Automatic: when the passed-through GPU has no monitor or no outputs"</option>
+                        <option value="always">"Always"</option>
+                        <option value="never">"Never"</option>
+                    </select>
+                </label>
                 <label>"Clipboard limit (bytes)"
                     <input type="number" min="1" name="clipboard_max_bytes" prop:value=move || sig.get().clipboard_max_bytes.to_string()
                         on:change=move |ev| { let v = num(&ev, sig.get().clipboard_max_bytes); sig.update(|s| s.clipboard_max_bytes = v) }/>

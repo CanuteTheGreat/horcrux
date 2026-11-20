@@ -90,6 +90,10 @@ pub struct HostHello {
     pub v: u32,
     /// Largest clipboard payload either side sends (bytes).
     pub clipboard_max_bytes: u32,
+    /// Show the guest desktop on Horcrux virtual display monitors (the
+    /// node decided the guest's GPU has no monitor or no outputs). Guests
+    /// whose tools have `virtual_display = auto` follow it.
+    pub virtual_display: bool,
 }
 
 /// Node -> guest: start (or reconfigure) capture + encode.
@@ -183,6 +187,8 @@ pub struct Monitor {
     pub height: u32,
     pub refresh_hz: u32,
     pub primary: bool,
+    /// A Horcrux virtual display monitor (guest -> node in `LAYOUT`).
+    pub virtual_display: bool,
 }
 
 /// Node -> guest (`SET_LAYOUT`, sized to the client) and guest -> node
@@ -755,6 +761,7 @@ mod tests {
         round(Msg::HostHello(HostHello {
             v: 1,
             clipboard_max_bytes: 1 << 20,
+            virtual_display: true,
         }));
         round(Msg::StartVideo(StartVideo {
             fps: 240,
@@ -879,7 +886,8 @@ mod tests {
             m,
             Msg::HostHello(HostHello {
                 v: 2,
-                clipboard_max_bytes: 5
+                clipboard_max_bytes: 5,
+                virtual_display: false
             })
         );
     }

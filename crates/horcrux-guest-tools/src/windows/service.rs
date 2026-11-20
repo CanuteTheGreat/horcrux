@@ -132,6 +132,9 @@ impl Child {
 fn supervise() {
     let args = ARGS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let cfg = Config::load(args.clone()).unwrap_or_default();
+    for note in super::drivers::ensure(&cfg) {
+        eprintln!("horcrux-guest-agent: drivers: {note}");
+    }
     let poll = Duration::from_millis(cfg.service_poll_ms);
     let mut child: Option<Child> = None;
     let mut last_fail = String::new();

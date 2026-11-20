@@ -46,6 +46,7 @@ pub async fn connect(
     socket: &Path,
     wait: Duration,
     clipboard_max_bytes: u32,
+    virtual_display: bool,
 ) -> Result<Option<GuestLink>, String> {
     let stream = match UnixStream::connect(socket).await {
         Ok(s) => s,
@@ -88,6 +89,7 @@ pub async fn connect(
     let hh = Msg::HostHello(HostHello {
         v: VERSION,
         clipboard_max_bytes,
+        virtual_display,
     });
     to_guest.send(hh).await.map_err(|e| e.to_string())?;
     let deadline = tokio::time::Instant::now() + wait;
@@ -127,6 +129,7 @@ mod tests {
                 m,
                 Msg::HostHello(HostHello {
                     clipboard_max_bytes: 77,
+                    virtual_display: true,
                     ..
                 })
             ));
@@ -157,7 +160,7 @@ mod tests {
                 }
             }
         });
-        let mut g = connect(&sock, Duration::from_secs(2), 77)
+        let mut g = connect(&sock, Duration::from_secs(2), 77, true)
             .await
             .unwrap()
             .expect("tools answered");
@@ -165,17 +168,22 @@ mod tests {
         g.tx.send(Msg::Ping(5)).await.unwrap();
         assert_eq!(g.rx.recv().await, Some(Msg::Pong(5)));
         drop(g);
-        let none = connect(&sock, Duration::from_millis(300), 1).await.unwrap();
+        let none = connect(&sock, Duration::from_millis(300), 1, false)
+            .await
+            .unwrap();
         assert!(none.is_none(), "no Hello -> no tools");
         // ...and the node let go of the connection (the fake guest sees EOF;
         // join off the runtime thread so the aborted reader can finish)
         tokio::task::spawn_blocking(move || t.join().unwrap())
             .await
             .unwrap();
-        assert!(
-            connect(&dir.path().join("missing"), Duration::from_millis(10), 1)
-                .await
-                .is_err()
-        );
+        assert!(connect(
+            &dir.path().join("missing"),
+            Duration::from_millis(10),
+            1,
+            false
+        )
+        .await
+        .is_err());
     }
 }
