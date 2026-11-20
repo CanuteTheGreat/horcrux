@@ -1,4 +1,4 @@
-"""GNOME on OpenRC: session-scoped user services (gnome-base/gnome-session-openrc-50.0-r1::horcrux) and ssh logins without OpenRC user services
+"""GNOME on OpenRC: session-scoped user services (gnome-base/gnome-session-openrc-50.0-r2::horcrux) and ssh logins without OpenRC user services
 (sys-auth/horcrux-ssh-pam, pulled by sys-apps/horcrux-core on every edition). Static checks of the repo tree; the behaviour itself is proven by
 gnome-session-lifecycle-test.py on an installed GNOME VM. Skipped in the vendored copy of common/ in Patronus."""
 import os
@@ -54,6 +54,15 @@ class SessionScoping(unittest.TestCase):
         self.assertIn('DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"', p4)
         # upstream 50 is Wayland-only: gnome-shell and gnome-shell.gnome-login are the two guarded services
         self.assertEqual(len(re.findall(r'^\+command_args="guard /usr/bin/gnome-shell', p4, re.M)), 2)
+
+    def test_greeter_shell_gets_gdm_session_mode(self):
+        # GDM 50 starts the login screen as plain `gnome-session`; without GNOME_SHELL_SESSION_MODE=gdm gnome-shell is an empty
+        # desktop of gdm-greeter and nobody can log in (the lab's greeter-login tests failed on exactly this)
+        t = self.ebuild(GSO, "gnome-session-openrc-*.ebuild")
+        p = (GSO / "files" / "0002-greeter-shell-session-mode.patch").read_text()
+        self.assertIn("0002-greeter-shell-session-mode.patch", t)
+        self.assertEqual(p.count("+\t\texport GNOME_SHELL_SESSION_MODE=gdm"), 2)
+        self.assertIn('XDG_SESSION_CLASS}" = "greeter"', p)
 
     def test_images_no_longer_ship_the_user_patches(self):
         self.assertFalse(list((LIVE / "project" / "variants").glob("*/portage/patches/gnome-base/gnome-session-openrc/*")))
