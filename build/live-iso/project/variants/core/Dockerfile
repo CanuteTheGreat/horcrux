@@ -29,6 +29,8 @@ RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked 
     if qlist -I sys-apps/horcrux-core >/dev/null 2>&1; then echo "core already installed: nothing to do"; rm -f /tmp/vdb-prune.py /tmp/public-forbidden.txt; exit 0; fi; \
     # the [horcrux] repos.conf entry is package-owned (sys-apps/horcrux-repo-config, a dependency of the core); placed once from the package's own file so this emerge sees the overlay
     install -D -m644 /var/db/repos/horcrux/sys-apps/horcrux-repo-config/files/horcrux.conf /etc/portage/repos.conf/horcrux.conf; \
+    # same for the role USE changes (qemu spice, ffmpeg vpx/x264 ...): horcrux-bin's RDEPEND needs them while this one emerge resolves, before horcrux-repo-config is installed; identical content, so the package's own copy replaces it silently
+    install -D -m644 /var/db/repos/horcrux/sys-apps/horcrux-repo-config/files/horcrux-roles.use /etc/portage/package.use/horcrux-roles; \
     qlist -I | sort > /tmp/pkgs.before; \
     emerge --update --newuse --usepkg-exclude "sys-apps/horcrux-* net-misc/horcrux-* app-emulation/horcrux-bin sec-keys/openpgp-keys-errantsolutions" --select sys-apps/horcrux-core app-emulation/horcrux-bin sec-keys/openpgp-keys-errantsolutions > /tmp/core-emerge.log 2>&1 || { tail -60 /tmp/core-emerge.log; exit 1; }; \
     qlist -I | sort > /tmp/pkgs.after; comm -13 /tmp/pkgs.before /tmp/pkgs.after > /tmp/pkgs.added; \
