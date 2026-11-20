@@ -46,15 +46,20 @@ mod tests {
         let relayed = c.allocate(&p).await.unwrap();
         assert_eq!(relayed.ip().to_string(), "127.0.0.1");
         assert!((40000..=40999).contains(&relayed.port()));
-        assert_eq!(c.mapped.unwrap().port(), c.socket.local_addr().unwrap().port());
+        assert_eq!(
+            c.mapped.unwrap().port(),
+            c.socket.local_addr().unwrap().port()
+        );
         assert_eq!(relay.relayed_addresses("sess1"), vec![relayed]);
 
         // Before a permission nothing passes.
         c.send_indication(pa, b"early").await.unwrap();
         let mut buf = [0u8; 64];
-        assert!(tokio::time::timeout(Duration::from_millis(200), peer.recv_from(&mut buf))
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), peer.recv_from(&mut buf))
+                .await
+                .is_err()
+        );
 
         c.create_permission(pa).await.unwrap().unwrap();
         c.send_indication(pa, b"hello peer").await.unwrap();
@@ -140,12 +145,15 @@ mod tests {
         let req = stun::Builder::request(stun::method::BINDING).fingerprint();
         let r = c.transact(&req).await.unwrap();
         assert_eq!(
-            r.get_xor_addr(stun::attr::XOR_MAPPED_ADDRESS).map(|a| a.port()),
+            r.get_xor_addr(stun::attr::XOR_MAPPED_ADDRESS)
+                .map(|a| a.port()),
             Some(c.socket.local_addr().unwrap().port())
         );
         // TCP: allocate over a stream with framing
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let mut s = tokio::net::TcpStream::connect(relay.tcp_addr.unwrap()).await.unwrap();
+        let mut s = tokio::net::TcpStream::connect(relay.tcp_addr.unwrap())
+            .await
+            .unwrap();
         let req = stun::Builder::request(stun::method::ALLOCATE)
             .u32(stun::attr::REQUESTED_TRANSPORT, 17 << 24)
             .fingerprint();

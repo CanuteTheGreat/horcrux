@@ -106,8 +106,8 @@ pub async fn apply(w: &WanSettings) {
                 upnp_ssdp_address: ssdp,
                 ..Default::default()
             };
-            let _ = tokio::time::timeout(Duration::from_secs(5), unmap(&w2, m, st.external_port))
-                .await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(5), unmap(&w2, m, st.external_port)).await;
         }
     }
     if let Ok(mut g) = STATUS.lock() {
@@ -332,7 +332,9 @@ async fn http(
             req.push_str(&format!("{k}: {v}\r\n"));
         }
         req.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
-        s.write_all(req.as_bytes()).await.map_err(|e| e.to_string())?;
+        s.write_all(req.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
         let mut resp = Vec::new();
         s.read_to_end(&mut resp).await.map_err(|e| e.to_string())?;
         let text = String::from_utf8_lossy(&resp).to_string();
@@ -341,7 +343,10 @@ async fn http(
             .nth(1)
             .and_then(|c| c.parse().ok())
             .ok_or("bad HTTP answer")?;
-        let body = text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
         Ok::<_, String>((code, body))
     };
     tokio::time::timeout(Duration::from_secs(5), fut)
@@ -375,7 +380,9 @@ fn find_service(desc: &str) -> Option<(String, String)> {
 
 async fn discover_igd(w: &WanSettings) -> Result<Igd, String> {
     for loc in ssdp_search(w).await? {
-        let Some((addr, path)) = split_url(&loc) else { continue };
+        let Some((addr, path)) = split_url(&loc) else {
+            continue;
+        };
         let Ok((200, desc)) = http(addr, "GET", &path, &[], "").await else {
             continue;
         };
@@ -385,7 +392,11 @@ async fn discover_igd(w: &WanSettings) -> Result<Igd, String> {
         let (control, control_path) = if control.starts_with("http://") {
             split_url(&control).ok_or("bad controlURL")?
         } else {
-            let p = if control.starts_with('/') { control } else { format!("/{control}") };
+            let p = if control.starts_with('/') {
+                control
+            } else {
+                format!("/{control}")
+            };
             (addr, p)
         };
         // our address as the router sees it
@@ -425,7 +436,9 @@ async fn soap(igd: &Igd, action: &str, args: &[(&str, String)]) -> Result<String
     )
     .await?;
     if code != 200 {
-        let e = xml_text(&resp, "errorDescription").unwrap_or("").to_string();
+        let e = xml_text(&resp, "errorDescription")
+            .unwrap_or("")
+            .to_string();
         return Err(format!("{action}: HTTP {code} {e}"));
     }
     Ok(resp)
@@ -434,7 +447,9 @@ async fn soap(igd: &Igd, action: &str, args: &[(&str, String)]) -> Result<String
 async fn upnp_map(w: &WanSettings) -> Result<MappingStatus, String> {
     let igd = discover_igd(w).await?;
     let ext = soap(&igd, "GetExternalIPAddress", &[]).await?;
-    let ext_ip = xml_text(&ext, "NewExternalIPAddress").unwrap_or("").to_string();
+    let ext_ip = xml_text(&ext, "NewExternalIPAddress")
+        .unwrap_or("")
+        .to_string();
     let mut protos = vec!["UDP"];
     if w.relay_tcp {
         protos.push("TCP");
@@ -563,12 +578,20 @@ mod tests {
                 // read headers + body (Content-Length)
                 loop {
                     let n = s.read(&mut buf).await.unwrap_or(0);
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                     got.extend_from_slice(&buf[..n]);
                     let t = String::from_utf8_lossy(&got).to_string();
                     if let Some((h, b)) = t.split_once("\r\n\r\n") {
-                        let cl = h.lines().find_map(|l| l.strip_prefix("Content-Length: ")).and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0);
-                        if b.len() >= cl { break; }
+                        let cl = h
+                            .lines()
+                            .find_map(|l| l.strip_prefix("Content-Length: "))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if b.len() >= cl {
+                            break;
+                        }
                     }
                 }
                 let t = String::from_utf8_lossy(&got).to_string();
@@ -576,15 +599,25 @@ mod tests {
                     "<root><device><serviceList><service><serviceType>urn:schemas-upnp-org:service:Layer3Forwarding:1</serviceType><controlURL>/l3</controlURL></service>\
                      <service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/ctl/IPConn</controlURL></service></serviceList></device></root>".to_string()
                 } else {
-                    let action = t.lines().find_map(|l| l.strip_prefix("SOAPAction: ")).unwrap_or("").to_string();
-                    l2.lock().unwrap().push(format!("{action} {}", t.split_once("\r\n\r\n").map(|x| x.1).unwrap_or("")));
+                    let action = t
+                        .lines()
+                        .find_map(|l| l.strip_prefix("SOAPAction: "))
+                        .unwrap_or("")
+                        .to_string();
+                    l2.lock().unwrap().push(format!(
+                        "{action} {}",
+                        t.split_once("\r\n\r\n").map(|x| x.1).unwrap_or("")
+                    ));
                     if action.contains("GetExternalIPAddress") {
                         "<s:Envelope><s:Body><u:GetExternalIPAddressResponse><NewExternalIPAddress>198.51.100.7</NewExternalIPAddress></u:GetExternalIPAddressResponse></s:Body></s:Envelope>".to_string()
                     } else {
                         "<s:Envelope><s:Body/></s:Envelope>".to_string()
                     }
                 };
-                let r = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+                let r = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
                 let _ = s.write_all(r.as_bytes()).await;
             }
         });
@@ -605,8 +638,13 @@ mod tests {
         assert_eq!(m.external_address.as_deref(), Some("198.51.100.7"));
         assert_eq!(m.external_port, Some(3478));
         let l = log.lock().unwrap().clone();
-        assert!(l[0].contains("WANIPConnection:1#GetExternalIPAddress"), "{l:?}");
-        assert!(l[1].contains("#AddPortMapping") && l[1].contains("<NewProtocol>UDP</NewProtocol>"));
+        assert!(
+            l[0].contains("WANIPConnection:1#GetExternalIPAddress"),
+            "{l:?}"
+        );
+        assert!(
+            l[1].contains("#AddPortMapping") && l[1].contains("<NewProtocol>UDP</NewProtocol>")
+        );
         assert!(l[1].contains("<NewInternalClient>127.0.0.1</NewInternalClient>"));
         assert!(l[1].contains("<NewLeaseDuration>600</NewLeaseDuration>"));
         assert!(l[2].contains("<NewProtocol>TCP</NewProtocol>"));

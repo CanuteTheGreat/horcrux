@@ -43,8 +43,12 @@ fn WanFields(sig: RwSignal<ConsoleSettings>) -> impl IntoView {
             let mapping = match map.get("method").and_then(|m| m.as_str()) {
                 Some(m) => format!(
                     "; router mapping via {m}: {}:{}",
-                    map.get("external_address").and_then(|v| v.as_str()).unwrap_or("?"),
-                    map.get("external_port").and_then(|v| v.as_u64()).unwrap_or(0)
+                    map.get("external_address")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?"),
+                    map.get("external_port")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
                 ),
                 None => match map.get("error").and_then(|e| e.as_str()) {
                     Some(e) => format!("; router mapping failed: {e}"),
@@ -65,7 +69,8 @@ fn WanFields(sig: RwSignal<ConsoleSettings>) -> impl IntoView {
         })
     };
     let w = move || sig.get().wan;
-    let set = move |f: &dyn Fn(&mut horcrux_common::console::WanSettings)| sig.update(|s| f(&mut s.wan));
+    let set =
+        move |f: &dyn Fn(&mut horcrux_common::console::WanSettings)| sig.update(|s| f(&mut s.wan));
     view! {
         <fieldset class="hxc-wan" id="hxc-wan">
             <legend>"WAN access (from anywhere)"</legend>

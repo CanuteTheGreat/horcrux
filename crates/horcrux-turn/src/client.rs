@@ -64,7 +64,10 @@ impl TurnClient {
             }
             wait *= 2;
         }
-        Err(io::Error::new(io::ErrorKind::TimedOut, "no answer from the relay"))
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "no answer from the relay",
+        ))
     }
 
     fn authed(&self, b: Builder) -> Vec<u8> {
@@ -93,9 +96,8 @@ impl TurnClient {
         self.realm = r.get_str(attr::REALM).unwrap_or_default();
         self.nonce = r.get_str(attr::NONCE).unwrap_or_default();
         self.key = stun::long_term_key(&self.username, &self.realm, password);
-        let req = self.authed(
-            Builder::request(method::ALLOCATE).u32(attr::REQUESTED_TRANSPORT, 17 << 24),
-        );
+        let req = self
+            .authed(Builder::request(method::ALLOCATE).u32(attr::REQUESTED_TRANSPORT, 17 << 24));
         let r = self.transact(&req).await?;
         if r.class != Class::Success {
             return Err(io_err(format!(
@@ -180,7 +182,9 @@ impl TurnClient {
             }
             if let Ok(m) = Message::parse(b) {
                 if (m.method, m.class) == (method::DATA, Class::Indication) {
-                    if let (Some(p), Some(d)) = (m.get_xor_addr(attr::XOR_PEER_ADDRESS), m.get(attr::DATA)) {
+                    if let (Some(p), Some(d)) =
+                        (m.get_xor_addr(attr::XOR_PEER_ADDRESS), m.get(attr::DATA))
+                    {
                         return Ok(Some((p, d.to_vec())));
                     }
                 }

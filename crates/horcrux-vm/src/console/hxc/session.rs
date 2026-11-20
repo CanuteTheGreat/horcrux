@@ -29,12 +29,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use str0m::bwe::{Bitrate, BweKind};
 use str0m::change::SdpOffer;
 use str0m::channel::ChannelId;
 use str0m::format::Codec;
 use str0m::media::{MediaKind, MediaTime, Mid, Pt};
 use str0m::net::{Protocol, Receive};
-use str0m::bwe::{Bitrate, BweKind};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, watch};
@@ -1142,29 +1142,30 @@ async fn compositor(
         // Apply the newest link-adaptation target (set by the transport).
         let want = ctx.stats.lock().ok().and_then(|s| s.target);
         if let Some(t) = want.filter(|t| Some(*t) != rate) {
-        frame_gap = Duration::from_secs_f64(1.0 / t.fps.max(1) as f64);
-        rate = Some(t);
-        if ctx.guest_video.load(Ordering::Relaxed) {
-            // the guest encoder restarts with the new rate
-            let mut sv = start_video_for(&profile);
-            sv.bitrate_kbps = t.kbps;
-            sv.max_bitrate_kbps = t.kbps;
-            sv.fps = t.fps.max(1);
-            sv.keyframe_interval_frames = sv.fps * profile.keyframe_interval_secs.max(1);
-            let _ = ctx.to_guest(gproto::Msg::StartVideo(sv));
-        } else if let (Some((kbps, ow, oh, fps)), Some(f)) = (running, fb.as_ref()) {
-            // FFmpeg's CLI can't change rate or size in-stream and
-            // a restart costs a keyframe: restart for a new size or
-            // frame rate, or a bitrate change of -30% / +50%.
-            let (w, h) = encode::fit(f.width, f.height, t.width.max(2), t.height.max(2));
-            let (mw, mh) = encode::fit(f.width, f.height, settings.max_width, settings.max_height);
-            let shape = (w.min(mw), h.min(mh), t.fps.max(1)) != (ow, oh, fps);
-            if shape || t.kbps * 10 < kbps * 7 || t.kbps * 10 > kbps * 15 {
-                encoder = None;
-                submitted.clear();
-                dirty = true;
+            frame_gap = Duration::from_secs_f64(1.0 / t.fps.max(1) as f64);
+            rate = Some(t);
+            if ctx.guest_video.load(Ordering::Relaxed) {
+                // the guest encoder restarts with the new rate
+                let mut sv = start_video_for(&profile);
+                sv.bitrate_kbps = t.kbps;
+                sv.max_bitrate_kbps = t.kbps;
+                sv.fps = t.fps.max(1);
+                sv.keyframe_interval_frames = sv.fps * profile.keyframe_interval_secs.max(1);
+                let _ = ctx.to_guest(gproto::Msg::StartVideo(sv));
+            } else if let (Some((kbps, ow, oh, fps)), Some(f)) = (running, fb.as_ref()) {
+                // FFmpeg's CLI can't change rate or size in-stream and
+                // a restart costs a keyframe: restart for a new size or
+                // frame rate, or a bitrate change of -30% / +50%.
+                let (w, h) = encode::fit(f.width, f.height, t.width.max(2), t.height.max(2));
+                let (mw, mh) =
+                    encode::fit(f.width, f.height, settings.max_width, settings.max_height);
+                let shape = (w.min(mw), h.min(mh), t.fps.max(1)) != (ow, oh, fps);
+                if shape || t.kbps * 10 < kbps * 7 || t.kbps * 10 > kbps * 15 {
+                    encoder = None;
+                    submitted.clear();
+                    dirty = true;
+                }
             }
-        }
         }
     }
 }
@@ -1483,13 +1484,21 @@ async fn transport(
                                         }
                                         Some("display") => {
                                             // pace frames to the client's display
-                                            if let Some(hz) = v.get("refresh_hz").and_then(|x| x.as_u64()) {
+                                            if let Some(hz) =
+                                                v.get("refresh_hz").and_then(|x| x.as_u64())
+                                            {
                                                 let hz = (hz as u32).clamp(1, 500);
                                                 if let Ok(mut s) = ctx.stats.lock() {
                                                     s.client_refresh_hz = Some(hz);
                                                 }
                                                 abr.set_max_fps(hz.min(tprofile.max_fps));
-                                                replan(&mut abr, &ctx, &to_comp, &mut pending_ctl, &link_msg);
+                                                replan(
+                                                    &mut abr,
+                                                    &ctx,
+                                                    &to_comp,
+                                                    &mut pending_ctl,
+                                                    &link_msg,
+                                                );
                                             }
                                         }
                                         Some("resize") if allow_input => {

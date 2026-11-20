@@ -294,19 +294,15 @@ impl Relay {
     /// The session ended: refuse its credentials and drop its allocations.
     pub fn revoke(&self, tag: &str) {
         if let Ok(mut s) = self.inner.state.lock() {
-            let keep = Instant::now() + Duration::from_secs(self.inner.cfg.max_lifetime_secs as u64);
+            let keep =
+                Instant::now() + Duration::from_secs(self.inner.cfg.max_lifetime_secs as u64);
             s.revoked.insert(tag.to_string(), keep);
             s.allocs.retain(|_, a| a.tag != tag);
         }
     }
 
     pub fn stats(&self) -> RelayStats {
-        let allocations = self
-            .inner
-            .state
-            .lock()
-            .map(|s| s.allocs.len())
-            .unwrap_or(0);
+        let allocations = self.inner.state.lock().map(|s| s.allocs.len()).unwrap_or(0);
         RelayStats {
             allocations,
             allocations_total: self.inner.allocations_total.load(Ordering::Relaxed),
@@ -513,7 +509,8 @@ impl Inner {
                 return None;
             }
             if a.socket.try_send_to(data, *peer).is_ok() {
-                self.to_peers.fetch_add(data.len() as u64, Ordering::Relaxed);
+                self.to_peers
+                    .fetch_add(data.len() as u64, Ordering::Relaxed);
             }
             return None;
         }
@@ -542,7 +539,8 @@ impl Inner {
                     return None;
                 }
                 if a.socket.try_send_to(data, peer).is_ok() {
-                    self.to_peers.fetch_add(data.len() as u64, Ordering::Relaxed);
+                    self.to_peers
+                        .fetch_add(data.len() as u64, Ordering::Relaxed);
                 }
                 None
             }
@@ -569,7 +567,13 @@ impl Inner {
         }
     }
 
-    fn allocate(self: &Arc<Self>, key: ClientKey, src: SocketAddr, m: &Message, sink: &Sink) -> Vec<u8> {
+    fn allocate(
+        self: &Arc<Self>,
+        key: ClientKey,
+        src: SocketAddr,
+        m: &Message,
+        sink: &Sink,
+    ) -> Vec<u8> {
         if let Ok(st) = self.state.lock() {
             if let Some(a) = st.allocs.get(&key) {
                 if a.last_allocate.0 == m.txid {
@@ -603,7 +607,11 @@ impl Inner {
         if m.get(attr::RESERVATION_TOKEN).is_some() {
             return self.err(m, 508, "Insufficient Capacity", Some(&k));
         }
-        let count = self.state.lock().map(|s| s.allocs.len()).unwrap_or(usize::MAX);
+        let count = self
+            .state
+            .lock()
+            .map(|s| s.allocs.len())
+            .unwrap_or(usize::MAX);
         if count >= self.cfg.max_allocations {
             return self.err(m, 486, "Allocation Quota Reached", Some(&k));
         }
@@ -714,10 +722,17 @@ impl Inner {
                 for p in peers {
                     a.perms.insert(p.ip(), now + PERMISSION_LIFETIME);
                 }
-                ok(Builder::new(method::CREATE_PERMISSION, Class::Success, m.txid))
+                ok(Builder::new(
+                    method::CREATE_PERMISSION,
+                    Class::Success,
+                    m.txid,
+                ))
             }
             _ => {
-                let ch = m.get(attr::CHANNEL_NUMBER).filter(|v| v.len() >= 2).map(|v| u16::from_be_bytes([v[0], v[1]]));
+                let ch = m
+                    .get(attr::CHANNEL_NUMBER)
+                    .filter(|v| v.len() >= 2)
+                    .map(|v| u16::from_be_bytes([v[0], v[1]]));
                 let peer = m.get_xor_addr(attr::XOR_PEER_ADDRESS);
                 let (Some(ch), Some(peer)) = (ch, peer) else {
                     return self.err(m, 400, "Bad Request", Some(&k));
@@ -729,7 +744,11 @@ impl Inner {
                     self.forbidden.fetch_add(1, Ordering::Relaxed);
                     return self.err(m, 403, "Forbidden", Some(&k));
                 }
-                let clash = a.channels.get(&ch).map(|(p, _)| *p != peer).unwrap_or(false)
+                let clash = a
+                    .channels
+                    .get(&ch)
+                    .map(|(p, _)| *p != peer)
+                    .unwrap_or(false)
                     || a.by_peer.get(&peer).map(|c| *c != ch).unwrap_or(false);
                 if clash {
                     return self.err(m, 400, "Bad Request", Some(&k));

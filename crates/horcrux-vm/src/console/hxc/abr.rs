@@ -209,8 +209,7 @@ impl Abr {
             .map(|l| now.duration_since(l))
             .unwrap_or(Duration::MAX);
         let shape_changed = (t.width, t.height, t.fps) != (cur.width, cur.height, cur.fps);
-        if t.kbps < cur.kbps || (t.width * t.height * t.fps) < (cur.width * cur.height * cur.fps)
-        {
+        if t.kbps < cur.kbps || (t.width * t.height * t.fps) < (cur.width * cur.height * cur.fps) {
             self.higher_since = None;
             let big = shape_changed || t.kbps * 100 < cur.kbps * 85;
             if big && since >= self.cfg.down_interval {
@@ -252,7 +251,10 @@ mod tests {
     fn plan_fits_the_quality_floor() {
         // 1080p120 at 0.05 bpp needs ~12.4 Mbit/s
         let t = plan(&cfg(true), 20_000);
-        assert_eq!((t.width, t.height, t.fps, t.limit), (1920, 1080, 120, Limit::Link));
+        assert_eq!(
+            (t.width, t.height, t.fps, t.limit),
+            (1920, 1080, 120, Limit::Link)
+        );
         // gaming keeps 120 fps and drops resolution
         let t = plan(&cfg(true), 5_000);
         assert_eq!(t.fps, 120);
@@ -293,14 +295,24 @@ mod tests {
         let first = a.on_estimate(30_000, t0).unwrap();
         assert_eq!(first.width, 1920);
         // small wobble: nothing
-        assert!(a.on_estimate(29_000, t0 + Duration::from_millis(1500)).is_none());
+        assert!(a
+            .on_estimate(29_000, t0 + Duration::from_millis(1500))
+            .is_none());
         // big drop after the down interval: immediate
-        let d = a.on_estimate(4_000, t0 + Duration::from_millis(2600)).unwrap();
+        let d = a
+            .on_estimate(4_000, t0 + Duration::from_millis(2600))
+            .unwrap();
         assert!(d.kbps <= 3_600 && d.width < 1920);
         // recovery needs up_interval (4 s) of higher estimates
-        assert!(a.on_estimate(30_000, t0 + Duration::from_millis(3000)).is_none());
-        assert!(a.on_estimate(30_000, t0 + Duration::from_millis(5000)).is_none());
-        let u = a.on_estimate(30_000, t0 + Duration::from_millis(7100)).unwrap();
+        assert!(a
+            .on_estimate(30_000, t0 + Duration::from_millis(3000))
+            .is_none());
+        assert!(a
+            .on_estimate(30_000, t0 + Duration::from_millis(5000))
+            .is_none());
+        let u = a
+            .on_estimate(30_000, t0 + Duration::from_millis(7100))
+            .unwrap();
         assert_eq!(u.width, 1920);
     }
 
@@ -310,7 +322,9 @@ mod tests {
         let now = Instant::now();
         a.on_estimate(40_000, now);
         a.set_max_fps(60);
-        let t = a.on_estimate(40_000, now + Duration::from_millis(10)).unwrap();
+        let t = a
+            .on_estimate(40_000, now + Duration::from_millis(10))
+            .unwrap();
         assert_eq!(t.fps, 60);
     }
 }
