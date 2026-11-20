@@ -218,6 +218,14 @@
   video.addEventListener("mousedown", (e) => { video.focus(); e.preventDefault(); const p = guestXY(e); if (p) motion(1, p[0], p[1]); markInput(); send("keys", JSON.stringify({ t: "btn", b: e.button, down: true })); });
   video.addEventListener("mouseup", (e) => { e.preventDefault(); send("keys", JSON.stringify({ t: "btn", b: e.button, down: false })); });
   video.addEventListener("contextmenu", (e) => e.preventDefault());
+  // The guest tools encode at the guest's own mode: when the guest
+  // resizes (ctl resize, a game switching modes) the decoded size is the
+  // guest's new size, and pointer coordinates must follow it.
+  video.addEventListener("resize", () => {
+    if (hxc.videoSource === "guest" && video.videoWidth && video.videoHeight) {
+      hxc.guest = { width: video.videoWidth, height: video.videoHeight };
+    }
+  });
   video.addEventListener("wheel", (e) => { e.preventDefault(); send("keys", JSON.stringify({ t: "wheel", dx: Math.sign(e.deltaX), dy: Math.sign(e.deltaY) })); }, { passive: false });
   document.getElementById("btn-cad").onclick = () => {
     for (const c of ["ControlLeft", "AltLeft", "Delete"]) hxc.sendKey(c, true);

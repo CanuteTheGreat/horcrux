@@ -387,13 +387,18 @@ def windows(browser):
             if lay:
                 break
             time.sleep(0.5)
-        time.sleep(3)
+        end = time.time() + 15
+        while time.time() < end:
+            vs = video_stats(page) or {}
+            if vs.get("w") == w and vs.get("h") == h:
+                break
+            time.sleep(0.5)
         g = page.evaluate("window.hxc.guest")
-        print(f"   windows resize {w}x{h}: layout {lay} picture {g}", flush=True)
-        if g.get("width") == w and g.get("height") == h:
+        print(f"   windows resize {w}x{h}: layout {lay} decoded {vs} client {g}", flush=True)
+        if vs.get("w") == w and vs.get("h") == h and g.get("width") == w:
             check(True, f"windows: resize through the guest tools: the guest switched to {w}x{h} and the "
                         f"guest-encoded stream follows ({lay})")
-            RESULTS["windows_resize"] = {"asked": [w, h], "layout": lay, "picture": g}
+            RESULTS["windows_resize"] = {"asked": [w, h], "layout": lay, "decoded": vs, "client": g}
             break
     else:
         check(False, "windows: resize through the guest tools", fatal=False)
