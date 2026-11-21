@@ -75,6 +75,11 @@ gnome-base/gdm
 gnome-base/gnome-light
 # the FULL GNOME edition (variant gnome; owner rule 2026-11-12). Its extras meta is covered by gnome-extra/horcrux-* above.
 gnome-base/gnome
+# GNOME session pieces that an admin may have selected explicitly (they are dependencies of the GNOME editions, not extra apps).
+gnome-base/gnome-session
+gnome-base/gnome-session-openrc
+gnome-base/gnome-shell
+x11-wm/mutter
 gnome-extra/gnome-tweaks
 gnome-extra/gnome-shell-extension*
 media-video/pipewire

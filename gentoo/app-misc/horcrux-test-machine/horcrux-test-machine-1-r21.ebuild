@@ -18,6 +18,7 @@ KEYWORDS="~amd64"
 # +gnome / xfce (per-login xfconf power settings: the XFCE defaults file is owned by horcrux-surface-desktop).
 IUSE="+gnome +plain smallram xfce"
 
+# -r21: world.allowlist also accepts gnome-session, gnome-session-openrc, gnome-shell and mutter (selected explicitly on GNOME-edition machines).
 # -r20: pkg_postinst restarts a RUNNING horcrux-test-klog (OpenRC or systemd) so an upgrade takes effect: a logger started by an older revision kept
 #   running its old iso-stamped, block-buffered dmesg for days and the persistent-log check failed although the package was current.
 # -r19: the kernel-install hook moved to sys-apps/horcrux-core-1-r7 (/etc/kernel/postinst.d/91-horcrux-boot-entry: every non-boot-environment Horcrux
