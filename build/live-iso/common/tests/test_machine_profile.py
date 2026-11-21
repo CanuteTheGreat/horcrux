@@ -167,9 +167,10 @@ class DesiredState(unittest.TestCase):
         out = ("[binary   R    ] www-client/firefox-bin-160.0.1::gentoo  USE=\"\"\n"
                "[ebuild  N     ] app-misc/tmux-3.6::gentoo  USE=\"\"\n"
                "[ebuild  N     ] sys-apps/tiny-dfr-0.3.8-r1::horcrux  USE=\"\"\n"
-               "[ebuild  N     ] app-misc/owner-tools-1::private  \n")
+               "[ebuild  N     ] app-misc/owner-tools-1::private  \n"
+               "[ebuild  N     ] acct-user/nm-openvpn-0-r2::gentoo  \n")
         b = E.source_builds(out)
-        self.assertEqual(len(b), 3)
+        self.assertEqual(len(b), 4)
         self.assertEqual(E.forbidden_source_builds(b, GOOD), ["app-misc/tmux-3.6::gentoo"])
         self.assertEqual(E.forbidden_source_builds(b, dict(GOOD, software={"allow_source": ["app-misc/tmux"]})), [])
 
