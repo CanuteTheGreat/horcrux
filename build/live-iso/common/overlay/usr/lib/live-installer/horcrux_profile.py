@@ -46,6 +46,8 @@ EDITIONS = ("server", "gnome-light", "gnome", "xfce")
 # packages an edition adds on top of the ISO it is installed from (the full GNOME edition from the GNOME (light) ISO)
 EDITION_PACKAGES = {"gnome": ["gnome-base/gnome", "gnome-extra/horcrux-gnome-extras"]}
 ATOM_RE = re.compile(r"^(@[A-Za-z0-9_.+-]+|[<>=~]{0,2}[A-Za-z0-9+_.-]+/[A-Za-z0-9+_-]+(-[0-9][A-Za-z0-9._*-]*)?(:[A-Za-z0-9._/*-]+)?(::[A-Za-z0-9_-]+)?)$")
+# package.* files also take wildcards: */*, */*::repo, cat/*, */pkg (never in software.packages)
+PORTAGE_KEY_RE = re.compile(r"^(\*|[A-Za-z0-9+_.-]+)/(\*|[A-Za-z0-9+_-]+)(::[A-Za-z0-9_-]+)?$")
 NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 HOST_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
@@ -103,7 +105,7 @@ def problems(mp, bundle=None):
             errs.append(f"software: {a!r} is not a package atom")
     for sect in ("use", "accept_keywords", "license"):
         for a, v in mp.get("portage", {}).get(sect, {}).items():
-            if not ATOM_RE.match(a) or "\n" in str(v):
+            if not (ATOM_RE.match(a) or PORTAGE_KEY_RE.match(a)) or "\n" in str(v):
                 errs.append(f"portage.{sect}: bad entry for {a!r}")
     for r in mp.get("repos", []) + mp.get("binrepos", []):
         if not REPO_RE.match(str(r.get("name", ""))):

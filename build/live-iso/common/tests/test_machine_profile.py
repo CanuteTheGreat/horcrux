@@ -78,6 +78,12 @@ class Schema(unittest.TestCase):
         for frag in ("schema", "hostname", "edition", "root", "not a package atom", "https://", "refusing path", "exactly one", "psk"):
             self.assertIn(frag, errs)
 
+    def test_portage_wildcards_allowed_only_in_portage_tables(self):
+        mp = dict(GOOD, portage={"accept_keywords": {"*/*::private": "~amd64"}, "license": {"*/*": "*"}})
+        self.assertEqual([e for e in E.problems(mp) if "bundle:" not in e], [])
+        bad = dict(GOOD, software={"packages": ["*/*"]})
+        self.assertTrue(any("not a package atom" in e for e in E.problems(bad)))
+
     def test_bundle_reference_cannot_escape(self):
         with self.assertRaises(ValueError):
             E.bundle_path("/b", "bundle:../../etc/shadow")
