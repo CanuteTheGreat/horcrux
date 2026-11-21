@@ -93,6 +93,10 @@ class PRun(ZE.ZRun):
             args += ["-drive", f"file={self.pa.mac_esp},if=virtio,format=raw,readonly=on"]
         return args
 
+    def wait_installer(self, vm, timeout, *rest):
+        # base install + hardware layers + the profile's packages (binary): the profile part is a download-bound emerge
+        return super().wait_installer(vm, timeout * 2, *rest)
+
     def toml(self, pubkey, pwhash):
         t = super().toml(pubkey, pwhash)
         t = t.replace('t2 = "yes"', 't2 = "yes"\nt2_kernel = "skip"') if self.pa.fake_t2 else t
@@ -220,12 +224,10 @@ class PRun(ZE.ZRun):
         self.step("desktop-gdm-greeter-running", "GDM" in o and "SHELL" in o, o.strip().replace("\n", " | "))
         qt.greeter_no_session_gate(self.sh, self.step, u, "gdm", wait=60)
         # a real PAM login of the profile's administrator with the password typed at install (login(1) on a pty)
-        rc, o = self.sh(f"(sleep 2; printf '%s\\n' '{qt.USER_PW if hasattr(qt, 'USER_PW') else ZE.USER_PW}'; sleep 4; printf 'id -nG\\nexit\\n') | "
+        rc, o = self.sh(f"(sleep 2; printf '%s\\n' '{ZE.USER_PW}'; sleep 4; printf 'id -nG\\nexit\\n') | "
                         f"script -qec 'login {u}' /dev/null | tr -d '\\r' | tail -5", timeout=60)
         self.step("first-login-of-the-profile-administrator", "wheel" in o and "portage" in o, re.sub(r"\s+", " ", o)[:300])
-        ppm = vm.grab() if hasattr(vm, "grab") else None
-        if ppm:
-            vm.shot("greeter")
+        vm.shot("greeter")
 
     def declarative_change_checks(self):
         p = "/var/lib/horcrux/profile/bundle/profile.toml"
@@ -239,16 +241,46 @@ class PRun(ZE.ZRun):
         self.step("profile-revert-deselects-package-as-generation-3", "RC=0" in o and re.search(r"(?m)^0$", o) is not None and re.search(r"(?m)^\s+3\s", o) is not None, re.sub(r"\s+", " ", o)[-300:])
 
 
-def make_mac_esp(path, raw_tree_tar):
-    """a GPT disk with one EFI system partition holding t2linux's firmware-raw.tar.gz (needs sgdisk, mkfs.vfat, mount: run on the host)"""
-    raise SystemExit("make the ESP image on the host first (see tests/fixtures note in the run report)")
+def make_mac_esp(path):
+    """a disk image with one GPT EFI system partition holding t2linux's firmware-raw.tar.gz made from a SYNTHETIC macOS firmware tree
+    (same layout as /usr/share/firmware/wifi on a T2 Mac, made-up bytes: no Apple data). Needs sgdisk, mkfs.vfat, mcopy (mtools)."""
+    import tarfile
+    d = tempfile.mkdtemp()
+    w = os.path.join(d, "wifi", "C-4364__s-B2")
+    os.makedirs(w)
+    for name, data in (("ekans.trx", b"\x01synthetic-ekans"), ("hanauma.trx", b"\x01synthetic-ekans"), ("ekans.clmb", b"synthetic-clm"),
+                       ("P-ekans_M-HRPN_V-m__m-5.1.txt", b"boardrev=0x1\n"), ("P-ekans_M-HRPN_V-u__m-7.5.txt", b"boardrev=0x2\n")):
+        open(os.path.join(w, name), "wb").write(data)
+    tgz = os.path.join(d, "firmware-raw.tar.gz")
+    with tarfile.open(tgz, "w:gz") as t:
+        t.add(os.path.join(d, "wifi"), arcname="./wifi")
+    subprocess.check_call(["truncate", "-s", "64M", path])
+    subprocess.check_call(["sgdisk", "-o", "-n", "1:2048:0", "-t", "1:ef00", path], stdout=subprocess.DEVNULL)
+    part = path + ".p1"
+    subprocess.check_call(["truncate", "-s", str(64 * 1024 * 1024 - 2048 * 512 - 34 * 512), part])
+    subprocess.check_call(["mkfs.vfat", "-n", "EFI", part], stdout=subprocess.DEVNULL)
+    if shutil.which("mcopy"):
+        subprocess.check_call(["mcopy", "-i", part, tgz, "::firmware-raw.tar.gz"])
+    else:          # no mtools: loop-mount (needs root or passwordless sudo)
+        m = tempfile.mkdtemp()
+        pre = [] if os.geteuid() == 0 else ["sudo", "-n"]
+        subprocess.check_call(pre + ["mount", "-o", "loop", part, m])
+        try:
+            subprocess.check_call(pre + ["cp", tgz, os.path.join(m, "firmware-raw.tar.gz")])
+        finally:
+            subprocess.check_call(pre + ["umount", m])
+            os.rmdir(m)
+    subprocess.check_call(["dd", f"if={part}", f"of={path}", "bs=512", "seek=2048", "conv=notrunc", "status=none"])
+    os.unlink(part)
+    shutil.rmtree(d)
+    return path
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--iso", required=True)
-    ap.add_argument("--out", required=True)
-    ap.add_argument("--profile", required=True, help="bundle directory with profile.toml")
+    ap.add_argument("--iso", default="")
+    ap.add_argument("--out", default="")
+    ap.add_argument("--profile", default="", help="bundle directory with profile.toml")
     ap.add_argument("--desktop", action="store_true")
     ap.add_argument("--fake-t2", action="store_true")
     ap.add_argument("--mac-esp", default="", help="raw disk image with a Mac EFI partition holding firmware-raw.tar.gz (synthetic)")
@@ -258,7 +290,11 @@ def main():
     ap.add_argument("--cpu", default=os.environ.get("QEMU_TEST_CPU", "qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt,+cx16"))
     ap.add_argument("--disk-gb", type=int, default=40)
     ap.add_argument("--keep-disks", action="store_true")
+    ap.add_argument("--make-mac-esp", default="", help="only write the synthetic Mac ESP image to this path and exit")
     a = ap.parse_args()
+    if a.make_mac_esp:
+        print(make_mac_esp(a.make_mac_esp))
+        return
     qt.ARCH = qt.HOST_ARCH
     qt.SLOW = float(os.environ.get("QEMU_SLOW", 0) or 0) or (1.0 if os.path.exists("/dev/kvm") else 3.0)
     a.mem, note = qt.fit_guest_mem(a.mem, qt.cgroup_mem_limit_mb())
@@ -270,11 +306,13 @@ def main():
     errs = E.problems(mp, a.bundle)
     if errs:
         raise SystemExit("profile invalid: " + "; ".join(errs))
+    if a.fake_t2 and not a.mac_esp:
+        a.mac_esp = make_mac_esp(os.path.join(a.out, "mac-esp.img"))
     try:
         PRun(a, mp).run()
     finally:
         if not a.keep_disks:
-            for n in ("target.qcow2", "target2.qcow2", "answers.img", "OVMF_VARS.fd"):
+            for n in ("target.qcow2", "target2.qcow2", "answers.img", "OVMF_VARS.fd", "mac-esp.img"):
                 try:
                     os.unlink(os.path.join(a.out, n))
                 except OSError:
