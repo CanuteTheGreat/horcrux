@@ -6,3 +6,4 @@ app-misc/awccd            # first-party daemon (this repo)
 app-misc/*-tools          # first-party helper packages
 net-misc/ctg-ssh-ca       # first-party
 sec-keys/openpgp-keys-errantsolutions # first-party: the release signing public key, versioned by this repo (no upstream)
+sys-firmware/apple-t2-firmware-local  # no upstream: installs the firmware read from the Mac it runs on (nothing to track)
