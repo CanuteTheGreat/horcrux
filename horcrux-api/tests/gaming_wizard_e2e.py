@@ -9,6 +9,7 @@ ready, VBS + Memory Integrity running, the hypervisor visible (never
 hidden), the generated SMBIOS identity, the virtio drivers and the account
 the wizard asked for."""
 import base64
+import http.client
 import json
 import os
 import socket
@@ -25,6 +26,7 @@ CTX.verify_mode = ssl.CERT_NONE
 TOKEN = None
 DATA = os.environ.get("HX_DATA", "/tmp/hxg")
 INSTALL_MIN = int(os.environ.get("INSTALL_TIMEOUT_MIN", "100"))
+POLL_GRACE_MIN = float(os.environ.get("POLL_GRACE_MIN", "10"))
 T0 = time.time()
 
 
@@ -218,6 +220,7 @@ if cmdline:
 
 # --------------------------------------------- install until the agent answers
 deadline = T0 + INSTALL_MIN * 60
+unreachable_since = None
 while os.path.exists(answer):
     if time.time() > deadline:
         try:
@@ -225,7 +228,22 @@ while os.path.exists(answer):
         except Exception:
             pass
         raise SystemExit(f"FAIL Windows not installed (no guest agent) within {INSTALL_MIN} min; screendump {DATA}/stuck.ppm")
-    _, v = call("GET", "/vms/ci-gaming")
+    # A dropped poll (connection reset, timeout) says nothing about the guest:
+    # on a busy CI host the API can stall for a minute under memory pressure.
+    # Only a reported non-running state, or the API staying unreachable for
+    # POLL_GRACE_MIN, fails the test.
+    try:
+        _, v = call("GET", "/vms/ci-gaming")
+    except (OSError, http.client.HTTPException) as e:
+        if unreachable_since is None:
+            unreachable_since = time.time()
+        down = (time.time() - unreachable_since) / 60
+        print(f"... status poll failed ({e!r}), API unreachable for {down:.1f} min", flush=True)
+        if down > POLL_GRACE_MIN:
+            raise SystemExit(f"FAIL API unreachable for {down:.0f} min during the install: {e!r}")
+        time.sleep(15)
+        continue
+    unreachable_since = None
     if v["status"] not in ("Running", "running"):
         raise SystemExit(f"FAIL VM left running state: {v['status']}")
     time.sleep(30)
