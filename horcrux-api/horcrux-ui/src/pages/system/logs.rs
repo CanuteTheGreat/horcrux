@@ -274,8 +274,9 @@ pub fn SystemLogsPage() -> impl IntoView {
 
                 <div class="controls-row">
                     <div class="filter-group">
-                        <label>"Log Level:"</label>
+                        <label for="log-level">"Log Level:"</label>
                         <select
+                            id="log-level"
                             prop:value=log_level
                             on:change=move |ev| {
                                 set_log_level.set(event_target_value(&ev));
@@ -292,8 +293,9 @@ pub fn SystemLogsPage() -> impl IntoView {
                     </div>
 
                     <div class="filter-group">
-                        <label>"Service:"</label>
+                        <label for="log-service">"Service:"</label>
                         <select
+                            id="log-service"
                             prop:value=service_filter
                             on:change=move |ev| {
                                 set_service_filter.set(event_target_value(&ev));
@@ -312,8 +314,9 @@ pub fn SystemLogsPage() -> impl IntoView {
                     </div>
 
                     <div class="filter-group">
-                        <label>"Lines:"</label>
+                        <label for="log-lines">"Lines:"</label>
                         <select
+                            id="log-lines"
                             prop:value=move || lines_limit.get().to_string()
                             on:change=move |ev| {
                                 if let Ok(limit) = event_target_value(&ev).parse::<u32>() {
