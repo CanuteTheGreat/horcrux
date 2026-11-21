@@ -17,7 +17,9 @@
 #![cfg(feature = "qemu")]
 
 use horcrux_vm::console::hxc::keymap;
-use horcrux_vm::console::hxc::qemu_dbus::{DbusDisplay, DisplayEvent};
+use horcrux_vm::console::hxc::qemu_dbus::{
+    qmp_add_dbus_client, DbusDisplay, DisplayEvent, GuestInput,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -52,6 +54,13 @@ where
     updates.load(Ordering::SeqCst) - before
 }
 
+async fn click(d: &DbusDisplay) {
+    d.input(GuestInput::ButtonPress(0)).await.expect("press");
+    d.input(GuestInput::ButtonRelease(0))
+        .await
+        .expect("release");
+}
+
 /// DOM key code for one character of a shell command (lower case only).
 fn code_of(c: char) -> String {
     match c {
@@ -77,12 +86,12 @@ async fn type_text(d: &DbusDisplay, text: &str) {
         };
         let q = keymap::qnum(&code).expect("qnum");
         if shifted {
-            d.keyboard.press(shift).await.unwrap();
+            d.input(GuestInput::KeyPress(shift)).await.unwrap();
         }
-        d.keyboard.press(q).await.unwrap();
-        d.keyboard.release(q).await.unwrap();
+        d.input(GuestInput::KeyPress(q)).await.unwrap();
+        d.input(GuestInput::KeyRelease(q)).await.unwrap();
         if shifted {
-            d.keyboard.release(shift).await.unwrap();
+            d.input(GuestInput::KeyRelease(shift)).await.unwrap();
         }
         tokio::time::sleep(Duration::from_millis(40)).await;
     }
@@ -200,12 +209,11 @@ async fn dbus_display_frames_keyboard_and_pointer() {
     {
         let d = &display;
         let n = changes_after(&updates, Duration::from_millis(1500), || async move {
-            let abs = d.mouse.set_abs_position(*x, *y).await;
+            let abs = d.input(GuestInput::Abs(*x, *y)).await;
             let r = match &abs {
                 Ok(()) => Ok(()),
                 Err(_) => {
-                    d.mouse
-                        .rel_motion(if i % 2 == 0 { 40 } else { -40 }, 20)
+                    d.input(GuestInput::Rel(if i % 2 == 0 { 40 } else { -40 }, 20))
                         .await
                 }
             };
@@ -228,12 +236,104 @@ async fn dbus_display_frames_keyboard_and_pointer() {
 
     let d = &display;
     let clicks = changes_after(&updates, Duration::from_millis(1500), || async move {
-        d.mouse.press(0).await.unwrap();
-        d.mouse.release(0).await.unwrap();
+        d.input(GuestInput::ButtonPress(0)).await.unwrap();
+        d.input(GuestInput::ButtonRelease(0)).await.unwrap();
     })
     .await;
     assert!(clicks > 0, "a click reaches the guest");
     println!("ok - button press/release reaches the guest ({clicks} updates)");
+
+    // A second viewer of the same VM. QEMU's p2p D-Bus display serves its
+    // objects on only the newest client connection, so a second connection
+    // per viewer would cut the first viewer's keyboard and mouse off.
+    let (tx2, mut rx2) = mpsc::channel::<DisplayEvent>(64);
+    let second = DbusDisplay::connect(&qmp, "t2", tx2, false)
+        .await
+        .expect("second viewer connects");
+    let updates2 = Arc::new(AtomicU64::new(0));
+    let u2 = updates2.clone();
+    tokio::spawn(async move {
+        while let Some(ev) = rx2.recv().await {
+            if matches!(
+                ev,
+                DisplayEvent::Scanout { .. } | DisplayEvent::Update { .. }
+            ) {
+                u2.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    });
+    quiet(
+        &updates,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    )
+    .await;
+    let n = changes_after(&updates, Duration::from_millis(1500), || click(&display)).await;
+    assert!(
+        n > 0,
+        "the first viewer's input still reaches the guest after a second viewer connected"
+    );
+    let n2 = updates2.load(Ordering::SeqCst);
+    assert!(
+        n2 > 0,
+        "the second viewer sees the guest's picture too ({n2} updates)"
+    );
+    println!(
+        "ok - two viewers: the first one's input still works ({n} updates; second viewer saw {n2})"
+    );
+    quiet(
+        &updates,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    )
+    .await;
+    let n = changes_after(&updates, Duration::from_millis(1500), || click(&second)).await;
+    assert!(n > 0, "the second viewer's input reaches the guest");
+    drop(second);
+    quiet(
+        &updates,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    )
+    .await;
+    let n = changes_after(&updates, Duration::from_millis(1500), || click(&display)).await;
+    assert!(
+        n > 0,
+        "the first viewer's input works after the second viewer left"
+    );
+    println!("ok - second viewer's input works; the first still works after it left");
+
+    // Another D-Bus client outside Horcrux takes QEMU's display objects:
+    // the viewer reconnects on its next input instead of going deaf.
+    let (ours, theirs) = std::os::unix::net::UnixStream::pair().expect("pair");
+    let theirs = std::os::fd::OwnedFd::from(theirs);
+    let q = qmp.clone();
+    tokio::task::spawn_blocking(move || qmp_add_dbus_client(&q, &theirs, "outsider"))
+        .await
+        .expect("join")
+        .expect("QEMU accepts another D-Bus client");
+    ours.set_nonblocking(true).expect("nonblocking");
+    // the outsider completes the D-Bus handshake, so QEMU moves its objects
+    let _outsider = zbus::connection::Builder::unix_stream(
+        tokio::net::UnixStream::from_std(ours).expect("tokio stream"),
+    )
+    .p2p()
+    .build()
+    .await
+    .expect("outsider handshake");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    quiet(
+        &updates,
+        Duration::from_millis(800),
+        Duration::from_secs(10),
+    )
+    .await;
+    let n = changes_after(&updates, Duration::from_millis(1500), || click(&display)).await;
+    assert!(
+        n > 0,
+        "input works again after another client took the D-Bus display"
+    );
+    println!("ok - input reconnects after another D-Bus client took the display ({n} updates)");
     drop(display);
     let _ = qemu.kill().await;
 }

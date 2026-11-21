@@ -3,9 +3,11 @@
 //! VMs started while the console is enabled run with
 //! `-display dbus,p2p=yes`: QEMU exports its consoles, keyboard, mouse and
 //! audio on peer-to-peer D-Bus connections that it accepts through QMP
-//! (`getfd` + `add_client protocol=@dbus-display`). Per viewer session the
-//! broker opens one such connection, registers a listener object on a
-//! second socket pair (QEMU connects to it as the D-Bus client) and gets
+//! (`getfd` + `add_client protocol=@dbus-display`). QEMU serves its
+//! objects on only the newest such connection, so all viewer sessions of a
+//! VM share one (see `Control`); per viewer session the broker registers a
+//! listener object on its own socket pair (QEMU connects to it as the
+//! D-Bus client) and gets
 //! the guest's framebuffer (`Scanout`/`Update`), cursor and audio pushed to
 //! it. No guest tools are involved, so this works for every guest and
 //! before any OS runs (firmware, boot menus, installers).
@@ -17,9 +19,11 @@
 //! IsAbsolute), `org.qemu.Display1.Listener` (implemented here),
 //! `org.qemu.Display1.Audio` + `org.qemu.Display1.AudioOutListener`.
 //! Consumed over D-Bus only: nothing of QEMU is linked or copied.
+use std::collections::HashMap;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use zbus::zvariant;
 
@@ -256,8 +260,36 @@ impl Listener {
     }
 }
 
+/// One audio voice QEMU announced (replayed to viewers that join later).
+#[derive(Clone, Copy)]
+struct Voice {
+    bits: u8,
+    is_signed: bool,
+    is_float: bool,
+    freq: u32,
+    channels: u8,
+    enabled: bool,
+}
+
+/// QEMU accepts ONE audio-out listener per VM in p2p mode (it keys them
+/// by sender, and every p2p sender is "p2p": audio/dbusaudio.c), so the
+/// listener is shared and fans the voices out to every viewer session.
+#[derive(Default)]
+struct AudioFanState {
+    subs: Vec<mpsc::Sender<DisplayEvent>>,
+    voices: std::collections::HashMap<u64, Voice>,
+}
+
 struct AudioOutListener {
-    tx: mpsc::Sender<DisplayEvent>,
+    state: Arc<Mutex<AudioFanState>>,
+}
+
+impl AudioOutListener {
+    fn subs(&self) -> Vec<mpsc::Sender<DisplayEvent>> {
+        let mut st = lock(&self.state);
+        st.subs.retain(|s| !s.is_closed());
+        st.subs.clone()
+    }
 }
 
 #[zbus::interface(name = "org.qemu.Display1.AudioOutListener", spawn = false)]
@@ -275,32 +307,54 @@ impl AudioOutListener {
         _bytes_per_second: u32,
         _be: bool,
     ) {
-        let _ = self
-            .tx
-            .send(DisplayEvent::AudioInit {
-                id,
+        lock(&self.state).voices.insert(
+            id,
+            Voice {
                 bits,
                 is_signed,
                 is_float,
                 freq,
                 channels: nchannels,
-            })
-            .await;
+                enabled: false,
+            },
+        );
+        for tx in self.subs() {
+            let _ = tx
+                .send(DisplayEvent::AudioInit {
+                    id,
+                    bits,
+                    is_signed,
+                    is_float,
+                    freq,
+                    channels: nchannels,
+                })
+                .await;
+        }
     }
     async fn fini(&self, id: u64) {
-        let _ = self.tx.send(DisplayEvent::AudioFini { id }).await;
+        lock(&self.state).voices.remove(&id);
+        for tx in self.subs() {
+            let _ = tx.send(DisplayEvent::AudioFini { id }).await;
+        }
     }
     async fn set_enabled(&self, id: u64, enabled: bool) {
-        let _ = self
-            .tx
-            .send(DisplayEvent::AudioEnabled { id, enabled })
-            .await;
+        if let Some(v) = lock(&self.state).voices.get_mut(&id) {
+            v.enabled = enabled;
+        }
+        for tx in self.subs() {
+            let _ = tx.send(DisplayEvent::AudioEnabled { id, enabled }).await;
+        }
     }
     async fn set_volume(&self, _id: u64, _mute: bool, _volume: Vec<u8>) {}
     async fn write(&self, id: u64, data: Vec<u8>) {
         // Audio is best effort: never block QEMU's audio thread on a slow
         // viewer.
-        let _ = self.tx.try_send(DisplayEvent::AudioData { id, data });
+        for tx in self.subs() {
+            let _ = tx.try_send(DisplayEvent::AudioData {
+                id,
+                data: data.clone(),
+            });
+        }
     }
     #[zbus(property)]
     async fn interfaces(&self) -> Vec<String> {
@@ -308,14 +362,172 @@ impl AudioOutListener {
     }
 }
 
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// The shared audio-out listener of one VM; dropped (QEMU unregisters it)
+/// when the last viewer session holding it ends.
+struct AudioFan {
+    state: Arc<Mutex<AudioFanState>>,
+    _listener: zbus::Connection,
+}
+
+impl AudioFan {
+    /// Adds a viewer: it gets the voices QEMU already announced first.
+    fn subscribe(&self, tx: mpsc::Sender<DisplayEvent>) {
+        subscribe(&self.state, tx)
+    }
+}
+
+fn subscribe(state: &Mutex<AudioFanState>, tx: mpsc::Sender<DisplayEvent>) {
+    let mut st = lock(state);
+    for (id, v) in &st.voices {
+        let _ = tx.try_send(DisplayEvent::AudioInit {
+            id: *id,
+            bits: v.bits,
+            is_signed: v.is_signed,
+            is_float: v.is_float,
+            freq: v.freq,
+            channels: v.channels,
+        });
+        if v.enabled {
+            let _ = tx.try_send(DisplayEvent::AudioEnabled {
+                id: *id,
+                enabled: true,
+            });
+        }
+    }
+    st.subs.push(tx);
+}
+
+/// QEMU's p2p D-Bus display serves its objects (consoles, keyboard,
+/// mouse, audio) on ONE client connection: every QMP `add_client` moves
+/// them to the new connection and closes the previous one (ui/dbus.c,
+/// `g_dbus_object_manager_server_set_connection`). So all viewer sessions
+/// of a VM share one control connection; each still registers its own
+/// display listener (QEMU keeps any number of those, each on its own
+/// socket, and they outlive a control connection being replaced).
+struct Control {
+    conn: zbus::Connection,
+    console: ConsoleProxy<'static>,
+    keyboard: KeyboardProxy<'static>,
+    mouse: MouseProxy<'static>,
+}
+
+impl Control {
+    async fn open(qmp_socket: &Path, session: &str) -> Result<Control, String> {
+        let (ours, theirs) = pair().map_err(|e| e.to_string())?;
+        let qmp = qmp_socket.to_path_buf();
+        let name = format!("hxc-{session}");
+        tokio::task::spawn_blocking(move || qmp_add_dbus_client(&qmp, &theirs, &name))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("QEMU refused the D-Bus display client: {e}"))?;
+        tracing::debug!("hxc {session}: QEMU accepted the D-Bus client");
+        let conn = zbus::connection::Builder::unix_stream(ours)
+            .p2p()
+            .build()
+            .await
+            .map_err(|e| format!("D-Bus handshake with QEMU: {e}"))?;
+        let console = ConsoleProxy::new(&conn)
+            .await
+            .map_err(|e| format!("console proxy: {e}"))?;
+        let keyboard = KeyboardProxy::new(&conn)
+            .await
+            .map_err(|e| format!("keyboard proxy: {e}"))?;
+        let mouse = MouseProxy::new(&conn)
+            .await
+            .map_err(|e| format!("mouse proxy: {e}"))?;
+        Ok(Control {
+            conn,
+            console,
+            keyboard,
+            mouse,
+        })
+    }
+
+    /// Still QEMU's current client? (GDBus answers org.freedesktop.DBus.Peer
+    /// on every connection; a replaced or dead one fails at once.)
+    async fn alive(&self) -> bool {
+        let ping = self.conn.call_method(
+            None::<&str>,
+            "/org/qemu/Display1",
+            Some("org.freedesktop.DBus.Peer"),
+            "Ping",
+            &(),
+        );
+        matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), ping).await,
+            Ok(Ok(_))
+        )
+    }
+
+    async fn send(&self, input: GuestInput) -> zbus::Result<()> {
+        match input {
+            GuestInput::KeyPress(q) => self.keyboard.press(q).await,
+            GuestInput::KeyRelease(q) => self.keyboard.release(q).await,
+            GuestInput::ButtonPress(b) => self.mouse.press(b).await,
+            GuestInput::ButtonRelease(b) => self.mouse.release(b).await,
+            GuestInput::Abs(x, y) => self.mouse.set_abs_position(x, y).await,
+            GuestInput::Rel(dx, dy) => self.mouse.rel_motion(dx, dy).await,
+        }
+    }
+}
+
+/// Per VM (QMP socket): the shared control connection and audio listener.
+#[derive(Default)]
+struct Shared {
+    control: std::sync::Weak<Control>,
+    audio: std::sync::Weak<AudioFan>,
+}
+
+fn registry() -> &'static tokio::sync::Mutex<HashMap<PathBuf, Shared>> {
+    static R: std::sync::OnceLock<tokio::sync::Mutex<HashMap<PathBuf, Shared>>> =
+        std::sync::OnceLock::new();
+    R.get_or_init(Default::default)
+}
+
+/// The VM's control connection: the current one when it still answers
+/// (and is not `stale`), else a new one that every session then uses.
+async fn control_for(
+    qmp_socket: &Path,
+    session: &str,
+    stale: Option<&Arc<Control>>,
+) -> Result<Arc<Control>, String> {
+    let mut reg = registry().lock().await;
+    reg.retain(|_, s| s.control.strong_count() > 0 || s.audio.strong_count() > 0);
+    let entry = reg.entry(qmp_socket.to_path_buf()).or_default();
+    if let Some(c) = entry.control.upgrade() {
+        let replaced = stale.is_some_and(|s| !Arc::ptr_eq(s, &c));
+        if replaced || (stale.is_none() && c.alive().await) {
+            return Ok(c);
+        }
+    }
+    let c = Arc::new(Control::open(qmp_socket, session).await?);
+    entry.control = Arc::downgrade(&c);
+    Ok(c)
+}
+
+/// One input event for the guest.
+#[derive(Debug, Clone, Copy)]
+pub enum GuestInput {
+    KeyPress(u32),
+    KeyRelease(u32),
+    ButtonPress(u32),
+    ButtonRelease(u32),
+    Abs(u32, u32),
+    Rel(i32, i32),
+}
+
 /// One viewer's connection to a VM's D-Bus display.
 pub struct DbusDisplay {
-    pub conn: zbus::Connection,
+    qmp_socket: PathBuf,
+    session: String,
+    control: Mutex<Arc<Control>>,
     /// Kept alive: QEMU talks to our listener over it.
     _listener: zbus::Connection,
-    _audio_listener: Option<zbus::Connection>,
-    pub keyboard: KeyboardProxy<'static>,
-    pub mouse: MouseProxy<'static>,
+    _audio: Option<Arc<AudioFan>>,
     pub absolute: bool,
 }
 
@@ -344,17 +556,16 @@ async fn serve_listener<I: zbus::object_server::Interface>(
 /// bounded: a VM without D-Bus audio answers RegisterOutListener with an
 /// error and never connects to our listener, so the listener side must not
 /// be awaited unconditionally (that hung the whole console connect).
-async fn audio_out(
-    conn: &zbus::Connection,
-    session: &str,
-    tx: mpsc::Sender<DisplayEvent>,
-) -> Option<zbus::Connection> {
+async fn audio_out(conn: &zbus::Connection, session: &str) -> Option<AudioFan> {
     let proxy = AudioProxy::new(conn).await.ok()?;
     let (ours, theirs) = pair().ok()?;
+    let state = Arc::new(Mutex::new(AudioFanState::default()));
     let serve = tokio::spawn(serve_listener(
         ours,
         "/org/qemu/Display1/AudioOutListener",
-        AudioOutListener { tx },
+        AudioOutListener {
+            state: state.clone(),
+        },
     ));
     let wait = std::time::Duration::from_secs(5);
     let reg = tokio::time::timeout(
@@ -365,7 +576,10 @@ async fn audio_out(
     drop(theirs);
     match reg {
         Ok(Ok(())) => match tokio::time::timeout(wait, serve).await {
-            Ok(Ok(Ok(l))) => Some(l),
+            Ok(Ok(Ok(l))) => Some(AudioFan {
+                state,
+                _listener: l,
+            }),
             Ok(Ok(Err(e))) => {
                 tracing::debug!("audio listener for {session}: {e}");
                 None
@@ -386,6 +600,18 @@ async fn audio_out(
             None
         }
     }
+}
+
+/// The VM's shared audio listener, registered on first use.
+async fn audio_for(qmp_socket: &Path, control: &Control, session: &str) -> Option<Arc<AudioFan>> {
+    let mut reg = registry().lock().await;
+    let entry = reg.entry(qmp_socket.to_path_buf()).or_default();
+    if let Some(a) = entry.audio.upgrade() {
+        return Some(a);
+    }
+    let a = Arc::new(audio_out(&control.conn, session).await?);
+    entry.audio = Arc::downgrade(&a);
+    Some(a)
 }
 
 impl DbusDisplay {
@@ -415,22 +641,7 @@ impl DbusDisplay {
         tx: mpsc::Sender<DisplayEvent>,
         audio: bool,
     ) -> Result<Self, String> {
-        let (ours, theirs) = pair().map_err(|e| e.to_string())?;
-        let qmp = qmp_socket.to_path_buf();
-        let name = format!("hxc-{session}");
-        tokio::task::spawn_blocking(move || qmp_add_dbus_client(&qmp, &theirs, &name))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| format!("QEMU refused the D-Bus display client: {e}"))?;
-        tracing::debug!("hxc {session}: QEMU accepted the D-Bus client");
-        let conn = zbus::connection::Builder::unix_stream(ours)
-            .p2p()
-            .build()
-            .await
-            .map_err(|e| format!("D-Bus handshake with QEMU: {e}"))?;
-        let console = ConsoleProxy::new(&conn)
-            .await
-            .map_err(|e| format!("console proxy: {e}"))?;
+        let control = control_for(qmp_socket, session, None).await?;
 
         // QEMU connects to our listener as a client; serve it while the
         // registration call is in flight.
@@ -440,33 +651,53 @@ impl DbusDisplay {
             "/org/qemu/Display1/Listener",
             Listener { tx: tx.clone() },
         );
-        let register = console.register_listener(zvariant::Fd::from(&theirs));
+        let register = control
+            .console
+            .register_listener(zvariant::Fd::from(&theirs));
         let (listener, reg) = tokio::join!(serve, register);
         reg.map_err(|e| format!("RegisterListener: {e}"))?;
         tracing::debug!("hxc {session}: display listener registered");
         let listener = listener.map_err(|e| format!("listener connection: {e}"))?;
         drop(theirs);
 
-        let mut audio_listener = None;
+        let mut audio_fan = None;
         if audio {
-            audio_listener = audio_out(&conn, session, tx).await;
+            audio_fan = audio_for(qmp_socket, &control, session).await;
+            if let Some(a) = &audio_fan {
+                a.subscribe(tx);
+            }
         }
 
-        let keyboard = KeyboardProxy::new(&conn)
-            .await
-            .map_err(|e| format!("keyboard proxy: {e}"))?;
-        let mouse = MouseProxy::new(&conn)
-            .await
-            .map_err(|e| format!("mouse proxy: {e}"))?;
-        let absolute = mouse.is_absolute().await.unwrap_or(false);
+        let absolute = control.mouse.is_absolute().await.unwrap_or(false);
         Ok(Self {
-            conn,
+            qmp_socket: qmp_socket.to_path_buf(),
+            session: session.to_string(),
+            control: Mutex::new(control),
             _listener: listener,
-            _audio_listener: audio_listener,
-            keyboard,
-            mouse,
+            _audio: audio_fan,
             absolute,
         })
+    }
+
+    /// Send one input event. When the shared control connection was lost
+    /// (QEMU accepted another D-Bus client, e.g. a tool outside Horcrux),
+    /// reconnect once and resend.
+    pub async fn input(&self, input: GuestInput) -> zbus::Result<()> {
+        let c = lock(&self.control).clone();
+        match c.send(input).await {
+            Err(zbus::Error::InputOutput(e)) => {
+                tracing::debug!(
+                    "hxc {}: D-Bus control connection lost ({e}), reconnecting",
+                    self.session
+                );
+                let fresh = control_for(&self.qmp_socket, &self.session, Some(&c))
+                    .await
+                    .map_err(zbus::Error::Failure)?;
+                *lock(&self.control) = fresh.clone();
+                fresh.send(input).await
+            }
+            r => r,
+        }
     }
 }
 
@@ -496,4 +727,79 @@ pub async fn qemu_has_dbus_display(binary: &str) -> bool {
         c.insert(binary.to_string(), v);
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_late_viewer_gets_the_voices_already_announced() {
+        let state = Arc::new(Mutex::new(AudioFanState::default()));
+        let l = AudioOutListener {
+            state: state.clone(),
+        };
+        let (tx1, mut rx1) = mpsc::channel(8);
+        subscribe(&state, tx1);
+        l.init(7, 16, true, false, 48000, 2, 4, 192000, false).await;
+        l.set_enabled(7, true).await;
+        l.write(7, vec![1, 2]).await;
+        assert!(matches!(
+            rx1.recv().await,
+            Some(DisplayEvent::AudioInit {
+                id: 7,
+                freq: 48000,
+                ..
+            })
+        ));
+        assert!(matches!(
+            rx1.recv().await,
+            Some(DisplayEvent::AudioEnabled {
+                id: 7,
+                enabled: true
+            })
+        ));
+        assert!(matches!(
+            rx1.recv().await,
+            Some(DisplayEvent::AudioData { id: 7, .. })
+        ));
+
+        // joins after Init/SetEnabled: replayed, then both get the data
+        let (tx2, mut rx2) = mpsc::channel(8);
+        subscribe(&state, tx2);
+        assert!(matches!(
+            rx2.recv().await,
+            Some(DisplayEvent::AudioInit {
+                id: 7,
+                channels: 2,
+                ..
+            })
+        ));
+        assert!(matches!(
+            rx2.recv().await,
+            Some(DisplayEvent::AudioEnabled {
+                id: 7,
+                enabled: true
+            })
+        ));
+        l.write(7, vec![3]).await;
+        assert!(matches!(
+            rx1.recv().await,
+            Some(DisplayEvent::AudioData { id: 7, .. })
+        ));
+        assert!(matches!(
+            rx2.recv().await,
+            Some(DisplayEvent::AudioData { id: 7, .. })
+        ));
+
+        // a viewer that left is dropped; Fini reaches the rest
+        drop(rx1);
+        l.fini(7).await;
+        assert!(matches!(
+            rx2.recv().await,
+            Some(DisplayEvent::AudioFini { id: 7 })
+        ));
+        assert_eq!(lock(&state).subs.len(), 1);
+        assert!(lock(&state).voices.is_empty());
+    }
 }
