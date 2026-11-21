@@ -45,7 +45,19 @@ chown ceph:ceph $D
 echo '{"cephx_secret":"x"}' >/dev/null
 ceph-osd -i $ID --mkfs --osd-uuid $UUID --setuser ceph --setgroup ceph 2>&1 | tail -3
 chown -R ceph:ceph $D
-ceph-osd -i $ID --setuser ceph --setgroup ceph >/dev/null 2>&1
+# Ceph 19 (squid) OSD init can send its first mon command (update_crush_device_class)
+# while its MonClient still holds a monmap with a zero fsid; the mon answers
+# "wrong fsid" and ceph-osd exits 250 before daemonizing (run 22551). The mon
+# and the OSD's store are fine, so print the MonClient trace that names the race
+# and start the OSD once more; a second failure falls through to the ERR trap.
+osd_start() { ceph-osd -i "$ID" --setuser ceph --setgroup ceph --debug-monc 10 >/dev/null 2>&1; }
+osd_start || {
+  echo "ceph-osd start failed (rc=$?); OSD MonClient trace:"
+  grep -E 'monc|fsid|mon_cmd' "/var/log/ceph/ceph-osd.$ID.log" | tail -30 || true
+  echo "starting the OSD once more"
+  osd_start || echo "ceph-osd failed again (rc=$?)"
+}
+grep -qx ceph-osd /proc/[0-9]*/comm 2>/dev/null # no OSD daemon -> the ERR trap prints the logs
 for i in $(seq 60); do ceph osd stat | grep -q '1 up' && break; sleep 1; done
 ceph osd stat
 mkdir -p /var/lib/ceph/mgr/ceph-x; chown ceph:ceph /var/lib/ceph/mgr/ceph-x
