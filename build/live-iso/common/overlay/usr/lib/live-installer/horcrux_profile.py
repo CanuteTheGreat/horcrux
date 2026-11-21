@@ -55,6 +55,7 @@ NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 HOST_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
 DEFAULT_SOURCE_OK_REPOS = ("horcrux",)          # our own script/config packages; everything else must be a binary package
+NO_COMPILE_CATEGORIES = ("acct-group", "acct-user", "virtual")   # never compile anything: fine from the ebuild on any machine
 ADMIN_GROUPS = ("wheel", "portage")
 SELF_ATOM = "sys-apps/horcrux-profile"
 
@@ -328,7 +329,7 @@ def forbidden_source_builds(builds, mp):
     allow = mp.get("software", {}).get("allow_source", [])
     bad = []
     for cpv, repo in builds:
-        if repo in ok_repos or repo == "local":
+        if repo in ok_repos or repo == "local" or cpv.split("/")[0] in NO_COMPILE_CATEGORIES:
             continue
         cp = re.sub(r"-[0-9][^/]*$", "", cpv)
         if any(cp == re.sub(r"^[<>=~]+", "", a).split(":")[0] for a in allow):
