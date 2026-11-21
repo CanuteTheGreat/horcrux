@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod console;
 pub mod lxc;
+pub mod remote_play;
 
 pub use lxc::{
     LxcCatalogEntry, LxcFeatures, LxcMount, LxcNet, LxcOptions, LxcSnapshot, LxcTemplate,
@@ -363,6 +364,11 @@ pub struct VmAdvanced {
     /// Integrity (HVCI), Hyper-V, WSL2. Needs nested KVM on the host.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub nested_virt: bool,
+    /// Steam Remote Play / Moonlight readiness (network reach, discovery
+    /// relay, port forwards, Wake-on-LAN, guest logon settings);
+    /// docs/design/gaming-vm.md section 16. None = off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_play: Option<remote_play::VmRemotePlay>,
 }
 
 /// Most evdev input devices one VM can grab.
@@ -616,6 +622,9 @@ impl VmAdvanced {
         }
         if self.nested_virt && !x86 {
             return Err("nested virtualisation is offered for x86_64 guests".into());
+        }
+        if let Some(rp) = &self.remote_play {
+            rp.validate()?;
         }
         if self.evdev.len() > MAX_VM_EVDEV {
             return Err(format!("at most {MAX_VM_EVDEV} evdev input devices"));

@@ -297,3 +297,39 @@ fn console_settings_are_planned_validated_and_exported() {
     let back: Spec = serde_yaml::from_str(&y).unwrap();
     assert!(plan(&back, &live, false).in_sync());
 }
+
+#[test]
+fn remote_play_settings_are_planned_validated_and_exported() {
+    use horcrux_common::remote_play::RemotePlaySettings;
+    let live = Live::default();
+    let mut s = Spec {
+        remote_play: Some(RemotePlaySettings::default()),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).in_sync());
+    let want = RemotePlaySettings {
+        wol_ports: vec![9],
+        ..Default::default()
+    };
+    s.remote_play = Some(want.clone());
+    let p = plan(&s, &live, false);
+    assert_eq!(p.changes.len(), 1);
+    assert_eq!(p.changes[0].kind, "remote_play");
+    assert!(
+        p.changes[0]
+            .details
+            .join("\n")
+            .contains("wol_ports: [9,7] -> [9]"),
+        "{:?}",
+        p.changes[0].details
+    );
+    s.remote_play = Some(RemotePlaySettings {
+        wol_ports: vec![],
+        ..Default::default()
+    });
+    assert!(plan(&s, &live, false).errors[0].contains("wol_ports"));
+    let y = serde_yaml::to_string(&export(&live)).unwrap();
+    assert!(y.contains("remote_play:"), "{y}");
+    let back: Spec = serde_yaml::from_str(&y).unwrap();
+    assert!(plan(&back, &live, false).in_sync());
+}

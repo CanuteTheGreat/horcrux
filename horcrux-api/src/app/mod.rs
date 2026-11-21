@@ -560,6 +560,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::sdn_ovs::routes(&state))
         .merge(api::vm_hw::routes())
         .merge(api::gaming::routes())
+        .merge(api::remote_play::routes(&state))
         .merge(api::vm_devices::routes())
         .merge(api::mdev::routes())
         .merge(api::metric_servers::routes(&state))
@@ -1898,6 +1899,15 @@ async fn start_vm(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<VmConfig>, ApiError> {
+    Ok(Json(start_vm_by_id(&state, &id).await?))
+}
+
+/// Start a VM the way the Start button does (resume from saved state when
+/// there is one, HA intent, events, unattended-install cleanup); also used
+/// by Wake-on-LAN (api::remote_play).
+pub(crate) async fn start_vm_by_id(state: &Arc<AppState>, id: &str) -> Result<VmConfig, ApiError> {
+    let state = state.clone();
+    let id = id.to_string();
     let old_status = state
         .vm_manager
         .get_vm(&id)
@@ -1931,7 +1941,7 @@ async fn start_vm(
         .ws_state
         .broadcast_vm_status(id.clone(), old_status, format!("{:?}", vm.status));
 
-    Ok(Json(vm))
+    Ok(vm)
 }
 
 async fn stop_vm(

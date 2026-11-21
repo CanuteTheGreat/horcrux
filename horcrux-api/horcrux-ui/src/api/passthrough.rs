@@ -214,6 +214,9 @@ pub struct GamingVmRequest {
     pub hugepages: Option<bool>,
     pub vbs: Option<bool>,
     pub games: Vec<String>,
+    /// Steam Remote Play / Moonlight readiness (None = off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_play: Option<horcrux_common::remote_play::VmRemotePlay>,
     pub start: bool,
     pub dry_run: bool,
 }
