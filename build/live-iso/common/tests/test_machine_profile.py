@@ -490,5 +490,45 @@ class KernelLayerTransaction(unittest.TestCase):
             self.assertFalse(seen[-1])
 
 
+class KernelPreflightWaits(unittest.TestCase):
+    """the answer-file install starts when DHCP is only *started* and the clock is wrong: the binhost index is retried, and "unreachable" is
+    not reported as "not published yet" (QEMU run 2026-11-21: the T2 install was refused 1 s after boot with the lane published)"""
+    LAY = [{"id": "apple-t2", "kernel": {"packages": ["sys-kernel/gentoo-kernel", "sys-fs/zfs-kmod"], "binrepo": {"uri": "https://x.invalid/amd64/t2"}}}]
+
+    class Inst:
+        c = {}
+
+    def setUp(self):
+        self._img = T2.image_has_t2_kernel
+        T2.image_has_t2_kernel = lambda root="/": False
+
+    def tearDown(self):
+        T2.image_has_t2_kernel = self._img
+
+    def test_retries_until_the_network_is_up(self):
+        calls = []
+
+        def fetch(uri):
+            calls.append(uri)
+            if len(calls) < 3:
+                raise OSError("Network is unreachable")
+            return "CPV: sys-kernel/gentoo-kernel-6.18.64_p1\nCPV: sys-fs/zfs-kmod-2.3.9\n"
+        self.assertEqual(MP.kernel_preflight(self.Inst(), self.LAY, wait_s=60, sleep=lambda s: None, fetch=fetch), [])
+        self.assertEqual(len(calls), 3)
+
+    def test_unreachable_is_not_unpublished(self):
+        def fetch(uri):
+            raise OSError("certificate is not yet valid")
+        r = MP.kernel_preflight(self.Inst(), self.LAY, wait_s=0, sleep=lambda s: None, fetch=fetch)
+        self.assertEqual(len(r), 1)
+        self.assertIn("cannot reach", r[0])
+        self.assertIn("certificate is not yet valid", r[0])
+
+    def test_reachable_but_missing_is_unpublished(self):
+        r = MP.kernel_preflight(self.Inst(), self.LAY, wait_s=0, sleep=lambda s: None, fetch=lambda uri: "CPV: sys-kernel/gentoo-kernel-6.18.64_p1\n")
+        self.assertEqual(len(r), 1)
+        self.assertIn("sys-fs/zfs-kmod is not published", r[0])
+
+
 if __name__ == "__main__":
     unittest.main()

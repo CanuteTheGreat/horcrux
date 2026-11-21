@@ -212,10 +212,29 @@ def choose_layers(inst):
     return sel
 
 
-def kernel_preflight(inst, layers, has=None):
-    """before the disk is touched: a layer that brings its own kernel (T2) must find it on its binhost, unless the ISO already boots one"""
+def _wait_index(uri, wait_s, sleep=time.sleep, fetch=None):
+    """(Packages text or None, last error): the autoinstall starts as soon as DHCP is *started*, with a clock that is still wrong (TLS
+    certificates not yet valid), so an unreachable binhost is retried for wait_s seconds before it counts as unreachable"""
+    from . import hwlayers
+    end, err = time.time() + wait_s, ""
+    while True:
+        try:
+            return (fetch or hwlayers.binrepo_index)(uri), ""
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"[:120]
+        if time.time() >= end:
+            return None, err
+        sleep(5)
+
+
+def kernel_preflight(inst, layers, has=None, wait_s=None, sleep=time.sleep, fetch=None):
+    """before the disk is touched: a layer that brings its own kernel (T2) must find it on its binhost, unless the ISO already boots one.
+    `has` (tests) answers per atom without waiting; otherwise the index is fetched, waiting up to answer key binhost_wait_s (default 300 s)
+    for the network and the clock, and "cannot reach" is told apart from "not published yet"."""
     from . import hwlayers, t2
     out = []
+    if wait_s is None:
+        wait_s = int(getattr(inst, "c", {}).get("binhost_wait_s", 300))
     for lay in layers:
         k = lay.get("kernel", {})
         if not k.get("packages"):
@@ -223,9 +242,16 @@ def kernel_preflight(inst, layers, has=None):
         if lay["id"] == "apple-t2" and t2.image_has_t2_kernel("/"):
             continue
         b = k.get("binrepo", {})
+        uri = b.get("uri", "")
+        idx = None
+        if has is None:
+            idx, err = _wait_index(uri, wait_s, sleep, fetch)
+            if idx is None:
+                out.append(f"hardware layer {lay['id']}: cannot reach {uri or 'its binhost'} after {wait_s} s ({err}): is the network up and the clock set?")
+                continue
         for a in k["packages"]:
-            if not (has or hwlayers.binrepo_has)(b.get("uri", ""), a):
-                out.append(f"hardware layer {lay['id']}: {a} is not published on {b.get('uri') or 'its binhost'} yet")
+            if not (has(uri, a) if has is not None else hwlayers.index_has(idx, a)):
+                out.append(f"hardware layer {lay['id']}: {a} is not published on {uri or 'its binhost'} yet")
     return out
 
 
