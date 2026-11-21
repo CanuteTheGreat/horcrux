@@ -173,6 +173,9 @@ pub struct PruneDecision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupStorage {
     pub id: String,
+    /// Human name (pool name); older servers omit it.
+    #[serde(default)]
+    pub name: String,
     pub path: String,
     pub kind: String,
     pub available_gb: Option<u64>,
@@ -298,6 +301,22 @@ where
     Tz::Offset: std::fmt::Display,
 {
     d.format("%Y-%m-%d %H:%M:%S %:z").to_string()
+}
+
+/// What the UI shows for a backup storage id: the pool name when the server
+/// sent one, else the id (pool ids are UUIDs, which users never chose).
+pub fn storage_label(id: &str, storages: &[BackupStorage]) -> String {
+    storages
+        .iter()
+        .find(|s| s.id == id)
+        .map(|s| {
+            if s.name.is_empty() {
+                s.id.clone()
+            } else {
+                s.name.clone()
+            }
+        })
+        .unwrap_or_else(|| id.to_string())
 }
 
 #[cfg(test)]

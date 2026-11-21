@@ -297,7 +297,7 @@ pub fn BackupJobsPage() -> impl IntoView {
                             <select id="job-storage" on:change=move |ev| set_f_storage.set(event_target_value(&ev))>
                                 {move || storages.get().into_iter().map(|s| {
                                     let sel = s.id == f_storage.get();
-                                    view! { <option value=s.id.clone() selected=sel>{format!("{} ({})", s.id, s.path)}</option> }
+                                    view! { <option value=s.id.clone() selected=sel>{format!("{} ({})", bk::storage_label(&s.id, std::slice::from_ref(&s)), s.path)}</option> }
                                 }).collect_view()}
                             </select>
                         </div>
@@ -398,7 +398,7 @@ pub fn BackupJobsPage() -> impl IntoView {
                                             {if j.enabled { "" } else { " (disabled)" }}</td>
                                         <td>{j.schedule.clone()}</td>
                                         <td>{j.targets.join(", ")}</td>
-                                        <td>{format!("{} / {} / {}", if j.storage.is_empty() { "local" } else { &j.storage }, j.mode, j.compression)}</td>
+                                        <td>{format!("{} / {} / {}", bk::storage_label(if j.storage.is_empty() { "local" } else { &j.storage }, &storages.get()), j.mode, j.compression)}</td>
                                         <td>{j.retention.summary()}</td>
                                         <td class="job-last-run">{last}</td>
                                         <td>{j.next_run.map(bk::format_time).unwrap_or_else(|| "-".into())}</td>

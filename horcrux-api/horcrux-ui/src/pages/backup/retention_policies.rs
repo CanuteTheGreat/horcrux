@@ -8,6 +8,7 @@ use leptos::*;
 pub fn RetentionPoliciesPage() -> impl IntoView {
     let (guests, set_guests) = create_signal(Vec::<Guest>::new());
     let (backups, set_backups) = create_signal(Vec::<bk::Backup>::new());
+    let (storage_list, set_storage_list) = create_signal(Vec::<bk::BackupStorage>::new());
     let (target, set_target) = create_signal(String::new());
     let (storage, set_storage) = create_signal(String::new());
     let (decisions, set_decisions) = create_signal(None::<Vec<bk::PruneDecision>>);
@@ -34,6 +35,11 @@ pub fn RetentionPoliciesPage() -> impl IntoView {
     };
     create_effect(move |_| {
         reload();
+        spawn_local(async move {
+            if let Ok(s) = bk::list_backup_storages().await {
+                set_storage_list.set(s);
+            }
+        });
         spawn_local(async move {
             let g = load_guests().await;
             if let Some(first) = g.first() {
@@ -139,7 +145,7 @@ pub fn RetentionPoliciesPage() -> impl IntoView {
                     <label for="prune-storage">"Storage"</label>
                     <select id="prune-storage" on:change=move |ev| set_storage.set(event_target_value(&ev))>
                         <option value="">"all (each pruned separately)"</option>
-                        {move || storages_of_target().into_iter().map(|s| view! { <option value=s.clone()>{s.clone()}</option> }).collect_view()}
+                        {move || storages_of_target().into_iter().map(|s| view! { <option value=s.clone()>{bk::storage_label(&s, &storage_list.get())}</option> }).collect_view()}
                     </select>
                 </div>
                 <div class="form-group">

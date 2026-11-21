@@ -359,6 +359,9 @@ async fn ui_types_read_real_api_responses() {
     assert!(jobs.iter().any(|j| j.id == "contract-job"), "job listed");
     let storages: Vec<bk::BackupStorage> = fetch(&c, &token, "/backup-storages").await;
     assert!(storages.iter().any(|s| s.id == "local"), "{storages:?}");
+    // every storage carries a human name (pool ids are UUIDs the user never chose)
+    assert!(storages.iter().all(|s| !s.name.is_empty()), "{storages:?}");
+    assert_eq!(bk::storage_label("local", &storages), "local");
     let one: bk::Backup = fetch(&c, &token, &format!("/backups/{}", backup.id)).await;
     assert_eq!(one.verify_state.as_deref(), Some("ok"), "{one:?}");
     let r = c

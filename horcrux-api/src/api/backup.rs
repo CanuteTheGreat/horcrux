@@ -240,6 +240,8 @@ async fn apply_retention(
 struct BackupStorage {
     /// Value to pass as `storage`.
     id: String,
+    /// Human name of the storage (the pool's name; the id is a UUID for pools).
+    name: String,
     /// Directory archives are written to.
     path: String,
     /// "default" or the pool's storage type.
@@ -258,6 +260,7 @@ async fn list_backup_storages(State(state): St) -> Json<Vec<BackupStorage>> {
     });
     out.push(BackupStorage {
         id: "local".into(),
+        name: "local".into(),
         path: local.to_string_lossy().into(),
         kind: "default".into(),
         total_gb: cap.map(|c| c.0),
@@ -266,6 +269,11 @@ async fn list_backup_storages(State(state): St) -> Json<Vec<BackupStorage>> {
     for pool in state.storage_manager.list_pools().await {
         if let Ok((id, dir)) = state.backup_manager.resolve_storage(&pool.id).await {
             out.push(BackupStorage {
+                name: if pool.name.is_empty() {
+                    id.clone()
+                } else {
+                    pool.name.clone()
+                },
                 id,
                 path: dir.to_string_lossy().into(),
                 kind: format!("{:?}", pool.storage_type).to_lowercase(),
