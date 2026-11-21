@@ -25,6 +25,9 @@ pub struct HorcruxConfig {
     pub logging: LoggingConfig,
     /// CNI (Container Networking Interface) configuration
     pub cni: CniConfig,
+    /// Backup scheduler and LXC settings (`[backup]`)
+    #[serde(default)]
+    pub backup: BackupConfig,
     /// Authentication settings
     #[serde(default)]
     pub auth: AuthConfig,
@@ -36,6 +39,26 @@ pub struct HorcruxConfig {
     /// declarative spec store changes in `<data_dir>/console.json`.
     #[serde(default)]
     pub console: horcrux_common::console::ConsoleSettings,
+}
+
+/// Backup settings (`[backup]` in config.toml). Env overrides:
+/// `HORCRUX_BACKUP_SCHEDULER_TICK_SECS`, `HORCRUX_LXC_PATH`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct BackupConfig {
+    /// How often the backup scheduler looks for due jobs, in seconds (> 0).
+    pub scheduler_tick_secs: u64,
+    /// Where LXC keeps container directories (read when backing them up).
+    pub lxc_path: PathBuf,
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        Self {
+            scheduler_tick_secs: 15,
+            lxc_path: PathBuf::from("/var/lib/lxc"),
+        }
+    }
 }
 
 /// GPU / PCI passthrough and VM tuning settings (`[passthrough]`).
@@ -481,6 +504,18 @@ impl HorcruxConfig {
             self.logging.file_logging_enabled = enabled.parse().unwrap_or(true);
         }
 
+        // Backup
+        if let Some(secs) = std::env::var("HORCRUX_BACKUP_SCHEDULER_TICK_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|s| *s > 0)
+        {
+            self.backup.scheduler_tick_secs = secs;
+        }
+        if let Ok(path) = std::env::var("HORCRUX_LXC_PATH") {
+            self.backup.lxc_path = PathBuf::from(path);
+        }
+
         // CNI
         if let Ok(path) = std::env::var("HORCRUX_CNI_BIN_DIR") {
             self.cni.bin_dir = PathBuf::from(path);
@@ -636,5 +671,15 @@ mod tests {
         // In a real scenario, you'd use a test framework that isolates env vars
         let config = HorcruxConfig::default();
         assert_eq!(config.paths.data_dir, PathBuf::from("/var/lib/horcrux"));
+    }
+
+    #[test]
+    fn backup_section_parses_and_defaults() {
+        let d = BackupConfig::default();
+        assert_eq!(d.scheduler_tick_secs, 15);
+        assert_eq!(d.lxc_path, PathBuf::from("/var/lib/lxc"));
+        let c: BackupConfig = toml::from_str("scheduler_tick_secs = 60").unwrap();
+        assert_eq!(c.scheduler_tick_secs, 60);
+        assert_eq!(c.lxc_path, PathBuf::from("/var/lib/lxc"));
     }
 }

@@ -31,9 +31,7 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         let st = hook_state.clone();
         Box::pin(async move { job_finished(st, job, report).await })
     });
-    let lxc_path = std::env::var("HORCRUX_LXC_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/var/lib/lxc"));
+    let lxc_path: PathBuf = state.config.backup.lxc_path.clone();
     let attached = state.backup_manager.attach_runtime(BackupRuntime {
         vm_manager: state.vm_manager.clone(),
         container_manager: state.container_manager.clone(),
@@ -43,11 +41,7 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         on_job_finished: Some(hook),
     });
     if attached.is_ok() {
-        let tick = std::env::var("HORCRUX_BACKUP_SCHEDULER_TICK_SECS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .filter(|s| *s > 0)
-            .unwrap_or(15);
+        let tick = state.config.backup.scheduler_tick_secs.max(1);
         // Clean up after a backup interrupted by an API crash/kill before
         // the scheduler can start new ones.
         let bm = state.backup_manager.clone();
