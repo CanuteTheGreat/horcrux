@@ -730,6 +730,8 @@ pub struct HostNet {
     /// argv prefix that runs `ip` / `bridge`.
     ip: Vec<String>,
     bridge: Vec<String>,
+    /// argv prefix that runs `tc` (NIC rate limits).
+    tc: Vec<String>,
 }
 
 impl HostNet {
@@ -740,7 +742,39 @@ impl HostNet {
             dev_dir: PathBuf::from("/dev"),
             ip: vec!["ip".into()],
             bridge: vec!["bridge".into()],
+            tc: vec!["tc".into()],
         }
+    }
+
+    /// Cap the tap `tap` at `mbps` Mbit/s both ways: a token-bucket filter
+    /// on its egress (traffic towards the guest) and an ingress policer
+    /// (traffic the guest sends). The qdiscs go away with the device.
+    async fn limit_rate(&self, tap: &str, mbps: u32) -> Result<()> {
+        let rate = format!("{mbps}mbit");
+        // ~10 ms worth of bytes, at least one jumbo frame's worth.
+        let burst = format!("{}", (u64::from(mbps) * 125_000 / 100).max(32_768));
+        Self::run(
+            &self.tc,
+            &[
+                "qdisc", "replace", "dev", tap, "root", "tbf", "rate", &rate, "burst", &burst,
+                "latency", "50ms",
+            ],
+        )
+        .await?;
+        Self::run(
+            &self.tc,
+            &["qdisc", "replace", "dev", tap, "handle", "ffff:", "ingress"],
+        )
+        .await?;
+        Self::run(
+            &self.tc,
+            &[
+                "filter", "replace", "dev", tap, "parent", "ffff:", "protocol", "all", "prio",
+                "1", "u32", "match", "u32", "0", "0", "police", "rate", &rate, "burst", &burst,
+                "drop", "flowid", ":1",
+            ],
+        )
+        .await
     }
 
     async fn run(tool: &[String], args: &[&str]) -> Result<()> {
@@ -816,6 +850,9 @@ impl HostNet {
             .await?;
         }
         Self::run(&self.ip, &["link", "set", &tap, "up"]).await?;
+        if let Some(mbps) = nic.rate_mbps {
+            self.limit_rate(&tap, mbps).await?;
+        }
         debug!("VM {}: net{i} = {tap} on {}", vm.id, nic.bridge);
         Ok(())
     }
@@ -899,6 +936,9 @@ impl HostNet {
         .await?;
         Self::run(&self.ip, &["link", "set", &tap, "address", mac]).await?;
         Self::run(&self.ip, &["link", "set", &tap, "up"]).await?;
+        if let Some(mbps) = nic.rate_mbps {
+            self.limit_rate(&tap, mbps).await?;
+        }
         debug!("VM {}: net{i} = macvtap {tap} on {}", vm.id, nic.bridge);
         Ok(())
     }
@@ -1861,6 +1901,7 @@ mod tests {
                 attach: Default::default(),
                 mac: None,
                 vlan: None,
+                rate_mbps: None,
             })
             .collect();
         let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
@@ -1885,6 +1926,7 @@ mod tests {
                 attach: Default::default(),
                 mac: Some("02:00:00:00:00:01".into()),
                 vlan: Some(20),
+                rate_mbps: None,
             },
             VmNic {
                 model: NicModel::E1000,
@@ -1892,6 +1934,7 @@ mod tests {
                 attach: Default::default(),
                 mac: Some("02:00:00:00:00:02".into()),
                 vlan: None,
+                rate_mbps: None,
             },
         ];
         let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
@@ -2404,7 +2447,7 @@ case "$*" in
   "link del "*) rmdir "$d/net/$3" ;;
 esac
 "#;
-            for tool in ["ip", "bridge"] {
+            for tool in ["ip", "bridge", "tc"] {
                 std::fs::write(r.join(tool), script).unwrap();
             }
             let sh = |tool: &str| vec!["sh".to_string(), r.join(tool).to_string_lossy().into()];
@@ -2413,6 +2456,7 @@ esac
                 dev_dir: r.join("dev"),
                 ip: sh("ip"),
                 bridge: sh("bridge"),
+                tc: sh("tc"),
             };
             FakeNet { root, host }
         }
@@ -2456,6 +2500,7 @@ esac
             attach: Default::default(),
             mac: None,
             vlan,
+            rate_mbps: None,
         }
     }
 
@@ -2528,6 +2573,41 @@ esac
             ]
         );
         assert!(f.has_dev(&t0) && f.has_dev(&t1));
+    }
+
+    #[tokio::test]
+    async fn a_nic_rate_limit_becomes_tc_shaping_on_its_tap() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = FakeNet::new();
+        f.add_bridge("vmbr0", Some("0"));
+        let mut v = temp_vm(dir.path(), "rate");
+        let mut limited = nic("vmbr0", None);
+        limited.rate_mbps = Some(100);
+        v.hardware.nets = vec![limited, nic("vmbr0", None)];
+        let (t0, t1) = (tap_name(&v.id, 0), tap_name(&v.id, 1));
+
+        f.host.setup_taps(&v).await.expect("both NICs set up");
+        let calls = f.calls();
+        assert!(
+            calls.contains(&format!(
+                "tc qdisc replace dev {t0} root tbf rate 100mbit burst 125000 latency 50ms"
+            )),
+            "{calls:?}"
+        );
+        assert!(
+            calls.contains(&format!("tc qdisc replace dev {t0} handle ffff: ingress")),
+            "{calls:?}"
+        );
+        assert!(
+            calls.iter().any(|c| c.starts_with(&format!(
+                "tc filter replace dev {t0} parent ffff: protocol all prio 1 u32 match u32 0 0 police rate 100mbit burst 125000 drop"
+            ))),
+            "{calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|c| c.starts_with("tc ") && c.contains(&t1)),
+            "an unlimited NIC gets no qdisc: {calls:?}"
+        );
     }
 
     fn macvtap_nic(dev: &str, mac: Option<&str>) -> horcrux_common::VmNic {

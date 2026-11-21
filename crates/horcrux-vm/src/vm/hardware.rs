@@ -667,6 +667,7 @@ mod tests {
             attach: Default::default(),
             mac: mac.map(Into::into),
             vlan: None,
+            rate_mbps: None,
         }
     }
 

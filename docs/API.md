@@ -437,6 +437,10 @@ Authorization: Bearer <token>
 - Each NIC is a tap device (`tap<hash>i<n>`) plugged into the host bridge; `vlan`
   sets the tap's PVID and needs a VLAN-aware bridge. A missing `mac` is generated
   (locally administered). `model`: `virtio` (default), `e1000`, `rtl8139`.
+- `rate_mbps` (1-400000, optional) caps the NIC's bandwidth in Mbit/s in both
+  directions: at start Horcrux sets a `tc` token-bucket filter on the tap (towards
+  the guest) and an ingress policer (from the guest). Unset = unlimited; applies
+  at the next start. UI: the "Mbit/s" box on the VM Hardware page.
 - `"attach": "macvtap"` puts the NIC directly on a wired host interface instead
   of a bridge (`bridge` then names that interface, e.g. `{"bridge": "eth0",
   "attach": "macvtap"}`): a macvtap device in bridge mode carrying the NIC's

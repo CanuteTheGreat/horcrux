@@ -591,6 +591,7 @@ mod tests {
                 attach: Default::default(),
                 mac: Some("02:00:00:aa:bb:cc".into()),
                 vlan: Some(20),
+                rate_mbps: None,
             }],
             cdrom: Some("/var/lib/horcrux/images/install.iso".into()),
             boot: vec![BootDevice::Cdrom, BootDevice::Disk],

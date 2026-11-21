@@ -649,6 +649,14 @@ pub async fn check_host_hardware(state: &AppState, hw: &VmHardware) -> Result<()
         crate::vm::mdev::check_device(std::path::Path::new("/sys"), d)?;
     }
     for (i, nic) in hw.nets.iter().enumerate() {
+        if let Some(r) = nic.rate_mbps {
+            if r == 0 || r > horcrux_common::MAX_NIC_RATE_MBPS {
+                return Err(ApiError::BadRequest(format!(
+                    "net{i}: rate limit must be 1-{} Mbit/s (leave it empty for no limit)",
+                    horcrux_common::MAX_NIC_RATE_MBPS
+                )));
+            }
+        }
         if nic.attach == horcrux_common::NicAttach::Macvtap {
             if let Some(p) = crate::vm::qemu::HostNet::system().macvtap_problem(&nic.bridge) {
                 return Err(ApiError::BadRequest(format!(

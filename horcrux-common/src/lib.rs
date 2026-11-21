@@ -219,7 +219,14 @@ pub struct VmNic {
     /// VLAN tag (the tap's PVID; the bridge must be VLAN-aware).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vlan: Option<u16>,
+    /// Bandwidth cap in Mbit/s, applied to the tap in both directions
+    /// (`tc`) when the VM starts; unset = unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_mbps: Option<u32>,
 }
+
+/// Highest NIC rate limit accepted (Mbit/s).
+pub const MAX_NIC_RATE_MBPS: u32 = 400_000;
 
 /// A boot device class, in `VmHardware::boot` order.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1826,6 +1833,7 @@ mod tests {
             attach: Default::default(),
             mac: None,
             vlan: None,
+            rate_mbps: None,
         };
         let mut hw = VmHardware {
             nets: vec![nic("vmbr0")],

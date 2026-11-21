@@ -3040,6 +3040,7 @@ async fn vm_hardware_iso_library_and_bridges_read_into_ui_types() {
             attach: Default::default(),
             mac: None,
             vlan: None,
+            rate_mbps: None,
         });
     }
     let upd = api::VmConfigUpdate {

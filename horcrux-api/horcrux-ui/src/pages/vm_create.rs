@@ -61,6 +61,7 @@ pub fn VmCreate() -> impl IntoView {
                                     attach: Default::default(),
                                     mac: None,
                                     vlan: None,
+                                    rate_mbps: None,
                                 })
                             }
                         });

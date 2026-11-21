@@ -128,6 +128,7 @@ pub fn HardwareFields(
                 attach,
                 mac: None,
                 vlan: None,
+                rate_mbps: None,
             })
         });
     };
@@ -172,6 +173,7 @@ pub fn HardwareFields(
                         };
                         let model = model_value(nic.model);
                         let vlan = nic.vlan.map(|v| v.to_string()).unwrap_or_default();
+                        let rate = nic.rate_mbps.map(|v| v.to_string()).unwrap_or_default();
                         let mac = nic.mac.clone().unwrap_or_else(|| "generated on save".to_string());
                         view! {
                             <div class="vm-nic-row form-row" data-nic=i>
@@ -215,6 +217,15 @@ pub fn HardwareFields(
                                     on:change=move |ev| {
                                         let v = event_target_value(&ev).trim().parse::<u16>().ok();
                                         hardware.update(|h| if let Some(n) = h.nets.get_mut(i) { n.vlan = v });
+                                    }/>
+                                <input class="vm-nic-rate" type="number" min="1" max="400000"
+                                    placeholder="Mbit/s (no limit)"
+                                    title="Bandwidth cap for this card in Mbit/s, both directions; empty = unlimited"
+                                    disabled={move || running.get()}
+                                    prop:value=rate
+                                    on:change=move |ev| {
+                                        let v = event_target_value(&ev).trim().parse::<u32>().ok();
+                                        hardware.update(|h| if let Some(n) = h.nets.get_mut(i) { n.rate_mbps = v });
                                     }/>
                                 <code class="vm-nic-mac">{mac}</code>
                                 <button type="button" class="btn btn-sm btn-danger vm-nic-remove" disabled={move || running.get()}
