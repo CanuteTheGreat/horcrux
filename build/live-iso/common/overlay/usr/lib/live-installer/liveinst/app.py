@@ -628,7 +628,7 @@ def apply_machine_profile(profile, c, answers_path=None, say=print):
         import tomllib
         with open(answers_path, "rb") as f:
             answers = tomllib.load(f)
-    bundle = MP.find(profile["name"], S.read("/proc/cmdline"), answers=answers, wait=3 if answers_path else 1)
+    bundle = MP.find(profile.get("name", "horcrux"), S.read("/proc/cmdline"), answers=answers, wait=3 if answers_path else 1)
     if not bundle:
         return None
     mp = MP.load(bundle)
