@@ -280,6 +280,18 @@ class Layers(unittest.TestCase):
         self.assertTrue(HL.binrepo_has("https://x", "sys-kernel/gentoo-kernel", fetch=lambda u: idx))
         self.assertFalse(HL.binrepo_has("https://x", "sys-kernel/gentoo-kernel-bin", fetch=lambda u: idx))
 
+    def test_edition_binrepo_gnome_openrc_only(self):
+        """a GNOME edition on OpenRC gets the desktop-apps binhost lane; server and systemd do not; a profile can opt out"""
+        conf = "/etc/portage/binrepos.conf/horcrux-profile.conf"
+        g = {"machine": {"edition": "gnome"}}
+        self.assertIn("ctg-binhost/amd64/gnome", E.portage_files(g, init="openrc")[conf])
+        self.assertIn("ctg-binhost/amd64/gnome", E.portage_files({"machine": {"edition": "gnome-light"}}, init="openrc")[conf])
+        self.assertNotIn(conf, E.portage_files(g, init="systemd"))
+        self.assertNotIn(conf, E.portage_files({"machine": {"edition": "server"}}, init="openrc"))
+        self.assertNotIn(conf, E.portage_files(dict(g, software={"edition_binrepos": False}), init="openrc"))
+        own = dict(g, binrepos=[{"name": "ctg-binhost-gnome", "uri": "file:///mirror", "priority": 1}])
+        self.assertEqual(E.portage_files(own, init="openrc")[conf].count("[ctg-binhost-gnome]"), 1)
+
     def test_package_copies_identical(self):
         """the installer's engine and layers are byte-identical to what sys-apps/horcrux-profile installs (Horcrux tree only)"""
         if not os.path.isdir(PKG):
