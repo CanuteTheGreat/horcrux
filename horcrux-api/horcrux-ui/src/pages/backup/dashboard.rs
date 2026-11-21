@@ -266,7 +266,7 @@ pub fn BackupDashboard() -> impl IntoView {
                         <select id="backup-storage" on:change=move |ev| set_storage.set(event_target_value(&ev))>
                             {move || storages.get().into_iter().map(|s| {
                                 let selected = s.id == storage.get();
-                                let label = format!("{} ({}, {})", s.id, s.path,
+                                let label = format!("{} ({}, {})", bk::storage_label(&s.id, std::slice::from_ref(&s)), s.path,
                                     s.available_gb.map(|a| format!("{a} GB free")).unwrap_or_else(|| s.kind.clone()));
                                 view! { <option value=s.id.clone() selected=selected>{label}</option> }
                             }).collect_view()}
@@ -393,7 +393,7 @@ pub fn BackupDashboard() -> impl IntoView {
                                             <td title=b.path.clone()>{bk::format_time(b.timestamp)}</td>
                                             <td>{bk::format_bytes(b.size)}</td>
                                             <td>{format!("{} / {}", b.mode, b.compression)}</td>
-                                            <td>{b.storage.clone()}</td>
+                                            <td title=b.storage.clone()>{bk::storage_label(&b.storage, &storages.get())}</td>
                                             <td class="verify-state">{verify_cell}</td>
                                             <td>
                                                 {if protected { "[protected] " } else { "" }}
