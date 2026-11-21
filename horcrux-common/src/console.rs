@@ -227,6 +227,9 @@ pub struct WanSettings {
     pub adaptive: bool,
     /// Lowest video bitrate adaptation goes to (kbit/s).
     pub min_kbps: u32,
+    /// Share of the link estimate (percent) kept free for audio, RTCP and
+    /// retransmissions: video plans with the rest.
+    pub headroom_pct: u32,
     /// Picture quality floor in thousandths of a bit per pixel: below it the
     /// resolution (gaming: first) or the frame rate (desktop) is lowered.
     pub min_millibits_per_pixel: u32,
@@ -265,6 +268,7 @@ impl Default for WanSettings {
             uplink_kbps: 0,
             adaptive: true,
             min_kbps: 250,
+            headroom_pct: 10,
             min_millibits_per_pixel: 50,
             min_fps: 10,
             down_interval_ms: 1000,
@@ -341,6 +345,9 @@ impl WanSettings {
         }
         if !(50..=100_000).contains(&self.min_kbps) {
             return Err("wan.min_kbps must be 50..=100000".into());
+        }
+        if self.headroom_pct > 50 {
+            return Err("wan.headroom_pct must be 0..=50".into());
         }
         if !(1..=2000).contains(&self.min_millibits_per_pixel) {
             return Err("wan.min_millibits_per_pixel must be 1..=2000".into());

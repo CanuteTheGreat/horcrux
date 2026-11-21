@@ -162,6 +162,10 @@ fn WanFields(sig: RwSignal<ConsoleSettings>) -> impl IntoView {
                 <input type="number" min="50" name="wan-min_kbps" prop:value=move || w().min_kbps.to_string()
                     on:change=move |ev| { let v = num(&ev, w().min_kbps); set(&|x| x.min_kbps = v) }/>
             </label>
+            <label>"Link headroom kept for audio and retransmissions (%)"
+                <input type="number" min="0" max="50" name="wan-headroom_pct" prop:value=move || w().headroom_pct.to_string()
+                    on:change=move |ev| { let v = num(&ev, w().headroom_pct); set(&|x| x.headroom_pct = v) }/>
+            </label>
             <label>"Quality floor (thousandths of a bit per pixel)"
                 <input type="number" min="1" max="2000" name="wan-min_millibits_per_pixel" prop:value=move || w().min_millibits_per_pixel.to_string()
                     on:change=move |ev| { let v = num(&ev, w().min_millibits_per_pixel); set(&|x| x.min_millibits_per_pixel = v) }/>

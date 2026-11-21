@@ -333,16 +333,20 @@ with sync_playwright() as pw:
                 time.sleep(1)
                 link = page.evaluate("window.hxc.link") or {}
                 srv = page.evaluate("window.hxc.server") or {}
-                series.append({"estimate_kbps": link.get("estimate_kbps"), "target": link.get("target"),
-                               "encoded": srv.get("encoded")})
+                series.append({"estimate_kbps": link.get("estimate_kbps"), "usable_kbps": link.get("usable_kbps"),
+                               "target": link.get("target"), "encoded": srv.get("encoded")})
             frames1 = page.evaluate("window.hxc.framesDecoded")
             cs2 = page.evaluate(CLIENT_STATS)
             target = series[-1]["target"]
             # the cap holds; the named limit must be the reason whenever the
-            # link itself would allow more than the cap
+            # link itself would allow more than the cap. The node plans with
+            # the estimate minus its headroom (wan.headroom_pct), reported as
+            # usable_kbps in the same link message as the target.
+            last = series[-1]
+            usable = last["usable_kbps"] if last["usable_kbps"] is not None else (last["estimate_kbps"] or 0)
             ok = all(x["target"] and x["target"]["kbps"] <= want["max_kbps"] for x in series[-5:]) and (
                 not want.get("limit") or target["limit"] == want["limit"]
-                or (series[-1]["estimate_kbps"] or 0) <= want["max_kbps"])
+                or usable <= want["max_kbps"])
             est = [x["estimate_kbps"] for x in series if x["estimate_kbps"]]
             res["adapted"] = {"target": target, "estimate_kbps_median": est and statistics.median(est),
                               "estimate_kbps_range": est and [min(est), max(est)],
@@ -372,7 +376,7 @@ with sync_playwright() as pw:
             page.evaluate("window.hxc.sendKey('ControlLeft', true);" + key("KeyC") + "window.hxc.sendKey('ControlLeft', false);")
             time.sleep(0.5)
             type_text(page, "clear\n")
-            check(ok, f"{name}: adaptation brings the target to {target} (limit {want.get('limit', 'link')}, at most {want['max_kbps']} kbit/s)")
+            check(ok, f"{name}: adaptation brings the target to {target} (limit {want.get('limit', 'link')}, at most {want['max_kbps']} kbit/s; link estimate {last['estimate_kbps']}, usable {usable})")
             check(frames1 - frames0 >= 20, f"{name}: frames keep arriving while adapted ({frames1 - frames0} in 15 s)")
         page.screenshot(path=f"{OUT}/{name}.png")
         RESULTS[name] = res

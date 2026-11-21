@@ -1283,6 +1283,7 @@ async fn transport(
     let mut path: Option<&'static str> = None;
     let link_msg = |stats: &SessionStats| {
         serde_json::json!({"t": "link", "path": stats.path, "estimate_kbps": stats.link_estimate_kbps,
+            "usable_kbps": stats.link_estimate_kbps.map(|e| abr::usable_kbps(e, wan.headroom_pct)),
             "target": stats.target, "uplink_kbps": wan.uplink_kbps, "rtt_ms": stats.rtt_ms,
             "loss_pct": stats.loss_pct, "adaptive": wan.adaptive})
         .to_string()

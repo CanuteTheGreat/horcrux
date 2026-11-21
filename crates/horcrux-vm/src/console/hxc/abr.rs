@@ -47,6 +47,8 @@ pub struct AbrConfig {
     pub keep_fps: bool,
     pub down_interval: Duration,
     pub up_interval: Duration,
+    /// Percent of the link estimate kept free (audio, RTCP, retransmissions).
+    pub headroom_pct: u32,
 }
 
 impl AbrConfig {
@@ -63,8 +65,20 @@ impl AbrConfig {
             keep_fps,
             down_interval: Duration::from_millis(w.down_interval_ms as u64),
             up_interval: Duration::from_millis(w.up_interval_ms as u64),
+            headroom_pct: w.headroom_pct.min(50),
         }
     }
+
+    /// The part of a link estimate video may plan with.
+    pub fn usable_kbps(&self, estimate_kbps: u32) -> u32 {
+        usable_kbps(estimate_kbps, self.headroom_pct)
+    }
+}
+
+/// The part of a link estimate video may plan with, keeping `headroom_pct`
+/// (capped at 50) free.
+pub fn usable_kbps(estimate_kbps: u32, headroom_pct: u32) -> u32 {
+    (estimate_kbps as u64 * (100 - headroom_pct.min(50)) as u64 / 100) as u32
 }
 
 /// Output scales tried, largest first (1, 3/4, 2/3, 1/2, 1/3, 1/4).
@@ -193,8 +207,8 @@ impl Abr {
         if self.cfg.src_width == 0 {
             return None;
         }
-        // keep ~10% headroom for audio, RTCP, retransmissions
-        let usable = estimate_kbps.saturating_mul(9) / 10;
+        // keep headroom for audio, RTCP, retransmissions
+        let usable = self.cfg.usable_kbps(estimate_kbps);
         let t = plan(&self.cfg, usable);
         let Some(cur) = self.current else {
             self.apply(t, now);
@@ -286,6 +300,42 @@ mod tests {
         let t = plan(&c, 1_000_000);
         assert_eq!(t.limit, Limit::Uplink);
         assert!(t.width < 3840 && t.fps == 120, "{t:?}");
+    }
+
+    #[test]
+    fn headroom_is_a_setting() {
+        // default 10%: an estimate just above the cap plans under it
+        let mut c = cfg(true);
+        c.uplink_kbps = Some(1_000);
+        let mut a = Abr::new(c.clone());
+        let t = a.on_estimate(1_080, Instant::now()).unwrap();
+        assert_eq!((t.kbps, t.limit), (972, Limit::Link));
+        let t = Abr::new(c.clone())
+            .on_estimate(1_200, Instant::now())
+            .unwrap();
+        assert_eq!((t.kbps, t.limit), (1_000, Limit::Uplink));
+        // no headroom: the cap names the limit as soon as the link exceeds it
+        c.headroom_pct = 0;
+        let t = Abr::new(c.clone())
+            .on_estimate(1_080, Instant::now())
+            .unwrap();
+        assert_eq!((t.kbps, t.limit), (1_000, Limit::Uplink));
+        // capped at 50%
+        assert_eq!(usable_kbps(1_000, 90), 500);
+        let w = WanSettings {
+            headroom_pct: 25,
+            ..WanSettings::default()
+        };
+        assert_eq!(
+            AbrConfig::new(&w, 50_000, 60, true).usable_kbps(4_000),
+            3_000
+        );
+        assert!(WanSettings {
+            headroom_pct: 51,
+            ..WanSettings::default()
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
