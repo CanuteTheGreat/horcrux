@@ -80,13 +80,23 @@ def shape(rtt_ms=0, loss=0.0, rate_kbit=None):
     limit applies to node -> client (the video direction)."""
     half = f"{rtt_ms / 2:g}ms"
     for dev, ns in (("hxwan0", False), ("hxwan1", True)):
-        argv = ["tc", "qdisc", "replace", "dev", dev, "root", "netem", "delay", half]
+        # Start from a fresh qdisc: `tc qdisc replace ... netem` without
+        # `rate` keeps the previous condition's rate and resets the queue to
+        # 1000 packets, so a case after the 3 Mbit one ran on a 3 Mbit link
+        # with seconds of queue (keystroke echoes timed out).
+        run(["tc", "qdisc", "del", "dev", dev, "root"], ns=ns, check_rc=False)
+        argv = ["tc", "qdisc", "add", "dev", dev, "root", "netem", "delay", half]
         if loss:
             argv += ["loss", f"{loss:g}%"]
+        want_rate = False
         if rate_kbit and not ns:
+            want_rate = True
             # ~100 ms of queue, like a home router's upload buffer
             argv += ["rate", f"{rate_kbit}kbit", "limit", str(max(10, rate_kbit // 100))]
         run(argv, ns=ns)
+        shown = run(["tc", "qdisc", "show", "dev", dev, "root"], ns=ns).stdout
+        if (" rate " in shown) != want_rate:
+            raise SystemExit(f"FAIL netem on {dev} is not the requested condition: {shown.strip()}")
 
 
 def block(udp_ports):
