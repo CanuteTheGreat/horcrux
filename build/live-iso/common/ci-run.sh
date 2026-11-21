@@ -229,9 +229,9 @@ if [ "$result" = pass ]; then
   if [ "$PROJECT" = horcrux ] && [ "$ARCH" = x86_64 ] && [ -e /dev/kvm ]; then
     # ONE ISO, ANY MACHINE: this stock ISO + a machine profile (tests/fixtures/profiles) = the machine, from binary packages, no image build.
     # Server ISO: the generic server profile. GNOME ISO: a laptop profile on a simulated Apple T2 Mac (hardware layer + firmware read from a
-    # synthetic Mac EFI partition). Install wall time is a gate (< 30 min). Branch runs bundle the branch's overlay (not published yet).
+    # synthetic Mac EFI partition) with the REAL T2 kernel installed from the binhost lane amd64/t2 and booted (--real-t2-kernel: no TEST-ONLY t2_kernel = skip). Install wall time is a gate (< 30 min). Branch runs bundle the branch's overlay (not published yet).
     name=machine-profile; prof=generic-server; margs=""
-    if [ "$IMG_DE" != server ]; then prof=generic-desktop; margs="--desktop --fake-t2"; fi
+    if [ "$IMG_DE" != server ]; then prof=generic-desktop; margs="--desktop --fake-t2 --real-t2-kernel"; fi
     movl=""
     if [ "${GITHUB_REF_TYPE:-}" = branch ] && [ -n "${GITHUB_REF_NAME:-}" ] && [ "${GITHUB_REF_NAME}" != main ]; then movl="--dev-overlay $(cd "$HERE/../../.." && pwd)/gentoo"; fi
     echo "::group::QEMU test $name ($prof)"
