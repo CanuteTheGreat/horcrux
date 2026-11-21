@@ -3,13 +3,16 @@ name: Gaming VM wizard (Windows 11 install, KVM)
 # The Gaming VM wizard end to end on real KVM (docs/design/gaming-vm.md,
 # phase 2): the server fetches the Windows 11 evaluation ISO and virtio-win
 # into its ISO library, POST /api/vms/gaming composes the VM (Secure Boot
-# OVMF with Microsoft keys, swtpm TPM 2.0, nested virtualisation for VBS,
-# pinned vCPUs, virtio disk, guest agent, generated SMBIOS identity, answer
-# disc), Windows installs unattended until its guest agent answers (the
-# server then deletes the answer disc), and Secure Boot, TPM 2.0, VBS +
-# Memory Integrity, SMBIOS and the virtio drivers are checked from inside
-# Windows. No GPU (the runners have none). Needs /dev/kvm with nested
-# virtualisation (kvm-x86_64 runner). A Windows install takes 30-60 min,
+# OVMF with Microsoft keys, swtpm TPM 2.0, pinned vCPUs, virtio disk, guest
+# agent, generated SMBIOS identity, answer disc), Windows installs unattended
+# until its guest agent answers (the server then deletes the answer disc),
+# and Secure Boot, TPM 2.0, SMBIOS and the virtio drivers are checked from
+# inside Windows. VBS follows the wizard's default (VBS=auto): the runners
+# are themselves VMs, so the wizard leaves VBS off and the test checks it is
+# off inside; the plan with VBS asked for is still checked (nested
+# virtualisation). VBS + Memory Integrity running inside is checked on a
+# bare-metal host (or with VBS=on). No GPU (the runners have none). Needs
+# /dev/kvm (kvm-x86_64 runner). A Windows install takes 30-60 min,
 # so it runs on changes to the wizard, weekly and on dispatch.
 on:
   push:
@@ -34,7 +37,7 @@ env:
 
 jobs:
   gaming-wizard-e2e:
-    name: Gaming VM wizard installs Windows 11 (Secure Boot, TPM, VBS checked inside)
+    name: Gaming VM wizard installs Windows 11 (Secure Boot, TPM, SMBIOS checked inside)
     runs-on: kvm-x86_64
     container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 180

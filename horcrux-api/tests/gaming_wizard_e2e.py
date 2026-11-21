@@ -5,9 +5,10 @@ KVM. Fetches the Windows 11 and virtio-win ISOs through the ISO library
 CI hosts have none), lets the unattended install run, waits for the server
 to see the installed guest's agent (it deletes the answer disc then), and
 checks from inside Windows over the guest agent: Secure Boot on, TPM 2.0
-ready, VBS + Memory Integrity running, the hypervisor visible (never
-hidden), the generated SMBIOS identity, the virtio drivers and the account
-the wizard asked for."""
+ready, VBS as the wizard composed it (running with Memory Integrity on a
+bare-metal host; off on a host that is itself a VM, unless VBS=on), the
+hypervisor visible (never hidden), the generated SMBIOS identity, the virtio
+drivers and the account the wizard asked for."""
 import base64
 import http.client
 import json
@@ -195,12 +196,27 @@ if host_is_vm:
 st, _ = call("GET", "/vms/ci-gaming", ok=None)
 check(st == 404, "dry run created nothing")
 
-req.update(dry_run=False, start=True)
+# VBS for the real install. auto (default) leaves it to the wizard: on for a
+# bare-metal host, off on a host that is itself a VM (Windows' hypervisor
+# would run a third level deep). On the CI runners (AMD EPYC VMs, 4 CPUs per
+# job) a VBS install boots into the third-level hypervisor and then crawls:
+# no guest agent after 100 min (gaming-wizard-e2e run 22647, reproduced).
+# VBS=on forces it (only on hosts known to cope), VBS=off turns it off.
+VBS = os.environ.get("VBS", "auto")
+if VBS not in ("auto", "on", "off"):
+    raise SystemExit(f"FAIL VBS must be auto, on or off (got {VBS!r})")
+req.update(dry_run=False, start=True, vbs={"auto": None, "on": True, "off": False}[VBS])
 st, made = call("POST", "/vms/gaming", req, ok=(201,))
 vm = made["config"]
 disk = vm["disks"][0]["path"]
 uuid = vm["hardware"]["adv"]["smbios"]["uuid"]
 answer = made["unattend_iso"]
+want_vbs = vm["hardware"]["adv"].get("nested_virt", False) is True
+if VBS == "auto":
+    check(want_vbs == (not host_is_vm),
+          f"VBS {'on' if want_vbs else 'off'} by the wizard's default (host is {'a VM' if host_is_vm else 'bare metal'})")
+else:
+    check(want_vbs == (VBS == "on"), f"VBS {VBS} as asked")
 check(os.path.isfile(answer) and (os.stat(answer).st_mode & 0o777) == 0o600, f"answer disc {answer} written 0600")
 base = os.path.splitext(disk)[0]
 qmp_sock, qga_sock = base + ".qmp.sock", base + ".qga.sock"
@@ -210,11 +226,14 @@ check(bool(cmdline), "QEMU is running")
 if cmdline:
     open(f"{DATA}/qemu-cmdline.txt", "w").write(cmdline)
     intel = "GenuineIntel" in open("/proc/cpuinfo").read()
-    for want in ("property=secure,value=on", "tpmdev", "vmx=on" if intel else "svm=on",
-                 "drive=cdx1", "drive=cdunattend", "hv-relaxed", "virtio-blk"):
+    nested = "vmx=on" if intel else "svm=on"
+    for want in ("property=secure,value=on", "tpmdev", "drive=cdx1", "drive=cdunattend",
+                 "hv-relaxed", "virtio-blk") + ((nested,) if want_vbs else ()):
         if want not in cmdline:
             print(cmdline)
         check(want in cmdline, f"QEMU runs with {want}")
+    if not want_vbs:
+        check(nested not in cmdline, f"QEMU runs without {nested} (VBS off)")
     check("kvm=off" not in cmdline and "hv_vendor_id" not in cmdline and "hv-vendor-id" not in cmdline,
           "hypervisor not hidden")
 
@@ -269,7 +288,7 @@ def inside():
 
 o = inside()
 dg = json.loads(o["dg"] or "{}")
-if dg.get("VirtualizationBasedSecurityStatus") != 2:
+if want_vbs and dg.get("VirtualizationBasedSecurityStatus") != 2:
     # VBS turned on during setup takes effect from the next boot
     print("... VBS not running yet, rebooting the guest once", flush=True)
     try:
@@ -287,8 +306,13 @@ if dg.get("VirtualizationBasedSecurityStatus") != 2:
 check(o["secure_boot"] == "True", "Secure Boot is on inside Windows")
 tpm = json.loads(o["tpm"] or "{}")
 check(tpm.get("TpmPresent") and tpm.get("TpmReady"), "TPM 2.0 present and ready inside Windows")
-check(dg.get("VirtualizationBasedSecurityStatus") == 2, "VBS running inside Windows (nested virtualisation)")
-check(2 in (dg.get("SecurityServicesRunning") or []), "Memory Integrity (HVCI) running")
+if want_vbs:
+    check(dg.get("VirtualizationBasedSecurityStatus") == 2, "VBS running inside Windows (nested virtualisation)")
+    check(2 in (dg.get("SecurityServicesRunning") or []), "Memory Integrity (HVCI) running")
+else:
+    check(dg.get("VirtualizationBasedSecurityStatus") != 2, "VBS not running inside Windows, as configured")
+    hvci = ps(qga_sock, r"(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' -Name Enabled -EA SilentlyContinue).Enabled")
+    check(hvci != "1", f"the answer file did not turn Memory Integrity on (Enabled={hvci!r})")
 cs = json.loads(o["cs"] or "{}")
 check(cs.get("HypervisorPresent") is True, "Windows sees a hypervisor (never hidden)")
 check(cs.get("Manufacturer") == settings["smbios_manufacturer"], f"SMBIOS manufacturer is {cs.get('Manufacturer')}")

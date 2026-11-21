@@ -294,9 +294,17 @@ UI page "New gaming VM" + `POST /api/vms/gaming` composing an ordinary VM config
   `horcrux-api/tests/gaming_wizard_e2e.sh` (workflow
   `gaming-wizard-e2e.yml`, kvm-x86_64): fetches the ISOs through the library,
   creates the VM with the wizard API, Windows installs unattended until the
-  agent answers, then Secure Boot, TPM 2.0, VBS + Memory Integrity running,
-  the visible hypervisor, the SMBIOS identity, virtio drivers and the account
-  are checked from inside Windows.
+  agent answers, then Secure Boot, TPM 2.0, the visible hypervisor, the
+  SMBIOS identity, virtio drivers and the account are checked from inside
+  Windows. VBS follows the wizard's default (`VBS=auto`; `on`/`off` force
+  it): on a bare-metal host VBS + Memory Integrity must be running inside;
+  on a host that is itself a VM (every CI runner) the wizard leaves VBS off
+  and the test checks that, while the dry-run plan with VBS asked for still
+  proves nested virtualisation is composed. Measured on the CI runners (AMD
+  EPYC VMs, 4 CPUs per job): with VBS forced on, Windows boots into its
+  hypervisor a third level deep and then crawls (black screen in OOBE after
+  40 min, QEMU at the CPU limit, no guest agent within 100 min), so the
+  install with VBS running inside is not provable there.
 - A Horcrux host that is itself a virtual machine (CPUID hypervisor bit, e.g.
   a cloud instance with nested virtualisation) would run Windows' own
   hypervisor a third level deep when VBS is on. Measured: on an Intel cloud
