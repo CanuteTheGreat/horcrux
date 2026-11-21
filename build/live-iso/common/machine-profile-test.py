@@ -94,7 +94,7 @@ class PRun(ZE.ZRun):
 
     def toml(self, pubkey, pwhash):
         t = super().toml(pubkey, pwhash)
-        t = t.replace('t2 = "yes"', 't2 = "yes"\nt2_kernel = "skip"') if self.pa.fake_t2 else t
+        t = t.replace('t2 = "yes"', 't2 = "yes"\nt2_kernel = "skip"') if self.pa.fake_t2 and not self.pa.real_t2_kernel else t
         return t + '\n[profile]\nsource = "/run/answers-media/profile"\n'
 
     def run(self):
@@ -204,9 +204,31 @@ class PRun(ZE.ZRun):
             self.step("t2-firmware-package-owned-incl-hard-linked-names", "sys-firmware/apple-t2-firmware-local" in o, re.sub(r"\s+", " ", o)[:300])
             # (the T2 dracut drivers file is left out with t2_kernel = skip: the stock kernel has no apple-bce)
             self.step("t2-modprobe-config-written", "MODPROBE" in o, "")
+            if self.pa.real_t2_kernel:
+                self.t2_kernel_checks()
         else:
             rc, o = self.sh("ls /lib/firmware/brcm 2>/dev/null | grep -ci apple; qlist -I | grep -cE 'apple-t2|tiny-dfr|t2fanrd'")
             self.step("non-mac-gets-no-t2-layer-and-no-apple-firmware", o.split() == ["0", "0"], o.strip().replace("\n", " "))
+
+    def t2_kernel_checks(self):
+        """--real-t2-kernel: the T2 kernel came from the binhost lane and this boot is on it (no t2_kernel = skip anywhere)"""
+        rc, o = self.sh("uname -r; echo MODS $(ls /lib/modules); echo PKGS $(qlist -ICv sys-kernel/gentoo-kernel sys-kernel/gentoo-kernel-bin sys-fs/zfs-kmod); "
+                        "kr=$(uname -r); echo BOOT $(ls /boot | grep -F $kr); "
+                        "echo ZFSKO $(find /lib/modules/$kr -name 'zfs.ko*' | head -1); echo T2KO $(find /lib/modules/$kr -name 't2bce_core.ko*' | head -1); "
+                        "echo INITRD $(lsinitrd /boot/initramfs-$kr.img 2>/dev/null | grep -cE 't2bce_core|t2bce_dma|t2bce_vhci|hid[-_]apple'); "
+                        "echo USEFILE $(cat /etc/portage/package.use/horcrux-profile); grep sync-uri /etc/portage/binrepos.conf/horcrux-profile.conf",
+                        timeout=120)
+        flat = re.sub(r"\s+", " ", o)
+        lines = [l.strip() for l in o.splitlines()]
+        kr = lines[0] if lines else ""
+        self.step("t2-kernel-booted-is-the-binhost-t2-kernel", "-t2" in kr, flat[:300])
+        self.step("t2-use-flag-written-by-the-layer-matches-the-lane", "gentoo-kernel -debug" in o, flat[:300])
+        self.step("t2-kernel-and-zfs-module-installed-from-the-binhost-stock-kernel-bin-gone",
+                  "sys-kernel/gentoo-kernel-" in flat and "sys-fs/zfs-kmod-" in flat and "sys-kernel/gentoo-kernel-bin" not in flat, flat[:300])
+        self.step("t2-kernel-has-zfs-ko-and-apple-bce-modules", "ZFSKO /lib/modules" in o and "T2KO /lib/modules" in o, flat[:300])
+        m = re.search(r"(?m)^INITRD (\d+)$", o)
+        self.step("t2-initramfs-lists-apple-bce-and-hid-apple", bool(m) and int(m.group(1)) >= 4, flat[:300])
+        self.step("t2-binrepo-written-by-the-layer", "ctg-binhost/amd64/t2" in o, flat[:300])
 
     def desktop_profile_checks(self, vm):
         u = self.user
@@ -279,6 +301,8 @@ def main():
     ap.add_argument("--profile", default="", help="bundle directory with profile.toml")
     ap.add_argument("--desktop", action="store_true")
     ap.add_argument("--fake-t2", action="store_true")
+    ap.add_argument("--real-t2-kernel", action="store_true", help="with --fake-t2: do NOT set the TEST-ONLY t2_kernel = skip; the apple-t2 layer installs the real T2 kernel from its binhost lane "
+                    "(ctg-binhost/amd64/t2) and the machine must boot it (needs the lane published; QEMU still has no T2 chip, so apple-bce itself cannot bind)")
     ap.add_argument("--mac-esp", default="", help="raw disk image with a Mac EFI partition holding firmware-raw.tar.gz (synthetic)")
     ap.add_argument("--dev-overlay", default="", help="the branch's gentoo/ overlay, bundled as repo horcrux-dev (pre-merge runs)")
     ap.add_argument("--private-overlay", default="", help="private overlay checkout for profiles that name bundle:repos/ctg-private")
