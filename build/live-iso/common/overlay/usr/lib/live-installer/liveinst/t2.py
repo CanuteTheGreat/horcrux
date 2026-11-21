@@ -299,6 +299,7 @@ def rebuild_initramfs(inst, kver):
         from .system import InstallError
         raise InstallError("T2 initramfs is missing " + ", ".join(miss) + " - the keyboard would be dead at the LUKS prompt")
     inst.log(f"T2 initramfs {img} contains apple-bce ({', '.join(EARLY_DRIVERS)} loaded early)")
+    inst.t2_initramfs_built = True
     return img
 
 
