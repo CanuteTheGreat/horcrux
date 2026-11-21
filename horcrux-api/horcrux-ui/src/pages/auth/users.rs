@@ -513,10 +513,11 @@ pub fn UsersPage() -> impl IntoView {
                                                         <div class="user-info">
                                                             <strong>{&user.username}</strong>
                                                             {user.comment.as_ref().map(|comment| {
-                                                                // A system-created account says so in a badge; the
+                                                                // A system-created account says so in a neutral badge (not a warning about the
+                                                                // admin's own login); the
                                                                 // full note is the tooltip, never raw text next to the name.
                                                                 if comment.to_lowercase().contains("deprecated") {
-                                                                    view! { <span class="badge badge-warning" title=comment.clone()>"Test account (deprecated)"</span> }.into_view()
+                                                                    view! { <span class="badge badge-info" title=comment.clone()>"Created from ADMIN_PASSWORD"</span> }.into_view()
                                                                 } else {
                                                                     view! { <small class="user-comment" title=comment.clone()>{comment.clone()}</small> }.into_view()
                                                                 }
