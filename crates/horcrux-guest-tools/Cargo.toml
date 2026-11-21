@@ -62,3 +62,9 @@ opus = "0.4"
 # mingw-w64 runtimes before v11. The encoder only reads PCM produced by the
 # agent itself; the other hardening flags stay on.
 opusic-sys = { version = "0.7", features = ["no-stack-protector", "no-fortify-source"] }
+# libopus 1.5 has no CPU detection for Arm on Windows (celt/arm/armcpu.c stops
+# with #error) and its NEON intrinsics need that detection, so the Windows on
+# Arm build uses the portable C code (10 ms stereo frames: far below the cost
+# of the video encode).
+[target.'cfg(all(windows, target_arch = "aarch64"))'.dependencies]
+opusic-sys = { version = "0.7", features = ["no-simd"] }

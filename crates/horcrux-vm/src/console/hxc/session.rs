@@ -615,7 +615,13 @@ async fn link_watch(
         if to_rtc.is_closed() || !sock.exists() {
             return;
         }
-        let link = match guest::connect(&sock, wait, ctx.req.settings.clipboard_max_bytes).await {
+        let link = match guest::connect(
+            &sock,
+            wait,
+            ctx.req.settings.clipboard_max_bytes,
+            ctx.req.virtual_display,
+        )
+        .await {
             Ok(Some(l)) => l,
             Ok(None) => continue,
             Err(e) => {
