@@ -46,10 +46,10 @@ def build_bundle(src, dst, dev_overlay=None, private_overlay=None):
     """copy the profile bundle; add the branch's overlay as repo horcrux-dev (pre-merge: the published overlay does not have the new
     packages yet) and, when the profile names it, a snapshot of the private overlay"""
     shutil.copytree(src, dst)
-    extra = ""
+    prof = open(os.path.join(dst, "profile.toml")).read()
     if dev_overlay:
         r = os.path.join(dst, "repos", "horcrux-dev")
-        shutil.copytree(dev_overlay, r, ignore=shutil.ignore_patterns(".git", "ci", "*.pyc"))
+        shutil.copytree(dev_overlay, r, ignore=shutil.ignore_patterns(".git", "ci", "*.pyc", "t2"))
         with open(os.path.join(r, "profiles", "repo_name"), "w") as f:
             f.write("horcrux-dev\n")
         lc = os.path.join(r, "metadata", "layout.conf")
@@ -57,23 +57,18 @@ def build_bundle(src, dst, dev_overlay=None, private_overlay=None):
         if "masters" not in txt:
             txt += "masters = gentoo\n"
         open(lc, "w").write(txt)
-        extra += ('\n[[repos]]\nname = "horcrux-dev"\nsnapshot = "bundle:repos/horcrux-dev"\npriority = 100\nsource_ok = true\n'
-                  '\n[portage.accept_keywords."*/*::horcrux-dev"]\n')
-    prof = open(os.path.join(dst, "profile.toml")).read()
-    if private_overlay and "bundle:repos/ctg-private" in prof:
-        subprocess.check_call(f"git -C {private_overlay} archive HEAD | tar -C {os.path.join(dst, 'repos')} --one-top-level=ctg-private -x", shell=True) \
-            if os.path.isdir(os.path.join(private_overlay, ".git")) else shutil.copytree(private_overlay, os.path.join(dst, "repos", "ctg-private"))
-    if extra:
-        # accept_keywords for the dev overlay is merged into the profile's own [portage.accept_keywords] table
-        import tomllib
-        mp = tomllib.loads(prof)
-        kw = mp.get("portage", {}).get("accept_keywords", {})
-        prof += ('\n[[repos]]\nname = "horcrux-dev"\nsnapshot = "bundle:repos/horcrux-dev"\npriority = 100\nsource_ok = true\n')
-        if kw:
+        prof += '\n[[repos]]\nname = "horcrux-dev"\nsnapshot = "bundle:repos/horcrux-dev"\npriority = 100\nsource_ok = true\n'
+        if "[portage.accept_keywords]" in prof:
             prof = prof.replace("[portage.accept_keywords]", '[portage.accept_keywords]\n"*/*::horcrux-dev" = "~amd64"', 1)
         else:
             prof += '\n[portage.accept_keywords]\n"*/*::horcrux-dev" = "~amd64"\n'
-        open(os.path.join(dst, "profile.toml"), "w").write(prof)
+    if private_overlay and "bundle:repos/ctg-private" in prof:
+        os.makedirs(os.path.join(dst, "repos"), exist_ok=True)
+        if os.path.isdir(os.path.join(private_overlay, ".git")):
+            subprocess.check_call(f"git -C {private_overlay} archive HEAD | tar -C {os.path.join(dst, 'repos')} --one-top-level=ctg-private -x", shell=True)
+        else:
+            shutil.copytree(private_overlay, os.path.join(dst, "repos", "ctg-private"))
+    open(os.path.join(dst, "profile.toml"), "w").write(prof)
     return E.load(os.path.join(dst, "profile.toml"))
 
 
