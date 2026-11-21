@@ -47,9 +47,19 @@ pub fn MetricServersPage() -> impl IntoView {
     let (notice, set_notice) = create_signal(None::<String>);
     let form = create_rw_signal(None::<ms::MetricServer>);
 
+    // Every action reloads the list. Two quick actions (delete one row, then
+    // the next) put two list requests in flight; only the newest answer may
+    // land, otherwise an older list brings a deleted row back.
+    let load_seq = store_value(0u64);
     let reload = move || {
+        load_seq.update_value(|n| *n += 1);
+        let seq = load_seq.get_value();
         spawn_local(async move {
-            match ms::list().await {
+            let r = ms::list().await;
+            if load_seq.get_value() != seq {
+                return;
+            }
+            match r {
                 Ok(l) => set_servers.set(l),
                 Err(e) => set_error.set(Some(e.message)),
             }
@@ -92,7 +102,10 @@ pub fn MetricServersPage() -> impl IntoView {
         spawn_local(async move {
             set_error.set(None);
             match ms::delete(&id).await {
-                Ok(()) => set_notice.set(Some(format!("Removed {name}"))),
+                Ok(()) => {
+                    set_servers.update(|l| l.retain(|s| s.id != id));
+                    set_notice.set(Some(format!("Removed {name}")));
+                }
                 Err(e) => set_error.set(Some(e.message)),
             }
             reload();

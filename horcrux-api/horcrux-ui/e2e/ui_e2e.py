@@ -1053,10 +1053,15 @@ def metric_server_checks(page):
     expect(page.locator("#ms-notice")).to_contain_text("data points", timeout=30000)
     wait_for(lambda: glines, "graphite delivery")
     assert "e2e.hx.nodes." in glines[-1] and ".cpu_percent " in glines[-1], glines[-1]
-    # delete both
-    for r in (row, grow):
+    # delete both, one after the other: each row must be gone (and stay gone
+    # after the list reloads) before the next delete
+    for name, r in (("e2e-influx", row), ("e2e-graphite", grow)):
         r.locator(".ms-delete").click()
+        expect(page.locator("#ms-notice")).to_contain_text(f"Removed {name}", timeout=30000)
+        expect(r).to_have_count(0, timeout=30000)
     expect(page.locator("tr.ms-row")).to_have_count(0, timeout=30000)
+    left = api_get("/api/observability/metric-servers", tok)
+    assert left == [], f"metric servers left after delete: {left}"
     srv.shutdown()
     gl.close()
 
