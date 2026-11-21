@@ -256,6 +256,37 @@ class InstallerSide(unittest.TestCase):
         self.assertIn("ssh-ed25519 AAAAC3Nza test", c["ssh_keys"])
         self.assertTrue(MP.to_config(GOOD, {}, "/b", iso="server"))        # a GNOME machine needs the GNOME ISO
 
+    def test_installer_stage_writes_bundle_layers_engine_call(self):
+        """MP.stage/MP.accounts end to end with a fake installer (no chroot): bundle copied 0600, layer copies, the engine call"""
+        with tempfile.TemporaryDirectory() as d:
+            b = os.path.join(d, "b")
+            tree(b, {"profile.toml": "schema = 1\n[machine]\nhostname = \"h\"\n", "secrets/w": "x"})
+            runs = []
+
+            class I:
+                target = os.path.join(d, "t")
+                t2 = True
+                p = {"name": "horcrux", "hwlayer_dir": PROJECT_LAYERS}
+                c = {"machine_profile": MP.load(b), "machine_profile_dir": b, "hostname": "h", "t2_kernel": "skip"}
+                apple_fw_tar = None
+
+                def log(self, line):
+                    pass
+
+                def run(self, cmd, check=True, chroot=False, **k):
+                    runs.append((cmd, chroot))
+                    return 0
+            os.makedirs(os.path.join(I.target, "etc"))
+            MP.stage(I())
+            MP.accounts(I())
+            st = os.path.join(I.target, "var/lib/horcrux/profile")
+            self.assertEqual(os.stat(os.path.join(st, "bundle/secrets/w")).st_mode & 0o777, 0o600)
+            self.assertTrue(os.path.exists(os.path.join(st, "layers/apple-t2.toml")))
+            self.assertEqual(runs[0][0][-3:], ["apple-t2", "apply", "--install"])
+            self.assertTrue(runs[0][1] and runs[1][1])
+            self.assertEqual(runs[1][0][-2:], ["apply", "--accounts-only"])
+            self.assertFalse(os.path.exists(os.path.join(I.target, "var/tmp/horcrux-profile")))     # engine copy removed again
+
     def test_edition_families(self):
         self.assertIsNone(MP.edition_problem("gnome", "gnome"))
         self.assertIsNone(MP.edition_problem("gnome-light", "gnome"))

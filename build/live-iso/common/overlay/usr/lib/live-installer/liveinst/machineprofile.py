@@ -230,7 +230,9 @@ def kernel_preflight(inst, layers, has=None):
 
 def _copy_engine(inst):
     T = inst.target
-    _copy_engine(inst)
+    os.makedirs(f"{T}/var/tmp/horcrux-profile", exist_ok=True)
+    eng = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "horcrux_profile.py")
+    shutil.copy(eng if os.path.exists(eng) else ENGINE, f"{T}/var/tmp/horcrux-profile/horcrux_profile.py")
 
 
 def accounts(inst):
