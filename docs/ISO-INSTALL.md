@@ -333,6 +333,10 @@ the profile **from binary packages only**. A package that would be compiled is r
 Packages that own `/etc/portage` keyword/USE/licence files for the rest of the profile go in `[software] preinstall`: they are
 installed first, so Portage sees their files before it resolves everything else.
 
+A GNOME or GNOME (light) edition on OpenRC also gets the Horcrux desktop-apps binary repository
+(`https://f002.backblazeb2.com/file/ctg-binhost/amd64/gnome`): common desktop applications built with the desktop's own USE flags,
+so a profile can ask for them without compiling anything. `[software] edition_binrepos = false` leaves it out.
+
 After the install the profile lives in `/var/lib/horcrux/profile/bundle/` and stays the source of truth:
 
 ```

@@ -48,6 +48,11 @@ OWNED = "horcrux-profile"                       # file name used under /etc/port
 EDITIONS = ("server", "gnome-light", "gnome", "xfce")
 # packages an edition adds on top of the ISO it is installed from (the full GNOME edition from the GNOME (light) ISO)
 EDITION_PACKAGES = {"gnome": ["gnome-base/gnome", "gnome-extra/horcrux-gnome-extras"]}
+# binary repositories an edition adds: desktop packages built under the GNOME ISO's own Portage profile, so their USE matches a desktop
+# install (ctg-binhost lane amd64/gnome, OpenRC). Keyed by (edition, init system, arch); listed after the profile's own [[binrepos]].
+# `[software] edition_binrepos = false` in a profile leaves them out.
+_GNOME_OPENRC = [{"name": "ctg-binhost-gnome", "uri": "https://f002.backblazeb2.com/file/ctg-binhost/amd64/gnome", "priority": 8000}]
+EDITION_BINREPOS = {("gnome", "openrc", "amd64"): _GNOME_OPENRC, ("gnome-light", "openrc", "amd64"): _GNOME_OPENRC}
 ATOM_RE = re.compile(r"^(@[A-Za-z0-9_.+-]+|[<>=~]{0,2}[A-Za-z0-9+_.-]+/[A-Za-z0-9+_-]+(-[0-9][A-Za-z0-9._*-]*)?(:[A-Za-z0-9._/*-]+)?(::[A-Za-z0-9_-]+)?)$")
 # package.* files also take wildcards: */*, */*::repo, cat/*, */pkg (never in software.packages)
 PORTAGE_KEY_RE = re.compile(r"^(\*|[A-Za-z0-9+_.-]+)/(\*|[A-Za-z0-9+_-]+)(::[A-Za-z0-9_-]+)?$")
@@ -255,7 +260,7 @@ def resolve_failure(text, limit=80):
     return "\n".join(keep[-limit:]) if keep else text.strip()[-4000:]
 
 
-def portage_files(mp, layers=(), arch_kw="amd64"):
+def portage_files(mp, layers=(), arch_kw="amd64", init=None):
     """{relative /etc/portage path: text} owned by this program"""
     p = mp.get("portage", {})
     out = {}
@@ -287,6 +292,9 @@ def portage_files(mp, layers=(), arch_kw="amd64"):
             txt.append("")
         out[f"/etc/portage/repos.conf/{OWNED}.conf"] = "\n".join(txt)
     bins = list(mp.get("binrepos", []))
+    if mp.get("software", {}).get("edition_binrepos", True):
+        key = (mp.get("machine", {}).get("edition", "server"), init or init_system(), arch_kw)
+        bins += [b for b in EDITION_BINREPOS.get(key, []) if b["name"] not in [x.get("name") for x in bins]]
     for lay in layers:
         b = lay.get("kernel", {}).get("binrepo")
         if b:
