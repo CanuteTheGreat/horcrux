@@ -18,7 +18,7 @@ use super::abr::{self, Abr, AbrConfig};
 use super::encode::{self, EncodeParams, EncodedFrame, Encoder, PixelFormat, VideoCodec};
 use super::guest::{self, GuestLink};
 use super::keymap;
-use super::qemu_dbus::{DbusDisplay, DisplayEvent};
+use super::qemu_dbus::{DbusDisplay, DisplayEvent, GuestInput};
 use base64::Engine as _;
 use horcrux_common::console::{ConsoleProfile, ConsoleSettings};
 use horcrux_guest_proto as gproto;
@@ -1032,18 +1032,18 @@ pub(super) async fn input_task(
     while let Some(ev) = rx.recv().await {
         let r = match ev {
             InputEvent::Key { code, down } => match keymap::qnum(&code) {
-                Some(q) if down => display.keyboard.press(q).await,
-                Some(q) => display.keyboard.release(q).await,
+                Some(q) if down => display.input(GuestInput::KeyPress(q)).await,
+                Some(q) => display.input(GuestInput::KeyRelease(q)).await,
                 None => Ok(()),
             },
             InputEvent::Button { button, down } => match keymap::mouse_button(button) {
-                Some(b) if down => display.mouse.press(b).await,
-                Some(b) => display.mouse.release(b).await,
+                Some(b) if down => display.input(GuestInput::ButtonPress(b)).await,
+                Some(b) => display.input(GuestInput::ButtonRelease(b)).await,
                 None => Ok(()),
             },
             InputEvent::Abs { x, y } => {
                 let prev = last.replace((x, y));
-                match display.mouse.set_abs_position(x, y).await {
+                match display.input(GuestInput::Abs(x, y)).await {
                     Ok(()) => {
                         if mode != Some(true) {
                             mode = Some(true);
@@ -1059,8 +1059,10 @@ pub(super) async fn input_task(
                         match prev {
                             Some((px, py)) => {
                                 display
-                                    .mouse
-                                    .rel_motion(x as i32 - px as i32, y as i32 - py as i32)
+                                    .input(GuestInput::Rel(
+                                        x as i32 - px as i32,
+                                        y as i32 - py as i32,
+                                    ))
                                     .await
                             }
                             None => Ok(()),
@@ -1068,7 +1070,7 @@ pub(super) async fn input_task(
                     }
                 }
             }
-            InputEvent::Rel { dx, dy } => display.mouse.rel_motion(dx, dy).await,
+            InputEvent::Rel { dx, dy } => display.input(GuestInput::Rel(dx, dy)).await,
             InputEvent::Wheel { dx, dy } => {
                 let mut r = Ok(());
                 for b in [
@@ -1080,9 +1082,9 @@ pub(super) async fn input_task(
                 .into_iter()
                 .flatten()
                 {
-                    r = display.mouse.press(b).await;
+                    r = display.input(GuestInput::ButtonPress(b)).await;
                     if r.is_ok() {
-                        r = display.mouse.release(b).await;
+                        r = display.input(GuestInput::ButtonRelease(b)).await;
                     }
                 }
                 r

@@ -77,6 +77,13 @@ them; where a library is used as a dependency it is listed in section 10.
      for virtio-gpu/virgl), cursor, keyboard/mouse, audio and clipboard
      interfaces. Needs no guest tools, works pre-OS, encoded on the host. This is
      the C1 path and the fallback for every VM.
+     In p2p mode QEMU serves these objects on only its newest client
+     connection (each `add_client` replaces and closes the previous one), so
+     all viewer sessions of a VM share one control connection for keyboard
+     and mouse, and one audio listener fanned out to every session (QEMU
+     takes a single audio-out listener per VM in p2p mode); each session
+     registers its own display listener. A connection lost to another D-Bus
+     client is re-opened on the next input event.
   2. Guest tools capture and encode inside the guest (the guest owns the GPU in
      the gaming case): Windows DXGI Desktop Duplication or the Indirect Display
      Driver swap chain, NVENC/AMF/QSV via Media Foundation or vendor SDKs;
