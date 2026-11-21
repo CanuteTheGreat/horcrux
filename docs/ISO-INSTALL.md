@@ -330,6 +330,8 @@ What the installer does: profile values fill the installer configuration (guided
 installed from the ISO as usual; then `horcrux-profile apply --install` runs inside the new system and installs the detected layers and
 the profile **from binary packages only**. A package that would be compiled is refused, except from repositories the profile marks
 `source_ok` (script/config-only overlays). An edition mismatch (a desktop profile on the server ISO) is refused before the disk is touched.
+Packages that own `/etc/portage` keyword/USE/licence files for the rest of the profile go in `[software] preinstall`: they are
+installed first, so Portage sees their files before it resolves everything else.
 
 After the install the profile lives in `/var/lib/horcrux/profile/bundle/` and stays the source of truth:
 

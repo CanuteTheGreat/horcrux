@@ -205,6 +205,39 @@ class DesiredState(unittest.TestCase):
         self.assertTrue(em and "--getbinpkg" in em[0] and "--select" in em[0])
         self.assertIn("@horcrux", rec["packages"])
 
+    def test_preinstall_goes_first(self):
+        cmds = []
+
+        class Fake(E.Sys):
+            def run(self, cmd, check=True, capture=False, env=None):
+                cmds.append(cmd)
+                return "[binary   N    ] app-misc/tmux-3.6::gentoo\n" if capture else 1
+
+        mp = dict(GOOD, software={"preinstall": ["app-misc/box-config"], "packages": ["app-misc/tmux"]})
+        self.assertEqual(E.problems(mp), [])
+        self.assertIn("app-misc/box-config", E.desired_atoms(mp, []))
+        with tempfile.TemporaryDirectory() as b:
+            tree(b, {"repos/private/profiles/repo_name": "private\n", "secrets/wifi": "correct horse battery\n"})
+            E.apply(mp, [], Fake(b, log=lambda *_: None, dry=True), install=True, sync=False)
+        em = [c for c in cmds if c[:1] == ["emerge"] and "--pretend" not in c and "--deselect" not in c]
+        self.assertEqual(em[0][-1:], ["app-misc/box-config"])      # alone, before the rest
+        self.assertIn("app-misc/tmux", em[1])
+
+    def test_ignored_binpkg_warning_is_not_a_failure(self):
+        ok = ("!!! The following binary packages have been ignored due to changed dependencies:\n\n"
+              "     dev-libs/glib-2.86.1::gentoo\n\n"
+              "NOTE: The --binpkg-changed-deps=n option will prevent emerge\n"
+              "      from ignoring these binary packages if possible.\n"
+              "[binary   N    ] app-misc/tmux-3.6::gentoo\n")
+        self.assertFalse(E.resolve_failed(ok))
+        bad = ok + "\n!!! Multiple package instances within a single package slot have been pulled\n" \
+                   "!!! into the dependency graph, resulting in a slot conflict:\n\nsys-apps/dbus:0\n"
+        self.assertTrue(E.resolve_failed(bad))
+        why = E.resolve_failure(bad)
+        self.assertIn("slot conflict", why)
+        self.assertIn("sys-apps/dbus:0", why)                   # the free-form reason survives
+        self.assertNotIn("[binary", why)
+
 
 class Layers(unittest.TestCase):
     def facts(self, pci=(), vendor="", product="", cpu=""):
