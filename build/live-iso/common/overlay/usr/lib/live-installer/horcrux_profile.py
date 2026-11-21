@@ -553,6 +553,18 @@ def apply_accounts(mp, sy):
                 os.chown(p, pw.pw_uid, pw.pw_gid)
 
 
+def bzimage_release(path):
+    """the release string a bzImage reports (boot protocol header: u16 kernel_version at 0x20E, relative to 0x200); '' when unreadable"""
+    try:
+        with open(path, "rb") as f:
+            h = f.read(0x210)
+            off = int.from_bytes(h[0x20E:0x210], "little") + 0x200
+            f.seek(off)
+            return f.read(256).split(b"\0")[0].decode("ascii", "replace").split(" ")[0]
+    except (OSError, ValueError):
+        return ""
+
+
 DRACUT_KERNEL_TXN = "/etc/dracut.conf.d/00-horcrux-profile-kernel-install.conf"
 
 
@@ -576,6 +588,14 @@ def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules"):
                                     'omit_dracutmodules+=" zfs "\n')
     try:
         sy.run(cmd, env={"PORTAGE_NICENESS": "10"})
+        if reinstall and not sy.dry:
+            # zfs-kmod's postinst reinstalls the kernel through /usr/src/linux (dist-kernel_reinstall_initramfs): while that symlink still
+            # names the stock kernel (the kernel's own postinst leaves it as-is when it points elsewhere) /boot/vmlinuz-<new release>,
+            # System.map and config are overwritten with the STOCK kernel's files and the machine boots the unpatched kernel
+            # against the new kernel's initramfs. Point it at the new kernel first.
+            for kr in sorted(set(os.listdir(mods)) - before if os.path.isdir(mods) else ()):
+                if os.path.isdir(f"/usr/src/linux-{kr}"):
+                    sy.run(["eselect", "kernel", "set", f"linux-{kr}"], check=False)
         if reinstall:
             sy.run(["emerge", "--oneshot", "--usepkgonly", "--getbinpkg", "--binpkg-respect-user-patches=n", "--quiet-build=y", "--with-bdeps=n", *reinstall],
                    env={"PORTAGE_NICENESS": "10"})
@@ -591,6 +611,10 @@ def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules"):
             continue
         sy.log(f"kernel {kr}: building its initramfs (dracut, zfs included)")
         sy.run(["dracut", "--force", "--no-hostonly", "--kver", kr, f"/boot/initramfs-{kr}.img", kr], env=env)
+        rel = bzimage_release(f"/boot/vmlinuz-{kr}")
+        if rel and rel != kr:
+            raise RuntimeError(f"/boot/vmlinuz-{kr} is a {rel} image, not the {kr} kernel (a module package's reinstall copied another kernel's image): "
+                               f"the machine would boot the wrong kernel against this initramfs")
 
 
 def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
