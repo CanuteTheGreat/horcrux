@@ -158,7 +158,10 @@ req = {
     "id": "ci-gaming",
     "gpu": None,
     "vcpus": int(os.environ.get("VCPUS", "4")),
-    "memory_mb": int(os.environ.get("MEMORY_MB", "6144")),
+    # 4 GiB = Windows 11's minimum: the CI job container is capped at 6 GiB
+    # in total (QEMU overhead, swtpm and the API share it), and a 6 GiB guest
+    # got QEMU OOM-killed by the job's memory cgroup during setup.
+    "memory_mb": int(os.environ.get("MEMORY_MB", "4096")),
     "disk_gb": 64,
     "bridge": "",
     "hugepages": False,
