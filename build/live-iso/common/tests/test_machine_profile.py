@@ -55,6 +55,34 @@ T2_LAYER = {"id": "apple-t2", "packages": ["sys-apps/tiny-dfr"], "desktop_packag
 
 
 class Schema(unittest.TestCase):
+    def test_autounmask_hints_name_every_entry_at_once(self):
+        au = """
+The following keyword changes are necessary to proceed:
+ (see "package.accept_keywords" in the portage(5) man page for more details)
+# required by app-misc/foo (argument)
+=dev-util/android-studio-2026.2.2.10 ~amd64
+=app-misc/alienfx-2.4.3::canutethegreat-overlay ~amd64
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by x
+>=media-libs/libvpx-1.15:0/11 postproc
+>=media-libs/libvpx-1.15 -foo
+
+The following license changes are necessary to proceed:
+ (see "package.license" in the portage(5) man page for more details)
+=www-client/x-1 EULA
+
+Use --autounmask-write to write changes to config files
+"""
+        h = E.autounmask_hints(au)
+        self.assertEqual(h["accept_keywords"], {"dev-util/android-studio": "~amd64", "app-misc/alienfx": "~amd64"})
+        self.assertEqual(h["use"], {"media-libs/libvpx": "postproc -foo"})
+        self.assertEqual(h["license"], {"www-client/x": "EULA"})
+        mp = dict(GOOD, portage=h)
+        self.assertEqual(E.problems(mp), [])          # the hint is valid profile syntax
+        self.assertIn('[portage.accept_keywords]', E.format_hints(h))
+
     def test_portage_mask_table_and_unknown_tables(self):
         mp = dict(GOOD, portage={"mask": {">=media-video/vlc-4.0": ""}})
         self.assertEqual(E.problems(mp), [])

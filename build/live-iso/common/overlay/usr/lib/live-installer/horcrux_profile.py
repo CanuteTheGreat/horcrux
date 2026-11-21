@@ -185,6 +185,39 @@ def desired_atoms(mp, layers=(), distdir="/var/cache/distfiles", installed=lambd
 PORTAGE_TABLES = ("use", "accept_keywords", "license", "mask", "unmask")
 
 
+_AU_SECTIONS = (("keyword changes", "accept_keywords"), ("USE changes", "use"), ("license changes", "license"),
+                ("mask changes", "unmask"))
+_AU_LINE = re.compile(r"^([<>=~]*)([A-Za-z0-9+_.-]+/[A-Za-z0-9+_.-]+?)(-[0-9][^\s:]*)?(:\S+)?(::\S+)?\s+(.*)$")
+
+
+def autounmask_hints(text):
+    """emerge --autounmask=y --autounmask-write=n output -> {table: {"cat/pkg": value}} (unversioned, so a later version still matches)"""
+    out, table = {}, None
+    for line in text.splitlines():
+        hdr = [t for k, t in _AU_SECTIONS if f"The following {k} are necessary" in line]
+        if hdr:
+            table = hdr[0]
+            continue
+        if table is None or not line.strip() or line.lstrip().startswith(("#", "(")):
+            continue
+        m = _AU_LINE.match(line.strip())
+        if not m:
+            table = None
+            continue
+        val = m.group(6).strip()
+        if table == "unmask":
+            val = ""
+        if table == "use":
+            cur = out.setdefault(table, {}).get(m.group(2), "")
+            val = " ".join(dict.fromkeys((cur + " " + val).split()))
+        out.setdefault(table, {})[m.group(2)] = val
+    return out
+
+
+def format_hints(h):
+    return "\n".join(f"[portage.{t}]\n" + "\n".join(f'"{a}" = "{v}"' for a, v in sorted(d.items())) for t, d in h.items())
+
+
 def portage_files(mp, layers=(), arch_kw="amd64"):
     """{relative /etc/portage path: text} owned by this program"""
     p = mp.get("portage", {})
@@ -529,6 +562,13 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
     if atoms:
         base = ["emerge", "--update", "--newuse", "--getbinpkg", "--usepkg", "--select", "--noreplace", "--quiet-build=y", "--with-bdeps=n", *emerge_args]
         pre = sy.run(base + ["--pretend", "--verbose", "--color=n", *atoms], check=False, capture=True)
+        if "!!!" in (pre or "") or "masked by:" in (pre or ""):
+            # name EVERY missing keyword/USE/licence/unmask at once, in profile syntax, instead of one error per attempt
+            au = sy.run(base + ["--pretend", "--color=n", "--autounmask=y", "--autounmask-write=n", "--autounmask-continue=n", *atoms],
+                        check=False, capture=True)
+            hints = autounmask_hints(au or "")
+            if hints:
+                raise RuntimeError("the packages need these [portage.*] entries in the machine profile:\n" + format_hints(hints))
         bad = forbidden_source_builds(source_builds(pre or ""), mp)
         if bad:
             raise RuntimeError("these would be compiled on this machine (no binary package on the binhosts): " + ", ".join(bad)
