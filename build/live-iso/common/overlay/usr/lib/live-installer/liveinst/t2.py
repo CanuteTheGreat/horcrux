@@ -222,6 +222,16 @@ def import_firmware(src, target_root, kind=None):
                     shutil.copyfileobj(f, o)
                 total += m.size
                 done.append(b)
+            # t2linux's firmware.tar stores identical files ONCE and the other names as hard links (e.g. one .bin for two boards):
+            # without these the board that only has the link name gets no firmware
+            for m in t.getmembers():
+                if not m.islnk() or len(done) >= FW_MAX_FILES:
+                    continue
+                n, tgt = m.name, os.path.basename(m.linkname)
+                if n.startswith("/") or ".." in n.split("/") or not _wanted(n) or tgt not in done:
+                    continue
+                shutil.copyfile(os.path.join(dest, tgt), os.path.join(dest, os.path.basename(n)))
+                done.append(os.path.basename(n))
     for b in done:
         os.chmod(os.path.join(dest, b), 0o644)
     return sorted(set(done))
@@ -289,6 +299,7 @@ def rebuild_initramfs(inst, kver):
         from .system import InstallError
         raise InstallError("T2 initramfs is missing " + ", ".join(miss) + " - the keyboard would be dead at the LUKS prompt")
     inst.log(f"T2 initramfs {img} contains apple-bce ({', '.join(EARLY_DRIVERS)} loaded early)")
+    inst.t2_initramfs_built = True
     return img
 
 
@@ -314,6 +325,95 @@ def firmware_choice(inst):
     return (found[0]["kind"], found[0]["path"]) if found else None
 
 
+MAC_ESP_ROOTS = ("/run/mac-esp",)
+
+
+def mac_firmware_sources(bundle=None, esp_mounts=MAC_ESP_ROOTS, extra=()):
+    """where this Mac's own firmware can be read, best first: [(kind, path)]
+       kind 'raw'  = macOS's /usr/share/firmware as a tree or as t2linux's firmware-raw.tar.gz on the Mac's EFI partition (converted here)
+       kind 'tar'/'dir' = an already converted t2linux firmware.tar / brcm directory (profile bundle, USB stick, old install)"""
+    from . import applefw
+    out = []
+    if bundle:
+        out.append(("tar", bundle))
+    for r in list(esp_mounts) + list(extra):
+        for n in applefw.RAW_NAMES:
+            p = os.path.join(r, n)
+            if os.path.isfile(p):
+                out.append(("raw", p))
+        for sub in ("usr/share/firmware", "firmware"):
+            p = os.path.join(r, sub)
+            if os.path.isdir(os.path.join(p, "wifi")):
+                out.append(("raw", p))
+    return out
+
+
+def mount_mac_esps(sh=None):
+    """mount every vfat EFI system partition read-only under /run/mac-esp[-N] (the Mac's own ESP, before the disk is erased)"""
+    import subprocess
+    run = sh or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True))
+    r = run(["lsblk", "-rno", "PATH,FSTYPE,PARTTYPE"])
+    mounts = []
+    for l in (r.stdout if hasattr(r, "stdout") else r).splitlines():
+        p = l.split()
+        if len(p) >= 3 and p[1] == "vfat" and p[2].lower() == "c12a7328-f81f-11d2-ba4b-00a0c93ec93b":
+            m = f"/run/mac-esp-{len(mounts)}" if mounts else "/run/mac-esp"
+            os.makedirs(m, exist_ok=True)
+            run(["mount", "-o", "ro", p[0], m])
+            mounts.append(m)
+    return mounts
+
+
+def capture_firmware(inst, sources=None):
+    """called BEFORE the disk is touched: convert the Mac's own Wi-Fi/Bluetooth firmware into /run/hx-applefw.tar (tmpfs), which
+    the apple-t2 layer installs as the package sys-firmware/apple-t2-firmware-local. Returns the tarball path or None."""
+    from . import applefw
+    want = str(inst.c.get("t2_firmware", "auto"))
+    if want == "none":
+        return None
+    bundle = None
+    if want.startswith("bundle:") and inst.c.get("machine_profile_dir"):
+        bundle = os.path.join(inst.c["machine_profile_dir"], os.path.normpath(want[len("bundle:"):]))
+    elif want not in ("auto", "macos") and os.path.exists(want):
+        bundle = want
+    mounts = []
+    if sources is None:
+        try:
+            mounts = mount_mac_esps()
+        except Exception as e:  # noqa
+            inst.log(f"Apple firmware: could not scan EFI partitions ({e})")
+        sources = mac_firmware_sources(bundle, esp_mounts=mounts or MAC_ESP_ROOTS)
+        if want == "auto":
+            sources += [(k["kind"], k["path"]) for k in find_firmware_sources([r for r in ("/media", "/run/media", "/run/old-os") if r])]
+    out = "/run/hx-applefw.tar" if not getattr(inst, "applefw_out", None) else inst.applefw_out
+    files = []
+    try:
+        for kind, path in sources:
+            try:
+                if kind == "raw":
+                    files = applefw.convert_raw_tarball(path) if os.path.isfile(path) else applefw.convert_tree(path)
+                else:
+                    tmp = os.path.join(os.path.dirname(out), "hx-applefw-import")
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    names = import_firmware(path, tmp, kind)
+                    files = [(n, open(os.path.join(tmp, "lib/firmware/brcm", n), "rb").read()) for n in names]
+                    shutil.rmtree(tmp, ignore_errors=True)
+            except Exception as e:  # noqa - a bad source is skipped, the next one is tried
+                inst.log(f"Apple firmware: {kind} {path} unusable ({e})")
+                files = []
+            if apple_fw_count([n for n, _d in files]):
+                applefw.write_tar(files, out)
+                inst.log(f"Apple firmware: {len(files)} files from {kind} {path} (this Mac's own copy; never part of the ISO)")
+                inst.apple_fw_tar = out
+                return out
+    finally:
+        for m in mounts:
+            import subprocess
+            subprocess.run(["umount", m], capture_output=True)
+    inst.log("Apple firmware: none found on this Mac - Wi-Fi/Bluetooth need `horcrux-t2-firmware <firmware.tar|dir>` after the first boot")
+    return None
+
+
 def apply(inst):
     """T2 profile for the installed tree (called from Installer.profile_extras, after copy_system)"""
     from .system import InstallError
@@ -321,6 +421,15 @@ def apply(inst):
     kver = target_kernel_version(inst.target)
     if not kver and install_kernel_from_assets(inst):
         kver = target_kernel_version(inst.target)
+    if not kver and inst.c.get("t2_kernel") == "skip":
+        write_config(inst)
+        # the stock kernel has no apple-bce: dracut would abort on force_drivers t2bce_* (from this file and from sys-kernel/horcrux-t2-config's
+        # copy of it), so a later file drops the T2 driver lists again; only ever written for this test-only answer key
+        inst.write("/etc/dracut.conf.d/99-horcrux-test-stock-kernel.conf",
+                   "# TEST ONLY (answer file t2_kernel = skip, QEMU): the stock kernel has no apple-bce\n"
+                   'force_drivers=" "\nadd_drivers=" nvme dm_crypt dm_mod xhci_pci xhci_hcd hid hid_generic usbhid "\n')
+        inst.log("TEST ONLY: t2_kernel = skip: T2 configuration written (T2 dracut drivers neutralised), kernel and apple-bce initramfs check skipped")
+        return
     if not kver:
         msg = ("this image has no T2 kernel (apple-bce): the internal keyboard would not work at the disk-passphrase "
                "prompt. Use the Apple T2 image of Horcrux.")
@@ -329,7 +438,7 @@ def apply(inst):
         inst.log("WARNING: " + msg)
         return
     write_config(inst)
-    fw = firmware_choice(inst)
+    fw = None if getattr(inst, "apple_fw_tar", None) else firmware_choice(inst)   # captured firmware is installed by the layer's package
     if fw:
         done = import_firmware(fw[1], inst.target, fw[0])
         inst.log(f"Apple firmware: imported {len(done)} files from {fw[0]} {fw[1]}")
@@ -345,10 +454,17 @@ def image_has_t2_kernel(root="/"):
     return bool(target_kernel_version(root)) or bool(glob.glob(os.path.join(root, T2_ASSETS.lstrip("/"), "kernel-*.tar*")))
 
 
-def preflight(inst):
-    """called before the disk is touched: never erase a disk when the result could not boot with its keyboard"""
+def preflight(inst, layer_kernel=False):
+    """called before the disk is touched: never erase a disk when the result could not boot with its keyboard.
+    layer_kernel = the apple-t2 hardware layer installs the T2 kernel from its binhost (checked by machineprofile.kernel_preflight)"""
     from .system import InstallError
     inst.log("Apple T2 Mac detected (PCI 106b:1801): checking that this image can boot it")
+    if layer_kernel:
+        inst.log("T2 kernel: installed from the binhost by the apple-t2 hardware layer")
+        return
+    if inst.c.get("t2_kernel") == "skip":
+        inst.log("TEST ONLY: t2_kernel = skip (answer file): no T2 kernel, no apple-bce initramfs gate")
+        return
     if not image_has_t2_kernel("/") and (inst.c.get("zfs_encrypt") or not inst.c.get("t2_allow_no_kernel")):
         raise InstallError("this image has no T2 kernel (apple-bce): the internal keyboard would not work at the disk-passphrase "
                            "prompt. Use the Apple T2 image of Horcrux. (nothing was written to the disk)")

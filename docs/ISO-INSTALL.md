@@ -307,6 +307,75 @@ The installed system has no web `admin` account: log in to the web UI (https, po
 The installer powers the machine off when it is done (`AUTOINSTALL-OK` on the console and in
 `/var/log/autoinstall.log`). Invalid answer files stop with `ANSWER-FILE-ERROR ...` lines and start the guided installer instead.
 
+## Machine profiles: one ISO, any machine
+
+There is no per-machine ISO. The stock daily/stable ISO of an edition installs every machine; what makes a machine *that* machine is a
+small declarative **machine profile** (`profile.toml`, schema 1) plus the **hardware layers** the installer detects.
+
+* **Hardware layers** (`/usr/share/horcrux/hwlayers/*.toml`, package `sys-apps/horcrux-profile`): matched on PCI ids, DMI vendor/product
+  and CPU vendor. Shipped: `apple-t2` (T2 Macs: t2linux kernel, Touch Bar, fans, audio), `microsoft-surface`, `intel-cpu`. A layer lists
+  binary packages, Portage keywords/USE, services and, for Apple T2 Macs, the firmware package `sys-firmware/apple-t2-firmware-local`.
+  Apple's Wi-Fi/Bluetooth firmware is not redistributable and never on the ISO or a binhost: before the disk is erased the installer
+  reads it from the Mac itself (t2linux's `firmware-raw.tar.gz` on the EFI partition, or a macOS firmware tree) or from the profile
+  bundle, converts it (t2linux's MIT-licensed method) and installs it as that local package, so the files are package-owned.
+* **Machine profile**: host name, edition, time zone/locale/keymap, disks + file system + encryption, administrator and further users
+  with their groups (administrators always get `wheel` + `portage`), Wi-Fi networks, extra repositories and binhosts, packages and
+  sets, Portage USE/keywords/licences, services, files. Secrets are never in it: the disk passphrase and login password are typed at
+  install (or given as hashes in the answer file); Wi-Fi keys and deploy keys travel in the bundle (`bundle:` paths), 0600.
+* **Bundle** = `profile.toml` + the files it references, as a directory or `.tar.gz`. The installer finds it, first match wins:
+  kernel argument `horcrux.profile=<https URL|path>` (optional `horcrux.profile_token=` bearer token; a QR code is just that URL),
+  answer file `[profile] source = "..."`, or a volume labelled **`HORCRUX-PROFILE`** with `profile.toml` or `bundle.tar.gz`.
+
+What the installer does: profile values fill the installer configuration (guided screens show them prefilled); the base system is
+installed from the ISO as usual; then `horcrux-profile apply --install` runs inside the new system and installs the detected layers and
+the profile **from binary packages only**. A package that would be compiled is refused, except from repositories the profile marks
+`source_ok` (script/config-only overlays). An edition mismatch (a desktop profile on the server ISO) is refused before the disk is touched.
+
+After the install the profile lives in `/var/lib/horcrux/profile/bundle/` and stays the source of truth:
+
+```
+horcrux-profile plan            # what would change (packages, files, groups, Wi-Fi, services)
+horcrux-profile apply           # apply it: a new generation, with a boot-environment snapshot first
+horcrux-profile generations     # list them
+horcrux-profile rollback N      # roll back to the boot-environment snapshot taken before generation N (ZFS root)
+```
+
+Packages the profile no longer lists are deselected from `@world` (removed by the next `emerge --depclean`), files it no longer lists are
+removed, so a reinstall with the same profile and an edited-and-applied profile converge to the same system. Example:
+
+```toml
+schema = 1
+
+[machine]
+hostname = "web-1"
+edition = "server"           # server | gnome-light | gnome | xfce (gnome and gnome-light share the GNOME ISO)
+timezone = "UTC"
+
+[disk]
+disks = ["first"]
+filesystem = "zfs"
+encryption = true
+
+[[users]]
+name = "ops"
+admin = true
+groups = ["horcrux-admin"]
+ssh_keys = ["ssh-ed25519 AAAA... ops@laptop"]
+
+[hardware]
+layers = "auto"              # or a list of layer ids, or "none"
+
+[software]
+packages = ["app-misc/tmux", "sys-apps/smartmontools"]
+
+[[wifi]]
+ssid = "Office"
+psk_file = "bundle:secrets/office.psk"
+```
+
+Tested by `build/live-iso/common/machine-profile-test.py` (QEMU: stock ISO + profile, unlock, packages, groups, greeter, a declarative
+add/remove as generations 2 and 3; `--fake-t2` adds a synthetic Mac EFI partition and checks the T2 layer and the firmware package).
+
 ## Rescue mode
 
 Boot entry **5** (serial: `s`, `5`). The rescue menu is plain text, identical on VGA and serial.
