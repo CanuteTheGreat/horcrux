@@ -193,7 +193,7 @@ FACTS_JS = r"""() => {
   return {
     bareControls: bareControls.slice(0, 4), bareTables: bareTables.slice(0, 3), jammedLabels: jammedLabels.slice(0, 4), placeholderOnly: placeholderOnly.slice(0, 4), truncPlaceholder: truncPlaceholder.slice(0, 4),
     textLen: text.trim().length, text: text.slice(0, 60000), ownText: ownText.slice(0, 60000), title: document.title,
-    overflowX: root.scrollWidth - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), zeroRed, navProblems, empty: empty.slice(0, 3),
+    overflowX: Math.max(root.scrollWidth, document.body.scrollWidth) - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), zeroRed, navProblems, empty: empty.slice(0, 3),
     h1: ((document.querySelector('main h1, h1, main h2, h2') || {}).innerText || '').trim().slice(0, 60),
   };
 }"""

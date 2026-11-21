@@ -756,6 +756,13 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
 @media (max-width: 900px) {
     html, body { overflow-x: hidden; }
     .container { padding: 1rem 0.75rem; }
+    /* html/body overflow-x:hidden only hides a too-wide page, the content past the edge stays unreachable. Wide tables scroll inside
+       themselves, and form blocks may shrink below their content width. */
+    .container table { display: block; max-width: 100%; overflow-x: auto; }
+    fieldset { min-width: 0; max-width: 100%; }
+    .form-row { flex-wrap: wrap; min-width: 0; }
+    .form-row > * { min-width: 0; max-width: 100%; }
+    select, input, textarea { max-width: 100%; }
 }
 
 .status-success {
