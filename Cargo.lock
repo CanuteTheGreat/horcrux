@@ -3314,7 +3314,7 @@ dependencies = [
  "crc32fast",
  "hmac 0.12.1",
  "md-5 0.10.6",
- "nix",
+ "nix 0.29.0",
  "rand 0.8.8",
  "sha1 0.10.7",
  "tokio",
