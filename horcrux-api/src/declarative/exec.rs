@@ -21,6 +21,7 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         subnets: sdn::list_subnets(State(state.clone())).await.0,
         vms: state.vm_manager.list_vms().await,
         console: crate::console::hxc_settings::get(),
+        remote_play: crate::api::remote_play::load_settings(state).await,
     }
 }
 
@@ -109,6 +110,14 @@ async fn run_change(
                 "applies to new console sessions; enabling/disabling the D-Bus display \
                  takes effect at each VM's next start"
                     .into(),
+            ))
+        }
+
+        ("remote_play", Action::Update) => {
+            let w = spec.remote_play.clone().ok_or("not in spec")?;
+            crate::api::remote_play::set_settings(state, w).await?;
+            Ok(Some(
+                "applied at once (listeners, relay and port forwards)".into(),
             ))
         }
 

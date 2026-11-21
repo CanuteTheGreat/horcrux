@@ -488,3 +488,138 @@ Details: docs/design/horcrux-console.md section 6.
 5. HA placement and failover for GPU VMs; GPU pool, sessions, quotas.
 6. Protected gaming VM + attestation; confidential tier where hardware allows.
 7. GPU lending across nodes (compute follows the GPU); remote-GPU research.
+8. **Remote Play ready (section 16):** Steam Remote Play / Steam Link and
+   optional Moonlight next to the Horcrux Console: LAN card or NAT relay +
+   forwards, Wake-on-LAN start, guest setup, checklist.
+
+## 16. Remote Play ready (Steam Remote Play / Steam Link, optional Moonlight)
+
+Steam Remote Play streams a game from the PC running it to Steam Link on
+TVs, phones and tablets, to another PC with Steam, and to friends with
+Remote Play Together. A gaming VM is a natural host for it. This is an
+**option next to the Horcrux Console**, which stays the native, first-class
+path: Horcrux ships no Steam or Sunshine code. Steam (or, if the user picks
+it, Sunshine for Moonlight clients) runs inside the guest and the user
+installs it (Horcrux can run Valve's own installer for them). Horcrux makes
+the rest work: network reach, waking the VM, a guest that comes up ready,
+and a checklist that says what is still missing.
+
+**Setting.** `hardware.adv.remote_play` (`VmRemotePlay`, `None` = off):
+`enabled`, `clients` (`steam`, `moonlight`), `network` (`auto|lan|nat`),
+`lan_sources` (CIDRs allowed to reach and wake the VM; empty = the host's
+own LAN networks), `wake_on_lan` (default on), `wake_on_discovery` (default
+off), `big_picture`, `keep_awake`. One toggle in the gaming wizard ("Steam
+Remote Play ready", plus "Also Moonlight clients"), a Remote Play tab on
+every QEMU VM, `GET/PUT /api/vms/:id/remote-play`. It is a host-side
+setting, so changes apply at once, also while the VM runs. Node settings
+(`GET/PUT /api/vms/remote-play/settings`, declarative section
+`remote_play`): Steam and Moonlight port lists, Steam discovery port,
+discovery relay on/off, Wake-on-LAN ports (9, 7), wake cooldown, relay
+client lifetime, reconcile interval, nftables table name, Steam installer
+URL and the guest setup timeout. Nothing is hard-coded; every default is
+what the clients use.
+
+**Networking.** Steam finds hosts by UDP broadcast on 27036 and streams on
+UDP 27031-27036 and TCP 27036-27037 (Steam support's list); Moonlight uses
+TCP 47984/47989/48010 and UDP 47998-48000/48002/48010 (Sunshine defaults).
+- *LAN (recommended):* the wizard puts the VM's card on a bridge that has a
+  physical port, else macvtap on the wired uplink (`POST
+  /api/vms/:id/remote-play/lan-nic` does the same for an existing VM, MAC
+  kept). Clients then see the VM as any PC on the LAN. If the VM has Horcrux
+  firewall rules, Horcrux adds `remote-play-*` accept rules for the ports
+  from the allowed networks only, and removes them when the option goes off.
+  A VM with no firewall rules needs none.
+- *NAT (user keeps it, or no LAN path exists):* Horcrux keeps one nftables
+  table (`inet horcrux_remote_play` by default) with DNAT for the ports from
+  the allowed networks to the VM's address and the matching forward accepts;
+  it is rewritten when the VM's address changes and deleted when nothing
+  needs it. Broadcast discovery can't be forwarded, so a relay on the
+  discovery port copies a client's request to each VM behind NAT and sends
+  the VMs' answers back to the clients that asked within the last
+  `relay_client_secs`. It reads only the packet framing (magic, header
+  length, message type) and never changes Steam's payload, so the client then
+  connects to the host's address, which the forwards carry to the VM. The
+  sockets use SO_REUSEADDR, so a Steam client on the host itself keeps
+  working. Steam remembers hosts it has seen, so a NAT VM may need one
+  discovery before a client lists it.
+- The VM's address comes from the guest agent (by MAC), else the host's
+  neighbour table, else the last one seen (so a stopped VM can still be
+  woken and forwarded to).
+- Steam needs clients and host to talk directly: guest Wi-Fi and AP client
+  isolation block it. The checklist says so; Horcrux can't change the user's
+  router.
+
+**Waking the VM.** Wake-on-LAN listeners (UDP 9 and 7) accept magic packets
+for a VM's MAC from the allowed networks and start the VM through the same
+code path as the Start button (`start_vm_by_id`): saved state is resumed,
+HA intent and events recorded, audit entry `remote_play_wake`. Steam Link
+and Moonlight both send Wake-on-LAN for a host they know. A cooldown stops
+packet bursts from starting it twice. `wake_on_discovery` (off by default)
+also starts a VM when a Steam client searches, which every open Steam
+client does constantly, so it is opt-in. Host shutdown follows the VM's
+guest-state policy (docs/SAVE_STATE.md: saved with memory,
+guest hibernate, or clean shutdown for passed-through GPUs); the checklist
+shows which applies and whether the VM comes back on boot, and Wake-on-LAN
+resumes a saved VM.
+
+**Guest setup.** `POST /api/vms/:id/remote-play/guest-setup` runs a
+PowerShell script as SYSTEM through the QEMU guest agent (options and the
+logon password go on stdin, never on the command line; the password is
+stored only by Windows as the `DefaultPassword` LSA secret, as Microsoft's
+Autologon does, and never by Horcrux). It reports whether Steam/Sunshine
+are installed and running, and on request: installs Steam from Valve's URL
+after checking the installer's Authenticode signature is valid and Valve's;
+sets automatic logon (or turns it off); starts Steam in Big Picture at
+logon (`-gamepadui`); sets the power plan so the guest never sleeps or
+turns its display off. Linux guests get a report only. The result is kept
+and shown in the checklist.
+
+**Display, encode, audio, controllers.**
+- A passed-through GPU with no monitor has no desktop to capture: the guest
+  tools' IddCx virtual display (Console C2) gives Windows one at any
+  resolution/refresh so Steam can match the client; a dummy plug or real
+  monitor also works. HDR/10-bit follows what Steam and the GPU driver
+  offer through that display.
+- Steam encodes in the guest on the passed-through GPU (NVENC on NVIDIA,
+  AMF on AMD, Quick Sync on Intel). vGPU: depends on the vendor's guest
+  driver. No GPU: software encoding on the VM's CPUs, about 1080p at 30-60 fps
+  for desktop and light games, higher latency; the checklist says this
+  plainly.
+- Steam brings its own streaming audio devices and controllers (Steam
+  Input). The Horcrux virtual gamepad stays idle outside a Console session;
+  if a game picks it as player 1 the user turns it off there.
+- Anti-cheat rules (section 5) are unchanged: nothing hides the VM.
+
+**Checklist** (`GET /api/vms/:id/remote-play/status`, Remote Play tab): on,
+network (LAN/NAT/none), allowed networks, VM address, discovery (direct or
+relay listening), port forwards applied, VM firewall, Wi-Fi isolation note,
+Wake-on-LAN listening, wake on discovery, hardware encoder per GPU, display,
+audio/controllers, guest agent, Steam/Sunshine in the guest, automatic
+logon, Big Picture, keep awake, host shutdown behaviour. Each row has a
+status (ok/warn/fail/unknown/info), the detail and what to do. The same
+response lists every rule Horcrux keeps for the VM (forward, allow, relay;
+ports, sources, target, applied) and the nftables text.
+
+**RBAC.** Reading the VM's page needs VM.Audit on `/vms/<id>`; changing it,
+the guest setup and the LAN card need VM.Config there; node settings need
+Sys.Modify on `/nodes`.
+
+**Init systems.** All of it runs inside `horcrux-api` (no new service), so
+OpenRC and systemd behave the same; nftables is driven with `nft -f`.
+
+**Tests.** Unit tests: magic packet parsing, discovery framing, relay
+decisions (who gets copies, answers only to recent allowed clients, wake on
+discovery, LAN VMs not relayed), LAN/NAT detection from sysfs, nftables
+rendering, checklist, address parsing, wizard NIC choice, RBAC mapping,
+declarative plan/export. `horcrux-api/tests/remote_play_netns.sh` (CI,
+privileged): a namespace "LAN client" and a NAT'ed "VM" namespace around a
+real horcrux-api; checks a magic packet starts the VM, packets from outside
+the allowed networks don't, a synthetic Steam discovery request is relayed
+to the VM and its answer comes back to the client, and the forwarded TCP
+port reaches the VM from the LAN and not from elsewhere. A real GPU end to
+end (Steam Link client on the LAN streaming a game) needs real GPU hardware
+and is run by hand.
+
+Prior art (ideas only, no code): Steam's own LAN broadcast and Remote Play
+docs; Sunshine/Moonlight (GPL-3.0) for the GameStream port set and
+Wake-on-LAN behaviour; Parsec-style "host app in the VM" setups.

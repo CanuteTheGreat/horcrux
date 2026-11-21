@@ -74,6 +74,7 @@ pub fn VmDetailPage() -> impl IntoView {
                 <A href=move || format!("/vms/{}", id()) class="tab tab-active">"Summary"</A>
                 <A href=move || format!("/vms/{}/hardware", id()) class="tab">"Hardware"</A>
                 <A href=move || format!("/vms/{}/console", id()) class="tab">"Console"</A>
+                <A href=move || format!("/vms/{}/remote-play", id()) class="tab">"Remote Play"</A>
                 <A href=move || format!("/snapshots?vm={}", id()) class="tab">"Snapshots"</A>
                 <A href="/network/firewall-objects" class="tab">"Firewall"</A>
             </nav>

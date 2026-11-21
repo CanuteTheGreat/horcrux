@@ -48,6 +48,7 @@ pub mod vm_import_libvirt;
 pub mod vm_import_ovf;
 mod vm_list;
 pub mod vm_passthrough;
+mod vm_remote_play;
 
 pub use alerts::Alerts;
 pub use clone_list::CloneList;
@@ -86,6 +87,7 @@ pub use vm_import_esxi::VmImportEsxiPage;
 pub use vm_import_libvirt::{ImportCleanup, UnmanagedLibvirtBanner, VmImportLibvirtPage};
 pub use vm_import_ovf::VmImportOvfPage;
 pub use vm_list::VmList;
+pub use vm_remote_play::VmRemotePlayPage;
 
 // Re-export auth components
 pub use auth::{
