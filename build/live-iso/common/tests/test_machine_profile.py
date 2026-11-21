@@ -23,6 +23,7 @@ _spec.loader.exec_module(E)
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 PROJECT_LAYERS = os.path.join(HERE, "..", "..", "project", "overlay", "usr", "share", "horcrux", "hwlayers")
 PKG = os.path.join(REPO, "gentoo", "sys-apps", "horcrux-profile", "files")
+needs_layers = unittest.skipUnless(os.path.isdir(PROJECT_LAYERS), "this tree ships no hardware layers (project/overlay/usr/share/horcrux/hwlayers)")
 
 
 def tree(root, files):
@@ -244,6 +245,7 @@ class Layers(unittest.TestCase):
     def facts(self, pci=(), vendor="", product="", cpu=""):
         return {"pci": set(pci), "sys_vendor": vendor, "product_name": product, "cpu_vendor": cpu}
 
+    @needs_layers
     def test_shipped_layers_parse_and_match(self):
         layers = HL.load_all(PROJECT_LAYERS)
         ids = {l["id"] for l in layers}
@@ -340,6 +342,7 @@ class InstallerSide(unittest.TestCase):
         self.assertIn("ssh-ed25519 AAAAC3Nza test", c["ssh_keys"])
         self.assertTrue(MP.to_config(GOOD, {}, "/b", iso="server"))        # a GNOME machine needs the GNOME ISO
 
+    @needs_layers
     def test_installer_stage_writes_bundle_layers_engine_call(self):
         """MP.stage/MP.accounts end to end with a fake installer (no chroot): bundle copied 0600, layer copies, the engine call"""
         with tempfile.TemporaryDirectory() as d:
@@ -452,6 +455,7 @@ class KernelLayerTransaction(unittest.TestCase):
     """the T2 kernel layer's emerge: dracut's zfs module is omitted only while the kernel postinst runs, the lane's zfs-kmod is merged again,
     and the new kernel gets its initramfs afterwards (the stock kernel's version equals the lane's, so Portage rebuilds nothing by itself)"""
 
+    @needs_layers
     def test_layer_declares_the_module_reinstall_and_the_lane_use(self):
         lay = E.load(os.path.join(PROJECT_LAYERS, "apple-t2.toml"))
         self.assertEqual(lay["kernel"]["reinstall"], ["sys-fs/zfs-kmod"])
