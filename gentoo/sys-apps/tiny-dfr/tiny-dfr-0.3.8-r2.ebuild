@@ -188,7 +188,8 @@ src_install() {
 	cargo_src_install
 	insinto /usr/share/tiny-dfr
 	doins -r share/tiny-dfr/.
-	udev_dorules etc/udev/rules.d/99-touchbar-seat.rules
+	# both upstream rules: seat assignment, and the systemd device tag that starts tiny-dfr.service on systemd installs
+	udev_dorules etc/udev/rules.d/*.rules
 	newinitd "${FILESDIR}/tiny-dfr.initd" tiny-dfr
 	systemd_dounit "${FILESDIR}/tiny-dfr.service"
 }

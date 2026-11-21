@@ -50,6 +50,16 @@ src_install() {
 	fi
 	# optional /etc payload (live-ISO init services, console-menu profile hook, zram-swap, installer profile): only variants whose tarball has
 	# an etc/ tree get it (the Surface image); the hogshead tarball has none. cp -a keeps the init scripts executable.
+	# early-boot dracut module and init-system drop-ins shipped by the live image (only present in tarballs that carry them)
+	if [[ -d usr/lib/dracut ]]; then
+		insinto /usr/lib
+		doins -r usr/lib/dracut
+		find "${ED}/usr/lib/dracut" -name "*.sh" -exec chmod 0755 {} + || die
+	fi
+	if [[ -d usr/lib/systemd ]]; then
+		insinto /usr/lib
+		doins -r usr/lib/systemd
+	fi
 	if [[ -d etc ]]; then cp -a etc "${ED}/" || die; fi
 	# byte-compile here so the .pyc files are owned by this package instead of appearing at first run
 	python_optimize "${ED}/usr/lib/live-installer"
