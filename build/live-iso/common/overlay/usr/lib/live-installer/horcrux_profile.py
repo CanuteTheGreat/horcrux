@@ -265,7 +265,7 @@ def plan(mp, layers, state):
             lines.append(f"+ package {a}")
     prev = state.get("prev", {})
     for a in prev.get("packages", []):
-        if a not in want:
+        if a not in want and a != SELF_ATOM:          # this program stays (added by apply when the overlay offers it)
             lines.append(f"- package {a} (deselected from @world)")
     files = portage_files(mp, layers)
     files.update({f["path"]: f.get("content", "") for f in mp.get("files", []) if "content" in f})
@@ -514,14 +514,14 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
     rec["packages"] = atoms
     if atoms:
         base = ["emerge", "--update", "--newuse", "--getbinpkg", "--usepkg", "--select", "--noreplace", "--quiet-build=y", "--with-bdeps=n", *emerge_args]
-        pre = sy.run(base + ["--pretend", "--color=n", *atoms], check=False, capture=True)
+        pre = sy.run(base + ["--pretend", "--verbose", "--color=n", *atoms], check=False, capture=True)
         bad = forbidden_source_builds(source_builds(pre or ""), mp)
         if bad:
             raise RuntimeError("these would be compiled on this machine (no binary package on the binhosts): " + ", ".join(bad)
                                + " - publish them on the binhost or list them in software.allow_source")
         sy.run(base + atoms, env={"PORTAGE_NICENESS": "10"})
     for a in prev.get("packages", []):
-        if a not in atoms:
+        if a not in atoms and a != SELF_ATOM:
             sy.run(["emerge", "--deselect", a], check=False)
     for lay in layers:
         for u in lay.get("kernel", {}).get("unmerge", []):
