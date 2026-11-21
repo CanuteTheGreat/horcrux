@@ -51,6 +51,7 @@ HOST_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
 DEFAULT_SOURCE_OK_REPOS = ("horcrux",)          # our own script/config packages; everything else must be a binary package
 ADMIN_GROUPS = ("wheel", "portage")
+SELF_ATOM = "sys-apps/horcrux-profile"
 
 
 # ------------------------------------------------------------------------------------------------ loading / validation (pure)
@@ -420,6 +421,44 @@ def zfs_root():
     return False
 
 
+def apply_accounts(mp, sy):
+    """group memberships + ssh keys of the profile's users (accounts themselves are created by the installer or by hand)"""
+    for u, gs in user_groups(mp).items():
+        if not sy.user_exists(u):
+            # the installer creates the first administrator (with the password typed at install); further profile users are created here,
+            # with their password_hash or LOCKED (ssh key / an administrator sets the password) - a profile never carries a plain password
+            spec = next(x for x in mp.get("users", []) if x["name"] == u)
+            sy.run(["useradd", "-m", "-s", "/bin/bash", "-c", spec.get("fullname", u), u], check=False)
+            if spec.get("password_hash"):
+                if not sy.dry:
+                    subprocess.run(["chpasswd", "-e"], input=f"{u}:{spec['password_hash']}\n", text=True, check=False)
+            else:
+                sy.run(["passwd", "-l", u], check=False)
+            if not sy.dry and not sy.user_exists(u):
+                sy.log(f"user {u}: could not be created")
+                continue
+        for g in gs:
+            if not sy.group_exists(g):
+                if g in ADMIN_GROUPS:
+                    sy.run(["groupadd", "-f", "-r", g], check=False)
+                else:
+                    sy.log(f"user {u}: group {g} does not exist (its package is not installed): skipped")
+                    continue
+            if g not in sy.groups_of(u):
+                sy.run(["usermod", "-aG", g, u])
+        keys = [k for k in next((x for x in mp.get("users", []) if x["name"] == u), {}).get("ssh_keys", [])]
+        if keys and not sy.dry:
+            import pwd
+            pw = pwd.getpwnam(u)
+            d = os.path.join(pw.pw_dir, ".ssh")
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            ak = os.path.join(d, "authorized_keys")
+            have = open(ak).read().splitlines() if os.path.exists(ak) else []
+            sy.write(ak, "\n".join(have + [k for k in keys if k not in have]) + "\n", 0o600)
+            for p in (d, ak):
+                os.chown(p, pw.pw_uid, pw.pw_gid)
+
+
 def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
     """converge the running system (or the installer's chroot) to the profile; returns the generation record"""
     errs = problems(mp, sy.bundle)
@@ -461,6 +500,8 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
             sy.run(["emaint", "sync", "-r", r], check=False)
     # 3. packages: binary only (source only for trusted script/config repos and the profile's allow_source list)
     atoms = desired_atoms(mp, layers, installed=lambda a: sy.run(["portageq", "has_version", "/", a], check=False) == 0)
+    if SELF_ATOM not in atoms and (sy.run(["portageq", "best_visible", "/", SELF_ATOM], check=False, capture=True) or "").strip().startswith(SELF_ATOM.split("/")[0]):
+        atoms.append(SELF_ATOM)          # this program, so later `horcrux-profile apply` runs come from the package
     rec["packages"] = atoms
     if atoms:
         base = ["emerge", "--update", "--newuse", "--getbinpkg", "--usepkg", "--select", "--noreplace", "--quiet-build=y", "--with-bdeps=n", *emerge_args]
@@ -477,31 +518,7 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
         for u in lay.get("kernel", {}).get("unmerge", []):
             if sy.run(["portageq", "has_version", "/", u], check=False) == 0:
                 sy.run(["emerge", "--unmerge", u], check=False)
-    # 4. users and groups (accounts are created by the installer / by hand; the profile only adds group memberships)
-    for u, gs in user_groups(mp).items():
-        if not sy.user_exists(u):
-            sy.log(f"user {u}: not present on this system (the installer creates it): groups not applied")
-            continue
-        for g in gs:
-            if not sy.group_exists(g):
-                if g in ADMIN_GROUPS:
-                    sy.run(["groupadd", "-f", "-r", g], check=False)
-                else:
-                    sy.log(f"user {u}: group {g} does not exist (its package is not installed): skipped")
-                    continue
-            if g not in sy.groups_of(u):
-                sy.run(["usermod", "-aG", g, u])
-        keys = [k for k in next((x for x in mp.get("users", []) if x["name"] == u), {}).get("ssh_keys", [])]
-        if keys and not sy.dry:
-            import pwd
-            pw = pwd.getpwnam(u)
-            d = os.path.join(pw.pw_dir, ".ssh")
-            os.makedirs(d, mode=0o700, exist_ok=True)
-            ak = os.path.join(d, "authorized_keys")
-            have = open(ak).read().splitlines() if os.path.exists(ak) else []
-            sy.write(ak, "\n".join(have + [k for k in keys if k not in have]) + "\n", 0o600)
-            for p in (d, ak):
-                os.chown(p, pw.pw_uid, pw.pw_gid)
+    apply_accounts(mp, sy)
     # 5. Wi-Fi (iwd known networks when iwd is the backend, NetworkManager keyfiles otherwise), files, services
     for w in mp.get("wifi", []):
         psk = w.get("psk", "")
@@ -566,6 +583,7 @@ def main(argv=None):
     a_apply.add_argument("--install", action="store_true", help="first apply, run by the live installer inside the new system")
     a_apply.add_argument("--no-sync", action="store_true")
     a_apply.add_argument("--dry-run", action="store_true")
+    a_apply.add_argument("--accounts-only", action="store_true", help="only group memberships and ssh keys (the installer runs this once the users exist)")
     sub.add_parser("generations")
     rb = sub.add_parser("rollback")
     rb.add_argument("generation", type=int)
@@ -605,6 +623,9 @@ def main(argv=None):
         return 0
     sy = Sys(bundle, dry=a.dry_run)
     try:
+        if a.accounts_only:
+            apply_accounts(mp, sy)
+            return 0
         apply(mp, layers, sy, install=a.install, sync=not a.no_sync)
     except RuntimeError as e:
         print("horcrux-profile: " + str(e), file=sys.stderr)

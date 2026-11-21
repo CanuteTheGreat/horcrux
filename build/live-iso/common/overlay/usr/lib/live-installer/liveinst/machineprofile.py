@@ -206,6 +206,8 @@ def choose_layers(inst):
     sel = hwlayers.select(allx, spec, edition=mp.get("machine", {}).get("edition"), force=force)
     if not inst.t2:
         sel = [l for l in sel if l["id"] != "apple-t2"]       # the installer's T2 decision (answer file t2 = no) wins
+    if inst.c.get("t2_kernel") == "skip":                    # TEST ONLY (QEMU): no T2 kernel, see system.config_from_answers
+        sel = [{k: v for k, v in l.items() if k != "kernel"} if l["id"] == "apple-t2" else l for l in sel]
     return sel
 
 
@@ -224,6 +226,23 @@ def kernel_preflight(inst, layers, has=None):
             if not (has or hwlayers.binrepo_has)(b.get("uri", ""), a):
                 out.append(f"hardware layer {lay['id']}: {a} is not published on {b.get('uri') or 'its binhost'} yet")
     return out
+
+
+def _copy_engine(inst):
+    T = inst.target
+    _copy_engine(inst)
+
+
+def accounts(inst):
+    """after the installer created the users (finish stage): the profile's group memberships and ssh keys"""
+    if not inst.c.get("machine_profile"):
+        return
+    _copy_engine(inst)
+    try:
+        inst.run(["python3", "/var/tmp/horcrux-profile/horcrux_profile.py", "--profile", "/var/lib/horcrux/profile/bundle/profile.toml",
+                  "apply", "--accounts-only"], chroot=True)
+    finally:
+        shutil.rmtree(f"{inst.target}/var/tmp/horcrux-profile", ignore_errors=True)
 
 
 def stage(inst):
@@ -259,9 +278,7 @@ def stage(inst):
     src = layer_dir(inst.p)
     for lay in layers:
         shutil.copy(os.path.join(src, f"{lay['id']}.toml"), f"{st}/layers/{lay['id']}.toml")
-    os.makedirs(f"{T}/var/tmp/horcrux-profile", exist_ok=True)
-    eng = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "horcrux_profile.py")
-    shutil.copy(eng if os.path.exists(eng) else ENGINE, f"{T}/var/tmp/horcrux-profile/horcrux_profile.py")
+    _copy_engine(inst)
     if os.path.exists("/etc/resolv.conf"):
         shutil.copy("/etc/resolv.conf", f"{T}/etc/resolv.conf")
     fw = getattr(inst, "apple_fw_tar", None)

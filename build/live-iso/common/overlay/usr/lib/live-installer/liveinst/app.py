@@ -624,7 +624,7 @@ def apply_machine_profile(profile, c, answers_path=None, say=print):
     """machine profile (kernel arg / PROFILE volume / answer file [profile] source) -> installer config; raises on a broken profile"""
     from . import machineprofile as MP
     answers = {}
-    if answers_path:
+    if answers_path and os.path.exists(answers_path):
         import tomllib
         with open(answers_path, "rb") as f:
             answers = tomllib.load(f)

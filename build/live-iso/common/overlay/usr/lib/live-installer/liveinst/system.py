@@ -624,6 +624,9 @@ def config_from_answers(profile, path):
     c[testmachine.KEY] = bool(d.get(testmachine.KEY, False))
     c["t2"] = str(g.get("t2", "auto"))
     c["t2_firmware"] = str(g.get("t2_firmware", "auto"))
+    # TEST ONLY (QEMU cannot be a T2 Mac): "skip" leaves out the T2 kernel and the apple-bce initramfs gate so the rest of the T2 layer
+    # (packages, firmware capture, config) can be exercised in a VM. Never set by the installer UI or a machine profile.
+    c["t2_kernel"] = str(g.get("t2_kernel", "auto"))
     c["install_type"] = str(g.get("install_type", "server"))
     u = a.get("user", {})
     c["user_name"], c["user_fullname"] = u.get("name", ""), u.get("fullname", u.get("name", ""))
@@ -907,6 +910,8 @@ class Installer:
 
     def stage_finish(self):
         self.cfg_finish_config()
+        from . import machineprofile
+        machineprofile.accounts(self)          # the users exist now (desktop users are created in cfg_finish_config)
         self.prog(90, "Installing the boot loader")
         self.bootloader()
         self.prog(97, "Finishing")

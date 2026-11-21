@@ -420,6 +420,10 @@ def apply(inst):
     kver = target_kernel_version(inst.target)
     if not kver and install_kernel_from_assets(inst):
         kver = target_kernel_version(inst.target)
+    if not kver and inst.c.get("t2_kernel") == "skip":
+        write_config(inst)
+        inst.log("TEST ONLY: t2_kernel = skip: T2 configuration written, kernel and apple-bce initramfs check skipped")
+        return
     if not kver:
         msg = ("this image has no T2 kernel (apple-bce): the internal keyboard would not work at the disk-passphrase "
                "prompt. Use the Apple T2 image of Horcrux.")
@@ -451,6 +455,9 @@ def preflight(inst, layer_kernel=False):
     inst.log("Apple T2 Mac detected (PCI 106b:1801): checking that this image can boot it")
     if layer_kernel:
         inst.log("T2 kernel: installed from the binhost by the apple-t2 hardware layer")
+        return
+    if inst.c.get("t2_kernel") == "skip":
+        inst.log("TEST ONLY: t2_kernel = skip (answer file): no T2 kernel, no apple-bce initramfs gate")
         return
     if not image_has_t2_kernel("/") and (inst.c.get("zfs_encrypt") or not inst.c.get("t2_allow_no_kernel")):
         raise InstallError("this image has no T2 kernel (apple-bce): the internal keyboard would not work at the disk-passphrase "
