@@ -43,6 +43,13 @@ RUN_WAIT = int(os.environ.get("HXD_RUN_WAIT_SECS", "300"))
 # stalls around a guest-exec child's exit (see Qga._transfer)
 FILE_GRACE = int(os.environ.get("HXD_FILE_GRACE_SECS", "300"))
 EXEC_START_WAIT = int(os.environ.get("HXD_EXEC_START_WAIT_SECS", "180"))
+# how long a guest helper command (PowerShell: work directory, SHA-256,
+# environment) may run; a freshly booted guest under a loaded runner is slow
+# (CI: the first PowerShell call still ran after 90 s)
+EXEC_WAIT = int(os.environ.get("HXD_EXEC_WAIT_SECS", "300"))
+# time the agent spends not answering guest-exec-status is not counted
+# against a command's wait, up to this much in total
+EXEC_STALL_GRACE = int(os.environ.get("HXD_EXEC_STALL_GRACE_SECS", "300"))
 GUEST_DIR = os.environ.get("HXD_GUEST_DIR", r"C:\hxc")
 TYPED = os.environ.get("HXD_TYPE_TEXT", r"root\necho horcrux-console-on-windows\n")
 # Relay listen address for the relay run: HXD_RELAY_LISTEN=<addr> pins it,
@@ -130,7 +137,9 @@ class Qga:
             raise RuntimeError(f"{cmd}: {r['error']}")
         return r["return"]
 
-    def exec(self, path, argv, env=None, wait=120):
+    def exec(self, path, argv, env=None, wait=None, stall_grace=None):
+        wait = EXEC_WAIT if wait is None else wait
+        stall_grace = EXEC_STALL_GRACE if stall_grace is None else stall_grace
         a = {"path": path, "arg": argv, "capture-output": True}
         if env is not None:
             a["env"] = env
@@ -138,22 +147,29 @@ class Qga:
         # out an agent stall instead (see _transfer)
         pid = self("guest-exec", a, timeout=EXEC_START_WAIT)["pid"]
         end = time.time() + wait
+        stalled = 0.0
         while time.time() < end:
+            asked = time.time()
             try:
                 st = self("guest-exec-status", {"pid": pid}, timeout=60)
             except (TimeoutError, OSError, ValueError) as e:
                 # the Windows agent can stall for a while as the child
-                # exits (it collects the captured output); ask again
-                print(f"   guest-exec-status: {e!r}, asking again", flush=True)
+                # exits (it collects the captured output); ask again, and
+                # give the command back the time the agent did not answer
+                # (CI: a 60 s stall ate the end of a 120 s budget)
+                lost = min(time.time() - asked + 2, max(0.0, stall_grace - stalled))
+                stalled += lost
+                end += lost
+                print(f"   guest-exec-status: {e!r}, asking again ({stalled:.0f} s of agent stalls)", flush=True)
                 time.sleep(2)
                 continue
             if st.get("exited"):
                 dec = lambda k: base64.b64decode(st.get(k, "")).decode("utf-8", errors="replace")  # noqa: E731
                 return st.get("exitcode"), dec("out-data"), dec("err-data")
             time.sleep(1)
-        raise TimeoutError(f"{path} did not exit within {wait} s")
+        raise TimeoutError(f"{path} did not exit within {wait} s (+{stalled:.0f} s of agent stalls)")
 
-    def ps(self, script, wait=120):
+    def ps(self, script, wait=None):
         return self.exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], wait=wait)
 
     # The Windows agent stalls for a minute or more around a guest-exec
@@ -340,21 +356,39 @@ check(info is not None, f"Windows client: guest agent answers ({time.time() - t0
 print(f"   client OS {info.get('pretty-name')} {info.get('kernel-release')}", flush=True)
 RESULTS["client_os"] = f"{info.get('pretty-name')} {info.get('kernel-release')}"
 
+
+def guest_ps(script, what):
+    """A PowerShell helper in the client guest; a timeout fails the step
+    with a picture of the guest screen (win-timeout.png) instead of a
+    traceback."""
+    try:
+        return qga.ps(script)
+    except (TimeoutError, OSError, ValueError, RuntimeError) as e:
+        try:
+            qmp(qmp_sock, "screendump", filename=os.path.join(OUT, "win-timeout.ppm"))
+            ppm_png(os.path.join(OUT, "win-timeout.ppm"))
+        except OSError:
+            pass
+        check(False, f"Windows client: {what}: {e!r}")
+        raise SystemExit(1)
+
+
 # ---- 3. the client program, copied in through the guest agent
-rc, out, err = qga.ps(f"New-Item -ItemType Directory -Force '{GUEST_DIR}' | Out-Null; "
-                      f"try {{ Add-MpPreference -ExclusionPath '{GUEST_DIR}' -ErrorAction Stop }} catch {{ }}; 'ok'")
+rc, out, err = guest_ps(f"New-Item -ItemType Directory -Force '{GUEST_DIR}' | Out-Null; "
+                        f"try {{ Add-MpPreference -ExclusionPath '{GUEST_DIR}' -ErrorAction Stop }} catch {{ }}; 'ok'",
+                        f"work directory {GUEST_DIR}")
 check(rc == 0 and "ok" in out, f"Windows client: work directory {GUEST_DIR} ({rc} {err.strip()[:200]})")
 exe = GUEST_DIR + r"\horcrux-console.exe"
 t1 = time.time()
 qga.put(EXE, exe)
 want = hashlib.sha256(open(EXE, "rb").read()).hexdigest()
-rc, out, err = qga.ps(f"(Get-FileHash -Algorithm SHA256 '{exe}').Hash")
+rc, out, err = guest_ps(f"(Get-FileHash -Algorithm SHA256 '{exe}').Hash", "SHA-256 of the copied exe")
 check(out.strip().lower() == want, f"horcrux-console.exe ({os.path.getsize(EXE)} bytes) copied in through the guest "
       f"agent in {time.time() - t1:.0f} s, SHA-256 matches in the guest ({out.strip()[:16].lower()}...)")
 
 # the guest agent's environment (SYSTEM), plus the password variable: a
 # guest-exec env list replaces the whole environment
-rc, out, err = qga.ps("Get-ChildItem env: | ForEach-Object { $_.Name + '=' + $_.Value }")
+rc, out, err = guest_ps("Get-ChildItem env: | ForEach-Object { $_.Name + '=' + $_.Value }", "agent environment")
 ENV = [ln for ln in out.splitlines() if "=" in ln and not ln.startswith("HORCRUX_")]
 ENV += ["HORCRUX_PASSWORD=admin", "RUST_LOG=info"]
 
