@@ -1199,8 +1199,12 @@ class ZRun(qt.Runner):
                   o.strip().replace("\n", " | ")[:300])
         if vm:
             # the greeter is graphical: wait until the VGA console is no longer the black text console (many distinct colours)
+            # the headless checks above take many minutes, longer than the greeter's idle blank (GDM blanks an idle screen): press Shift
+            # like a user would, so a blanked-but-working greeter is not mistaken for a black text console (a broken one stays black)
             end, colours = time.time() + qt.T(150), 0
             while time.time() < end:
+                vm.qmp("send-key", keys=[{"type": "qcode", "data": "shift"}])
+                time.sleep(1)
                 ppm = vm.grab()
                 m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+(\d+)\s", ppm or b"")
                 if m:
