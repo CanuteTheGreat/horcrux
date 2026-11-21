@@ -55,6 +55,12 @@ T2_LAYER = {"id": "apple-t2", "packages": ["sys-apps/tiny-dfr"], "desktop_packag
 
 
 class Schema(unittest.TestCase):
+    def test_portage_mask_table_and_unknown_tables(self):
+        mp = dict(GOOD, portage={"mask": {">=media-video/vlc-4.0": ""}})
+        self.assertEqual(E.problems(mp), [])
+        self.assertIn(">=media-video/vlc-4.0\n", E.portage_files(mp)["/etc/portage/package.mask/horcrux-profile"])
+        self.assertTrue(E.problems(dict(GOOD, portage={"usee": {"a/b": "x"}})))     # a typo is an error, never silently dropped
+
     def test_good_profile_valid_with_bundle(self):
         with tempfile.TemporaryDirectory() as b:
             tree(b, {"repos/private/profiles/repo_name": "private\n", "secrets/wifi": "correct horse battery\n"})

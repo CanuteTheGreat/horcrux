@@ -18,6 +18,7 @@ Profile (schema 1), every key optional except schema and machine.hostname:
     [[binrepos]] name = "x"  uri = "https://..."  priority = 10
     [software]  packages = ["cat/pkg", ...]   sets = ["@x"]   allow_source = ["cat/pkg"]
     [portage]   use = { "cat/pkg" = "flag -flag" }   accept_keywords = { "cat/pkg" = "~amd64" }   license = { "cat/pkg" = "LIC" }
+                mask = { ">=cat/pkg-2" = "" }   unmask = { "=cat/pkg-1" = "" }
     [services]  enable = ["sshd", "name:runlevel"]   disable = [...]
     [[wifi]]    ssid = "Net"  psk = "..."  (or psk_file = "bundle:secrets/wifi-net")  autoconnect = true
     [[files]]   path = "/etc/x"  source = "bundle:files/x" | content = "..."  mode = "0644"  owner = "root:root"
@@ -103,7 +104,10 @@ def problems(mp, bundle=None):
     for a in list(sw.get("packages", [])) + list(sw.get("sets", [])) + list(sw.get("allow_source", [])):
         if not ATOM_RE.match(str(a)):
             errs.append(f"software: {a!r} is not a package atom")
-    for sect in ("use", "accept_keywords", "license"):
+    for sect in mp.get("portage", {}):
+        if sect not in PORTAGE_TABLES:
+            errs.append(f"portage.{sect}: unknown table (known: {', '.join(PORTAGE_TABLES)})")
+    for sect in PORTAGE_TABLES:
         for a, v in mp.get("portage", {}).get(sect, {}).items():
             if not (ATOM_RE.match(a) or PORTAGE_KEY_RE.match(a)) or "\n" in str(v):
                 errs.append(f"portage.{sect}: bad entry for {a!r}")
@@ -177,11 +181,16 @@ def desired_atoms(mp, layers=(), distdir="/var/cache/distfiles", installed=lambd
     return res
 
 
+# [portage.<table>] -> /etc/portage/package.<table>/horcrux-profile ("atom" = "value"; mask/unmask take "" as the value)
+PORTAGE_TABLES = ("use", "accept_keywords", "license", "mask", "unmask")
+
+
 def portage_files(mp, layers=(), arch_kw="amd64"):
     """{relative /etc/portage path: text} owned by this program"""
     p = mp.get("portage", {})
     out = {}
-    for sect, d in (("package.use", "use"), ("package.accept_keywords", "accept_keywords"), ("package.license", "license")):
+    for d in PORTAGE_TABLES:
+        sect = "package." + d
         lines = []
         for lay in layers:
             for a, v in lay.get("portage", {}).get(d, {}).items():
