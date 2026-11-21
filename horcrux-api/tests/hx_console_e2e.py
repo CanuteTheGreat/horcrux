@@ -23,6 +23,7 @@ the browser) and data-channel RTT, printed as `LATENCY {...}` lines.
 """
 import json
 import os
+import socket
 import ssl
 import statistics
 import sys
@@ -99,6 +100,54 @@ def qemu_cmdline(vm_id):
         if argv and b"qemu-system" in argv[0] and any(vm_id.encode() in a for a in argv):
             return [a.decode(errors="replace") for a in argv]
     return []
+
+
+def qmp_socket(vm_id):
+    argv = qemu_cmdline(vm_id)
+    for i, a in enumerate(argv[:-1]):
+        if a == "-qmp" and argv[i + 1].startswith("unix:"):
+            return argv[i + 1][len("unix:"):].split(",")[0]
+    return None
+
+
+def guest_picture(vm_id):
+    """The guest's own framebuffer (QMP screendump, PPM bytes), or None.
+
+    This is what the guest drew, independent of any console stream: the
+    stream's picture also changes when the node restarts its encoder (link
+    adaptation ramping up a fresh session, a keyframe request), so a
+    changed video frame does not prove the guest changed."""
+    sock = qmp_socket(vm_id)
+    if not sock:
+        return None
+    path = f"{OUT}/qmp-shot-{time.monotonic_ns()}.ppm"
+    s = socket.socket(socket.AF_UNIX)
+    s.settimeout(30)
+    try:
+        s.connect(sock)
+        f = s.makefile("rw")
+        f.readline()
+        for cmd in ({"execute": "qmp_capabilities"},
+                    {"execute": "screendump", "arguments": {"filename": path}}):
+            f.write(json.dumps(cmd) + "\n")
+            f.flush()
+            while True:
+                line = json.loads(f.readline())
+                if "return" in line or "error" in line:
+                    break
+            if "error" in line:
+                print("DEBUG screendump", line, flush=True)
+                return None
+    except OSError as e:
+        print("DEBUG screendump", e, flush=True)
+        return None
+    finally:
+        s.close()
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    finally:
+        os.unlink(path)
 
 
 # ---------------------------------------------------------------- settings
@@ -381,14 +430,32 @@ with sync_playwright() as pw:
     vpage = open_console(viewer, VM, "viewer")
     check(vpage.evaluate("window.hxc.hello.input") is False, "a VM.Console-only user gets a view-only session")
     wait_static(vpage, quiet_ms=1500, timeout=30)
+    # Ground truth is the guest's framebuffer, not the view-only stream: a
+    # fresh session's encoder restarts while its link estimate ramps up, so
+    # its picture can change with no guest change at all.
+    before = guest_picture(VM)
     lat = trial(vpage, f"window.hxc.move(10,10); window.hxc.click({g['width']//2},{g['height']//2},2)", timeout=4)
     time.sleep(1)
+    after = guest_picture(VM)
     _, sess = call("GET", f"/console/{VM}/hxc/sessions", token=ADMIN, ok=None)
     vs = [x for x in sess if x["user"] == "hxcview"]
     check(len(vs) == 1 and vs[0]["stats"]["input_denied"] >= 2 and vs[0]["stats"]["keys_in"] == 0
           and vs[0]["stats"]["pointer_in"] == 0,
           f"the server refused the view-only user's input ({vs[0]['stats'] if vs else sess})")
-    check(lat is None, "the view-only user's click changed nothing in the guest (od printed nothing)")
+    check(before is not None and before == after,
+          "the view-only user's click changed nothing in the guest (od printed nothing; QMP screendump"
+          f" identical before and after; the view-only stream {'changed after ' + str(round(lat)) + ' ms' if lat is not None else 'did not change'})")
+    # Positive control: the same screendump comparison sees an admin move
+    # that od prints, so "identical" above is not a blind check.
+    page.evaluate(f"window.hxc.move({g['width'] // 3},{g['height'] // 3})")
+    moved = None
+    for _ in range(20):
+        time.sleep(0.5)
+        moved = guest_picture(VM)
+        if moved != after:
+            break
+    check(moved is not None and moved != after,
+          "the same guest screendump changes when the admin moves the pointer (od printed it)")
     check(len(vpage.evaluate("window.hxc.denied")) >= 1, "the view-only user is told input needs VM.Console.Input")
     vpage.close()
     nobody = login_context(browser, "hxcnone", "Hxc-e2e-pass-1")
