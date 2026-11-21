@@ -16,7 +16,7 @@
 //! fails, the source restores/starts its own copy (the target having removed
 //! its half-import first), so there are never two running copies.
 use super::savestate::{self, have, run};
-use super::{Container, ContainerManager};
+use super::{Container, ContainerManager, CreateReservation};
 use horcrux_common::{ContainerConfig, ContainerRuntime, ContainerStatus, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -570,6 +570,17 @@ impl ContainerManager {
         let podman_live = m.live && cfg.runtime == ContainerRuntime::Podman;
         let r: Result<()> = async {
             if podman_live {
+                // `podman container restore --import` makes the container
+                // visible to `podman ps` minutes before register_existing
+                // runs; a concurrent reconcile_podman (any GET /containers)
+                // adopts it under its own name and register_existing then
+                // fails with "Container with ID .. already exists". Hold
+                // the id and name so the reconciler leaves them alone, like
+                // create_container does for its runtime call.
+                let _hold_id = CreateReservation::try_new(&self.creating, &cfg.id);
+                let _hold_name = (cfg.name != cfg.id)
+                    .then(|| CreateReservation::try_new(&self.creating, &cfg.name))
+                    .flatten();
                 savestate::ensure_podman_apparmor_profile(&image).await;
                 // The export carries no volumes (restoring them would fail on
                 // a node that already has a volume of that name): make each
