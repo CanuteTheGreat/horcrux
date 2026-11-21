@@ -605,6 +605,11 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
         atoms.append(SELF_ATOM)          # this program, so later `horcrux-profile apply` runs come from the package
     rec["packages"] = atoms
     base = ["emerge", "--update", "--newuse", "--getbinpkg", "--usepkg", "--select", "--noreplace", "--quiet-build=y", "--with-bdeps=n", *emerge_args]
+    if any(lay.get("kernel", {}).get("binrepo") for lay in layers):
+        # a hardware layer's kernel binhost lane (the Apple T2 kernel) builds gentoo-kernel with the layer's user patches (/etc/portage/patches), and
+        # Portage ignores a binary package whose USER_PATCHES digest differs from the local one: the patch-set package installs in the same
+        # transaction, so the digest never matches at resolve time. The lane's signed index is the trust anchor, not the local patch files.
+        base.append("--binpkg-respect-user-patches=n")
     pre_atoms = [a for a in mp.get("software", {}).get("preinstall", []) if a in atoms]
     if pre_atoms:
         # packages owning /etc/portage files (keywords, USE, licences) that the rest of the profile needs: Portage only sees those
