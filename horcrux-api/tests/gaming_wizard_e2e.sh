@@ -48,5 +48,5 @@ $SUDO env HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR="$DATA" \
   bash -c "nohup '$BIN' >> '$DATA/api.log' 2>&1 & echo \$! > '$DATA/api.pid'"
 for i in $(seq 1 90); do curl -skf https://127.0.0.1:8006/api/health >/dev/null && break; sleep 2; done
 curl -skf https://127.0.0.1:8006/api/health >/dev/null || { echo "FAIL API did not start"; tail -50 "$DATA/api.log"; exit 1; }
-$SUDO env HX_DATA="$DATA" MEMORY_MB="${MEMORY_MB:-4096}" python3 -u "$HERE/gaming_wizard_e2e.py" || {
+$SUDO env HX_DATA="$DATA" MEMORY_MB="${MEMORY_MB:-4096}" VBS="${VBS:-auto}" python3 -u "$HERE/gaming_wizard_e2e.py" || {
   echo "---- api.log"; tail -120 "$DATA/api.log"; exit 1; }
