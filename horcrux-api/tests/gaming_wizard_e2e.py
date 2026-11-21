@@ -97,13 +97,40 @@ def qga(sock, cmd, timeout=15):
     return r
 
 
-def ps(sock, script):
-    r = qga(sock, {"execute": "guest-exec", "arguments": {
+def qga_retry(sock, cmd, timeout=30):
+    # First logon installs the guest tools, which restarts the agent: a call
+    # that times out or hits a closed channel is retried until the agent
+    # has been unreachable for POLL_GRACE_MIN.
+    t0 = time.time()
+    while True:
+        try:
+            return qga(sock, cmd, timeout)
+        except (OSError, ValueError) as e:
+            down = (time.time() - t0) / 60
+            if down > POLL_GRACE_MIN:
+                raise SystemExit(f"FAIL guest agent did not answer for {down:.0f} min: {e!r}")
+            print(f"... guest agent call {cmd['execute']} failed ({e!r}), retrying", flush=True)
+            time.sleep(10)
+
+
+def ps(sock, script, attempt=0):
+    if attempt > 20:
+        raise SystemExit(f"FAIL guest-exec kept failing: {script[:60]}")
+    r = qga_retry(sock, {"execute": "guest-exec", "arguments": {
         "path": "powershell.exe", "arg": ["-NoProfile", "-Command", script],
-        "capture-output": True}}, 30)
+        "capture-output": True}})
+    if "error" in r:
+        print(f"... guest-exec refused ({r['error']}), retrying", flush=True)
+        time.sleep(15)
+        return ps(sock, script, attempt + 1)
     pid = r["return"]["pid"]
     for _ in range(180):
-        st = qga(sock, {"execute": "guest-exec-status", "arguments": {"pid": pid}}, 30)["return"]
+        st = qga_retry(sock, {"execute": "guest-exec-status", "arguments": {"pid": pid}})
+        if "error" in st:
+            # the agent restarted and forgot the pid: run the query again
+            time.sleep(15)
+            return ps(sock, script, attempt + 1)
+        st = st["return"]
         if st.get("exited"):
             return base64.b64decode(st.get("out-data", "")).decode(errors="replace").strip()
         time.sleep(1)
