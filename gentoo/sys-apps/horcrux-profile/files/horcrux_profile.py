@@ -520,7 +520,8 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
         for u in lay.get("kernel", {}).get("unmerge", []):
             if sy.run(["portageq", "has_version", "/", u], check=False) == 0:
                 sy.run(["emerge", "--unmerge", u], check=False)
-    apply_accounts(mp, sy)
+    if not install:      # at install time the installer creates the users after this stage, then runs `apply --accounts-only`
+        apply_accounts(mp, sy)
     # 5. Wi-Fi (iwd known networks when iwd is the backend, NetworkManager keyfiles otherwise), files, services
     for w in mp.get("wifi", []):
         psk = w.get("psk", "")
