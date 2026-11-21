@@ -769,9 +769,9 @@ impl HostNet {
         Self::run(
             &self.tc,
             &[
-                "filter", "replace", "dev", tap, "parent", "ffff:", "protocol", "all", "prio",
-                "1", "u32", "match", "u32", "0", "0", "police", "rate", &rate, "burst", &burst,
-                "drop", "flowid", ":1",
+                "filter", "replace", "dev", tap, "parent", "ffff:", "protocol", "all", "prio", "1",
+                "u32", "match", "u32", "0", "0", "police", "rate", &rate, "burst", &burst, "drop",
+                "flowid", ":1",
             ],
         )
         .await
@@ -2605,7 +2605,9 @@ esac
             "{calls:?}"
         );
         assert!(
-            !calls.iter().any(|c| c.starts_with("tc ") && c.contains(&t1)),
+            !calls
+                .iter()
+                .any(|c| c.starts_with("tc ") && c.contains(&t1)),
             "an unlimited NIC gets no qdisc: {calls:?}"
         );
     }
