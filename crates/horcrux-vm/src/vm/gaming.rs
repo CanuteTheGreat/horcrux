@@ -718,6 +718,7 @@ pub fn compose(
                 attach,
                 mac: None,
                 vlan: None,
+                rate_mbps: None,
             })
             .collect(),
         cdrom: Some(req.windows_iso.clone()),

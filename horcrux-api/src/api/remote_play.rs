@@ -197,6 +197,7 @@ async fn lan_nic(
             attach,
             mac: None,
             vlan: None,
+            rate_mbps: None,
         }),
     }
     crate::api::vm_hw::check_host_hardware(&state, &hw).await?;
