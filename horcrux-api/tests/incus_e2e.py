@@ -60,13 +60,33 @@ def step(msg):
     log(f"--- {STEP[0]}. {msg}")
 
 
+# The API log: the CI wrapper writes /tmp/api.log, the VM-cluster harness
+# <data dir>/api.log (API_LOG overrides).
+API_LOG = os.environ.get("API_LOG") or next(
+    (p for p in ("/tmp/api.log", "/tmp/incus-e2e-data/api.log") if os.path.exists(p)), "/tmp/api.log")
+
+
+def daemon_log_cmd():
+    """Shell snippet printing incusd's own log: the hand-started daemon's file
+    (CI container) or the systemd journal (nodes), panics first."""
+    return ("if [ -s /tmp/incusd.log ]; then grep -A14 -m2 'panic:' /tmp/incusd.log; tail -30 /tmp/incusd.log;"
+            " else journalctl -u incus --no-pager -o cat 2>/dev/null | grep -A14 -m2 'panic:';"
+            " journalctl -u incus --no-pager -n 25 2>/dev/null; fi")
+
+
 def fail(msg):
     log(f"FAIL: {msg}")
     subprocess.run(
-        ["sh", "-c", "echo '== api log'; grep -v 'Failed to broadcast' /tmp/api.log | tail -60;"
-         " echo '== incus'; incus list </dev/null; tail -30 /tmp/incusd.log"]
+        ["sh", "-c", f"echo '== api log'; grep -v 'Failed to broadcast' {API_LOG} | tail -60;"
+         f" echo '== incus'; incus list </dev/null; echo '== incusd log'; {daemon_log_cmd()}"]
     )
     sys.exit(1)
+
+
+def incusd_pid():
+    """PID of the running incusd (oldest), or None."""
+    p = subprocess.run(["pgrep", "-o", "-x", "incusd"], capture_output=True, text=True)
+    return p.stdout.strip() or None
 
 
 def check(cond, msg):
@@ -503,6 +523,37 @@ def run_vm():
           "SPICE link over the ticketed WebSocket")
     ws.close()
 
+    step("SPICE sessions come and go without crashing the VM or the daemon")
+    # A viewer that links main + display and leaves at once, again and again
+    # (reconnects, closed tabs). This used to kill QEMU (display channel
+    # closed while the SPICE server waited for its init) or incusd (console
+    # operation cancelled while it was already ending) every few rounds.
+    pid_before = incusd_pid()
+    rounds = int(os.environ.get("SPICE_ROUNDS", "15"))
+    for i in range(rounds):
+        s, rd, wr = tcp_io(host, port)
+        if spice_link(rd, wr, pw) != 0:
+            fail(f"round {i + 1}: main channel link refused")
+        session, _ = spice_main_channels(rd, wr)
+        s2, rd2, wr2 = tcp_io(host, port)
+        if spice_link(rd2, wr2, pw, channel=2, connection_id=session) != 0:
+            fail(f"round {i + 1}: display channel link refused")
+        s2.close()
+        s.close()
+        if i % 2:
+            s, rd, wr = tcp_io(host, port)
+            if spice_link(rd, wr, "wrong-password") != 7:
+                fail(f"round {i + 1}: wrong password not refused")
+            s.close()
+    state = incus(f"list {VM} --format csv -c s", False).strip().upper()
+    check(state == "RUNNING", f"VM still running after {rounds} SPICE sessions (state {state})")
+    check(incusd_pid() == pid_before,
+          f"incusd still the same process after {rounds} SPICE sessions ({pid_before} -> {incusd_pid()})")
+    ws = WS(sp["ws_path"])
+    check(spice_link(ws.read_exact, lambda b: ws.send(b, binary=True), pw) == 0,
+          "SPICE link over the WebSocket after the session churn")
+    ws.close()
+
     step(".vv file for remote-viewer names the relay")
     _, vv = req("GET", f"/console/{VM}/spice.vv", raw=True)
     check("type=spice" in vv and f"port={port}" in vv and f"password={pw}" in vv,
@@ -517,10 +568,24 @@ def run_vm():
 
 def main():
     login()
+    pid0 = incusd_pid()
     if MODE == "vm":
         run_vm()
     else:
         run_ct()
+    # Closing consoles must never take the daemon down: Horcrux once cancelled
+    # console operations while Incus was already ending them, which crashed
+    # incusd 6.0.x (nil pointer in Operation.Cancel) and broke the next
+    # console. A restarted daemon has a new PID.
+    pid1 = incusd_pid()
+    if pid0 and pid1 != pid0:
+        msg = f"incusd restarted during the run (pid {pid0} -> {pid1}): the daemon crashed"
+        if MODE == "vm":
+            fail(msg)
+        # MODE=ct revives the daemon on purpose after a known upstream exec
+        # panic (ensure_incusd); report it without failing.
+        log(f"WARN: {msg}")
+        subprocess.run(["sh", "-c", daemon_log_cmd()])
     log("PASS")
 
 

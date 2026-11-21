@@ -33,6 +33,11 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, info, warn};
 
 const IDLE_SECS: i64 = 600;
+/// Per attempt: opening a daemon channel and reading its SPICE link reply
+/// (HORCRUX_SPICE_LINK_TIMEOUT_SECS, default 8).
+fn upstream_link_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(super::lxd::env_secs("HORCRUX_SPICE_LINK_TIMEOUT_SECS", 8))
+}
 /// SPICE link errors (spice-protocol `SpiceLinkErr`).
 const LINK_ERR_PERMISSION_DENIED: u32 = 7;
 
@@ -386,6 +391,7 @@ async fn handle_inner(
     // SpiceLinkMess: connection_id u32, channel_type u8, channel_id u8,
     // num_common_caps u32 @6, num_channel_caps u32 @10, caps_offset u32 @14
     let client_caps = first_common_cap(&mess, 6, 14);
+    let channel_type = mess.get(4).copied().unwrap_or(0);
 
     // The daemon can refuse or drop a vga session right after another one of the
     // same VM closed (SPICE opens one per channel and clients disconnect in
@@ -402,16 +408,23 @@ async fn handle_inner(
         let tried: Result<_> = async {
             let op = share.join(api.open_vga_op(instance)).await?;
             *op_used = Some(op.clone());
-            let mut up = Upstream {
-                ws: api.vga_channel(&op).await?,
-                buf: Vec::new(),
-            };
-            up.write(&[hdr.as_slice(), mess.as_slice()].concat())
-                .await?;
-            let rhdr = up.read_n(16).await?;
-            let rsize = u32_at(&rhdr, 12) as usize;
-            let reply = up.read_n(rsize).await?;
-            Ok((up, rhdr, reply))
+            // Bounded: a daemon that stops answering (crashed, restarting)
+            // must not leave the client waiting forever; the next attempt
+            // opens a fresh operation.
+            tokio::time::timeout(upstream_link_timeout(), async {
+                let mut up = Upstream {
+                    ws: api.vga_channel(&op).await?,
+                    buf: Vec::new(),
+                };
+                up.write(&[hdr.as_slice(), mess.as_slice()].concat())
+                    .await?;
+                let rhdr = up.read_n(16).await?;
+                let rsize = u32_at(&rhdr, 12) as usize;
+                let reply = up.read_n(rsize).await?;
+                Ok((up, rhdr, reply))
+            })
+            .await
+            .map_err(|_| Error::System("SPICE display did not answer the link".into()))?
         }
         .await;
         match tried {
@@ -497,17 +510,20 @@ async fn handle_inner(
 
     // Splice.
     let leftover = std::mem::take(&mut up.buf);
+    let mut upstream_seen = leftover.len();
     if !leftover.is_empty() {
         client.write_all(&leftover).await.map_err(io)?;
     }
     let (mut c_rx, mut c_tx) = client.into_split();
     let (mut u_tx, mut u_rx) = up.ws.split();
+    let mut client_sent = 0usize;
     let to_vm = async {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             match c_rx.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    client_sent += n;
                     if u_tx
                         .send(WsMessage::Binary(buf[..n].to_vec()))
                         .await
@@ -527,6 +543,7 @@ async fn handle_inner(
                 Ok(WsMessage::Close(_)) | Err(_) => break,
                 Ok(_) => continue,
             };
+            upstream_seen += data.len();
             if c_tx.write_all(&data).await.is_err() {
                 break;
             }
@@ -536,7 +553,104 @@ async fn handle_inner(
         _ = to_vm => {}
         _ = to_client => {}
     }
+    // A display channel whose client left before sending DISPLAY_INIT: the
+    // VM's SPICE server sits in a synchronous wait for that message, and
+    // when the channel's socket closes during the wait (the daemon closes it
+    // when the vga operation ends) spice-server 0.15 frees the channel
+    // client inside its own wait loop and QEMU dies with a NULL dereference
+    // in the SPICE worker (RedChannelClient::is_connected from dcc_start).
+    // Complete the init on the client's behalf and keep the channel open
+    // until the server is past its wait (it then sends more than the one
+    // SET_ACK message it sends before waiting), so the channel is a normal,
+    // fully started channel when it closes. Init and close in one read of
+    // the server still crash it.
+    if channel_type == SPICE_CHANNEL_DISPLAY && client_sent == 0 {
+        let mini = client_caps & server_caps & COMMON_CAP_MINI_HEADER != 0;
+        if u_tx
+            .send(WsMessage::Binary(display_init_message(mini)))
+            .await
+            .is_ok()
+        {
+            let pre_init = set_ack_len(mini);
+            let _ = tokio::time::timeout(upstream_link_timeout(), async {
+                while upstream_seen <= pre_init {
+                    match u_rx.next().await {
+                        Some(Ok(WsMessage::Binary(d))) => upstream_seen += d.len(),
+                        Some(Ok(WsMessage::Text(t))) => upstream_seen += t.len(),
+                        Some(Ok(WsMessage::Close(_))) | Some(Err(_)) | None => break,
+                        Some(Ok(_)) => {}
+                    }
+                }
+            })
+            .await;
+        }
+    }
+    // The daemon keeps this channel's socket to the VM's SPICE server open
+    // until the whole vga operation ends (it closes per-channel sockets only
+    // then). Keep reading it until then so the SPICE server never blocks on
+    // a channel nobody reads; the operation ends when the last channel
+    // leaves.
+    tokio::spawn(drain_until_closed(u_tx, u_rx));
     Ok(())
+}
+
+/// SPICE channel type of the display channel.
+const SPICE_CHANNEL_DISPLAY: u8 = 2;
+/// Common capability bit: mini message header (spice-protocol
+/// SPICE_COMMON_CAP_MINI_HEADER).
+const COMMON_CAP_MINI_HEADER: u32 = 1 << 3;
+
+/// Size of the SET_ACK message (header + generation u32 + window u32), the
+/// only message a display channel sends before the client's init.
+fn set_ack_len(mini: bool) -> usize {
+    if mini {
+        6 + 8
+    } else {
+        18 + 8
+    }
+}
+
+/// SPICE_MSGC_DISPLAY_INIT with the smallest caches (the channel is closing):
+/// pixmap cache id 1 of size 0, GLZ dictionary id 1 with a 256 Ki-pixel
+/// window. Mini header (type u16, size u32) when both sides negotiated it,
+/// else the full header (serial u64 = 1, type, size, sub_list u32 = 0).
+fn display_init_message(mini: bool) -> Vec<u8> {
+    const MSGC_DISPLAY_INIT: u16 = 101;
+    let mut body = Vec::with_capacity(14);
+    body.push(1u8); // pixmap_cache_id
+    body.extend_from_slice(&0i64.to_le_bytes()); // pixmap_cache_size
+    body.push(1u8); // glz_dictionary_id
+    body.extend_from_slice(&(256 * 1024i32).to_le_bytes()); // glz window
+    let mut m = Vec::with_capacity(18 + body.len());
+    if !mini {
+        m.extend_from_slice(&1u64.to_le_bytes());
+    }
+    m.extend_from_slice(&MSGC_DISPLAY_INIT.to_le_bytes());
+    m.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    if !mini {
+        m.extend_from_slice(&0u32.to_le_bytes());
+    }
+    m.extend_from_slice(&body);
+    m
+}
+
+/// Read and discard a daemon channel until the daemon closes it (bounded).
+async fn drain_until_closed(
+    tx: futures::stream::SplitSink<super::lxd::Ws, WsMessage>,
+    mut rx: futures::stream::SplitStream<super::lxd::Ws>,
+) {
+    let _keep_open = tx;
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(super::lxd::env_secs("HORCRUX_SPICE_DRAIN_MAX_SECS", 600)),
+        async {
+            while let Some(m) = rx.next().await {
+                if matches!(m, Ok(WsMessage::Close(_)) | Err(_)) {
+                    break;
+                }
+            }
+        },
+    )
+    .await;
 }
 
 /// `.vv` connection file for remote-viewer.
@@ -624,6 +738,45 @@ mod tests {
         assert!(
             sh.leave(None).await.is_none(),
             "stale op's user does not end the new one"
+        );
+    }
+
+    #[test]
+    fn display_init_message_layout() {
+        let full = display_init_message(false);
+        assert_eq!(full.len(), 18 + 14);
+        assert_eq!(
+            u64::from_le_bytes(full[0..8].try_into().unwrap()),
+            1,
+            "serial"
+        );
+        assert_eq!(
+            u16::from_le_bytes(full[8..10].try_into().unwrap()),
+            101,
+            "type"
+        );
+        assert_eq!(
+            u32::from_le_bytes(full[10..14].try_into().unwrap()),
+            14,
+            "size"
+        );
+        assert_eq!(
+            u32::from_le_bytes(full[14..18].try_into().unwrap()),
+            0,
+            "sub_list"
+        );
+        let mini = display_init_message(true);
+        assert_eq!(mini.len(), 6 + 14);
+        assert_eq!(u16::from_le_bytes(mini[0..2].try_into().unwrap()), 101);
+        assert_eq!(u32::from_le_bytes(mini[2..6].try_into().unwrap()), 14);
+        assert_eq!(&mini[6..], &full[18..], "same body");
+        let body = &mini[6..];
+        assert_eq!(body[0], 1, "pixmap cache id");
+        assert_eq!(i64::from_le_bytes(body[1..9].try_into().unwrap()), 0);
+        assert_eq!(body[9], 1, "glz dictionary id");
+        assert_eq!(
+            i32::from_le_bytes(body[10..14].try_into().unwrap()),
+            256 * 1024
         );
     }
 

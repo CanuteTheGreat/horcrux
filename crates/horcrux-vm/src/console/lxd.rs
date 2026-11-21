@@ -359,6 +359,33 @@ impl Client {
         let _ = self.request("DELETE", &operation_path(id), None).await;
     }
 
+    /// End a console/exec operation whose websockets were just closed.
+    ///
+    /// The daemon ends a console operation on its own once the control
+    /// websocket closes (an exec operation once its command exits, e.g. after
+    /// the hang-up signal). A DELETE that arrives while it does so races the
+    /// daemon's own teardown: Incus 6.0.x drops the operation's cancel hook
+    /// when the operation finishes, and a concurrent cancel then calls the
+    /// cleared hook and the whole daemon panics (nil pointer in
+    /// `Operation.Cancel`), taking every other console and API call down with
+    /// it until it restarts. So wait for the operation to finish by itself and
+    /// cancel only one that is still running after `grace`.
+    pub async fn finish_operation(&self, id: &str, grace: std::time::Duration) {
+        let secs = grace.as_secs().max(1);
+        let waiter = Self {
+            backend: self.backend,
+            socket: self.socket.clone(),
+            timeout: std::time::Duration::from_secs(secs + 5),
+        };
+        let path = format!("{}/wait?timeout={secs}", operation_path(id));
+        if let Ok((status, body)) = waiter.request("GET", &path, None).await {
+            if operation_finished(status, &body) {
+                return;
+            }
+        }
+        self.cancel_operation(id).await;
+    }
+
     async fn ws(&self, op: &str, secret: &str) -> Result<Ws> {
         let stream = self.connect().await?;
         let url = format!(
@@ -419,7 +446,9 @@ impl Client {
     pub async fn close_vga_op(&self, op: VgaOp) {
         let mut control = op.control;
         let _ = control.close(None).await;
-        self.cancel_operation(&op.id).await;
+        // Closing the control websocket ends the operation; cancel only one
+        // the daemon did not end (see finish_operation).
+        self.finish_operation(&op.id, op_end_grace()).await;
     }
 
     /// Interactive command on a PTY (containers; VMs need the guest agent).
@@ -449,6 +478,39 @@ impl Client {
 /// API path of an operation.
 fn operation_path(id: &str) -> String {
     format!("/1.0/operations/{}", enc(id))
+}
+
+/// How long a console/exec operation gets to end by itself after its
+/// websockets closed before it is cancelled (HORCRUX_CONSOLE_OP_END_GRACE_SECS,
+/// default 5).
+pub fn op_end_grace() -> std::time::Duration {
+    std::time::Duration::from_secs(env_secs("HORCRUX_CONSOLE_OP_END_GRACE_SECS", 5))
+}
+
+/// A whole number of seconds from the environment, `default` when unset or
+/// not a positive number.
+pub fn env_secs(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
+/// Whether a `GET /1.0/operations/<id>/wait` answer says the operation is
+/// over: gone (404) or in a final state (status codes 200 success,
+/// 400 failure, 401 cancelled).
+fn operation_finished(status: u16, body: &[u8]) -> bool {
+    if status == 404 {
+        return true;
+    }
+    let Ok(v) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    matches!(
+        v["metadata"]["status_code"].as_u64(),
+        Some(200) | Some(400) | Some(401)
+    )
 }
 
 /// Send a control message (exec: signal / window-resize).
@@ -521,10 +583,14 @@ pub async fn bridge(
     }
     let _ = control.close(None).await;
     // Close the data websocket too (the sink half was only dropped, which
-    // leaves the daemon's side waiting) and cancel the operation, so the
-    // console is released for the next session.
+    // leaves the daemon's side waiting), then make sure the operation ends so
+    // the console is released for the next session: wait for the daemon to
+    // end it, cancel only if it does not (a cancel racing the daemon's own
+    // teardown crashes Incus 6.0.x, see Client::finish_operation).
     let _ = d_tx.close().await;
-    Client::quick(backend).cancel_operation(&op_id).await;
+    Client::quick(backend)
+        .finish_operation(&op_id, op_end_grace())
+        .await;
 }
 
 /// Minimal HTTP/1.1 response parser (Content-Length, chunked, or EOF body).
@@ -723,6 +789,116 @@ mod instance_image_tests {
     fn operation_path_is_encoded() {
         assert_eq!(super::operation_path("a-b"), "/1.0/operations/a-b");
         assert_eq!(super::operation_path("a/b"), "/1.0/operations/a%2Fb");
+    }
+
+    #[test]
+    fn operation_finished_reads_the_final_states() {
+        use super::operation_finished as fin;
+        let op = |code: u64| format!(r#"{{"metadata":{{"status_code":{code}}}}}"#).into_bytes();
+        assert!(fin(404, b"{}"), "a gone operation is over");
+        assert!(fin(200, &op(200)), "success");
+        assert!(fin(200, &op(400)), "failure");
+        assert!(fin(200, &op(401)), "cancelled");
+        assert!(!fin(200, &op(103)), "running");
+        assert!(!fin(200, &op(104)), "cancelling");
+        assert!(!fin(504, b"not json"), "an unreadable answer is not proof");
+    }
+
+    /// Fake daemon on a Unix socket: answers each request with the next
+    /// canned response and records the request lines.
+    async fn fake_daemon(
+        tag: &str,
+        answers: Vec<&'static str>,
+    ) -> (std::path::PathBuf, tokio::task::JoinHandle<Vec<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let path = std::env::temp_dir().join(format!("hx-{tag}-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            for body in answers {
+                let Ok(Ok((mut s, _))) =
+                    tokio::time::timeout(std::time::Duration::from_secs(3), listener.accept())
+                        .await
+                else {
+                    break;
+                };
+                let mut buf = vec![0u8; 2048];
+                let n = s.read(&mut buf).await.unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]);
+                seen.push(req.lines().next().unwrap_or("").to_string());
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                s.write_all(resp.as_bytes()).await.unwrap();
+            }
+            seen
+        });
+        (path, server)
+    }
+
+    #[tokio::test]
+    async fn finish_operation_does_not_cancel_an_operation_that_ended() {
+        // The daemon ended the operation itself (control websocket closed):
+        // a DELETE now would race its teardown, so none may be sent.
+        let (path, server) = fake_daemon(
+            "finish-ended",
+            vec![r#"{"metadata":{"status_code":200}}"#, "{}"],
+        )
+        .await;
+        let client = super::Client {
+            backend: super::Backend::Incus,
+            socket: path.clone(),
+            timeout: std::time::Duration::from_secs(5),
+        };
+        client
+            .finish_operation("op-1", std::time::Duration::from_secs(1))
+            .await;
+        let seen = server.await.unwrap();
+        assert_eq!(
+            seen,
+            vec!["GET /1.0/operations/op-1/wait?timeout=1 HTTP/1.1".to_string()]
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn finish_operation_cancels_one_still_running() {
+        let (path, server) = fake_daemon(
+            "finish-running",
+            vec![r#"{"metadata":{"status_code":103}}"#, "{}"],
+        )
+        .await;
+        let client = super::Client {
+            backend: super::Backend::Incus,
+            socket: path.clone(),
+            timeout: std::time::Duration::from_secs(5),
+        };
+        client
+            .finish_operation("op-2", std::time::Duration::from_secs(1))
+            .await;
+        let seen = server.await.unwrap();
+        assert_eq!(
+            seen,
+            vec![
+                "GET /1.0/operations/op-2/wait?timeout=1 HTTP/1.1".to_string(),
+                "DELETE /1.0/operations/op-2 HTTP/1.1".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn env_secs_falls_back_on_bad_values() {
+        use super::env_secs;
+        std::env::set_var("HX_TEST_ENV_SECS_A", "12");
+        std::env::set_var("HX_TEST_ENV_SECS_B", "zero");
+        std::env::set_var("HX_TEST_ENV_SECS_C", "0");
+        assert_eq!(env_secs("HX_TEST_ENV_SECS_A", 5), 12);
+        assert_eq!(env_secs("HX_TEST_ENV_SECS_B", 5), 5);
+        assert_eq!(env_secs("HX_TEST_ENV_SECS_C", 5), 5);
+        assert_eq!(env_secs("HX_TEST_ENV_SECS_UNSET", 7), 7);
     }
 
     #[tokio::test]
