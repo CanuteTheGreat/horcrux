@@ -688,6 +688,10 @@ pub fn compose(
         firmware: Firmware::Ovmf,
         secure_boot: true,
         tpm: true,
+        // CRB, like every new VM (what libvirt uses for Windows 11)
+        tpm_model: Some(horcrux_common::TpmModel::Crb),
+        // set once the TPM has been used (first start)
+        tpm_state_expected: false,
         balloon: false,
         guest_agent: true,
         usb_controller: true,
