@@ -174,7 +174,7 @@ def finish_config(inst):
         from . import portableswap
         inst.write("/etc/fstab", portableswap.fstab_line("UUID=" + inst.swap_uuid), append=True)
         # no hx-resume service: the kernel is given resume=UUID= on the command line and the stock resume module handles it
-        if not getattr(inst, "t2", False):
+        if not getattr(inst, "t2_initramfs_built", False):      # t2.apply already built it (with these modules) for the T2 kernel
             _rebuild_initramfs(inst)
         else:
             _check_initramfs(inst)
@@ -184,7 +184,7 @@ def finish_config(inst):
     inst.write("/etc/init.d/hx-resume", HX_RESUME_INIT, 0o755)
     inst.write("/etc/systemd/system/hx-resume.service", HX_RESUME_UNIT, 0o644)
     initsys.enable(inst, "hx-resume", "boot")
-    if not getattr(inst, "t2", False):
+    if not getattr(inst, "t2_initramfs_built", False):
         _rebuild_initramfs(inst)
     else:
         _check_initramfs(inst)
