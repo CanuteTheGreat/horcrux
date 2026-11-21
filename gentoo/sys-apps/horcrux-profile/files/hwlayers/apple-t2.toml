@@ -4,7 +4,9 @@
 # machine profile bundle, and installs it as sys-firmware/apple-t2-firmware-local (firmware_package below).
 id = "apple-t2"
 title = "Apple Mac with the T2 security chip"
-packages = ["sys-kernel/horcrux-t2-config", "sys-apps/tiny-dfr", "sys-apps/t2fanrd", "sys-apps/horcrux-t2-audio"]
+packages = ["sys-kernel/horcrux-t2-config", "sys-apps/tiny-dfr", "sys-apps/t2fanrd"]
+# desktop editions only: the speaker/mic profiles plug into the desktop's PipeWire
+desktop_packages = ["sys-apps/horcrux-t2-audio"]
 
 [match]
 pci = ["106b:1801"]

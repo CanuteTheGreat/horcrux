@@ -47,7 +47,7 @@ GOOD = {
     "services": {"enable": ["sshd"]},
 }
 
-T2_LAYER = {"id": "apple-t2", "packages": ["sys-apps/tiny-dfr"], "match": {"pci": ["106b:1801"]},
+T2_LAYER = {"id": "apple-t2", "packages": ["sys-apps/tiny-dfr"], "desktop_packages": ["sys-apps/horcrux-t2-audio"], "match": {"pci": ["106b:1801"]},
             "firmware_package": {"atom": "sys-firmware/apple-t2-firmware-local", "distfile": "fw.tar"},
             "kernel": {"packages": ["sys-kernel/gentoo-kernel"], "binrepo": {"name": "t2", "uri": "https://example.invalid/t2", "priority": 9000}},
             "portage": {"accept_keywords": {"sys-apps/tiny-dfr": "~amd64"}}}
@@ -97,6 +97,9 @@ class DesiredState(unittest.TestCase):
             a = E.desired_atoms(GOOD, [T2_LAYER], distdir=dd)
             self.assertEqual(a[:2], ["gnome-base/gnome", "gnome-extra/horcrux-gnome-extras"])     # full GNOME from the gnome-light ISO
             self.assertIn("sys-kernel/gentoo-kernel", a)
+            self.assertIn("sys-apps/horcrux-t2-audio", a)
+            srv = dict(GOOD, machine={"hostname": "s", "edition": "server"})
+            self.assertNotIn("sys-apps/horcrux-t2-audio", E.desired_atoms(srv, [T2_LAYER], distdir=dd))
             self.assertNotIn("sys-firmware/apple-t2-firmware-local", a)                          # no firmware captured
             open(os.path.join(dd, "fw.tar"), "w").close()
             self.assertIn("sys-firmware/apple-t2-firmware-local", E.desired_atoms(GOOD, [T2_LAYER], distdir=dd))

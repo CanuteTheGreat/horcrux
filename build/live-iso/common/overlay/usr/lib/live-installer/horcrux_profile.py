@@ -158,8 +158,11 @@ def desired_atoms(mp, layers=(), distdir="/var/cache/distfiles", installed=lambd
     """packages that must be in @world: edition, hardware layers, then the profile's sets and packages (order kept, no duplicates).
     A layer's firmware_package only when its (machine-local) distfile was captured, or when it is already installed."""
     out = list(EDITION_PACKAGES.get(mp.get("machine", {}).get("edition", "server"), []))
+    desktop = mp.get("machine", {}).get("edition", "server") != "server"
     for lay in layers:
         out += list(lay.get("packages", []))
+        if desktop:
+            out += list(lay.get("desktop_packages", []))    # e.g. audio profiles: need the desktop's PipeWire
         out += list(lay.get("kernel", {}).get("packages", []))
         fp = lay.get("firmware_package")
         if fp and (os.path.exists(os.path.join(distdir, fp.get("distfile", ""))) or installed(fp["atom"])):
