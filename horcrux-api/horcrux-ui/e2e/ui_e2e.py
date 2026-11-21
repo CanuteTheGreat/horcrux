@@ -1610,6 +1610,11 @@ def s3_gateway_checks(page):
     expect(page.locator("#s3-objects")).to_be_visible()
     payload = b"hello from the Horcrux UI\n"
     page.set_input_files("#s3-upload-file", files=[{"name": "hello.txt", "mimeType": "text/plain", "buffer": payload}])
+    # Like a user, take longer than one status poll (3 s) between choosing the
+    # file and clicking Upload: a poll that re-renders the form loses the file
+    # ("Choose a file to upload").
+    page.wait_for_timeout(4000)
+    assert page.eval_on_selector("#s3-upload-file", "e => e.files.length") == 1, "chosen file lost before Upload"
     page.locator("#s3-upload").click()
     expect(page.locator("tr[data-key='hello.txt']")).to_be_visible(timeout=30000)
     with page.expect_download(timeout=30000) as dl:

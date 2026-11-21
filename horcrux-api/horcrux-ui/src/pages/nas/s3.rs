@@ -427,7 +427,12 @@ pub fn S3Page() -> impl IntoView {
         }
     };
 
-    let running = move || status.get().map(|s| s.running).unwrap_or(false);
+    // A memo, not a plain closure: the page polls the gateway status every few
+    // seconds and each poll sets `status` again. Read directly, every poll
+    // re-rendered the whole tab below, replacing the upload form's file input
+    // (a chosen file was lost before the user could click Upload) and any
+    // half-typed form state. The memo only notifies when Running changes.
+    let running = create_memo(move |_| status.get().map(|s| s.running).unwrap_or(false));
 
     view! {
         <div class="s3-page">
@@ -532,7 +537,7 @@ pub fn S3Page() -> impl IntoView {
                 }).collect_view()}
             </div>
 
-            {move || if !running() {
+            {move || if !running.get() {
                 view! { <div class="no-data" id="s3-not-running"><p>"Start the gateway to manage buckets, users and access keys."</p></div> }.into_view()
             } else if tab.get() == "buckets" {
                 view! {
