@@ -185,6 +185,7 @@ def desired_atoms(mp, layers=(), distdir="/var/cache/distfiles", installed=lambd
 PORTAGE_TABLES = ("use", "accept_keywords", "license", "mask", "unmask")
 
 
+RESOLVE_FAILED = ("!!!", "masked by:", "there are no ebuilds", "Multiple package instances", "slot conflict")
 _AU_SECTIONS = (("keyword changes", "accept_keywords"), ("USE changes", "use"), ("license changes", "license"),
                 ("mask changes", "unmask"))
 _AU_LINE = re.compile(r"^([<>=~]*)([A-Za-z0-9+_.-]+/[A-Za-z0-9+_.-]+?)(-[0-9][^\s:]*)?(:\S+)?(::\S+)?\s+(.*)$")
@@ -562,13 +563,15 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
     if atoms:
         base = ["emerge", "--update", "--newuse", "--getbinpkg", "--usepkg", "--select", "--noreplace", "--quiet-build=y", "--with-bdeps=n", *emerge_args]
         pre = sy.run(base + ["--pretend", "--verbose", "--color=n", *atoms], check=False, capture=True)
-        if "!!!" in (pre or "") or "masked by:" in (pre or ""):
+        if any(m in (pre or "") for m in RESOLVE_FAILED):
             # name EVERY missing keyword/USE/licence/unmask at once, in profile syntax, instead of one error per attempt
             au = sy.run(base + ["--pretend", "--color=n", "--autounmask=y", "--autounmask-write=n", "--autounmask-continue=n", *atoms],
                         check=False, capture=True)
             hints = autounmask_hints(au or "")
             if hints:
                 raise RuntimeError("the packages need these [portage.*] entries in the machine profile:\n" + format_hints(hints))
+            raise RuntimeError("the packages of the machine profile can't be resolved:\n"
+                               + "\n".join(l for l in pre.splitlines() if l.startswith(("emerge:", "!!!", "- ", "(dependency"))))
         bad = forbidden_source_builds(source_builds(pre or ""), mp)
         if bad:
             raise RuntimeError("these would be compiled on this machine (no binary package on the binhosts): " + ", ".join(bad)
