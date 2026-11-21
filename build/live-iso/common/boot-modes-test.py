@@ -183,11 +183,22 @@ class Tests:
         cmd = [sys.executable, "-u", os.path.join(HERE, "qemu-test.py"), "--iso", a.iso, "--project", a.project, "--init", a.init, "--mode", a.mode, "--media", a.media,
                "--flow", "auto", "--fs", "ext4", "--disk-gb", "12", "--keep-disks", "--arch", a.arch, "--out", d]
         t = time.time()
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        open(f"{a.out}/install.log", "w").write(r.stdout + r.stderr)
+        # ONE retry of the base install: the install log of a failed first attempt is kept (install.log.1) and its tail is carried into the step
+        # line, so a repeat failure still names its cause; a deterministic regression fails both attempts and the step stays red. (Patronus
+        # aarch64 daily run 2553: a bare 'answer-file install (149s)' right after the mode-livepersist VM, the same ISO having installed fine
+        # in the earlier scenarios of the same run.)
         tail = ""
-        if r.returncode != 0:  # a bare "answer-file install (149s)" names no cause: carry the end of the install log into the step line
-            tail = " | rc=%d, last install output: %s" % (r.returncode, " / ".join((r.stdout + r.stderr).strip().splitlines()[-12:])[-1500:])
+        for attempt in (1, 2):
+            if attempt == 2:
+                shutil.rmtree(d, ignore_errors=True)
+                time.sleep(20)                            # let the previous QEMU's forwarded ports and TCG threads go
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            open(f"{a.out}/install.log" + ("" if attempt == 2 else ".1"), "w").write(r.stdout + r.stderr)
+            if r.returncode == 0:
+                break
+            tail += " | attempt %d rc=%d, last install output: %s" % (attempt, r.returncode, " / ".join((r.stdout + r.stderr).strip().splitlines()[-12:])[-1500:])
+        if r.returncode == 0:
+            tail = " (first attempt failed:" + tail + ")" if tail else ""
         self.step("install-base-system", r.returncode == 0, f"answer-file install ({int(time.time()-t)}s){tail}")
         os.rename(f"{d}/target.qcow2", base)
         return base
