@@ -48,12 +48,17 @@ pub struct RelayInfo {
 /// dropped when the last one ends (here: the VM's single `vga` operation).
 struct Shared<T> {
     inner: Mutex<(Option<Arc<T>>, usize)>,
+    /// Held while a value is being torn down on the daemon, and by every join:
+    /// a new operation is not opened until the old one is really closed
+    /// (Incus refuses a second vga session while the first is still ending).
+    gate: Mutex<()>,
 }
 
 impl<T> Shared<T> {
     fn new() -> Self {
         Self {
             inner: Mutex::new((None, 0)),
+            gate: Mutex::new(()),
         }
     }
 
@@ -62,6 +67,7 @@ impl<T> Shared<T> {
     where
         F: std::future::Future<Output = Result<T>>,
     {
+        let _gate = self.gate.lock().await;
         let mut g = self.inner.lock().await;
         let v = match &g.0 {
             Some(v) => v.clone(),
@@ -344,6 +350,7 @@ async fn handle(
     // Leave the shared vga operation; the last connection out ends it so the
     // VM's console is free again.
     if let Some(used) = op_used.take() {
+        let _gate = share.gate.lock().await;
         let gone = share.leave(None).await;
         drop(used);
         if let Some(g) = gone {
@@ -412,6 +419,7 @@ async fn handle_inner(
             Err(e) => {
                 // Leave (and drop, as broken) the operation this attempt used.
                 if let Some(used) = op_used.take() {
+                    let _gate = share.gate.lock().await;
                     if let Some(g) = share.leave(Some(&used)).await {
                         drop(used);
                         if let Ok(op) = Arc::try_unwrap(g) {
@@ -419,11 +427,11 @@ async fn handle_inner(
                         }
                     }
                 }
-                if attempt >= 5 {
+                if attempt >= 8 {
                     return Err(e);
                 }
                 warn!("SPICE relay {instance}: upstream link attempt {attempt} failed ({e}), retrying");
-                tokio::time::sleep(std::time::Duration::from_millis(400 * attempt as u64)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
             }
         }
     };
@@ -586,6 +594,21 @@ mod tests {
             2,
             "a new op after the last ended"
         );
+    }
+
+    #[tokio::test]
+    async fn join_waits_until_the_old_op_is_closed() {
+        let sh: Shared<u32> = Shared::new();
+        let gate = sh.gate.lock().await;
+        let pending = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            sh.join(async { Ok::<u32, Error>(1) }),
+        )
+        .await;
+        assert!(pending.is_err(), "a join must wait while an op is closing");
+        drop(gate);
+        let v = sh.join(async { Ok::<u32, Error>(1) }).await.unwrap();
+        assert_eq!(*v, 1);
     }
 
     #[tokio::test]
