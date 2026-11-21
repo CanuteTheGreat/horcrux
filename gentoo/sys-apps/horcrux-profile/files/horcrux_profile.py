@@ -17,6 +17,8 @@ Profile (schema 1), every key optional except schema and machine.hostname:
     [[repos]]   name = "x"  sync_uri = "..."  sync_type = "git"  priority = 50  snapshot = "bundle:repos/x"  deploy_key = "bundle:keys/x"  source_ok = true
     [[binrepos]] name = "x"  uri = "https://..."  priority = 10
     [software]  packages = ["cat/pkg", ...]   sets = ["@x"]   allow_source = ["cat/pkg"]
+                preinstall = ["cat/pkg-config"]   (installed before the rest is resolved: packages that own /etc/portage
+                keyword/USE/licence files the other packages need)
     [portage]   use = { "cat/pkg" = "flag -flag" }   accept_keywords = { "cat/pkg" = "~amd64" }   license = { "cat/pkg" = "LIC" }
                 mask = { ">=cat/pkg-2" = "" }   unmask = { "=cat/pkg-1" = "" }
     [services]  enable = ["sshd", "name:runlevel"]   disable = [...]
@@ -101,7 +103,7 @@ def problems(mp, bundle=None):
             if not NAME_RE.match(g):
                 errs.append(f"users.{n}: invalid group {g!r}")
     sw = mp.get("software", {})
-    for a in list(sw.get("packages", [])) + list(sw.get("sets", [])) + list(sw.get("allow_source", [])):
+    for a in list(sw.get("packages", [])) + list(sw.get("sets", [])) + list(sw.get("allow_source", [])) + list(sw.get("preinstall", [])):
         if not ATOM_RE.match(str(a)):
             errs.append(f"software: {a!r} is not a package atom")
     for sect in mp.get("portage", {}):
@@ -172,7 +174,7 @@ def desired_atoms(mp, layers=(), distdir="/var/cache/distfiles", installed=lambd
         if fp and (os.path.exists(os.path.join(distdir, fp.get("distfile", ""))) or installed(fp["atom"])):
             out.append(fp["atom"])
     sw = mp.get("software", {})
-    out += list(sw.get("sets", [])) + list(sw.get("packages", []))
+    out += list(sw.get("preinstall", [])) + list(sw.get("sets", [])) + list(sw.get("packages", []))
     seen, res = set(), []
     for a in out:
         if a not in seen:
@@ -186,6 +188,26 @@ PORTAGE_TABLES = ("use", "accept_keywords", "license", "mask", "unmask")
 
 
 RESOLVE_FAILED = ("!!!", "masked by:", "there are no ebuilds", "Multiple package instances", "slot conflict")
+# warnings emerge prints with "!!!" although the plan is fine
+_RESOLVE_WARNINGS = ("!!! The following binary packages have been ignored due to changed dependencies",
+                     "!!! The following binary packages have been ignored due to non matching USE")
+
+
+def resolve_failed(text):
+    """True when `emerge -p` output says the request can't be satisfied (its warning blocks about ignored binary packages don't count)"""
+    lines, skip = [], False
+    for l in (text or "").splitlines():
+        if l.startswith(_RESOLVE_WARNINGS):
+            skip = True
+            continue
+        if skip and (not l.strip() or l.startswith((" ", "\t", "NOTE:"))):
+            continue
+        skip = False
+        lines.append(l)
+    rest = "\n".join(lines)
+    return any(m in rest for m in RESOLVE_FAILED)
+
+
 _AU_SECTIONS = (("keyword changes", "accept_keywords"), ("USE changes", "use"), ("license changes", "license"),
                 ("mask changes", "unmask"))
 _AU_LINE = re.compile(r"^([<>=~]*)([A-Za-z0-9+_.-]+/[A-Za-z0-9+_.-]+?)(-[0-9][^\s:]*)?(:\S+)?(::\S+)?\s+(.*)$")
@@ -217,6 +239,19 @@ def autounmask_hints(text):
 
 def format_hints(h):
     return "\n".join(f"[portage.{t}]\n" + "\n".join(f'"{a}" = "{v}"' for a, v in sorted(d.items())) for t, d in h.items())
+
+
+def resolve_failure(text, limit=80):
+    """the part of a failed `emerge -p` that explains it: everything except the merge-list lines and the progress noise.
+    Slot conflicts and blockers are reported in free-form paragraphs, so a fixed prefix filter would drop the reason."""
+    keep = []
+    for l in text.splitlines():
+        s = l.strip()
+        if not s or re.match(r"^\[(binary|ebuild)", s) or s.startswith(("Calculating dependencies", "These are the packages", "Total:",
+                                                                          "Local copy of remote index", "Fetching ")):
+            continue
+        keep.append(l.rstrip())
+    return "\n".join(keep[-limit:]) if keep else text.strip()[-4000:]
 
 
 def portage_files(mp, layers=(), arch_kw="amd64"):
@@ -560,18 +595,29 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
     if SELF_ATOM not in atoms and (sy.run(["portageq", "best_visible", "/", SELF_ATOM], check=False, capture=True) or "").strip().startswith(SELF_ATOM.split("/")[0]):
         atoms.append(SELF_ATOM)          # this program, so later `horcrux-profile apply` runs come from the package
     rec["packages"] = atoms
+    base = ["emerge", "--update", "--newuse", "--getbinpkg", "--usepkg", "--select", "--noreplace", "--quiet-build=y", "--with-bdeps=n", *emerge_args]
+    pre_atoms = [a for a in mp.get("software", {}).get("preinstall", []) if a in atoms]
+    if pre_atoms:
+        # packages owning /etc/portage files (keywords, USE, licences) that the rest of the profile needs: Portage only sees those
+        # files once they are installed, so they go in first, under the same binary-only rule
+        pre = sy.run(base + ["--pretend", "--verbose", "--color=n", *pre_atoms], check=False, capture=True)
+        if resolve_failed(pre):
+            raise RuntimeError("the preinstall packages of the machine profile can't be resolved:\n" + resolve_failure(pre or ""))
+        bad = forbidden_source_builds(source_builds(pre or ""), mp)
+        if bad:
+            raise RuntimeError("these would be compiled on this machine (no binary package on the binhosts): " + ", ".join(bad)
+                               + " - publish them on the binhost or list them in software.allow_source")
+        sy.run(base + pre_atoms, env={"PORTAGE_NICENESS": "10"})
     if atoms:
-        base = ["emerge", "--update", "--newuse", "--getbinpkg", "--usepkg", "--select", "--noreplace", "--quiet-build=y", "--with-bdeps=n", *emerge_args]
         pre = sy.run(base + ["--pretend", "--verbose", "--color=n", *atoms], check=False, capture=True)
-        if any(m in (pre or "") for m in RESOLVE_FAILED):
+        if resolve_failed(pre):
             # name EVERY missing keyword/USE/licence/unmask at once, in profile syntax, instead of one error per attempt
             au = sy.run(base + ["--pretend", "--color=n", "--autounmask=y", "--autounmask-write=n", "--autounmask-continue=n", *atoms],
                         check=False, capture=True)
             hints = autounmask_hints(au or "")
             if hints:
                 raise RuntimeError("the packages need these [portage.*] entries in the machine profile:\n" + format_hints(hints))
-            raise RuntimeError("the packages of the machine profile can't be resolved:\n"
-                               + "\n".join(l for l in pre.splitlines() if l.startswith(("emerge:", "!!!", "- ", "(dependency"))))
+            raise RuntimeError("the packages of the machine profile can't be resolved:\n" + resolve_failure(pre or ""))
         bad = forbidden_source_builds(source_builds(pre or ""), mp)
         if bad:
             raise RuntimeError("these would be compiled on this machine (no binary package on the binhosts): " + ", ".join(bad)
