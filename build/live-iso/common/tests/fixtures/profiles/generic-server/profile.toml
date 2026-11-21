@@ -1,0 +1,39 @@
+# Generic server machine profile for the machine-profile QEMU gate (machine-profile-test.py): stock server ISO + this file = the machine.
+schema = 1
+
+[machine]
+hostname = "hx-profile-srv"
+edition = "server"
+timezone = "UTC"
+
+[disk]
+disks = ["first"]
+filesystem = "zfs"
+encryption = true
+
+[[users]]
+name = "hxadmin"
+fullname = "Horcrux administrator"
+admin = true
+groups = ["horcrux-admin"]
+
+[[users]]
+name = "backup"
+admin = false
+groups = ["users"]
+
+[hardware]
+layers = "auto"
+
+[software]
+packages = ["app-misc/tmux", "sys-apps/smartmontools", "sys-apps/nvme-cli"]
+
+[portage.use]
+"app-misc/tmux" = "-vim-syntax"
+
+[[files]]
+path = "/etc/motd.d/50-role"
+content = "Role: profile-gate server\n"
+
+[services]
+enable = ["smartd"]

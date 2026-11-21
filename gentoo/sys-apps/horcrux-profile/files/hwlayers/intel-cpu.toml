@@ -1,0 +1,10 @@
+# Intel CPUs: microcode updates loaded early (AMD microcode is part of sys-kernel/linux-firmware, already in every image).
+id = "intel-cpu"
+title = "Intel CPU microcode"
+packages = ["sys-firmware/intel-microcode"]
+
+[match]
+cpu_vendor = ["GenuineIntel"]
+
+[portage.license]
+"sys-firmware/intel-microcode" = "intel-ucode"
