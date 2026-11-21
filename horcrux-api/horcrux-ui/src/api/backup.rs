@@ -287,17 +287,32 @@ pub fn format_bytes(bytes: u64) -> String {
 /// Local date/time of a unix timestamp.
 pub fn format_time(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
-        .map(|d| {
-            d.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string()
-        })
+        .map(|d| format_in(&d.with_timezone(&chrono::Local)))
         .unwrap_or_else(|| ts.to_string())
+}
+
+/// `2026-11-19 13:53:00 +01:00`: backup and job times always carry the UTC
+/// offset of the zone they are shown in (the browser's), never a bare clock time.
+fn format_in<Tz: chrono::TimeZone>(d: &chrono::DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    d.format("%Y-%m-%d %H:%M:%S %:z").to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn times_carry_their_utc_offset() {
+        use chrono::TimeZone;
+        let berlin = chrono::FixedOffset::east_opt(3600).unwrap();
+        let d = berlin.with_ymd_and_hms(2026, 11, 19, 13, 53, 0).unwrap();
+        assert_eq!(format_in(&d), "2026-11-19 13:53:00 +01:00");
+        let la = chrono::FixedOffset::west_opt(8 * 3600).unwrap();
+        assert!(format_in(&d.with_timezone(&la)).ends_with(" -08:00"));
+    }
 
     #[test]
     fn retention_fields_and_summary() {
