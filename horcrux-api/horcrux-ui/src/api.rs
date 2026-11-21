@@ -3251,6 +3251,7 @@ pub mod libvirt;
 pub mod metric_servers;
 pub mod ovf;
 pub mod passthrough;
+pub mod remote_play;
 pub mod s3;
 pub mod sdn;
 pub mod sdn_zones;

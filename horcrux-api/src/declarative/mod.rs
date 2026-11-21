@@ -52,6 +52,10 @@ pub struct Spec {
     /// docs/design/horcrux-console.md section 9). Absent = unmanaged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub console: Option<horcrux_common::console::ConsoleSettings>,
+    /// Remote Play node settings (ports, Wake-on-LAN, discovery relay;
+    /// docs/design/gaming-vm.md section 16). Absent = unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_play: Option<horcrux_common::remote_play::RemotePlaySettings>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
@@ -302,6 +306,7 @@ pub struct Live {
     pub subnets: Vec<Subnet>,
     pub vms: Vec<VmConfig>,
     pub console: horcrux_common::console::ConsoleSettings,
+    pub remote_play: horcrux_common::remote_play::RemotePlaySettings,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -611,13 +616,43 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // Remote Play node settings: one node-wide object.
+    if let Some(w) = &spec.remote_play {
+        if let Err(e) = w.validate() {
+            p.errors.push(format!("remote_play: {e}"));
+        } else if *w != live.remote_play {
+            let a = serde_json::to_value(&live.remote_play).unwrap_or_default();
+            let b = serde_json::to_value(w).unwrap_or_default();
+            let mut d = Vec::new();
+            if let (Some(a), Some(b)) = (a.as_object(), b.as_object()) {
+                for (k, bv) in b {
+                    if a.get(k) != Some(bv) {
+                        d.push(format!(
+                            "{k}: {} -> {bv}",
+                            a.get(k).cloned().unwrap_or_default()
+                        ));
+                    }
+                }
+            }
+            creates.push(ch("remote_play", "settings", Action::Update, d));
+        }
+    }
+
     // Creates/updates run dependency-first (pools, zones, vnets, subnets,
     // VMs); deletes run in the opposite order (VMs first, pools last).
     let rank = |k: &str| {
-        ["console", "storage_pool", "zone", "vnet", "subnet", "vm"]
-            .iter()
-            .position(|x| *x == k)
-            .unwrap_or(9)
+        [
+            "console",
+            "remote_play",
+            "storage_pool",
+            "zone",
+            "vnet",
+            "subnet",
+            "vm",
+        ]
+        .iter()
+        .position(|x| *x == k)
+        .unwrap_or(9)
     };
     creates.sort_by_key(|c| rank(&c.kind));
     deletes.sort_by_key(|c| std::cmp::Reverse(rank(&c.kind)));
@@ -790,6 +825,7 @@ pub fn export(live: &Live) -> Spec {
         }),
         vms: Some(vms),
         console: Some(live.console.clone()),
+        remote_play: Some(live.remote_play.clone()),
         extra: BTreeMap::new(),
     }
 }

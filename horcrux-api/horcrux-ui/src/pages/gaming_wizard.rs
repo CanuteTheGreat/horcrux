@@ -43,6 +43,8 @@ pub fn GamingVmWizard() -> impl IntoView {
     let vbs = create_rw_signal(true);
     let hugepages = create_rw_signal(true);
     let start = create_rw_signal(true);
+    let remote_steam = create_rw_signal(false);
+    let remote_moonlight = create_rw_signal(false);
     let show_settings = create_rw_signal(false);
     let edit_settings = create_rw_signal(pt::GamingSettings::default());
 
@@ -136,6 +138,21 @@ pub fn GamingVmWizard() -> impl IntoView {
             .map(|g| g.trim().to_string())
             .filter(|g| !g.is_empty())
             .collect(),
+        remote_play: {
+            use horcrux_common::remote_play::{RemotePlayClient, VmRemotePlay};
+            let mut clients = Vec::new();
+            if remote_steam.get_untracked() {
+                clients.push(RemotePlayClient::Steam);
+            }
+            if remote_moonlight.get_untracked() {
+                clients.push(RemotePlayClient::Moonlight);
+            }
+            (!clients.is_empty()).then(|| VmRemotePlay {
+                enabled: true,
+                clients,
+                ..Default::default()
+            })
+        },
         start: start.get_untracked(),
         dry_run,
     };
@@ -436,6 +453,9 @@ pub fn GamingVmWizard() -> impl IntoView {
                 <p class="form-help">"Checked against the anti-cheat table below before anything is created."</p>
             </div>
 
+            <label class="checkbox"><input type="checkbox" id="gaming-remote-steam" prop:checked=remote_steam on:change=move |ev| remote_steam.set(event_target_checked(&ev))/>"Steam Remote Play ready (Steam Link on TVs and phones, other PCs, Remote Play Together): network card on the LAN, Wake-on-LAN, guest set up for it"</label>
+            <label class="checkbox"><input type="checkbox" id="gaming-remote-moonlight" prop:checked=remote_moonlight on:change=move |ev| remote_moonlight.set(event_target_checked(&ev))/>"Also Moonlight clients (you install Sunshine in Windows yourself; Horcrux opens the network for it)"</label>
+            <p class="form-help">"Optional, next to the Horcrux Console. The VM's Remote Play page shows every prerequisite once the VM exists."</p>
             <label class="checkbox"><input type="checkbox" id="gaming-start" prop:checked=start on:change=move |ev| start.set(event_target_checked(&ev))/>"Start the VM and install Windows right away"</label>
             <div class="form-actions">
                 <button type="button" class="btn" id="gaming-preview" disabled=busy on:click=preview>"Check plan"</button>

@@ -244,6 +244,23 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             if id == "defaults" {
                 return read_write(m, P::VmAudit, P::SysModify, "/nodes");
             }
+            // Remote Play node settings (ports, Wake-on-LAN, relay): read by
+            // VM auditors, changed with Sys.Modify.
+            if id == "remote-play" {
+                return if is_read(m) {
+                    Requirement::AnyBelow {
+                        privilege: P::VmAudit,
+                        prefix: "/vms".into(),
+                    }
+                } else {
+                    need(P::SysModify, "/nodes")
+                };
+            }
+            // A VM's Remote Play settings, status, guest setup and LAN card:
+            // configuration of that VM.
+            if arg(2) == "remote-play" {
+                return read_write(m, P::VmAudit, P::VmConfig, format!("/vms/{}", id));
+            }
             // Installing the Horcrux guest tools changes software inside
             // the guest: a configuration change, not a console view.
             if arg(2) == "console" && arg(3) == "guest-tools" {
@@ -611,6 +628,34 @@ mod tests {
         match r {
             Requirement::Privilege { privilege, path } => (privilege, path),
             other => panic!("expected a privilege requirement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn remote_play_routes_map_to_privileges() {
+        assert_eq!(
+            priv_of(requirement("PUT", "/api/vms/remote-play/settings")),
+            (P::SysModify, "/nodes".into())
+        );
+        assert!(matches!(
+            requirement("GET", "/api/vms/remote-play/settings"),
+            Requirement::AnyBelow {
+                privilege: P::VmAudit,
+                ..
+            }
+        ));
+        for (m, p, want) in [
+            ("GET", "/api/vms/g1/remote-play", P::VmAudit),
+            ("GET", "/api/vms/g1/remote-play/status", P::VmAudit),
+            ("PUT", "/api/vms/g1/remote-play", P::VmConfig),
+            ("POST", "/api/vms/g1/remote-play/guest-setup", P::VmConfig),
+            ("POST", "/api/vms/g1/remote-play/lan-nic", P::VmConfig),
+        ] {
+            assert_eq!(
+                priv_of(requirement(m, p)),
+                (want, "/vms/g1".into()),
+                "{m} {p}"
+            );
         }
     }
 

@@ -659,6 +659,17 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "VM networking + hardware"
           bash horcrux-api/tests/vm_nic_e2e.sh target/debug/horcrux-api
 
+      - name: "Remote Play ready (Wake-on-LAN start, Steam discovery relay, scoped port forwards)"
+        # remote_play_e2e.sh: real QEMU + nftables in a privileged sibling
+        # with "lan" (allowed) and "other" network namespaces: a magic packet
+        # starts the VM only from the allowed network, a Steam discovery
+        # request is relayed to the VM behind NAT and its answer comes back,
+        # the TCP Remote Play port is forwarded only from the allowed network,
+        # and turning the option off removes the rules and listeners.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Remote Play ready"
+          bash horcrux-api/tests/remote_play_e2e.sh target/debug/horcrux-api
+
       - name: "Guest save state (LXC containers - CRIU, fallback without it)"
         # guest_state_ct_e2e.sh: the fallback half (no CRIU: clean shutdown +
         # restart with the reason shown) always runs; with CRIU installed

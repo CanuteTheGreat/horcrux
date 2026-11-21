@@ -20,6 +20,7 @@ pub mod pci;
 /// Virtual machine management module
 /// Handles QEMU/KVM, LXD, and Incus virtual machine lifecycle
 pub mod qemu;
+pub mod remote_play;
 pub mod replication;
 pub mod savestate;
 pub mod snapshot;
