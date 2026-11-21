@@ -30,6 +30,11 @@ mon_data_avail_warn = 2
 mon_data_avail_crit = 1
 [osd]
 osd_objectstore = bluestore
+# Ceph 19's OSD sends its first mon command (update_crush_device_class) while its
+# MonClient still holds a zero-fsid monmap, and the mon answers "wrong fsid" (exit 250,
+# CI runs 22551/23079). Send no mon command during OSD init; the script places the OSD.
+osd_class_update_on_start = false
+osd_crush_update_on_start = false
 C
 rm -f /tmp/mon.keyring /tmp/monmap; ceph-authtool --create-keyring /tmp/mon.keyring --gen-key -n mon. --cap mon 'allow *' >/dev/null
 monmaptool --create --add $HOST $IP --fsid $FSID /tmp/monmap >/dev/null
@@ -42,21 +47,19 @@ ceph mgr module ls >/dev/null 2>&1 || true
 UUID=$(uuidgen); ID=$(ceph osd new $UUID)
 D=/var/lib/ceph/osd/ceph-$ID; rm -rf $D; mkdir -p $D
 chown ceph:ceph $D
+ceph osd crush add-bucket $HOST host >/dev/null; ceph osd crush move $HOST root=default >/dev/null
+ceph osd crush add osd.$ID 0.003 host=$HOST >/dev/null; ceph osd crush set-device-class hdd osd.$ID >/dev/null
 echo '{"cephx_secret":"x"}' >/dev/null
 ceph-osd -i $ID --mkfs --osd-uuid $UUID --setuser ceph --setgroup ceph 2>&1 | tail -3
 chown -R ceph:ceph $D
-# Ceph 19 (squid) OSD init can send its first mon command (update_crush_device_class)
-# while its MonClient still holds a monmap with a zero fsid; the mon answers
-# "wrong fsid" and ceph-osd exits 250 before daemonizing (run 22551). The mon
-# and the OSD's store are fine, so print the MonClient trace that names the race
-# and start the OSD once more; a second failure falls through to the ERR trap.
-osd_start() { ceph-osd -i "$ID" --setuser ceph --setgroup ceph --debug-monc 10 >/dev/null 2>&1; }
-osd_start || {
-  echo "ceph-osd start failed (rc=$?); OSD MonClient trace:"
+# The OSD sends no mon command at init (see ceph.conf), so the start is deterministic. If it
+# still exits non-zero, print its MonClient trace and let the ERR trap print the daemon logs.
+rc=0; ceph-osd -i "$ID" --setuser ceph --setgroup ceph --debug-monc 10 >/dev/null 2>&1 || rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "ceph-osd start failed (rc=$rc); OSD MonClient trace:"
   grep -E 'monc|fsid|mon_cmd' "/var/log/ceph/ceph-osd.$ID.log" | tail -30 || true
-  echo "starting the OSD once more"
-  osd_start || echo "ceph-osd failed again (rc=$?)"
-}
+  false # the ERR trap prints the daemon logs
+fi
 grep -qx ceph-osd /proc/[0-9]*/comm 2>/dev/null # no OSD daemon -> the ERR trap prints the logs
 for i in $(seq 60); do ceph osd stat | grep -q '1 up' && break; sleep 1; done
 ceph osd stat
@@ -65,7 +68,8 @@ runuser -u ceph -- ceph-mgr -i x >/dev/null 2>&1
 # pool stats (ceph df) come from the mgr
 for i in $(seq 60); do ceph mgr stat 2>/dev/null | grep -q '"available": true' && break; sleep 1; done
 ceph osd pool create hxpool 8 >/dev/null
-for i in $(seq 90); do ceph pg stat | grep -q 'active+clean' && break; sleep 1; done
+# every PG clean, not just one (a partial "1 active+clean" used to end this wait early)
+for i in $(seq 90); do ceph pg stat | grep -E 'active\+clean' | grep -vqE 'creating|peering|activating|unknown' && break; sleep 1; done
 ceph pg stat
 for i in $(seq 60); do ceph df --format json | grep -q max_avail && break; sleep 1; done
 rbd pool init hxpool
