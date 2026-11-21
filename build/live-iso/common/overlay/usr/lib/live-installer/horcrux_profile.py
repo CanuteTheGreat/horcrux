@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """horcrux-profile: apply a declarative MACHINE PROFILE to this system (plan / apply / generations / rollback).
 
-One stock installer ISO serves every machine. What makes a machine "hogshead" or "a lab server" is a small TOML file (the machine
+One stock installer ISO serves every machine. What makes a machine "the laptop in the office" or "a lab server" is a small TOML file (the machine
 profile) plus optional bundle files next to it. The live installer runs this program inside the freshly installed system; the same
 program (package sys-apps/horcrux-profile) applies later edits of the profile, so a reinstall and an edited profile converge to the
 same result. Everything comes from BINARY packages (the binhosts in /etc/portage/binrepos.conf); a source build is refused unless it
