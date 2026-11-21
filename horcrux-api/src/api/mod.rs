@@ -50,6 +50,7 @@ pub mod ovf;
 pub mod passthrough;
 pub mod prometheus_export;
 pub mod protection;
+pub mod remote_play;
 pub mod resource_pools;
 #[cfg(feature = "s3-gateway")]
 pub mod s3_gateway;

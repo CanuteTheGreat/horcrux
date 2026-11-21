@@ -136,6 +136,8 @@ impl VmManager {
             hw_without_cdrom.adv.protection = vm.hardware.adv.protection;
             hw_without_cdrom.adv.lock = vm.hardware.adv.lock.clone();
             hw_without_cdrom.adv.hookscript = vm.hardware.adv.hookscript.clone();
+            // remote play is host-side (forwards, relay, Wake-on-LAN): live
+            hw_without_cdrom.adv.remote_play = vm.hardware.adv.remote_play.clone();
             let cold_change =
                 next.cpus != vm.cpus || next.memory != vm.memory || hw_without_cdrom != vm.hardware;
             if running && cold_change {

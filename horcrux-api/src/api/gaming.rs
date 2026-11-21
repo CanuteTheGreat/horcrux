@@ -137,9 +137,20 @@ async fn create(
     })
     .await
     .map_err(|e| Error::System(format!("gaming check: {e}")))?;
+    let default_bridge = crate::api::vm_hw::default_vm_network(&state).await;
+    let sys = std::path::Path::new("/sys/class/net");
+    let lan = |b: &str| !crate::vm::remote_play::bridge_uplinks(sys, b).is_empty();
+    let lan_bridge = default_bridge.clone().filter(|b| lan(b)).or_else(|| {
+        crate::api::vm_hw::host_bridges()
+            .into_iter()
+            .map(|b| b.name)
+            .find(|b| lan(b))
+    });
     let host = HostFacts {
         memory_mb: host_memory_mb(),
-        default_bridge: crate::api::vm_hw::default_vm_network(&state).await,
+        default_bridge,
+        lan_bridge,
+        macvtap_uplink: crate::api::vm_hw::macvtap_uplinks().into_iter().next(),
     };
     let mut plan = gaming::compose(&req, &report, &host, &settings, &compat)?;
     // ISOs from the library, bridges that exist, firmware/TPM present
@@ -172,6 +183,9 @@ async fn create(
         return Err(e.into());
     }
     tracing::info!("gaming VM {} created ({})", vm.id, vm.name);
+    if vm.hardware.adv.remote_play.is_some() {
+        crate::api::remote_play::kick();
+    }
     plan.config = vm.clone();
     if req.start {
         state.vm_manager.start_vm(&vm.id).await?;

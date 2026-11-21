@@ -262,6 +262,10 @@ pub struct GamingVmRequest {
     /// Titles the user wants to play: their requirements are applied and
     /// blocked ones are reported before anything is created.
     pub games: Vec<String>,
+    /// Steam Remote Play / Moonlight readiness (section 16): the VM gets a
+    /// network card on the LAN when the host has one and the node side
+    /// (Wake-on-LAN, relay, forwards) is set up.
+    pub remote_play: Option<horcrux_common::remote_play::VmRemotePlay>,
     /// Start the VM (and with it the unattended install) right away.
     pub start: bool,
     /// Only compose and return the plan; create nothing.
@@ -274,6 +278,10 @@ pub struct HostFacts {
     pub memory_mb: u64,
     /// The node's default VM network (bridge).
     pub default_bridge: Option<String>,
+    /// A bridge with a physical port (on the LAN), preferring the default.
+    pub lan_bridge: Option<String>,
+    /// A wired interface a macvtap card can use.
+    pub macvtap_uplink: Option<String>,
 }
 
 /// Windows answer-file inputs.
@@ -636,12 +644,45 @@ pub fn compose(
     }
 
     // ---- network
+    let remote = req.remote_play.clone().filter(|r| r.enabled);
+    if let Some(r) = &remote {
+        r.validate().map_err(bad)?;
+    }
+    let wants_lan = remote
+        .as_ref()
+        .is_some_and(|r| r.network != horcrux_common::remote_play::RemotePlayNetwork::Nat);
+    let mut attach = horcrux_common::NicAttach::Bridge;
     let bridge = match req.bridge.as_deref() {
         Some(b) => Some(b.trim().to_string()).filter(|b| !b.is_empty()),
+        None if wants_lan => {
+            if let Some(b) = &host.lan_bridge {
+                notes.push(format!(
+                    "Remote Play: the network card goes on {b}, a bridge on the LAN, so Steam/Moonlight clients find the VM directly"
+                ));
+                Some(b.clone())
+            } else if let Some(i) = &host.macvtap_uplink {
+                attach = horcrux_common::NicAttach::Macvtap;
+                notes.push(format!(
+                    "Remote Play: the network card sits directly on {i} (macvtap), so clients on the LAN find the VM; this host itself can't reach the VM over the network (the Horcrux console still works)"
+                ));
+                Some(i.clone())
+            } else {
+                warnings.push("Remote Play: this host has no bridge on the LAN and no wired interface for macvtap: the VM stays behind NAT and Horcrux relays discovery and forwards the ports".into());
+                host.default_bridge.clone()
+            }
+        }
         None => host.default_bridge.clone(),
     };
     if bridge.is_none() {
+        if remote.is_some() {
+            return Err(bad(
+                "Remote Play needs a network card: pick a network or leave it on the default",
+            ));
+        }
         notes.push("no network card: Windows installs offline with a local account; add one on the Hardware page later".into());
+    }
+    if remote.is_some() {
+        notes.push("Remote Play: install Steam in Windows (or let Horcrux do it from the VM's Remote Play page once Windows is installed) and turn on automatic logon there, so a Wake-on-LAN start ends with Steam ready".into());
     }
 
     // ---- input
@@ -674,7 +715,7 @@ pub fn compose(
             .map(|b| VmNic {
                 model: Default::default(),
                 bridge: b,
-                attach: Default::default(),
+                attach,
                 mac: None,
                 vlan: None,
             })
@@ -709,6 +750,7 @@ pub fn compose(
     hw.adv.evdev = evdev;
     hw.adv.smbios = Some(new_smbios(settings));
     hw.adv.vmgenid = Some("auto".into());
+    hw.adv.remote_play = remote;
 
     let config = VmConfig {
         id,
@@ -1272,7 +1314,65 @@ mod tests {
         HostFacts {
             memory_mb: 65536,
             default_bridge: Some("vmbr0".into()),
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn remote_play_puts_the_card_on_the_lan_when_it_can() {
+        use horcrux_common::remote_play::{RemotePlayNetwork, VmRemotePlay};
+        use horcrux_common::NicAttach;
+        let s = GamingSettings::default();
+        let mut r = req();
+        r.remote_play = Some(VmRemotePlay {
+            enabled: true,
+            ..Default::default()
+        });
+        // default network is NAT-only, a LAN bridge exists: that one
+        let h = HostFacts {
+            memory_mb: 65536,
+            default_bridge: Some("natbr".into()),
+            lan_bridge: Some("vmbr0".into()),
+            macvtap_uplink: Some("enp5s0".into()),
+        };
+        let p = compose(&r, &report(), &h, &s, &compat()).unwrap();
+        let n = &p.config.hardware.nets[0];
+        assert_eq!((n.bridge.as_str(), n.attach), ("vmbr0", NicAttach::Bridge));
+        assert!(p.config.hardware.adv.remote_play.as_ref().unwrap().enabled);
+        // no LAN bridge: macvtap on the wired uplink
+        let h2 = HostFacts {
+            lan_bridge: None,
+            ..h.clone()
+        };
+        let p = compose(&r, &report(), &h2, &s, &compat()).unwrap();
+        let n = &p.config.hardware.nets[0];
+        assert_eq!(
+            (n.bridge.as_str(), n.attach),
+            ("enp5s0", NicAttach::Macvtap)
+        );
+        // neither: NAT with the relay, said up front
+        let h3 = HostFacts {
+            lan_bridge: None,
+            macvtap_uplink: None,
+            ..h.clone()
+        };
+        let p = compose(&r, &report(), &h3, &s, &compat()).unwrap();
+        assert_eq!(p.config.hardware.nets[0].bridge, "natbr");
+        assert!(p.warnings.iter().any(|w| w.contains("relays discovery")));
+        // the user asked for NAT, or named a network: kept
+        r.remote_play.as_mut().unwrap().network = RemotePlayNetwork::Nat;
+        let p = compose(&r, &report(), &h, &s, &compat()).unwrap();
+        assert_eq!(p.config.hardware.nets[0].bridge, "natbr");
+        r.remote_play.as_mut().unwrap().network = RemotePlayNetwork::Auto;
+        r.bridge = Some("lab".into());
+        let p = compose(&r, &report(), &h, &s, &compat()).unwrap();
+        assert_eq!(p.config.hardware.nets[0].bridge, "lab");
+        // no card at all is refused with remote play
+        r.bridge = Some(String::new());
+        assert!(compose(&r, &report(), &h, &s, &compat()).is_err());
+        // off by default
+        let p = compose(&req(), &report(), &h, &s, &compat()).unwrap();
+        assert!(p.config.hardware.adv.remote_play.is_none());
     }
 
     fn compat() -> Vec<CompatEntry> {
