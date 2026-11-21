@@ -448,5 +448,47 @@ class AppleFirmware(unittest.TestCase):
         self.assertIsNone(T2.capture_firmware(I(), sources=[]))
 
 
+class KernelLayerTransaction(unittest.TestCase):
+    """the T2 kernel layer's emerge: dracut's zfs module is omitted only while the kernel postinst runs, the lane's zfs-kmod is merged again,
+    and the new kernel gets its initramfs afterwards (the stock kernel's version equals the lane's, so Portage rebuilds nothing by itself)"""
+
+    def test_layer_declares_the_module_reinstall_and_the_lane_use(self):
+        lay = E.load(os.path.join(PROJECT_LAYERS, "apple-t2.toml"))
+        self.assertEqual(lay["kernel"]["reinstall"], ["sys-fs/zfs-kmod"])
+        self.assertEqual(lay["portage"]["use"], {"sys-kernel/gentoo-kernel": "-debug"})   # the USE the lane amd64/t2 is built with
+        self.assertIn("amd64/t2", lay["kernel"]["binrepo"]["uri"])
+
+    def test_transaction(self):
+        with tempfile.TemporaryDirectory() as d:
+            mods = os.path.join(d, "modules")
+            os.makedirs(os.path.join(mods, "6.18.64-p1-gentoo-dist-bin", "kernel"))
+            conf = os.path.join(d, "dracut.conf")
+            seen, cmds = [], []
+
+            class SY(E.Sys):
+                def run(self, cmd, check=True, capture=False, env=None):
+                    cmds.append(list(cmd))
+                    seen.append(os.path.exists(conf) and open(conf).read())
+                    if cmd[:2] == ["emerge", "--update"] or "sys-kernel/gentoo-kernel" in cmd:
+                        os.makedirs(os.path.join(mods, "6.18.64-p1-gentoo-dist-t2", "kernel"))
+                    return "x86_64-pc-linux-gnu" if cmd[:2] == ["portageq", "envvar"] else 0
+
+            old = E.DRACUT_KERNEL_TXN
+            E.DRACUT_KERNEL_TXN = conf
+            try:
+                E.kernel_transaction(SY(log=lambda *a: None), ["emerge", "sys-kernel/gentoo-kernel", "sys-fs/zfs-kmod"], ["sys-fs/zfs-kmod"], mods=mods)
+            finally:
+                E.DRACUT_KERNEL_TXN = old
+            self.assertFalse(os.path.exists(conf), "the temporary dracut config must be gone afterwards")
+            self.assertIn('omit_dracutmodules+=" zfs "', seen[0])                      # during the kernel transaction
+            self.assertEqual(cmds[1][:5], ["emerge", "--oneshot", "--usepkgonly", "--getbinpkg", "--binpkg-respect-user-patches=n"])
+            self.assertIn("sys-fs/zfs-kmod", cmds[1])                                  # binary-only reinstall of the module package
+            self.assertIn('omit_dracutmodules+=" zfs "', seen[1])
+            dr = [c for c in cmds if c and c[0] == "dracut"]
+            self.assertEqual(len(dr), 1)                                              # only the NEW kernel, with zfs (config removed by then)
+            self.assertIn("6.18.64-p1-gentoo-dist-t2", dr[0])
+            self.assertFalse(seen[-1])
+
+
 if __name__ == "__main__":
     unittest.main()

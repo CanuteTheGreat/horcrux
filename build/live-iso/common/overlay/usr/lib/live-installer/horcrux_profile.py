@@ -556,7 +556,7 @@ def apply_accounts(mp, sy):
 DRACUT_KERNEL_TXN = "/etc/dracut.conf.d/00-horcrux-profile-kernel-install.conf"
 
 
-def kernel_transaction(sy, cmd, reinstall=()):
+def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules"):
     """emerge a transaction that brings a new dist-kernel (a hardware layer's kernel binhost) together with its ZFS module.
 
     The kernel's postinst builds an initramfs through installkernel/dracut BEFORE zfs-kmod for that kernel is merged (zfs-kmod depends on
@@ -570,7 +570,6 @@ def kernel_transaction(sy, cmd, reinstall=()):
     kernel is in. A kernel of the SAME version as the one already installed (the stock kernel-bin vs the layer's patched gentoo-kernel) does not
     trigger Portage's slot-operator rebuild, so the old zfs.ko stays under the old kernel and the new kernel has none. Binary-only: the lane
     publishes the module built against exactly that kernel, a source build here would be a bug."""
-    mods = "/lib/modules"
     before = set(os.listdir(mods)) if os.path.isdir(mods) else set()
     if not sy.dry:
         sy.write(DRACUT_KERNEL_TXN, "# horcrux-profile: only while a kernel layer's packages are merged (removed afterwards, the initramfs is rebuilt)\n"
