@@ -33,11 +33,15 @@ if len(sys.argv)>2: d["prerelease"]=sys.argv[2]=="true"
 print(json.dumps(d))' "$2" ${3:+"$3"})
   curl -fsS "${auth[@]}" -X PATCH -H 'Content-Type: application/json' -d "$b" "$api/releases/$1" >/dev/null
 }
-put_asset() { # id file [name]
-  local id=$1 f=$2 name=${3:-$(basename "$2")} old a
-  old=$(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | python3 -c 'import json,sys;print(" ".join(str(a["id"]) for a in json.load(sys.stdin) if a["name"]==sys.argv[1]))' "$name")
-  for a in $old; do curl -fsS -X DELETE "${auth[@]}" "$api/releases/$id/assets/$a"; done
-  curl -fsS --retry 3 "${auth[@]}" -F "attachment=@$f" "$api/releases/$id/assets?name=$name" >/dev/null
+put_asset() { # id file [name]   (B2-backed storage drops PUTs intermittently: retry, removing any partial asset first)
+  local id=$1 f=$2 name=${3:-$(basename "$2")} old a try ok=0
+  for try in 1 2 3 4 5 6; do
+    old=$(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | python3 -c 'import json,sys;print(" ".join(str(a["id"]) for a in json.load(sys.stdin) if a["name"]==sys.argv[1]))' "$name") || old=
+    for a in $old; do curl -fsS -X DELETE "${auth[@]}" "$api/releases/$id/assets/$a" || true; done
+    if curl -fsS --retry 3 "${auth[@]}" -F "attachment=@$f" "$api/releases/$id/assets?name=$name" >/dev/null; then ok=1; break; fi
+    echo "::warning::upload of $name failed (attempt $try/6); retrying"; sleep $((try * 20))
+  done
+  [ "$ok" = 1 ] || { echo "::error::upload of $name failed after 6 attempts"; return 1; }
   echo "attached $name to release $id"
 }
 
