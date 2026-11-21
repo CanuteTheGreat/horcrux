@@ -101,15 +101,21 @@ def select(layers, spec, f=None, edition=None, force=()):
     return [by[i] for i in spec]
 
 
+def binrepo_index(uri, timeout=20):
+    """the text of the binhost's Packages index (network; raises when it cannot be read)"""
+    import urllib.request
+    with urllib.request.urlopen(uri.rstrip("/") + "/Packages", timeout=timeout) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def index_has(text, atom_cp):
+    return any(l.startswith("CPV: " + atom_cp + "-") for l in text.splitlines())
+
+
 def binrepo_has(uri, atom_cp, fetch=None, timeout=20):
     """does the binhost at `uri` publish cat/pkg? (reads its Packages index; network)"""
-    import urllib.request
     try:
-        if fetch:
-            txt = fetch(uri.rstrip("/") + "/Packages")
-        else:
-            with urllib.request.urlopen(uri.rstrip("/") + "/Packages", timeout=timeout) as r:
-                txt = r.read().decode("utf-8", "replace")
+        txt = fetch(uri.rstrip("/") + "/Packages") if fetch else binrepo_index(uri, timeout)
     except Exception:
         return False
-    return any(l.startswith("CPV: " + atom_cp + "-") for l in txt.splitlines())
+    return index_has(txt, atom_cp)
