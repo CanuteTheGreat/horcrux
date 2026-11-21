@@ -25,7 +25,7 @@ Complete Python client library with comprehensive examples.
 ```python
 from horcrux_client import HorcruxClient
 
-with HorcruxClient("http://localhost:8006", "admin", "admin") as client:
+with HorcruxClient("https://localhost", "admin", "admin") as client:
     vms = client.list_vms()
     vm = client.create_vm("my-vm", cpus=2, memory=2048, disk_size=20)
     client.start_vm(vm['id'])
@@ -56,7 +56,7 @@ Simple bash wrapper using `curl` and `jq` for command-line automation.
 ```bash
 source horcrux.sh
 
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 horcrux_list_vms
 horcrux_create_vm "my-vm" 2 2048 20
 horcrux_logout
@@ -103,7 +103,7 @@ client.create_backup(vm['id'], backup_type="full", compression="zstd")
 **Shell:**
 ```bash
 source horcrux.sh
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 
 # Create and configure
 vm_id=$(horcrux_create_vm "web-server" 4 8192 50 | jq -r '.id')
@@ -317,7 +317,7 @@ brew install curl jq
 
 **Environment Variables:**
 ```bash
-export HORCRUX_URL="http://localhost:8006"
+export HORCRUX_URL="https://localhost"
 export HORCRUX_USER="admin"
 export HORCRUX_PASS="admin"
 ```
@@ -325,12 +325,12 @@ export HORCRUX_PASS="admin"
 **Or in code:**
 ```python
 # Python
-client = HorcruxClient("http://localhost:8006", "admin", "admin")
+client = HorcruxClient("https://localhost", "admin", "admin")
 ```
 
 ```bash
 # Shell
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 ```
 
 ### 4. Run Examples

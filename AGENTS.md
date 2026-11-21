@@ -44,8 +44,9 @@ route under a new top-level `/api/<area>`, add a rule for it there - CI's
 `every_registered_route_is_mapped` test fails otherwise, and an unmapped
 area is administrators-only. Tests must create users through the admin API
 (`POST /api/users` + `POST /api/acl`): public registration is disabled. The
-API serves HTTPS (self-issued certificate): test clients use
-`https://localhost:8006` with `danger_accept_invalid_certs(true)` (or the
+API serves HTTPS (self-issued certificate) on the standard port 443 by default (CI servers start
+unprivileged, so they set `HORCRUX_PORT` explicitly): test clients use
+`https://localhost:<port>` with `danger_accept_invalid_certs(true)` (or the
 node CA from `/api/tls/ca.pem`). See docs/ACCESS_CONTROL.md.
 
 ## Code layout: a workspace of crates (keep CI build memory low)

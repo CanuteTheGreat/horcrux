@@ -4,7 +4,7 @@
 
 The Horcrux API provides comprehensive virtualization management capabilities including VM lifecycle, storage, networking, monitoring, security, and clustering. All endpoints (except `/api/health` and authentication endpoints) require authentication via JWT token or API key.
 
-**Base URL**: `http://localhost:8006`
+**Base URL**: `https://localhost`
 
 **API Version**: 1.0
 

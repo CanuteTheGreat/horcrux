@@ -32,7 +32,7 @@ brew install curl jq
 source horcrux.sh
 
 # Login
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 
 # List VMs
 horcrux_list_vms
@@ -56,7 +56,7 @@ horcrux_logout
 #!/bin/bash
 source /path/to/horcrux.sh
 
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 
 # Your automation here
 horcrux_list_vms
@@ -69,7 +69,7 @@ horcrux_logout
 
 ```bash
 # Set environment variables (optional)
-export HORCRUX_URL="http://localhost:8006"
+export HORCRUX_URL="https://localhost"
 export HORCRUX_USER="admin"
 export HORCRUX_PASS="admin"
 
@@ -169,7 +169,7 @@ export HORCRUX_PASS="admin"
 #!/bin/bash
 source horcrux.sh
 
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 
 # Create VM
 vm_output=$(horcrux_create_vm "web-server" 4 8192 100 "Qemu")
@@ -201,7 +201,7 @@ horcrux_logout
 #!/bin/bash
 source horcrux.sh
 
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 
 # Get all running VMs
 vms=$(horcrux_api_call "GET" "/api/vms")
@@ -221,7 +221,7 @@ horcrux_logout
 #!/bin/bash
 source horcrux.sh
 
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 
 # Get node stats
 echo "=== Node Statistics ==="
@@ -253,7 +253,7 @@ horcrux_logout
 #!/bin/bash
 source horcrux.sh
 
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 
 # Template VM
 TEMPLATE_VM="template-vm"
@@ -276,7 +276,7 @@ horcrux_logout
 #!/bin/bash
 source horcrux.sh
 
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 
 echo "=== Cluster Health Check ==="
 echo ""
@@ -305,7 +305,7 @@ horcrux_logout
 #!/bin/bash
 source horcrux.sh
 
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 
 # Get all VMs
 vms=$(horcrux_list_vms)
@@ -399,14 +399,14 @@ brew install jq
 
 Check if Horcrux is running:
 ```bash
-curl http://localhost:8006/api/health
+curl https://localhost/api/health
 ```
 
 ### Authentication failed
 
 Verify credentials:
 ```bash
-horcrux_login "http://localhost:8006" "admin" "admin"
+horcrux_login "https://localhost" "admin" "admin"
 ```
 
 ## License

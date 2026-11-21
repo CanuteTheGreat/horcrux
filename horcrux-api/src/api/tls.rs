@@ -124,7 +124,7 @@ async fn put_acme(State(state): St, Json(cfg): Json<AcmeConfig>) -> Result<Statu
 async fn order(State(state): St) -> Result<Json<crate::tls::CertificateInfo>, ApiError> {
     if state.tls_manager.config().http_redirect_port.is_none() {
         return Err(ApiError::ValidationError(
-            "ACME HTTP-01 needs the plain-HTTP port: set HORCRUX_HTTP_REDIRECT_PORT=80 (or forward port 80 to it)".into(),
+            "ACME HTTP-01 needs the plain-HTTP port: set http_redirect_port to 80 in Settings > Web listeners (or forward port 80 to it)".into(),
         ));
     }
     Ok(Json(

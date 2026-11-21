@@ -185,7 +185,7 @@ class Console:
                 ip = S.nic_ip(n["name"]).split("/")[0]
                 if ip:
                     break
-        return f"{self.p['web_scheme']}://{ip or '<no address yet>'}:{self.p['web_port']}/"
+        return S.web_url(self.p, ip or '<no address yet>')
 
     def roles(self):
         if self.p["network_mode"] != "wan-lan":
@@ -336,7 +336,7 @@ class Console:
         return rc, o
 
     def port_listening(self):
-        port = self.p.get("web_port", 8443)
+        port = self.p.get("web_port", 443)
         return S.sh(f"ss -ltn 2>/dev/null | grep -q ':{port} '")[0] == 0
 
     def wait_listening(self, timeout, interval=2, clock=time.monotonic, nap=time.sleep):
@@ -481,7 +481,7 @@ class Console:
         pf = self.p.get("admin_password_file")
         if not pf:
             return
-        port = self.p.get("web_port", 8443)
+        port = self.p.get("web_port", 443)
         script = (f"n=0; while [ $n -lt 300 ]; do if ss -ltn 2>/dev/null | grep -q ':{port} '; then sleep 5; rm -f {pf}; exit 0; fi; "
                   f"sleep 2; n=$((n+2)); done")
         subprocess.Popen(["sh", "-c", script], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)

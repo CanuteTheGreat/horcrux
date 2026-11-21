@@ -266,7 +266,7 @@ horcrux --version
 
 Open your browser and navigate to:
 ```
-https://localhost:8006
+https://localhost
 ```
 
 You should see the Horcrux dashboard.
@@ -288,7 +288,7 @@ The API and UI are served over HTTPS from a node-local CA. Download it once
 and trust it in your browser / tools:
 
 ```bash
-curl -k https://localhost:8006/api/tls/ca.pem -o horcrux-ca.pem
+curl -k https://localhost/api/tls/ca.pem -o horcrux-ca.pem
 ```
 
 ### 4. Login
@@ -298,7 +298,7 @@ curl -k https://localhost:8006/api/tls/ca.pem -o horcrux-ca.pem
 horcrux auth login
 
 # Or via API
-curl --cacert horcrux-ca.pem -X POST https://localhost:8006/api/auth/login \
+curl --cacert horcrux-ca.pem -X POST https://localhost/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "username": "admin",
@@ -328,7 +328,9 @@ Edit `/etc/horcrux/horcrux.toml`:
 ```toml
 [server]
 bind_address = "0.0.0.0"
-bind_port = 8006
+port = 443
+http_redirect_port = 80
+# extra_https_ports = [8006]   # optional: a historical port for existing API clients / cluster peers
 
 [database]
 path = "/var/lib/horcrux/horcrux.db"
@@ -358,7 +360,8 @@ export RUST_LOG=debug
 
 ```bash
 # Allow HTTP/HTTPS
-sudo iptables -A INPUT -p tcp --dport 8006 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT   # HTTP: redirects to HTTPS only
 
 # Allow Prometheus metrics
 sudo iptables -A INPUT -p tcp --dport 9090 -j ACCEPT
@@ -438,9 +441,9 @@ egrep -c '(vmx|svm)' /proc/cpuinfo
 ### Port Already in Use
 
 ```bash
-# Check what's using port 8006
-sudo netstat -tlnp | grep 8006
-sudo lsof -i :8006
+# Check what's using ports 443 / 80 (or the ports you configured in Settings > Web listeners)
+sudo netstat -tlnp | grep -E ':(443|80) '
+sudo lsof -i :443
 
 # Change port in config
 sudo vim /etc/horcrux/horcrux.toml
@@ -530,7 +533,7 @@ After installation:
 - **Documentation**: `/usr/share/doc/horcrux/` or `docs/` directory
 - **Logs**: `journalctl -u horcrux-api -f`
 - **CLI Help**: `horcrux --help`
-- **API Docs**: https://localhost:8006/api/docs
+- **API Docs**: https://localhost/api/docs
 - **Issues**: https://github.com/CanuteTheGreat/horcrux/issues
 
 ---

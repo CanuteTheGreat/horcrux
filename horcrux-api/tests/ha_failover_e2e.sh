@@ -51,7 +51,7 @@ for n in "${NODES[@]}"; do
 # (re)start this node's API with fast HA timings
 set -e
 if [ -f /var/lib/hx/api.pid ]; then kill \$(cat /var/lib/hx/api.pid) 2>/dev/null || true; sleep 2; fi
-HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/var/lib/hx \\
+HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/var/lib/hx \\
 HORCRUX_DATABASE_URL=sqlite:///var/lib/hx/horcrux.db HORCRUX_SSL_DIR=/var/lib/hx/ssl \\
 HORCRUX_VM_STORAGE=/shared/vms ADMIN_PASSWORD=admin JWT_SECRET=$SECRET \\
 RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \\

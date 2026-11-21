@@ -1,10 +1,10 @@
 //! The API listener: HTTPS (HTTP/1.1 + HTTP/2, websocket upgrades) with a
-//! plain-HTTP redirect on the same port, an optional extra redirect port
-//! (e.g. 80) that also answers ACME HTTP-01 challenges, and graceful
-//! shutdown.
+//! plain-HTTP redirect on each HTTPS port, any number of HTTPS ports (443
+//! plus optional extras such as 8006), redirect-only plain-HTTP ports (80,
+//! which also answer ACME HTTP-01 challenges), and graceful stop.
 //!
 //! The first byte of a connection tells TLS (0x16, a handshake record) from
-//! plain HTTP, so `http://host:8006/...` gets a `308` to `https://host:8006/...`
+//! plain HTTP, so `http://host:8443/...` gets a `308` to `https://host:8443/...`
 //! instead of a confusing protocol error. `/api/health*` is answered on plain
 //! HTTP too, so existing liveness probes keep working unchanged.
 
@@ -205,19 +205,88 @@ async fn handle(
     }
 }
 
+/// Accept connections on one HTTPS(-sniffing) listener until told to stop.
+async fn accept_loop(
+    listener: TcpListener,
+    app: Router,
+    acceptor: Option<tokio_rustls::TlsAcceptor>,
+    tls_mgr: Arc<TlsManager>,
+    conns: Conns,
+) {
+    let mut stop = conns.stop.clone();
+    let own_port = listener.local_addr().map(|a| a.port()).unwrap_or(443);
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            accepted = listener.accept() => {
+                let (stream, peer) = match accepted {
+                    Ok(x) => x,
+                    Err(e) => {
+                        tracing::warn!("accept failed: {}", e);
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                };
+                let _ = stream.set_nodelay(true);
+                // plain HTTP on an HTTPS port is redirected to that same port
+                tokio::spawn(handle(
+                    stream,
+                    peer,
+                    app.clone(),
+                    acceptor.clone(),
+                    tls_mgr.clone(),
+                    own_port,
+                    conns.clone(),
+                ));
+            }
+        }
+    }
+}
+
+/// Accept connections on a plain-HTTP redirect listener (redirect + ACME only).
+async fn redirect_loop(
+    listener: TcpListener,
+    app: Router,
+    tls_mgr: Arc<TlsManager>,
+    https_port: u16,
+    conns: Conns,
+) {
+    let mut stop = conns.stop.clone();
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            accepted = listener.accept() => {
+                if let Ok((stream, peer)) = accepted {
+                    tokio::spawn(serve_plain(stream, app.clone(), tls_mgr.clone(), peer, https_port, conns.clone()));
+                }
+            }
+        }
+    }
+}
+
 /// Run the API until `shutdown` resolves.
 ///
-/// - `tls = Some(..)`: HTTPS on `listener`, plain HTTP there is redirected.
-/// - `tls = None`: plain HTTP (TLS terminated by a proxy in front).
-/// - `redirect_listener`: extra plain port, redirect + ACME HTTP-01 only.
+/// - `listeners`: every HTTPS port (main one first). With `tls = Some(..)`
+///   each serves HTTPS and redirects plain HTTP sent to it; with `tls = None`
+///   plain HTTP (TLS terminated by a proxy in front).
+/// - `redirect_listeners`: plain-HTTP ports (80), redirect + ACME HTTP-01 +
+///   `/api/health*` only; they redirect to the main (first) HTTPS port.
 pub async fn serve(
-    listener: TcpListener,
-    redirect_listener: Option<TcpListener>,
+    listeners: Vec<TcpListener>,
+    redirect_listeners: Vec<TcpListener>,
     app: Router,
     tls: Option<Arc<TlsManager>>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    let https_port = listener.local_addr()?.port();
+    let main_port = match listeners.first() {
+        Some(l) => l.local_addr()?.port(),
+        None => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                "no listener bound",
+            ))
+        }
+    };
     let acceptor = tls
         .as_ref()
         .map(|t| tokio_rustls::TlsAcceptor::from(Arc::new(server_config(t))));
@@ -229,47 +298,35 @@ pub async fn serve(
         stop: stop_rx,
         live: live.clone(),
     };
-    tokio::pin!(shutdown);
 
-    loop {
-        tokio::select! {
-            _ = &mut shutdown => break,
-            accepted = listener.accept() => {
-                let (stream, peer) = match accepted {
-                    Ok(x) => x,
-                    Err(e) => {
-                        tracing::warn!("accept failed: {}", e);
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                        continue;
-                    }
-                };
-                let _ = stream.set_nodelay(true);
-                tokio::spawn(handle(
-                    stream,
-                    peer,
-                    app.clone(),
-                    acceptor.clone(),
-                    tls_mgr.clone(),
-                    https_port,
-                    conns.clone(),
-                ));
-            }
-            accepted = async {
-                match &redirect_listener {
-                    Some(l) => l.accept().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                if let Ok((stream, peer)) = accepted {
-                    tokio::spawn(serve_plain(stream, app.clone(), tls_mgr.clone(), peer, https_port, conns.clone()));
-                }
-            }
-        }
+    let mut tasks = Vec::new();
+    for l in listeners {
+        tasks.push(tokio::spawn(accept_loop(
+            l,
+            app.clone(),
+            acceptor.clone(),
+            tls_mgr.clone(),
+            conns.clone(),
+        )));
+    }
+    for l in redirect_listeners {
+        tasks.push(tokio::spawn(redirect_loop(
+            l,
+            app.clone(),
+            tls_mgr.clone(),
+            main_port,
+            conns.clone(),
+        )));
     }
 
+    shutdown.await;
+
     tracing::info!("Stopped accepting connections; draining open ones");
-    drop(conns);
     let _ = stop_tx.send(true);
+    for t in tasks {
+        let _ = t.await;
+    }
+    drop(conns);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while Arc::strong_count(&live) > 1 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -334,7 +391,7 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let m = mgr.clone();
         tokio::spawn(async move {
-            serve(listener, None, app, tls.then_some(m), async {
+            serve(vec![listener], vec![], app, tls.then_some(m), async {
                 let _ = rx.await;
             })
             .await
@@ -401,5 +458,77 @@ mod tests {
             .unwrap();
         assert_eq!(r.text().await.unwrap(), "ok");
         let _ = stop.send(());
+    }
+
+    #[tokio::test]
+    async fn serves_every_https_port_and_a_redirect_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = Arc::new(TlsManager::with_paths(
+            dir.path().join("cert.pem"),
+            dir.path().join("key.pem"),
+            dir.path().join("fb"),
+        ));
+        mgr.ensure_certificate().unwrap();
+        let a = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let b = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let r = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (pa, pb, pr) = (
+            a.local_addr().unwrap().port(),
+            b.local_addr().unwrap().port(),
+            r.local_addr().unwrap().port(),
+        );
+        let app = Router::new().route("/api/health", axum::routing::get(|| async { "ok" }));
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let m = mgr.clone();
+        let server = tokio::spawn(async move {
+            serve(vec![a, b], vec![r], app, Some(m), async move {
+                let _ = rx.await;
+            })
+            .await
+        });
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        // HTTPS answers on the main port and on the extra one
+        for port in [pa, pb] {
+            let r = client
+                .get(format!("https://127.0.0.1:{port}/api/health"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(r.text().await.unwrap(), "ok", "https port {port}");
+        }
+        // plain HTTP on an HTTPS port is redirected to that same port (the extra one keeps its own)
+        let r = client
+            .get(format!("http://127.0.0.1:{pb}/vms"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 308);
+        assert_eq!(
+            r.headers()["location"],
+            format!("https://127.0.0.1:{pb}/vms")
+        );
+        // the redirect-only port sends everything to the MAIN https port and still answers /api/health
+        let r = client
+            .get(format!("http://127.0.0.1:{pr}/vms?x=1"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 308);
+        assert_eq!(
+            r.headers()["location"],
+            format!("https://127.0.0.1:{pa}/vms?x=1")
+        );
+        let r = client
+            .get(format!("http://127.0.0.1:{pr}/api/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.text().await.unwrap(), "ok");
+        tx.send(()).unwrap();
+        server.await.unwrap().unwrap();
     }
 }

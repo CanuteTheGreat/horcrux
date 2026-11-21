@@ -5,8 +5,12 @@
 [server]
 # Host address to bind to
 host = "0.0.0.0"
-# Port to listen on
-port = 8006
+# HTTPS port (standard 443); Settings > Web listeners, the API and a declarative `web:` section override it
+port = 443
+# Plain-HTTP port that only redirects to HTTPS (and answers ACME + /api/health); remove the line to use the default 80
+http_redirect_port = 80
+# Extra HTTPS ports serving the same API, e.g. [8006] for existing API clients and cluster peers
+extra_https_ports = []
 # Enable TLS (HTTPS)
 tls_enabled = true
 

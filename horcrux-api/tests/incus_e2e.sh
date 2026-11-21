@@ -124,7 +124,7 @@ if [ -d /srv/horcrux-ui ]; then UI_ENV="HORCRUX_UI_DIR=/srv/horcrux-ui"; fi
 SANS=$(hostname -I | tr ' ' ',' | sed 's/,*$//')
 cat > /tmp/start-api.sh <<EOF
 cd /tmp/incus-e2e-data
-env HORCRUX_HOST=$BIND HORCRUX_PORT=$PORT HORCRUX_DATA_DIR=/tmp/incus-e2e-data \\
+env HORCRUX_HOST=$BIND HORCRUX_PORT=$PORT HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/tmp/incus-e2e-data \\
   HORCRUX_DATABASE_URL=sqlite:///tmp/incus-e2e-data/horcrux.db ADMIN_PASSWORD=admin \\
   HORCRUX_SSL_DIR=/tmp/incus-e2e-data/ssl HORCRUX_TLS_SAN=$SANS \\
   RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=1000 RUST_LOG=info $UI_ENV \\

@@ -570,7 +570,7 @@ where
                                 <pre class="code-example">
     {format!(r#"curl -H "Authorization: Bearer {}" \
          -H "Content-Type: application/json" \
-         http://localhost:8006/api/vms"#, token_for_example)}
+         https://localhost/api/vms"#, token_for_example)}
                                 </pre>
                             </div>
                         </div>

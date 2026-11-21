@@ -78,7 +78,7 @@ def login():
 def start_api():
     sh(f"""if [ -f /tmp/api.pid ]; then kill $(cat /tmp/api.pid) 2>/dev/null || true; sleep 2; fi
 cd {DATA}
-HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR={DATA} HORCRUX_DATABASE_URL=sqlite://{DATA}/horcrux.db \
+HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR={DATA} HORCRUX_DATABASE_URL=sqlite://{DATA}/horcrux.db \
 ADMIN_PASSWORD=admin HORCRUX_SSL_DIR={DATA}/ssl RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 \
 RUST_LOG=info HORCRUX_BOOT_ID_FILE={DATA}/bootid HORCRUX_GUEST_BOOT_DELAY_SECS=3 \
 nohup horcrux-api >> /tmp/api.log 2>&1 &

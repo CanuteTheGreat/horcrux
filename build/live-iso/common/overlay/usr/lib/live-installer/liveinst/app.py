@@ -530,7 +530,7 @@ def web_url(st):
     else:
         n = c["mgmt"]
         ip = n["address"].split("/")[0] if n["mode"] == "static" else (S.nic_ip(n["iface"]).split("/")[0] or "<address from DHCP>") if n["iface"] else "<IP address>"
-    return f"{p['web_scheme']}://{ip}:{p['web_port']}/"
+    return S.web_url(p, ip)
 
 
 def s_done(t, st, step):

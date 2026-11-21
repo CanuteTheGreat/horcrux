@@ -11,7 +11,7 @@
 #
 # Usage:
 #   source horcrux.sh
-#   horcrux_login "http://localhost:8006" "admin" "admin"
+#   horcrux_login "https://localhost" "admin" "admin"
 #   horcrux_list_vms
 #   horcrux_create_vm "my-vm" 2 2048 20
 #
@@ -455,7 +455,7 @@ horcrux_check_iommu_status() {
 # ========================================
 
 horcrux_health() {
-    local url="${HORCRUX_BASE_URL:-http://localhost:8006}"
+    local url="${HORCRUX_BASE_URL:-https://localhost}"
     horcrux_log "Checking health..."
     curl -s "${url}/api/health" | jq '.'
 }

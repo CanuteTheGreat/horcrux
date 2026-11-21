@@ -651,7 +651,7 @@ class ZRun(qt.Runner):
 
     def web_checks(self):
         sc, code, body = qt.http(qt.FWD_WEB, "/")
-        rc, o = self.sh("curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8006/; echo; ss -ltn | grep -c ':8006 '")
+        rc, o = self.sh("curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1/; echo; ss -ltn | grep -c ':443 '")
         self.step("server-web-ui-reachable-from-the-network", code in (200, 301, 302, 303, 401) and re.match(r"\s*(200|30\d|401)", o) is not None, f"host->guest forward: {sc} {code}; in guest: {re.sub(chr(10), ' ', o).strip()}")
         sc, code, body = qt.http(qt.FWD_WEB, self.P["health"][0])
         self.step("server-web-api-health", code == 200, f"{self.P['health'][0]} -> {code}")

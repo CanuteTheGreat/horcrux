@@ -8,6 +8,8 @@ Wants=network-online.target
 Type=simple
 User=root
 Group=root
+# ports below 1024 (the default 443 + 80); explicit so a hardened drop-in cannot silently lose them
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 # /usr/share/horcrux was never created by any installer, which made
 # systemd refuse to start the unit (status=200/CHDIR). /var/lib/horcrux is
 # created by the ebuild and is already writable below.

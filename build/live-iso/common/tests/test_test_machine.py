@@ -11,7 +11,7 @@ from liveinst import testmachine as TM  # noqa: E402
 from liveinst import zfsswap as ZS  # noqa: E402
 
 PROFILE = {"name": "horcrux", "title": "Horcrux", "filesystems": ["ext4", "xfs", "zfs", "xfs-luks"], "swap_mb": 4096, "network_mode": "management",
-           "services": [], "web_scheme": "https", "web_port": 8006, "default_hostname": "h.localdomain"}
+           "services": [], "web_scheme": "https", "web_port": 443, "default_hostname": "h.localdomain"}
 INITRD_ENC = "usr/bin/hx-unlock\nusr/lib/dracut/hooks/pre-mount/50-hx-zfskey.sh\nusr/bin/cryptsetup\nusr/lib/modules/x/extra/zfs.ko\nusr/lib/dracut/resume.sh\n"
 INITRD_PLAIN = "usr/lib/modules/x/extra/zfs.ko\nusr/lib/dracut/resume.sh\nusr/lib/dracut/hooks/mount/98-mount-zfs.sh\n"
 

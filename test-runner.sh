@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 
 # Check if API server is running
 echo -n "Checking if API server is running... "
-if curl -s http://localhost:8006/api/health > /dev/null 2>&1; then
+if curl -s http://localhost/api/health > /dev/null 2>&1; then
     echo -e "${GREEN}OK${NC}"
 else
     echo -e "${RED}FAILED${NC}"

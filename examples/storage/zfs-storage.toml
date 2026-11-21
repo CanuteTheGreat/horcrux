@@ -19,7 +19,7 @@
 #   --path tank/horcrux
 
 # Or via API:
-# curl -X POST http://localhost:8006/api/storage/pools \
+# curl -X POST https://localhost/api/storage/pools \
 #   -H "Content-Type: application/json" \
 #   -d '{
 #     "name": "tank",

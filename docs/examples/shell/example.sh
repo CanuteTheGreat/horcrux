@@ -11,7 +11,7 @@ set -e
 source "$(dirname "$0")/horcrux.sh"
 
 # Configuration
-HORCRUX_URL="${HORCRUX_URL:-http://localhost:8006}"
+HORCRUX_URL="${HORCRUX_URL:-https://localhost}"
 HORCRUX_USER="${HORCRUX_USER:-admin}"
 HORCRUX_PASS="${HORCRUX_PASS:-admin}"
 

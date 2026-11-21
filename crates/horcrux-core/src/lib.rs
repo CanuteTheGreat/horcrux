@@ -12,3 +12,4 @@ pub mod features;
 pub mod logging;
 pub mod secrets;
 pub mod validation;
+pub mod web_settings;

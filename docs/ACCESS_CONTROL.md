@@ -67,7 +67,7 @@ account is created on first login and added to the realm's default group.
   "bind_password"}` - search-then-bind.
 - `ad`: `{"server", "mode", "domain", "base_dn"}` - binds as `user@domain`.
 - `openid`: `{"issuer_url", "client_id", "client_secret", "username_claim",
-  "redirect_uri"}`; register `https://<host>:8006/api/auth/oidc/callback`
+  "redirect_uri"}`; register `https://<host>/api/auth/oidc/callback`
   at the provider. Authorization code flow with PKCE, state and nonce.
 - `pam`: host accounts through the `horcrux` PAM service (USE=pam; the
   ebuild installs `/etc/pam.d/horcrux`).
@@ -85,22 +85,22 @@ only enroll. OpenID Connect realms leave second factors to the provider.
 
 ## HTTPS
 
-The API and web UI are served over HTTPS on port 8006. On first start the
+The API and web UI are served over HTTPS on port 443 (plain HTTP on 80 only redirects; see docs/WEB-LISTENERS.md). On first start the
 node creates its own CA (`/etc/horcrux/ssl/ca.pem`, falling back to
 `/var/lib/horcrux/ssl` when `/etc` isn't writable) and issues the server
-certificate from it. Import the CA once (`https://<host>:8006/api/tls/ca.pem`,
+certificate from it. Import the CA once (`https://<host>/api/tls/ca.pem`,
 also linked on *Administration > Certificates*) and browsers trust the node.
-Plain `http://host:8006/...` is redirected; `/api/health` answers on plain
+Plain `http://host/...` (port 80) is redirected to HTTPS; `/api/health` answers on plain
 HTTP too for probes.
 
 - Upload your own certificate, or re-issue from the local CA with extra
   names, on the Certificates page (switched without a restart).
-- ACME (Let's Encrypt or any RFC 8555 CA) with HTTP-01: set
-  `HORCRUX_HTTP_REDIRECT_PORT=80` (or forward port 80), enter domains and
+- ACME (Let's Encrypt or any RFC 8555 CA) with HTTP-01: keep
+  the HTTP redirect port on 80 (the default; Settings > Web listeners) or forward port 80 to it, enter domains and
   accept the CA's terms, *Order certificate now*. Renewed automatically 30
   days before expiry.
 - `HORCRUX_TLS_ENABLED=false` only behind a TLS-terminating proxy.
-- CLI: `horcrux --server https://host:8006 --ca-cert ca.pem ...` (the local
+- CLI: `horcrux --server https://host --ca-cert ca.pem ...` (the local
   node's CA is used automatically when readable).
 
 ## Tests

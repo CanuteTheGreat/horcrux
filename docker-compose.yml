@@ -10,7 +10,8 @@ services:
     container_name: horcrux-api
     restart: unless-stopped
     ports:
-      - "8006:8006"      # API server
+      - "443:443"        # web UI / API (HTTPS)
+      - "80:80"          # HTTP: redirects to HTTPS (and /api/health)
       - "5900-5910:5900-5910"  # VNC consoles (10 VMs)
     volumes:
       - horcrux-data:/var/lib/horcrux
@@ -19,7 +20,7 @@ services:
     environment:
       - RUST_LOG=info
       - DATABASE_URL=sqlite:///var/lib/horcrux/horcrux.db
-      # HTTPS on 8006 from the node-local CA, kept on the shared data volume
+      # HTTPS on 443 from the node-local CA, kept on the shared data volume
       # so the CLI container can trust it; also valid for the service name.
       - HORCRUX_SSL_DIR=/var/lib/horcrux/ssl
       - HORCRUX_TLS_SAN=horcrux-api
@@ -29,7 +30,7 @@ services:
     devices:
       - /dev/kvm:/dev/kvm  # Pass through KVM device
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8006/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -80,7 +81,7 @@ services:
     volumes:
       - horcrux-data:/var/lib/horcrux
     environment:
-      - HORCRUX_SERVER=https://horcrux-api:8006
+      - HORCRUX_SERVER=https://horcrux-api
       - HORCRUX_CA_CERT=/var/lib/horcrux/ssl/ca.pem
     networks:
       - horcrux-net

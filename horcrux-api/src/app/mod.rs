@@ -60,7 +60,14 @@ pub async fn run() -> anyhow::Result<()> {
     logging::init_console();
 
     // Load configuration
-    let horcrux_config = config::HorcruxConfig::load();
+    let mut horcrux_config = config::HorcruxConfig::load();
+    // First start of this version: an existing node that never picked a port
+    // keeps its historical listener (see horcrux_core::web_settings).
+    let _ = crate::web_settings::run_upgrade(&mut horcrux_config);
+    crate::firewall::objects::set_management_ports(
+        &crate::web_settings::WebSettings::from(&horcrux_config.server).all_ports(),
+        horcrux_config.server.ha_fence_port,
+    );
     if let Err(e) = horcrux_config.validate() {
         error!("Configuration validation failed: {}", e);
         return Err(anyhow::anyhow!("Invalid configuration: {}", e));
@@ -533,6 +540,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(vm_routes())
         .merge(vm_console_api::routes())
         .merge(api::hx_console::routes())
+        .merge(api::web_listeners::routes())
         .merge(api::vm_import::routes(&state))
         .merge(container_routes())
         .merge(api::container_runtimes::routes())
@@ -677,33 +685,69 @@ pub async fn run() -> anyhow::Result<()> {
 
     // Start server: HTTPS by default (plain HTTP on the same port is
     // redirected), plain HTTP only when TLS is turned off.
-    let addr = format!(
-        "{}:{}",
-        horcrux_config.server.host, horcrux_config.server.port
-    );
-    let listener = TcpListener::bind(&addr).await?;
-    let redirect_listener = match horcrux_config.server.http_redirect_port {
-        Some(port) if horcrux_config.server.tls_enabled => {
-            let raddr = format!("{}:{}", horcrux_config.server.host, port);
-            info!("HTTP redirect / ACME challenge listener on {}", raddr);
-            Some(TcpListener::bind(&raddr).await?)
-        }
-        _ => None,
+    let scheme = if horcrux_config.server.tls_enabled {
+        "https"
+    } else {
+        "http"
     };
-    info!(
-        "Horcrux API listening on {}://{}",
-        if horcrux_config.server.tls_enabled {
-            "https"
+    let host = horcrux_config.server.host.clone();
+    let bind_addr = |port: u16| {
+        if host.contains(':') {
+            format!("[{}]:{}", host, port)
         } else {
-            "http"
-        },
-        addr
-    );
+            format!("{}:{}", host, port)
+        }
+    };
+    // Main port first, then the extra HTTPS ports. A port that cannot be bound
+    // (for example 443 without CAP_NET_BIND_SERVICE) is logged and skipped as
+    // long as at least one listener works; with none, start fails loudly.
+    let mut listeners = Vec::new();
+    let mut bind_errors = Vec::new();
+    let mut https_ports = vec![horcrux_config.server.port];
+    https_ports.extend(horcrux_config.server.extra_https_ports.iter().copied());
+    for port in https_ports {
+        let addr = bind_addr(port);
+        match TcpListener::bind(&addr).await {
+            Ok(l) => {
+                info!("Horcrux API listening on {}://{}", scheme, addr);
+                listeners.push(l);
+            }
+            Err(e) => {
+                tracing::error!("cannot listen on {}: {}", addr, e);
+                bind_errors.push(format!("{addr}: {e}"));
+            }
+        }
+    }
+    if listeners.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Horcrux API could not bind any listener ({}). Ports below 1024 need \
+             CAP_NET_BIND_SERVICE (the shipped OpenRC script and systemd unit grant it); \
+             change the ports in /etc/horcrux/config.toml [server] or Settings > Web listeners",
+            bind_errors.join("; ")
+        ));
+    }
+    let mut redirect_listeners = Vec::new();
+    if let Some(port) = horcrux_config.server.http_redirect_port {
+        if horcrux_config.server.tls_enabled {
+            let raddr = bind_addr(port);
+            match TcpListener::bind(&raddr).await {
+                Ok(l) => {
+                    info!("HTTP redirect / ACME challenge listener on {}", raddr);
+                    redirect_listeners.push(l);
+                }
+                Err(e) => tracing::warn!(
+                    "HTTP redirect listener on {} not started: {} (set http_redirect_port to another port or null to turn it off)",
+                    raddr,
+                    e
+                ),
+            }
+        }
+    }
 
     let shutdown_signal = graceful.signal();
     tls::server::serve(
-        listener,
-        redirect_listener,
+        listeners,
+        redirect_listeners,
         app,
         horcrux_config
             .server

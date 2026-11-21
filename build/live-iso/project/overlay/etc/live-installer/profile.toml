@@ -5,7 +5,7 @@ network_mode = "management"          # one management NIC
 filesystems = ["zfs", "xfs-luks", "xfs", "ext4"]
 swap_mb = 4096
 web_scheme = "https"
-web_port = 8006
+web_port = 443
 default_hostname = "horcrux.localdomain"
 # the web UI signs in SYSTEM users through PAM (service "horcrux"); rights come from the groups horcrux-admin / wheel. The installer
 # creates that user: there is no 'admin' account and no generated first-boot password.

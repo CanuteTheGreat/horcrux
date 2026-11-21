@@ -2,9 +2,13 @@
 # Location: /etc/horcrux/horcrux.toml
 
 [server]
-# API server bind address and port
-bind_address = "0.0.0.0"
-bind_port = 8006
+# API server bind address and ports (all optional; these are the defaults)
+host = "0.0.0.0"
+# HTTPS port, and the HTTP port that only redirects to HTTPS
+port = 443
+http_redirect_port = 80
+# extra HTTPS ports for existing API clients / cluster peers, e.g. [8006]
+extra_https_ports = []
 
 # TLS configuration (optional)
 # tls_cert = "/etc/horcrux/tls/cert.pem"

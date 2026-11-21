@@ -308,13 +308,16 @@ RUN useradd -m -u 1000 -s /bin/bash horcrux 2>/dev/null || \
     mkdir -p /var/log/horcrux && \
     chown -R horcrux:horcrux /var/lib/horcrux /etc/horcrux /var/log/horcrux
 
+# the container's service user binds the standard ports (443 HTTPS, 80 HTTP redirect): file capability on the binary
+RUN setcap cap_net_bind_service=+ep /usr/local/bin/horcrux-api
+
 USER horcrux
-EXPOSE 8006
+EXPOSE 443 80
 EXPOSE 5900-5999
 VOLUME ["/var/lib/horcrux", "/var/log/horcrux"]
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8006/api/health || exit 1
+    CMD curl -f http://localhost/api/health || exit 1
 
 WORKDIR /var/lib/horcrux
 ENTRYPOINT ["/usr/local/bin/horcrux-api"]

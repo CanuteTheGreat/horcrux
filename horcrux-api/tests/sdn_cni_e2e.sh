@@ -47,7 +47,7 @@ mkdir -p /tmp/sdn/cni.d && cd /tmp/sdn
 CNI_BIN=$(for d in /opt/cni/bin /usr/lib/cni /usr/libexec/cni; do [ -x $d/bridge ] && echo $d && break; done)
 test -n "$CNI_BIN" || { echo "no CNI bridge plugin installed"; exit 1; }
 cat > /tmp/sdn/start-api.sh <<EOS
-HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/sdn \
+HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/tmp/sdn \
 HORCRUX_DATABASE_URL=sqlite:///tmp/sdn/horcrux.db HORCRUX_SSL_DIR=/tmp/sdn/ssl \
 HORCRUX_CNI_BIN_DIR=$CNI_BIN HORCRUX_CNI_CONF_DIR=/tmp/sdn/cni.d \
 ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \

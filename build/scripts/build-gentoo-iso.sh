@@ -1101,7 +1101,7 @@ install_horcrux() {
 
 [server]
 host = "0.0.0.0"
-port = 8006
+port = 443
 workers = 4
 tls_enabled = false
 # tls_cert = "/etc/horcrux/ssl/server.crt"
@@ -1192,7 +1192,7 @@ start_pre() {
 }
 
 start_post() {
-    einfo "Horcrux API available at https://localhost:8006"
+    einfo "Horcrux API available at https://localhost"
 }
 INITSCRIPT
     chmod +x "$ROOTFS_DIR/etc/init.d/horcrux"
@@ -1391,7 +1391,7 @@ OSREL
   INSTALL TO DISK:  Run 'horcrux-installer' as root
   =====================================================
 
-  Web UI:    https://localhost:8006
+  Web UI:    https://localhost
   CLI:       horcrux --help
   Docs:      /usr/share/horcrux/docs
 
@@ -1697,7 +1697,7 @@ main() {
     log_info "    Username: root / horcrux"
     log_info "    Password: horcrux"
     log_info ""
-    log_info "  After boot, access Horcrux at: http://<ip>:8006"
+    log_info "  After boot, access Horcrux at: https://<ip>"
     log_info "════════════════════════════════════════════════════════════════"
 }
 

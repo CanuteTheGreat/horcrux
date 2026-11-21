@@ -21,7 +21,7 @@ OUTCOME, not the click. Findings are ids `journey:<step>:<check>`; known/tracked
 ci/ux-qa/user-journey-baseline.json (a NEW failure fails the run; a baseline entry that no longer fails is reported so
 it gets removed). The screenshots then go to the LLM review (ci/ux-qa/journey-review-checklist.md).
 
-  BASE_URL=https://host:8006 ADMIN_PASSWORD=... user_journey.py --shots out/shots --report out/journey.json
+  BASE_URL=https://host ADMIN_PASSWORD=... user_journey.py --shots out/shots --report out/journey.json
 Env: HORCRUX_CA_FILE (trust the node's CA; else TLS errors are ignored), HX_EXEC_PREFIX (e.g. "docker exec -i ctr":
 the server runs elsewhere - ISO is pushed and QEMU command lines are read through it), HX_JOURNEY_BOOT_TIMEOUT (s),
 HX_BROWSER (chromium|firefox).
@@ -44,7 +44,7 @@ import http.server
 import functools
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BASE = os.environ.get("BASE_URL", "https://localhost:8006").rstrip("/")
+BASE = os.environ.get("BASE_URL", "https://localhost").rstrip("/")
 PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 CA = os.environ.get("HORCRUX_CA_FILE")
 PREFIX = shlex.split(os.environ.get("HX_EXEC_PREFIX", ""))

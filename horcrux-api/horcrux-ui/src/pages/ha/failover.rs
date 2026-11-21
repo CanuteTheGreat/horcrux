@@ -148,7 +148,7 @@ pub fn HaFailoverPage() -> impl IntoView {
                             </div>
                             <div class="space-y-2">
                                 <h3 class="font-medium">"Join an existing cluster"</h3>
-                                <div class="form-group"><label for="fo-join-peer">"Cluster member address"</label><input id="fo-join-peer" class="border p-2 w-full" placeholder="10.0.0.11:8006"
+                                <div class="form-group"><label for="fo-join-peer">"Cluster member address"</label><input id="fo-join-peer" class="border p-2 w-full" placeholder="10.0.0.11 (or 10.0.0.11:port)"
                                     data-testid="cluster-join-peer"
                                     prop:value=j_peer on:input=move |e| set_j_peer.set(event_target_value(&e))/></div>
                                 <div class="form-group"><label for="fo-join-user">"Administrator user"</label><input id="fo-join-user" class="border p-2 w-full" placeholder="admin"

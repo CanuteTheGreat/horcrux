@@ -676,7 +676,7 @@ impl MigrationManager {
 
     /// Check network connectivity to the target node's management
     /// interface. Resolves `target_node` (hostname or IP) and attempts a
-    /// real TCP connection to the API/management port (8006, matching
+    /// real TCP connection to the API/management port (the configured one, matching
     /// `Node::api_url()` elsewhere in this crate) with a bounded timeout,
     /// falling back to SSH (22) if the management port isn't reachable
     /// (e.g. the API service isn't up yet but the host itself is), mirroring
@@ -684,10 +684,11 @@ impl MigrationManager {
     /// node reachability.
     async fn check_network_connectivity(target_node: &str) -> MigrationCheck {
         const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-        const MGMT_PORT: u16 = 8006;
+        // the API port this node is configured with (cluster members share it)
+        let mgmt_port: u16 = crate::config::HorcruxConfig::load().server.port;
         const SSH_PORT: u16 = 22;
 
-        for port in [MGMT_PORT, SSH_PORT] {
+        for port in [mgmt_port, SSH_PORT] {
             let addr = format!("{}:{}", target_node, port);
             let resolved = match addr.to_socket_addrs() {
                 Ok(mut addrs) => addrs.next(),
@@ -732,7 +733,7 @@ impl MigrationManager {
             passed: false,
             message: format!(
                 "Target node {} is not reachable on management port {} or SSH port {}",
-                target_node, MGMT_PORT, SSH_PORT
+                target_node, mgmt_port, SSH_PORT
             ),
             blocking: true,
         }

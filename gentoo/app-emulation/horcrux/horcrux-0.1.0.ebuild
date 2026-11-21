@@ -437,7 +437,7 @@ pkg_postinst() {
 
 	if use webui; then
 		elog ""
-		elog "Web interface: https://$(hostname):8006"
+		elog "Web interface: https://$(hostname)"
 	fi
 
 	elog ""

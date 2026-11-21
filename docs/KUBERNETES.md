@@ -67,7 +67,7 @@ kubernetes = ["kube", "k8s-openapi"]
 horcrux k8s connect --name production --kubeconfig ~/.kube/config --context my-cluster
 
 # Via API
-curl -X POST http://localhost:8006/api/k8s/clusters \
+curl -X POST https://localhost/api/k8s/clusters \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
@@ -83,7 +83,7 @@ curl -X POST http://localhost:8006/api/k8s/clusters \
 
 ```bash
 # Via API
-curl -X POST http://localhost:8006/api/k8s/clusters/provision \
+curl -X POST https://localhost/api/k8s/clusters/provision \
   -H "Content-Type: application/json" \
   -d '{
     "name": "dev-cluster",
@@ -113,7 +113,7 @@ curl -X POST http://localhost:8006/api/k8s/clusters/provision \
 #### kubeadm Cluster
 
 ```bash
-curl -X POST http://localhost:8006/api/k8s/clusters/provision \
+curl -X POST https://localhost/api/k8s/clusters/provision \
   -H "Content-Type: application/json" \
   -d '{
     "name": "prod-cluster",
@@ -597,7 +597,7 @@ WS /api/k8s/clusters/:cluster_id/namespaces/:namespace/pods/:name/logs/stream
 Subscribe to real-time K8s events via WebSocket:
 
 ```javascript
-const ws = new WebSocket('ws://localhost:8006/api/ws');
+const ws = new WebSocket('wss://localhost/api/ws');
 
 // Subscribe to K8s topics
 ws.send(JSON.stringify({

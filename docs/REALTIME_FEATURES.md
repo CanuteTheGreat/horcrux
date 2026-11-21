@@ -87,7 +87,7 @@ pub fn MyComponent() -> impl IntoView {
 
 ### Connection Flow
 
-1. Client opens WebSocket connection to `ws://localhost:8006/api/ws`
+1. Client opens WebSocket connection to `wss://localhost/api/ws`
 2. Server authenticates user via auth middleware
 3. Server sends welcome notification
 4. Client sends subscription request with topics list
@@ -353,7 +353,7 @@ GET    /api/roles                    - List all roles
 
 **User Creation Example:**
 ```bash
-curl -X POST http://localhost:8006/api/users \
+curl -X POST https://localhost/api/users \
   -H "Content-Type: application/json" \
   -d '{
     "username": "alice",
@@ -416,15 +416,15 @@ cargo run --release
 ```
 
 The server will:
-- Start WebSocket endpoint at `ws://localhost:8006/api/ws`
+- Start WebSocket endpoint at `wss://localhost/api/ws`
 - Launch metrics collection background tasks
-- Serve UI at `http://localhost:8006`
+- Serve UI at `https://localhost`
 
 ### 2. Access the Monitoring Dashboard
 
 Open browser and navigate to:
 ```
-http://localhost:8006/monitoring
+https://localhost/monitoring
 ```
 
 You should see:
@@ -436,7 +436,7 @@ You should see:
 
 Using `wscat` or browser console:
 ```bash
-wscat -c ws://localhost:8006/api/ws
+wscat -c wss://localhost/api/ws
 
 # Send subscription
 > {"topics": ["vm:metrics", "node:metrics"]}
@@ -451,7 +451,7 @@ wscat -c ws://localhost:8006/api/ws
 
 ```bash
 # Create admin user
-curl -X POST http://localhost:8006/api/users \
+curl -X POST https://localhost/api/users \
   -H "Content-Type: application/json" \
   -d '{
     "username": "admin",
@@ -463,7 +463,7 @@ curl -X POST http://localhost:8006/api/users \
   }'
 
 # Create VM user
-curl -X POST http://localhost:8006/api/users \
+curl -X POST https://localhost/api/users \
   -H "Content-Type: application/json" \
   -d '{
     "username": "vmuser",
@@ -573,7 +573,7 @@ Use `websocat` or custom tool to simulate multiple connections:
 ```bash
 # Simulate 100 concurrent WebSocket connections
 for i in {1..100}; do
-  websocat ws://localhost:8006/api/ws &
+  websocat wss://localhost/api/ws &
 done
 ```
 

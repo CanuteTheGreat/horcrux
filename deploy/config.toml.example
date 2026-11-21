@@ -5,7 +5,9 @@
 # Listen address and port
 # Use 0.0.0.0 to listen on all interfaces
 # Use 127.0.0.1 to listen only on localhost
-listen = "0.0.0.0:8006"
+host = "0.0.0.0"
+port = 443
+http_redirect_port = 80
 
 # Data directory for VMs, templates, and backups
 data_dir = "/var/lib/horcrux"
@@ -31,9 +33,9 @@ name = "horcrux-cluster"
 # Cluster members for multi-node setup
 # List all nodes in the cluster including this one
 # members = [
-#     "node1.example.com:8006",
-#     "node2.example.com:8006",
-#     "node3.example.com:8006"
+#     "node1.example.com:443",
+#     "node2.example.com:443",
+#     "node3.example.com:443"
 # ]
 
 # Corosync configuration

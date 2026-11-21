@@ -22,7 +22,7 @@ horcrux [OPTIONS] <COMMAND>
 
 ### Global Options
 
-- `-s, --server <SERVER>`: API server address (default: `http://localhost:8006`)
+- `-s, --server <SERVER>`: API server address (default: `https://localhost`)
 - `-o, --output <OUTPUT>`: Output format: `table`, `json`, or `yaml` (default: `table`)
 - `-h, --help`: Print help
 - `-V, --version`: Print version
@@ -37,7 +37,7 @@ horcrux vm list
 horcrux -o json vm list
 
 # Connect to remote server
-horcrux -s http://192.168.1.100:8006 vm list
+horcrux -s https://192.168.1.100 vm list
 ```
 
 ## Authentication
@@ -558,7 +558,7 @@ Configuration is stored in `~/.config/horcrux/config.toml`:
 token = "eyJ0eXAiOiJKV1QiLCJhbGc..."
 
 # Default API server
-server = "http://localhost:8006"
+server = "https://localhost"
 
 # Default output format
 output = "table"
@@ -653,8 +653,8 @@ horcrux replication execute <job-id>
 If you get connection errors, verify:
 
 1. API server is running: `systemctl status horcrux-api`
-2. Server address is correct: `horcrux -s http://your-server:8006 vm list`
-3. Firewall allows port 8006
+2. Server address is correct: `horcrux -s https://your-server vm list`
+3. Firewall allows the API port (443 by default; Settings > Web listeners)
 
 ### Authentication Errors
 
@@ -682,8 +682,8 @@ horcrux -o json vm list 2>&1 | jq
 ## See Also
 
 - **API Documentation**: [docs/API_DOCS.md](API_DOCS.md)
-- **Interactive API Docs**: http://localhost:8006/api/docs
-- **OpenAPI Spec**: http://localhost:8006/api/openapi.yaml
+- **Interactive API Docs**: https://localhost/api/docs
+- **OpenAPI Spec**: https://localhost/api/openapi.yaml
 - **GitHub**: https://github.com/CanuteTheGreat/horcrux
 
 ## Support

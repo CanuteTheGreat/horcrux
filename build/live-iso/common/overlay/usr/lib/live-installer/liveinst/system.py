@@ -57,7 +57,7 @@ def load_profile(path="/etc/live-installer/profile.toml"):
     p.setdefault("services", [])
     p.setdefault("web_scheme", "https")
     p.setdefault("default_hostname", p["name"] + ".localdomain")
-    p.setdefault("web_port", 8443)
+    p.setdefault("web_port", 443)   # the standard HTTPS port; a profile sets another one only deliberately
     p.setdefault("config_paths", [f"/etc/{p['name']}"])
     return p
 
@@ -1280,7 +1280,7 @@ class Installer:
 
     def motd(self):
         return (f"\n  {self.p['title']} (installed {time.strftime('%F')})\n"
-                f"  Web UI : {self.p['web_scheme']}://<this-ip>:{self.p['web_port']}   user: admin\n"
+                f"  Web UI : {web_url(self.p, '<this-ip>')}   user: admin\n"
                 f"  SSH    : key-only for root{' (password login enabled by the installer)' if self.c['ssh_password_auth'] else ''}\n\n")
 
     def configure_network(self):
@@ -1483,3 +1483,11 @@ FIRSTBOOT = """#!/bin/sh
     sleep 2; n=$((n+2))
   done ) >/dev/null 2>&1 &
 """
+
+
+def web_url(p, host):
+    """scheme://host[:port]/ - the port only when it is not the scheme's standard one (443 for https, 80 for http)"""
+    scheme = p.get("web_scheme", "https")
+    port = int(p.get("web_port", 443))
+    std = 443 if scheme == "https" else 80
+    return f"{scheme}://{host}" + ("" if port == std else f":{port}") + "/"

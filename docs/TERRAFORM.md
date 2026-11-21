@@ -34,7 +34,7 @@ terraform {
 
 ```hcl
 provider "horcrux" {
-  endpoint = "http://localhost:8006"  # Horcrux API endpoint
+  endpoint = "https://localhost"  # Horcrux API endpoint
 
   # Authentication option 1: API token
   api_token = "your-api-token"
@@ -53,7 +53,7 @@ provider "horcrux" {
 The provider supports environment variables for sensitive configuration:
 
 ```bash
-export HORCRUX_ENDPOINT="http://localhost:8006"
+export HORCRUX_ENDPOINT="https://localhost"
 export HORCRUX_API_TOKEN="your-api-token"
 # Or
 export HORCRUX_USERNAME="admin"
@@ -312,7 +312,7 @@ terraform {
 }
 
 provider "horcrux" {
-  endpoint  = "http://192.168.1.100:8006"
+  endpoint  = "https://192.168.1.100"
   api_token = var.horcrux_token
 }
 

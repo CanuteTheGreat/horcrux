@@ -130,7 +130,7 @@ pkg_postinst() {
 		ln -s /etc/init.d/horcrux-guests "${rl}/horcrux-guests" && elog "horcrux-guests enabled in the default runlevel (the manager is)"
 	fi
 	elog "Horcrux manager installed. It is NOT started by default on a desktop edition (the server profile enables it):"
-	elog "  rc-update add libvirtd default; rc-update add horcrux-api default; rc-service horcrux-api start    # web UI https://<host>:8006"
+	elog "  rc-update add libvirtd default; rc-update add horcrux-api default; rc-service horcrux-api start    # web UI https://<host> (ports 443 and 80; Settings > Web listeners)"
 	elog "Web UI login: sign in with a SYSTEM user (PAM service /etc/pam.d/horcrux) who is in the horcrux-admin or wheel group; there is no 'admin' account."
 	elog "  gpasswd -a <user> horcrux-admin     # on every node: each node authenticates against its own users (or a shared SSSD/LDAP directory)"
 	elog "  root cannot log in to the web UI unless [auth] allow_root = true in /etc/horcrux/config.toml; see docs/WEB-LOGIN-PAM.md"

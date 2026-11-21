@@ -214,6 +214,7 @@ pub fn App() -> impl IntoView {
                             <A href="/auth/realms" class="dropdown-item">"Authentication Realms"</A>
                             <A href="/auth/mfa" class="dropdown-item">"Account Security (2FA)"</A>
                             <A href="/system/certificates" class="dropdown-item">"Certificates"</A>
+                            <A href="/system/web" class="dropdown-item">"Web listeners"</A>
                             <A href="/auth/sessions" class="dropdown-item">"Active Sessions"</A>
                             <A href="/auth/api-keys" class="dropdown-item">"API Keys"</A>
                         </div>
@@ -306,6 +307,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/auth/permissions" view=PermissionsPage/>
                     <Route path="/auth/realms" view=RealmsPage/>
                     <Route path="/system/certificates" view=CertificatesPage/>
+                    <Route path="/system/web" view=crate::pages::system::web_listeners::WebListenersPage/>
                     <Route path="/backup" view=|| view! { <Gated feature="backup"><BackupDashboard/></Gated> }/>
                     <Route path="/backup/jobs" view=|| view! { <Gated feature="backup"><BackupJobsPage/></Gated> }/>
                     <Route path="/backup/retention" view=|| view! { <Gated feature="backup"><RetentionPoliciesPage/></Gated> }/>

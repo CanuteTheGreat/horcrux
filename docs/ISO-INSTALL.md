@@ -3,7 +3,7 @@
 Horcrux is a **headless hypervisor/server OS** (VMs, containers, ZFS, clustering, web UI, API, SSH) with an **optional desktop**. It ships as a Gentoo-based
 **live + installer ISO** (x86_64 UEFI **and** legacy BIOS, aarch64 UEFI; hybrid: the same file boots from a CD/VM *and* from a USB stick; see "Architectures").
 The **server image is the product** and installs and runs with no display at all: serial console or SSH only, answer-file (unattended) install, web UI on
-port 8006. A desktop (GNOME today, XFCE for small devices later) is an optional edition layered on top of the same core (see "Layers").
+ports 443 (HTTPS) and 80 (redirect). A desktop (GNOME today, XFCE for small devices later) is an optional edition layered on top of the same core (see "Layers").
 It contains a **guided installer** (a text-mode wizard that works on a VGA/laptop screen and on a serial
 console, plus a graphical one), an **unattended installer** driven by an answer file, and a live system you can look around in.
 There is no default password anywhere: the installer makes you set one, and SSH on the installed system is
@@ -194,7 +194,7 @@ before you type `ERASE` on the summary screen.
 The screenshots are real QEMU screen captures of the VGA console (`qemu-test.py --flow tui-vga`), taken by
 the nightly test.
 
-After the install: remove the stick and boot. The web UI is at `https://<ip>:8006` (self-signed
+After the install: remove the stick and boot. The web UI is at `https://<ip>` (self-signed
 certificate; user `admin`, the password you set).
 
 ## Graphical installer (default)
@@ -303,7 +303,7 @@ gateway = "192.168.1.1"
 dns = ["192.168.1.1"]
 ```
 
-The installed system has no web `admin` account: log in to the web UI (https, port 8006) with the user from the answer file's `[user]` section (a system user in `wheel` + `horcrux-admin`, created by the installer; PAM). `[user]` is required for Horcrux. See [WEB-LOGIN-PAM.md](WEB-LOGIN-PAM.md).
+The installed system has no web `admin` account: log in to the web UI (https, port 443) with the user from the answer file's `[user]` section (a system user in `wheel` + `horcrux-admin`, created by the installer; PAM). `[user]` is required for Horcrux. See [WEB-LOGIN-PAM.md](WEB-LOGIN-PAM.md).
 The installer powers the machine off when it is done (`AUTOINSTALL-OK` on the console and in
 `/var/log/autoinstall.log`). Invalid answer files stop with `ANSWER-FILE-ERROR ...` lines and start the guided installer instead.
 

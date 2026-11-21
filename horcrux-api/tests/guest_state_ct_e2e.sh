@@ -44,7 +44,7 @@ apt-get update -qq >/dev/null
 (apt-get install -y -qq lxc-utils || apt-get install -y -qq lxc) >/dev/null; apt-get install -y -qq uidmap xz-utils e2fsprogs iproute2 curl libvirt0 nftables python3 >/dev/null
 mkdir -p /tmp/gsct-data
 cat > /tmp/env.sh <<EOF
-export HORCRUX_LXC_PATH=$LXC_PATH HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/gsct-data
+export HORCRUX_LXC_PATH=$LXC_PATH HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/tmp/gsct-data
 export HORCRUX_DATABASE_URL=sqlite:///tmp/gsct-data/horcrux.db ADMIN_PASSWORD=admin
 export HORCRUX_SSL_DIR=/tmp/gsct-data/ssl RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=1000 RUST_LOG=info
 export HORCRUX_BOOT_ID_FILE=/tmp/gsct-data/bootid HORCRUX_GUEST_BOOT_DELAY_SECS=3

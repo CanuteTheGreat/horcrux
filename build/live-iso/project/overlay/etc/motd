@@ -4,5 +4,5 @@
   Install to disk : live-installer              (guided installer)
   Live console    : root is passwordless here (physical access only); sshd is OFF
   Wi-Fi           : iwctl   (then: station wlan0 connect <ssid>)
-  After installing: https://<ip>:8006  user: admin  (the password you chose)
+  After installing: https://<ip>  user: admin  (the password you chose)
 

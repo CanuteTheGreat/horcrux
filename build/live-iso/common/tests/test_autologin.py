@@ -80,7 +80,7 @@ class Scanner(unittest.TestCase):
 class InstallerDefaults(unittest.TestCase):
     def test_default_config_has_no_autologin(self):
         c = S.default_config({"name": "horcrux", "title": "H", "filesystems": ["xfs"], "swap_mb": 0, "network_mode": "management", "services": [],
-                              "web_scheme": "https", "web_port": 8006, "default_hostname": "h.localdomain"})
+                              "web_scheme": "https", "web_port": 443, "default_hostname": "h.localdomain"})
         self.assertFalse(c["desktop"]["autologin"])
         self.assertFalse(c["user_autologin"])
 

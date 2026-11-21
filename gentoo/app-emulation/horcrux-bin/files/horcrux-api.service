@@ -1,5 +1,5 @@
 [Unit]
-Description=Horcrux API server and web UI (https://:8006)
+Description=Horcrux API server and web UI (https://:443, http :80 redirect)
 Documentation=https://horcrux.errant.solutions/docs/
 After=network-online.target local-fs.target libvirtd.service podman.socket docker.service
 Wants=network-online.target
@@ -7,9 +7,12 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
+# ports below 1024 (443, 80); explicit so a hardened drop-in that narrows the bounding set cannot silently lose them
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 WorkingDirectory=/var/lib/horcrux
 Environment=HORCRUX_HOST=0.0.0.0
-Environment=HORCRUX_PORT=8006
+# Listening ports are configuration, not unit text: defaults HTTPS 443 + HTTP 80 (redirect only); change them in Settings > Web listeners,
+# /etc/horcrux/config.toml [server] or HORCRUX_PORT / HORCRUX_HTTP_REDIRECT_PORT / HORCRUX_EXTRA_HTTPS_PORTS in /etc/conf.d/horcrux-api.
 Environment=HORCRUX_DATA_DIR=/var/lib/horcrux
 Environment=HORCRUX_DATABASE_URL=sqlite:///var/lib/horcrux/horcrux.db
 Environment=HORCRUX_SSL_DIR=/etc/horcrux/ssl

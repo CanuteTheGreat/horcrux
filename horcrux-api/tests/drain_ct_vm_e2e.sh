@@ -23,7 +23,7 @@ mkdir -p /var/lib/hx
 if [ -f /var/lib/hx/api.pid ]; then kill "$(cat /var/lib/hx/api.pid)" 2>/dev/null || true; sleep 2; fi
 pkill -9 -x horcrux-api 2>/dev/null || true
 cd /var/lib/hx
-env HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/var/lib/hx \
+env HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/var/lib/hx \
   HORCRUX_DATABASE_URL=sqlite:///var/lib/hx/horcrux.db HORCRUX_SSL_DIR=/var/lib/hx/ssl \
   ADMIN_PASSWORD=admin JWT_SECRET="$(cat /root/jwt.secret)" RATE_LIMIT_MAX_REQUESTS=100000 \
   AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info HORCRUX_BOOT_ID_FILE=/var/lib/hx/bootid \

@@ -12,7 +12,7 @@ import sys
 def main():
     # Initialize client
     client = HorcruxClient(
-        base_url="http://localhost:8006",
+        base_url="https://localhost",
         username="admin",
         password="admin"
     )

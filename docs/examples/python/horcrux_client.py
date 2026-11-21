@@ -6,7 +6,7 @@ A complete Python client library for interacting with the Horcrux virtualization
 Example usage:
     from horcrux_client import HorcruxClient
 
-    client = HorcruxClient("http://localhost:8006", "admin", "password")
+    client = HorcruxClient("https://localhost", "admin", "password")
 
     # List VMs
     vms = client.list_vms()
@@ -46,7 +46,7 @@ class HorcruxClient:
         Initialize the Horcrux client.
 
         Args:
-            base_url: Base URL of the Horcrux API (e.g., "http://localhost:8006")
+            base_url: Base URL of the Horcrux API (e.g., "https://localhost")
             username: Username for authentication (if using password auth)
             password: Password for authentication (if using password auth)
             api_key: API key for authentication (alternative to username/password)

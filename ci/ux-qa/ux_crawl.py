@@ -24,7 +24,7 @@ One deterministic, no-LLM check for the classes of defect the owner kept finding
   zero-red          a stat card showing 0 / none is painted red: red is only for > 0 (owner rule)
 
 Usage:
-  BASE_URL=https://host:8006 ADMIN_PASSWORD=... ux_crawl.py [--config ux-crawl.json] [--static DIR] [--report out.json]
+  BASE_URL=https://host ADMIN_PASSWORD=... ux_crawl.py [--config ux-crawl.json] [--static DIR] [--report out.json]
         [--shots DIR] [--widths desktop,phone] [--schemes light,dark] [--routes /a,/b] [--max-routes N]
 
 Exit 1 when there is a `fail` finding that is not in the baseline file (the config's "baseline" path: id -> reason/owner).
@@ -255,7 +255,7 @@ def main():
     ap.add_argument("--routes", help="comma separated routes instead of discovering them from the nav")
     ap.add_argument("--max-routes", type=int)
     ap.add_argument("--static")
-    ap.add_argument("--base", default=os.environ.get("BASE_URL", "https://localhost:8006"))
+    ap.add_argument("--base", default=os.environ.get("BASE_URL", "https://localhost"))
     a = ap.parse_args()
     cfg = load_config(a.config)
     base = a.base.rstrip("/")

@@ -154,7 +154,7 @@ horcrux-cli alerts test-notification \
   --message "This is a test notification"
 
 # Via API
-curl -X POST http://localhost:8006/api/alerts/test \
+curl -X POST https://localhost/api/alerts/test \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{

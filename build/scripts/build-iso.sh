@@ -496,7 +496,7 @@ create_configs() {
 
 [server]
 host = "0.0.0.0"
-port = 8006
+port = 443
 workers = 4
 
 [database]

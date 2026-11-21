@@ -6,10 +6,10 @@ Complete guide for using Horcrux virtualization platform.
 
 ### Accessing Horcrux
 
-1. Web UI: `https://your-server:8006`
-2. Mobile UI: `https://your-server:8006/mobile`
+1. Web UI: `https://your-server`
+2. Mobile UI: `https://your-server/mobile`
 3. CLI: `horcrux-cli`
-4. API: `https://your-server:8006/api`
+4. API: `https://your-server/api`
 
 ### First Login
 
@@ -48,7 +48,7 @@ horcrux-cli vm start my-first-vm
 ### Via API
 
 ```bash
-curl -X POST https://localhost:8006/api/vms \
+curl -X POST https://localhost/api/vms \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -487,7 +487,7 @@ The mobile UI provides touch-optimized access for phones and tablets:
 - Offline support (planned)
 
 ### Accessing
-1. Open `https://your-server:8006/mobile` in mobile browser
+1. Open `https://your-server/mobile` in mobile browser
 2. Login with your credentials
 3. Add to home screen for app-like experience
 

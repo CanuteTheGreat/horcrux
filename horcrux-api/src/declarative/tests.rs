@@ -297,3 +297,38 @@ fn console_settings_are_planned_validated_and_exported() {
     let back: Spec = serde_yaml::from_str(&y).unwrap();
     assert!(plan(&back, &live, false).in_sync());
 }
+
+#[test]
+fn web_listener_settings_are_planned_validated_and_exported() {
+    use crate::web_settings::WebSettings;
+    let live = Live::default();
+    // the live default is the standard ports
+    assert_eq!(live.web.port, 443);
+    assert_eq!(live.web.http_redirect_port, Some(80));
+    // absent section: unmanaged; same as live: in sync
+    assert!(plan(&Spec::default(), &live, false).in_sync());
+    let mut s = Spec {
+        web: Some(WebSettings::default()),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).in_sync());
+    // an extra 8006 listener is one update with key-level details
+    let mut want = WebSettings::default();
+    want.extra_https_ports = vec![8006];
+    s.web = Some(want.clone());
+    let p = plan(&s, &live, false);
+    assert_eq!(p.changes.len(), 1);
+    assert_eq!(p.changes[0].kind, "web");
+    assert_eq!(p.changes[0].action, Action::Update);
+    let d = p.changes[0].details.join("\n");
+    assert!(d.contains("extra_https_ports: [] -> [8006]"), "{d}");
+    // a colliding port is a plan error, not a change
+    want.extra_https_ports = vec![443];
+    s.web = Some(want);
+    assert!(plan(&s, &live, false).errors[0].contains("used twice"));
+    // export carries the live listeners and round-trips through YAML
+    let y = serde_yaml::to_string(&export(&live)).unwrap();
+    assert!(y.contains("web:"), "{y}");
+    let back: Spec = serde_yaml::from_str(&y).unwrap();
+    assert!(plan(&back, &live, false).in_sync());
+}

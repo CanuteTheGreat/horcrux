@@ -409,9 +409,9 @@ horcrux completions fish > ~/.config/fish/completions/horcrux.fish
 
 ## 📚 Documentation References
 
-- **API Documentation**: http://localhost:8006/api/docs
+- **API Documentation**: https://localhost/api/docs
 - **CLI Guide**: [docs/CLI.md](CLI.md)
-- **OpenAPI Spec**: http://localhost:8006/api/openapi.yaml
+- **OpenAPI Spec**: https://localhost/api/openapi.yaml
 - **Storage Guide**: [horcrux-api/src/storage/mod.rs](../horcrux-api/src/storage/mod.rs)
 - **SDN Guide**: [horcrux-api/src/sdn/mod.rs](../horcrux-api/src/sdn/mod.rs)
 

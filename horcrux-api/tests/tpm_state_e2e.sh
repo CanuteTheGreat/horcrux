@@ -41,7 +41,7 @@ esac
 EOV
 chmod +x /tmp/lv/virsh
 cat > /tmp/dev/start-api.sh <<EOS
-HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/dev \\
+HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/tmp/dev \\
 HORCRUX_DATABASE_URL=sqlite:///tmp/dev/horcrux.db HORCRUX_SSL_DIR=/tmp/dev/ssl \\
 HORCRUX_VM_STORAGE=/tmp/dev/vms ADMIN_PASSWORD=admin RUST_LOG=info \\
 HORCRUX_VIRSH=/tmp/lv/virsh HORCRUX_LIBVIRT_SWTPM_DIR=/tmp/lv/swtpm \\

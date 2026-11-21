@@ -89,7 +89,7 @@ use tracing::{trace, debug, info, warn, error};
 info!("Server started");
 
 // With structured fields
-info!(port = 8006, "Server listening");
+info!(port = 443, "Server listening");
 
 // Multiple fields
 info!(

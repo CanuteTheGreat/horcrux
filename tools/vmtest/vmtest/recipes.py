@@ -11,7 +11,7 @@ import time
 
 PW = "Kx9!mQv2-tle-77Zp"          # >= 12 chars, mixed: passes the installer's strength rules
 PROJECTS = {
-    "horcrux": dict(svc="horcrux-api", port=8006, web_user="hxadmin", health="/api/health"),
+    "horcrux": dict(svc="horcrux-api", port=443, web_user="hxadmin", health="/api/health"),
     "patronus": dict(svc="patronus-web", port=8443, web_user="pxadmin", health="/login"),
 }
 

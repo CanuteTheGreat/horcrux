@@ -21,6 +21,10 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         subnets: sdn::list_subnets(State(state.clone())).await.0,
         vms: state.vm_manager.list_vms().await,
         console: crate::console::hxc_settings::get(),
+        web: {
+            let cfg = crate::config::HorcruxConfig::load();
+            crate::web_settings::WebSettings::from(&cfg.server)
+        },
     }
 }
 
@@ -109,6 +113,14 @@ async fn run_change(
                 "applies to new console sessions; enabling/disabling the D-Bus display \
                  takes effect at each VM's next start"
                     .into(),
+            ))
+        }
+
+        ("web", Action::Update) => {
+            let w = spec.web.clone().ok_or("not in spec")?;
+            crate::web_settings::save(&state.config.paths.data_dir, &w)?;
+            Ok(Some(
+                "stored; the listeners are re-bound at the next horcrux-api restart".into(),
             ))
         }
 

@@ -75,104 +75,121 @@ pub struct MacroInfo {
     pub name: &'static str,
     pub description: &'static str,
     /// `(protocol, port)` pairs.
-    pub rules: &'static [(&'static str, &'static str)],
+    pub rules: Vec<(&'static str, String)>,
 }
 
-pub const MACROS: &[MacroInfo] = &[
-    MacroInfo {
-        name: "SSH",
-        description: "Secure Shell",
-        rules: &[("tcp", "22")],
-    },
-    MacroInfo {
-        name: "HTTP",
-        description: "Web",
-        rules: &[("tcp", "80")],
-    },
-    MacroInfo {
-        name: "HTTPS",
-        description: "Secure web",
-        rules: &[("tcp", "443")],
-    },
-    MacroInfo {
-        name: "DNS",
-        description: "Domain name service",
-        rules: &[("udp", "53"), ("tcp", "53")],
-    },
-    MacroInfo {
-        name: "NTP",
-        description: "Network time",
-        rules: &[("udp", "123")],
-    },
-    MacroInfo {
-        name: "SMTP",
-        description: "Mail submission",
-        rules: &[("tcp", "25"), ("tcp", "587")],
-    },
-    MacroInfo {
-        name: "IMAP",
-        description: "Mail retrieval",
-        rules: &[("tcp", "143"), ("tcp", "993")],
-    },
-    MacroInfo {
-        name: "POP3",
-        description: "Mail retrieval (POP)",
-        rules: &[("tcp", "110"), ("tcp", "995")],
-    },
-    MacroInfo {
-        name: "FTP",
-        description: "File transfer",
-        rules: &[("tcp", "21")],
-    },
-    MacroInfo {
-        name: "RDP",
-        description: "Remote Desktop",
-        rules: &[("tcp", "3389"), ("udp", "3389")],
-    },
-    MacroInfo {
-        name: "VNC",
-        description: "VNC displays 0-9",
-        rules: &[("tcp", "5900-5909")],
-    },
-    MacroInfo {
-        name: "MySQL",
-        description: "MySQL / MariaDB",
-        rules: &[("tcp", "3306")],
-    },
-    MacroInfo {
-        name: "PostgreSQL",
-        description: "PostgreSQL",
-        rules: &[("tcp", "5432")],
-    },
-    MacroInfo {
-        name: "Ping",
-        description: "ICMP echo",
-        rules: &[("icmp", "")],
-    },
-    MacroInfo {
-        name: "SMB",
-        description: "Windows file sharing",
-        rules: &[("tcp", "445"), ("tcp", "139"), ("udp", "137-138")],
-    },
-    MacroInfo {
-        name: "NFS",
-        description: "NFS",
-        rules: &[
+/// Ports the Horcrux web UI / API listens on, and the HA fence agent's port.
+/// Set once at start from the node's effective settings
+/// (`horcrux_core::web_settings`), so the `Horcrux` macro and the implicit
+/// management allow-rule of a `drop` host policy follow the configuration.
+static MGMT_PORTS: std::sync::RwLock<(Vec<u16>, u16)> = std::sync::RwLock::new((Vec::new(), 0));
+
+/// SSH port the implicit management allow-rule keeps open.
+pub const SSH_PORT: u16 = 22;
+
+/// Record the web listener ports (HTTPS, extras, HTTP redirect) and the HA
+/// fence agent port.
+pub fn set_management_ports(web: &[u16], fence: u16) {
+    if let Ok(mut g) = MGMT_PORTS.write() {
+        *g = (web.to_vec(), fence);
+    }
+}
+
+/// The recorded web ports (the standard 443 and 80 until set).
+pub fn web_ports() -> Vec<u16> {
+    match MGMT_PORTS.read() {
+        Ok(g) if !g.0.is_empty() => g.0.clone(),
+        _ => vec![443, 80],
+    }
+}
+
+/// The recorded HA fence agent port (8026 until set).
+pub fn fence_port() -> u16 {
+    match MGMT_PORTS.read() {
+        Ok(g) if g.1 != 0 => g.1,
+        _ => 8026,
+    }
+}
+
+/// Ports a `drop` host policy never cuts off: SSH, the web UI / API
+/// listeners and the HA fence agent's attestation endpoint.
+pub fn implicit_management_ports() -> Vec<u16> {
+    let mut v = vec![SSH_PORT];
+    v.extend(web_ports());
+    v.push(fence_port());
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+const STATIC_MACROS: &[(&str, &str, &[(&str, &str)])] = &[
+    ("SSH", "Secure Shell", &[("tcp", "22")]),
+    ("HTTP", "Web", &[("tcp", "80")]),
+    ("HTTPS", "Secure web", &[("tcp", "443")]),
+    (
+        "DNS",
+        "Domain name service",
+        &[("udp", "53"), ("tcp", "53")],
+    ),
+    ("NTP", "Network time", &[("udp", "123")]),
+    ("SMTP", "Mail submission", &[("tcp", "25"), ("tcp", "587")]),
+    ("IMAP", "Mail retrieval", &[("tcp", "143"), ("tcp", "993")]),
+    (
+        "POP3",
+        "Mail retrieval (POP)",
+        &[("tcp", "110"), ("tcp", "995")],
+    ),
+    ("FTP", "File transfer", &[("tcp", "21")]),
+    ("RDP", "Remote Desktop", &[("tcp", "3389"), ("udp", "3389")]),
+    ("VNC", "VNC displays 0-9", &[("tcp", "5900-5909")]),
+    ("MySQL", "MySQL / MariaDB", &[("tcp", "3306")]),
+    ("PostgreSQL", "PostgreSQL", &[("tcp", "5432")]),
+    ("Ping", "ICMP echo", &[("icmp", "")]),
+    (
+        "SMB",
+        "Windows file sharing",
+        &[("tcp", "445"), ("tcp", "139"), ("udp", "137-138")],
+    ),
+    (
+        "NFS",
+        "NFS",
+        &[
             ("tcp", "2049"),
             ("udp", "2049"),
             ("tcp", "111"),
             ("udp", "111"),
         ],
-    },
-    MacroInfo {
-        name: "Horcrux",
-        description: "Horcrux web UI / API",
-        rules: &[("tcp", "8006")],
-    },
+    ),
 ];
 
-pub fn find_macro(name: &str) -> Option<&'static MacroInfo> {
-    MACROS.iter().find(|m| m.name.eq_ignore_ascii_case(name))
+/// Every macro, the `Horcrux` one built from the configured web ports.
+pub fn macros() -> Vec<MacroInfo> {
+    let mut v: Vec<MacroInfo> = STATIC_MACROS
+        .iter()
+        .map(|(name, description, rules)| MacroInfo {
+            name: *name,
+            description: *description,
+            rules: rules
+                .iter()
+                .map(|(p, port)| (*p, port.to_string()))
+                .collect(),
+        })
+        .collect();
+    v.push(MacroInfo {
+        name: "Horcrux",
+        description: "Horcrux web UI / API (every configured listener)",
+        rules: web_ports()
+            .into_iter()
+            .map(|p| ("tcp", p.to_string()))
+            .collect(),
+    });
+    v
+}
+
+pub fn find_macro(name: &str) -> Option<MacroInfo> {
+    macros()
+        .into_iter()
+        .find(|m| m.name.eq_ignore_ascii_case(name))
 }
 
 /// `macro:SSH` -> the macro, if the port field names one.
@@ -339,5 +356,34 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn horcrux_macro_and_management_ports_follow_the_configured_ports() {
+        // defaults before anything is configured: the standard ports
+        set_management_ports(&[], 0);
+        assert_eq!(web_ports(), vec![443, 80]);
+        assert_eq!(implicit_management_ports(), vec![22, 80, 443, 8026]);
+        let m = find_macro("horcrux").unwrap();
+        assert_eq!(
+            m.rules,
+            vec![("tcp", "443".to_string()), ("tcp", "80".to_string())]
+        );
+
+        // a node that keeps 8006 as the main port and 443 as an extra
+        set_management_ports(&[8006, 443, 80], 18026);
+        assert_eq!(implicit_management_ports(), vec![22, 80, 443, 8006, 18026]);
+        let m = find_macro("Horcrux").unwrap();
+        assert_eq!(
+            m.rules.iter().map(|(_, p)| p.as_str()).collect::<Vec<_>>(),
+            vec!["8006", "443", "80"]
+        );
+        // the 8006 literal is gone from the static table
+        assert!(macros()
+            .iter()
+            .filter(|m| m.name != "Horcrux")
+            .all(|m| m.rules.iter().all(|(_, p)| p != "8006")));
+
+        set_management_ports(&[], 0);
     }
 }

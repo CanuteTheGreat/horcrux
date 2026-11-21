@@ -168,7 +168,7 @@ pub fn CertificatesPage() -> impl IntoView {
                 <h2>"ACME (Let's Encrypt)"</h2>
                 <p>
                     "The CA checks " <code>"http://<domain>/.well-known/acme-challenge/"</code>
-                    " on port 80: start Horcrux with HORCRUX_HTTP_REDIRECT_PORT=80 (or forward port 80 to that port). "
+                    " on port 80: Horcrux listens there by default (Settings > Web listeners; a node that turned the HTTP port off, or forwards port 80 elsewhere, must point the CA at the right port). "
                     {move || status.get().map(|s| match s.config["http_redirect_port"].as_u64() {
                         Some(p) => format!("Plain-HTTP port: {}.", p),
                         None => "No plain-HTTP port is configured right now.".to_string(),

@@ -22,7 +22,7 @@
 ## What is Horcrux?
 
 Horcrux is a **server-first operating system**: a Gentoo-based hypervisor you install from an ISO (x86_64 and aarch64) and manage through the web UI, the API, the CLI or SSH.
-The server image has no desktop and needs no display: it installs over a serial console or SSH with an answer file, and the web UI comes up on port 8006. A **desktop is an optional
+The server image has no desktop and needs no display: it installs over a serial console or SSH with an answer file, and the web UI comes up on the standard HTTPS port 443. A **desktop is an optional
 edition** (GNOME today) layered on the same core, for laptops and workstations that run VMs; it adds the desktop and nothing else (see [Layers](docs/ISO-INSTALL.md#layers)).
 
 | image | what it is |
@@ -97,7 +97,7 @@ ZFS, Ceph RBD, LVM, directory (qcow2) and iSCSI backends.
 - **Realms** (`user@realm`): local, PAM, LDAP (plain/StartTLS/LDAPS), Active Directory, OpenID Connect (PKCE, state, nonce), and API keys.
 - **Second factors:** TOTP, WebAuthn security keys/passkeys, recovery codes; enforceable per user, realm or globally.
 - **RBAC:** Proxmox-style privileges checked on every API route, built-in and custom roles, path ACLs with propagation.
-- **HTTPS by default** on port 8006 using a node-local CA (or your own certificate, or ACME/Let's Encrypt with renewal). Plain HTTP is redirected.
+- **HTTPS by default** on the standard port 443 (HTTP on 80 only redirects; extra ports are optional and configurable, docs/WEB-LISTENERS.md) using a node-local CA (or your own certificate, or ACME/Let's Encrypt with renewal). Plain HTTP is redirected.
 - **Firewall:** nftables-based, datacenter/node/per-guest rules, security groups, IPv4 and IPv6.
 
 See [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
@@ -127,7 +127,7 @@ sudo ./deploy/install.sh
 
 The script checks requirements, creates the `horcrux` user and groups, builds from
 source, installs binaries and the web UI, configures services and initializes the
-database. Then open `https://localhost:8006`.
+database. Then open `https://localhost`.
 
 There is no `admin` account and no default password: log in to the web UI and API with a
 system user (PAM) in the `horcrux-admin` or `wheel` group - see [docs/WEB-LOGIN-PAM.md](docs/WEB-LOGIN-PAM.md). Self-registration is off. Scripts must use
@@ -146,8 +146,8 @@ git clone https://github.com/CanuteTheGreat/horcrux.git
 cd horcrux
 docker-compose up -d
 
-curl -k https://localhost:8006/api/tls/ca.pem -o horcrux-ca.pem
-curl --cacert horcrux-ca.pem https://localhost:8006/api/health
+curl -k https://localhost/api/tls/ca.pem -o horcrux-ca.pem
+curl --cacert horcrux-ca.pem https://localhost/api/health
 ```
 
 See [docs/DOCKER.md](docs/DOCKER.md).
@@ -183,7 +183,8 @@ Edit `/etc/horcrux/config.toml` (example in `deploy/config.toml.example`):
 
 ```toml
 [server]
-bind_address = "0.0.0.0:8006"
+host = "0.0.0.0"
+port = 443
 workers = 4
 
 [storage]
@@ -207,11 +208,11 @@ repo at [docs/openapi.yaml](docs/openapi.yaml); guides are
 [docs/API_DOCS.md](docs/API_DOCS.md) and [docs/API.md](docs/API.md).
 
 ```bash
-TOKEN=$(curl -s --cacert horcrux-ca.pem -X POST https://localhost:8006/api/auth/login \
+TOKEN=$(curl -s --cacert horcrux-ca.pem -X POST https://localhost/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username": "alice", "password": "<your admin password>"}' | jq -r .ticket)
 
-curl --cacert horcrux-ca.pem -H "Authorization: Bearer $TOKEN" https://localhost:8006/api/vms
+curl --cacert horcrux-ca.pem -H "Authorization: Bearer $TOKEN" https://localhost/api/vms
 ```
 
 ### CLI

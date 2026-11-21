@@ -13,7 +13,7 @@ from liveinst import luksroot as LR  # noqa: E402
 from liveinst import system as S  # noqa: E402
 
 PROFILE = {"name": "horcrux", "title": "Horcrux", "filesystems": ["xfs-luks", "ext4", "xfs", "zfs"], "swap_mb": 4096, "network_mode": "management",
-           "services": [], "web_scheme": "https", "web_port": 8006, "default_hostname": "h.localdomain"}
+           "services": [], "web_scheme": "https", "web_port": 443, "default_hostname": "h.localdomain"}
 SURFACE = {"id": "surface", "defaults": {"fs": "xfs-luks", "swap": "hibernate"}}
 
 

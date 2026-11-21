@@ -220,10 +220,11 @@ async fn ensure_listening(cli: &str, cluster_ip: Option<&str>) -> Result<()> {
         // The cluster address, so the other server is told an address that
         // reaches this one (a server listening on every address advertises
         // all of them, including ones that mean something else elsewhere).
+        let port = crate::config::HorcruxConfig::load().server.incus_https_port;
         let listen = match cluster_ip {
-            Some(ip) if ip.contains(':') && !ip.starts_with('[') => format!("[{ip}]:8443"),
-            Some(ip) => format!("{ip}:8443"),
-            None => "[::]:8443".to_string(),
+            Some(ip) if ip.contains(':') && !ip.starts_with('[') => format!("[{ip}]:{port}"),
+            Some(ip) => format!("{ip}:{port}"),
+            None => format!("[::]:{port}"),
         };
         run(
             Command::new(cli).args(["config", "set", "core.https_address", &listen]),

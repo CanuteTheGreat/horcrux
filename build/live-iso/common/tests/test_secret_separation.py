@@ -23,7 +23,7 @@ from liveinst import system as S  # noqa: E402
 DISK_PW = "Wq4#vN8-correct-horse-Zx2"       # test-only disk passphrase
 OTHER_PW = "Bd6!hP3-tablet-user-Rk9"        # test-only account password
 PROFILE = {"name": "horcrux", "title": "Horcrux", "filesystems": ["ext4", "xfs", "zfs", "xfs-luks"], "swap_mb": 0, "network_mode": "management",
-           "services": [], "web_scheme": "https", "web_port": 8006, "default_hostname": "h.localdomain"}
+           "services": [], "web_scheme": "https", "web_port": 443, "default_hostname": "h.localdomain"}
 
 
 def sha512(pw, salt="unittest1"):

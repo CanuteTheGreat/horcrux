@@ -1,5 +1,10 @@
-# Horcrux web UI/API (https://<host>:8006) signs in SYSTEM users through PAM (/etc/pam.d/horcrux).
+# Horcrux web UI/API (https://<host>, port 443; http on 80 redirects) signs in SYSTEM users through PAM (/etc/pam.d/horcrux).
 # Members of these groups are administrators (default: horcrux-admin and wheel); root cannot log in unless allowed.
 #HORCRUX_ADMIN_GROUPS="horcrux-admin,wheel"
 #HORCRUX_ALLOW_ROOT_LOGIN=false
 # more roles: /etc/horcrux/config.toml  [auth] operator_groups = [..]  readonly_groups = [..]
+# Listening ports (defaults: HTTPS 443, HTTP 80 that only redirects). Normally changed in Settings > Web listeners or /etc/horcrux/config.toml [server];
+# these variables are the environment layer (the stored settings win over them).
+#HORCRUX_PORT=443
+#HORCRUX_HTTP_REDIRECT_PORT=80        # 0 = off
+#HORCRUX_EXTRA_HTTPS_PORTS="8006"     # comma list, empty/none = none

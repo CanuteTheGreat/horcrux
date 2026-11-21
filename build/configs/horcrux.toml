@@ -4,8 +4,11 @@
 [server]
 # API server bind address
 host = "0.0.0.0"
-# API server port (default: 8006, same as Proxmox for compatibility)
-port = 8006
+# HTTPS port (default 443, the standard port). Plain HTTP on http_redirect_port (80) only redirects to HTTPS.
+port = 443
+http_redirect_port = 80
+# optional extra HTTPS ports for existing API clients / cluster peers, e.g. [8006]
+extra_https_ports = []
 # Number of worker threads (0 = auto-detect based on CPU cores)
 workers = 0
 # Enable TLS

@@ -156,7 +156,7 @@ pub fn FirewallObjectsPage() -> impl IntoView {
                             <option value="drop" selected=o.policy_out == "drop">"drop"</option>
                         </select></label>
                     <button id="fwo-apply" class="btn btn-primary" on:click=apply>"Apply"</button>
-                    <span class="form-help">"With drop, replies, loopback, SSH (22) and the API (8006) stay allowed."</span>
+                    <span class="form-help">"With drop, replies, loopback, SSH (22) and the web UI / API ports (443, 80 by default; see Settings > Web listeners) stay allowed."</span>
                 </div>
             })}
 

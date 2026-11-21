@@ -17,7 +17,7 @@ from liveinst import secretcheck as SC  # noqa: E402
 from liveinst import system as S  # noqa: E402
 
 PROFILE = {"name": "horcrux", "title": "Horcrux", "filesystems": ["ext4", "xfs", "zfs", "xfs-luks"], "swap_mb": 0, "network_mode": "management",
-           "services": [], "web_scheme": "https", "web_port": 8006, "default_hostname": "h.localdomain"}
+           "services": [], "web_scheme": "https", "web_port": 443, "default_hostname": "h.localdomain"}
 
 
 def load_harness():

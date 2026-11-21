@@ -352,7 +352,7 @@ def api_request(url: str, token: str):
 
 # Usage
 try:
-    vms = api_request('http://localhost:8006/api/vms', token)
+    vms = api_request('https://localhost/api/vms', token)
 except ApiError as e:
     if e.error == 'AUTHENTICATION_FAILED':
         print('Authentication failed, please login')
@@ -396,7 +396,7 @@ async fn api_request(url: &str, token: &str) -> Result<serde_json::Value, ApiErr
 }
 
 // Usage
-match api_request("http://localhost:8006/api/vms", token).await {
+match api_request("https://localhost/api/vms", token).await {
     Ok(data) => println!("Success: {:?}", data),
     Err(e) => match e.error.as_str() {
         "NOT_FOUND" => eprintln!("Resource not found: {}", e.message),
@@ -430,17 +430,17 @@ match api_request("http://localhost:8006/api/vms", token).await {
 
 ```bash
 # Test 404 error
-curl -i http://localhost:8006/api/vms/nonexistent \
+curl -i https://localhost/api/vms/nonexistent \
   -H "Authorization: Bearer $TOKEN"
 
 # Test validation error
-curl -X POST http://localhost:8006/api/vms \
+curl -X POST https://localhost/api/vms \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"test","memory":-1}'
 
 # Test authentication error
-curl -i http://localhost:8006/api/vms \
+curl -i https://localhost/api/vms \
   -H "Authorization: Bearer invalid-token"
 ```
 

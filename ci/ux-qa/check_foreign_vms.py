@@ -9,7 +9,7 @@ libvirt (--real: compares with `virsh list --all --name`).  Asserts:
   2. a domain that is not managed has imported_as == null (so it is offered) and a usable plan (no `problem`);
   3. the /vms page, in Firefox, shows a visible link/button to the libvirt importer when something is unmanaged.
 
-usage: BASE_URL=https://host:8006 ADMIN_PASSWORD=... check_foreign_vms.py [--real] [--expect a,b] [--no-ui]
+usage: BASE_URL=https://host ADMIN_PASSWORD=... check_foreign_vms.py [--real] [--expect a,b] [--no-ui]
 fake-virsh.sh (next to this file) serves two domains, `uxqa-foreign-1` and `uxqa-foreign-2`.
 """
 import argparse
@@ -21,7 +21,7 @@ import subprocess
 import sys
 import urllib.request
 
-BASE = os.environ.get("BASE_URL", "https://localhost:8006").rstrip("/")
+BASE = os.environ.get("BASE_URL", "https://localhost").rstrip("/")
 CTX = ssl.create_default_context()
 CTX.check_hostname = False
 CTX.verify_mode = ssl.CERT_NONE

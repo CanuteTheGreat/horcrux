@@ -16,7 +16,7 @@ from liveinst import t2 as T2  # noqa: E402
 from liveinst import zfsroot as Z  # noqa: E402
 
 PROFILE = {"name": "horcrux", "title": "Horcrux", "filesystems": ["ext4", "xfs", "zfs"], "swap_mb": 4096, "network_mode": "management",
-           "services": ["docker"], "web_scheme": "https", "web_port": 8006, "default_hostname": "h.localdomain"}
+           "services": ["docker"], "web_scheme": "https", "web_port": 443, "default_hostname": "h.localdomain"}
 
 
 def fake_pci(root, devs):

@@ -36,7 +36,7 @@ from horcrux_client import HorcruxClient
 
 # Initialize client
 client = HorcruxClient(
-    base_url="http://localhost:8006",
+    base_url="https://localhost",
     username="admin",
     password="admin"
 )
@@ -66,7 +66,7 @@ client.logout()
 ```python
 # Authenticate with API key instead of username/password
 client = HorcruxClient(
-    base_url="http://localhost:8006",
+    base_url="https://localhost",
     api_key="hx_1234567890abcdef..."
 )
 ```
@@ -75,7 +75,7 @@ client = HorcruxClient(
 
 ```python
 # Use context manager for automatic cleanup
-with HorcruxClient("http://localhost:8006", "admin", "admin") as client:
+with HorcruxClient("https://localhost", "admin", "admin") as client:
     vms = client.list_vms()
     # ... do work ...
 # Automatically logs out when done
@@ -213,7 +213,7 @@ All API errors raise `HorcruxError`:
 ```python
 from horcrux_client import HorcruxClient, HorcruxError
 
-client = HorcruxClient("http://localhost:8006", "admin", "admin")
+client = HorcruxClient("https://localhost", "admin", "admin")
 
 try:
     vm = client.get_vm("nonexistent-vm")
@@ -295,7 +295,7 @@ while True:
 ```python
 from horcrux_client import HorcruxClient
 
-client = HorcruxClient("http://localhost:8006", "admin", "admin")
+client = HorcruxClient("https://localhost", "admin", "admin")
 
 # Create database VM
 db_vm = client.create_vm(
@@ -379,7 +379,7 @@ To test the client against a running Horcrux instance:
 
 ```bash
 # Set environment variables
-export HORCRUX_URL="http://localhost:8006"
+export HORCRUX_URL="https://localhost"
 export HORCRUX_USER="admin"
 export HORCRUX_PASS="admin"
 

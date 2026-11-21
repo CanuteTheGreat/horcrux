@@ -34,7 +34,7 @@ docker exec "$NAME" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractiv
 
 # One env for the API and for `horcrux-api guests ...` (what the unit runs).
 cat > /tmp/$NAME-env.sh <<'EOS'
-export HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/var/lib/hx
+export HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/var/lib/hx
 export HORCRUX_DATABASE_URL=sqlite:///var/lib/hx/horcrux.db HORCRUX_SSL_DIR=/var/lib/hx/ssl
 export HORCRUX_VM_STORAGE=/var/lib/hx/vms ADMIN_PASSWORD=admin RUST_LOG=info
 export RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000

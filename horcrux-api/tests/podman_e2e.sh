@@ -93,7 +93,7 @@ podman pull -q docker.io/library/busybox:latest
 docker exec "$NAME" bash -c '
 set -euo pipefail
 mkdir -p /tmp/pm /var/lib/horcrux/backups /var/lib/horcrux/storage/snapshot-test && cd /tmp/pm
-HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/pm \
+HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/tmp/pm \
 HORCRUX_DATABASE_URL=sqlite:///tmp/pm/horcrux.db HORCRUX_SSL_DIR=/tmp/pm/ssl \
 ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \
   nohup horcrux-api > /tmp/pm/api.log 2>&1 &

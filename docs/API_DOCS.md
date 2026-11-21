@@ -8,7 +8,7 @@ Horcrux provides interactive API documentation through Swagger UI.
 
 Once the Horcrux API server is running, you can access the interactive documentation at:
 
-**https://localhost:8006/api/docs**
+**https://localhost/api/docs**
 
 ### Features
 
@@ -23,8 +23,8 @@ Once the Horcrux API server is running, you can access the interactive documenta
 
 The machine-readable OpenAPI 3.0 specification is available at:
 
-- **YAML Format**: https://localhost:8006/api/openapi.yaml
-- **JSON Info**: https://localhost:8006/api/openapi.json
+- **YAML Format**: https://localhost/api/openapi.yaml
+- **JSON Info**: https://localhost/api/openapi.json
 
 ### Using the Swagger UI
 
@@ -39,7 +39,7 @@ Before making API calls, you need to authenticate:
 
 **Example login to get Bearer token:**
 ```bash
-curl --cacert horcrux-ca.pem -X POST https://localhost:8006/api/auth/login \
+curl --cacert horcrux-ca.pem -X POST https://localhost/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"alice","password":"<admin password>"}'
 ```
@@ -102,19 +102,19 @@ npm install -g @openapitools/openapi-generator-cli
 
 # Generate Python client
 openapi-generator-cli generate \
-  -i https://localhost:8006/api/openapi.yaml \
+  -i https://localhost/api/openapi.yaml \
   -g python \
   -o ./python-client
 
 # Generate Go client
 openapi-generator-cli generate \
-  -i https://localhost:8006/api/openapi.yaml \
+  -i https://localhost/api/openapi.yaml \
   -g go \
   -o ./go-client
 
 # Generate TypeScript/JavaScript client
 openapi-generator-cli generate \
-  -i https://localhost:8006/api/openapi.yaml \
+  -i https://localhost/api/openapi.yaml \
   -g typescript-axios \
   -o ./ts-client
 ```
@@ -174,7 +174,7 @@ All API errors follow a consistent format:
 
 The API supports WebSocket connections for real-time updates at:
 
-**ws://localhost:8006/api/ws**
+**wss://localhost/api/ws**
 
 After connecting, send a subscription message:
 
@@ -217,7 +217,7 @@ See the following resources for code examples:
 
 ### Support
 
-- **Interactive Docs**: https://localhost:8006/api/docs
+- **Interactive Docs**: https://localhost/api/docs
 - **GitHub Issues**: https://github.com/CanuteTheGreat/horcrux/issues
 - **Discussions**: https://github.com/CanuteTheGreat/horcrux/discussions
 
@@ -226,7 +226,7 @@ See the following resources for code examples:
 If you're developing against the API locally:
 
 1. Start the server: `cargo run -p horcrux-api`
-2. Open Swagger UI: https://localhost:8006/api/docs
+2. Open Swagger UI: https://localhost/api/docs
 3. Test endpoints interactively
 4. Generate client code from `/api/openapi.yaml`
 

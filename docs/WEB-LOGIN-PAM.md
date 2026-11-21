@@ -1,7 +1,7 @@
 # Web UI / API login: system users (PAM)
 
 Horcrux has **no user database and no `admin` account of its own**. You sign in to the web UI
-(`https://<host>:8006`) and the API with the **Linux user** of the host, e.g. `canutethegreat`.
+(`https://<host>`) and the API with the **Linux user** of the host, e.g. `canutethegreat`.
 The password is checked by PAM (service `/etc/pam.d/horcrux`, package-owned, mirrors `system-auth`),
 so local users and SSSD / FreeIPA / LDAP / AD users (wherever NSS + PAM resolve them) all work.
 Horcrux never reads `/etc/shadow`.

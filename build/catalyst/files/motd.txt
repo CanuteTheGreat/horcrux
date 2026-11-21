@@ -13,5 +13,5 @@
    Password: horcrux
 
  To install: horcrux-installer
- Web UI: http://localhost:8006
+ Web UI: https://localhost
 

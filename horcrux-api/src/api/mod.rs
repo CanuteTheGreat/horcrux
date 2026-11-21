@@ -65,6 +65,7 @@ pub mod vm_devices;
 pub mod vm_hw;
 pub mod vm_import;
 pub mod vm_migration;
+pub mod web_listeners;
 
 use crate::AppState;
 use axum::Router;

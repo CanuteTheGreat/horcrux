@@ -11,6 +11,7 @@ pub use horcrux_core::config;
 pub use horcrux_core::error;
 pub use horcrux_core::features;
 pub use horcrux_core::validation;
+pub use horcrux_core::web_settings;
 
 // Application state
 pub mod state;

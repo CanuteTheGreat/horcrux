@@ -55,7 +55,7 @@ impl HorcruxProvider {
             .with_attribute(
                 "endpoint",
                 SchemaAttribute::string()
-                    .with_description("Horcrux API endpoint (e.g., https://localhost:8006)")
+                    .with_description("Horcrux API endpoint (e.g., https://localhost)")
                     .required(),
             )
             .with_attribute(

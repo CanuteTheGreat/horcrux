@@ -18,7 +18,7 @@ struct Cli {
         short,
         long,
         env = "HORCRUX_SERVER",
-        default_value = "https://localhost:8006"
+        default_value = "https://localhost"
     )]
     server: String,
 

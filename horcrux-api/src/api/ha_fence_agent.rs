@@ -314,11 +314,8 @@ pub async fn agent_main() -> i32 {
 
 /// TCP port of the attestation endpoint (`GET /attest?n=<nonce>`).
 pub(crate) fn attest_port() -> u16 {
-    std::env::var("HORCRUX_HA_FENCE_PORT")
-        .ok()
-        .and_then(|v| v.trim().parse::<u16>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(8026)
+    // `[server] ha_fence_port` in config.toml, or HORCRUX_HA_FENCE_PORT (default 8026)
+    crate::config::HorcruxConfig::load().server.ha_fence_port
 }
 
 /// How long after the agent started a manager that is enabled but not running is

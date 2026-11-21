@@ -174,19 +174,59 @@ impl Default for AuthConfig {
     }
 }
 
-/// Server configuration
+/// Server configuration (`[server]`).
+///
+/// Defaults are the standard ports: HTTPS 443 and an HTTP listener on 80
+/// that only redirects to HTTPS. See [`crate::web_settings`] for the layers
+/// and the upgrade rule that keeps an existing node's port.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     /// Host address to bind to
+    #[serde(default = "default_host")]
     pub host: String,
-    /// Port to listen on
+    /// Main HTTPS port (443)
+    #[serde(default = "default_https_port")]
     pub port: u16,
     /// Serve HTTPS (default). Turn off only behind a TLS-terminating proxy.
+    #[serde(default = "default_tls_enabled")]
     pub tls_enabled: bool,
-    /// Extra plain-HTTP port that redirects to HTTPS and answers ACME
-    /// HTTP-01 challenges (80 for Let's Encrypt). Env: `HORCRUX_HTTP_REDIRECT_PORT`.
-    #[serde(default)]
+    /// Plain-HTTP port that redirects to HTTPS and answers ACME HTTP-01
+    /// challenges (80). Env `HORCRUX_HTTP_REDIRECT_PORT=0` turns it off.
+    #[serde(default = "default_redirect_port")]
     pub http_redirect_port: Option<u16>,
+    /// Extra HTTPS ports serving the same API (none by default; the
+    /// historical 8006 for existing API clients and cluster peers).
+    /// Env: `HORCRUX_EXTRA_HTTPS_PORTS` (comma list, `none`).
+    #[serde(default)]
+    pub extra_https_ports: Vec<u16>,
+    /// Port of the HA fence agent's attestation endpoint on every node.
+    /// Env: `HORCRUX_HA_FENCE_PORT`.
+    #[serde(default = "default_fence_port")]
+    pub ha_fence_port: u16,
+    /// Port Incus/LXD listens on (`core.https_address`) when a container move
+    /// between two nodes needs the server on the network. 8443 is Incus's and
+    /// LXD's own standard remote-API port. Env: `HORCRUX_INCUS_HTTPS_PORT`.
+    #[serde(default = "default_incus_port")]
+    pub incus_https_port: u16,
+}
+
+fn default_host() -> String {
+    "0.0.0.0".to_string()
+}
+fn default_https_port() -> u16 {
+    443
+}
+fn default_tls_enabled() -> bool {
+    true
+}
+fn default_redirect_port() -> Option<u16> {
+    Some(80)
+}
+fn default_fence_port() -> u16 {
+    8026
+}
+fn default_incus_port() -> u16 {
+    8443
 }
 
 /// Storage paths configuration
@@ -268,10 +308,13 @@ pub struct CniConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            host: "0.0.0.0".to_string(),
-            port: 8006,
-            tls_enabled: true,
-            http_redirect_port: None,
+            host: default_host(),
+            port: default_https_port(),
+            tls_enabled: default_tls_enabled(),
+            http_redirect_port: default_redirect_port(),
+            extra_https_ports: Vec::new(),
+            ha_fence_port: default_fence_port(),
+            incus_https_port: default_incus_port(),
         }
     }
 }
@@ -358,7 +401,21 @@ impl HorcruxConfig {
         // Override with environment variables
         config.apply_env_overrides();
 
+        // Settings made through the API / UI / declarative spec win last
+        if let Some(w) = crate::web_settings::load_stored(&config.paths.data_dir) {
+            w.apply_to(&mut config.server);
+        }
+
         config
+    }
+
+    /// One raw value from the config file (`[section] key`), if it is set
+    /// there (tells "explicitly configured" from "defaulted").
+    pub fn config_file_value(section: &str, key: &str) -> Option<toml::Value> {
+        let path = Self::find_config_file()?;
+        let text = std::fs::read_to_string(path).ok()?;
+        let v: toml::Value = toml::from_str(&text).ok()?;
+        v.get(section)?.get(key).cloned()
     }
 
     /// Load configuration from a specific file path
@@ -401,7 +458,25 @@ impl HorcruxConfig {
             );
         }
         if let Ok(port) = std::env::var("HORCRUX_HTTP_REDIRECT_PORT") {
+            // `0` (or anything unparsable) turns the redirect listener off
             self.server.http_redirect_port = port.trim().parse().ok().filter(|p| *p != 0);
+        }
+        if let Ok(list) = std::env::var("HORCRUX_EXTRA_HTTPS_PORTS") {
+            self.server.extra_https_ports = crate::web_settings::parse_port_list(&list);
+        }
+        if let Ok(port) = std::env::var("HORCRUX_INCUS_HTTPS_PORT") {
+            if let Ok(port) = port.trim().parse::<u16>() {
+                if port != 0 {
+                    self.server.incus_https_port = port;
+                }
+            }
+        }
+        if let Ok(port) = std::env::var("HORCRUX_HA_FENCE_PORT") {
+            if let Ok(port) = port.trim().parse::<u16>() {
+                if port != 0 {
+                    self.server.ha_fence_port = port;
+                }
+            }
         }
         if let Ok(v) = std::env::var("HORCRUX_ADMIN_GROUPS") {
             self.auth.admin_groups = v
@@ -608,7 +683,9 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = HorcruxConfig::default();
-        assert_eq!(config.server.port, 8006);
+        assert_eq!(config.server.port, 443);
+        assert_eq!(config.server.http_redirect_port, Some(80));
+        assert!(config.server.extra_https_ports.is_empty());
         assert_eq!(config.paths.data_dir, PathBuf::from("/var/lib/horcrux"));
         assert_eq!(config.database.url, "sqlite:///var/lib/horcrux/horcrux.db");
     }

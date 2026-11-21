@@ -52,6 +52,11 @@ pub struct Spec {
     /// docs/design/horcrux-console.md section 9). Absent = unmanaged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub console: Option<horcrux_common::console::ConsoleSettings>,
+    /// Where the web UI / API listens (HTTPS port, HTTP redirect port, extra
+    /// HTTPS ports; docs/WEB-LISTENERS.md). Absent = unmanaged. Takes effect
+    /// at the next `horcrux-api` restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<crate::web_settings::WebSettings>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
@@ -302,6 +307,8 @@ pub struct Live {
     pub subnets: Vec<Subnet>,
     pub vms: Vec<VmConfig>,
     pub console: horcrux_common::console::ConsoleSettings,
+    /// The web listener settings stored for the next start.
+    pub web: crate::web_settings::WebSettings,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -611,13 +618,46 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // Web listener settings: one node-wide object.
+    if let Some(w) = &spec.web {
+        if let Err(e) = w.validate() {
+            p.errors.push(format!("web: {e}"));
+        } else if *w != live.web {
+            let mut d = Vec::new();
+            let l = &live.web;
+            diff(&mut d, "host", &l.host, &w.host);
+            diff(&mut d, "port", &l.port, &w.port);
+            diff(
+                &mut d,
+                "http_redirect_port",
+                &l.http_redirect_port,
+                &w.http_redirect_port,
+            );
+            diff(
+                &mut d,
+                "extra_https_ports",
+                &l.extra_https_ports,
+                &w.extra_https_ports,
+            );
+            creates.push(ch("web", "listeners", Action::Update, d));
+        }
+    }
+
     // Creates/updates run dependency-first (pools, zones, vnets, subnets,
     // VMs); deletes run in the opposite order (VMs first, pools last).
     let rank = |k: &str| {
-        ["console", "storage_pool", "zone", "vnet", "subnet", "vm"]
-            .iter()
-            .position(|x| *x == k)
-            .unwrap_or(9)
+        [
+            "console",
+            "web",
+            "storage_pool",
+            "zone",
+            "vnet",
+            "subnet",
+            "vm",
+        ]
+        .iter()
+        .position(|x| *x == k)
+        .unwrap_or(9)
     };
     creates.sort_by_key(|c| rank(&c.kind));
     deletes.sort_by_key(|c| std::cmp::Reverse(rank(&c.kind)));
@@ -790,6 +830,7 @@ pub fn export(live: &Live) -> Spec {
         }),
         vms: Some(vms),
         console: Some(live.console.clone()),
+        web: Some(live.web.clone()),
         extra: BTreeMap::new(),
     }
 }

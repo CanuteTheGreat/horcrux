@@ -29,7 +29,7 @@ import headless_gates as HG
 import udisks_gate as UG
 
 PROJECTS = {
-    "horcrux": dict(svc="horcrux-api", port=8006, web_user="hxadmin", pam="horcrux", admin_group="horcrux-admin",   # the web UI signs in SYSTEM users (PAM): the installer-created user
+    "horcrux": dict(svc="horcrux-api", port=443, web_user="hxadmin", pam="horcrux", admin_group="horcrux-admin",   # the web UI signs in SYSTEM users (PAM): the installer-created user
                      health=["/api/health", "/"], pwfile="/var/lib/horcrux/initial-admin-password", old_pw="horcrux",
                     seedfile="/etc/horcrux/admin-password",
                     services=["horcrux-api"], forward=False, dbfiles=[], logdirs=["/var/log/horcrux"]),
@@ -1991,6 +1991,13 @@ class Runner:
             self.step("web-api-health", got, f"{self.guest_ip(True)}:{P['port']} {got[0]} {P['health'][0]} -> 200" if got else "no 200 within 300s")
             sc, code, body = http(FWD_WEB, "/")
             self.step("web-ui-root", code == 200 and b"<" in body, f"{sc} / -> {code} ({len(body)} bytes)")
+            if a.project == "horcrux":
+                # owner: standard ports only. HTTPS on 443, HTTP on 80 that only redirects, nothing on the historical 8006 of a fresh install
+                rc, o = ssh(FWD_SSH, self.key, "curl -s -o /dev/null -m8 -w 'HTTP80=%{http_code} %{redirect_url}' http://127.0.0.1:80/; echo; "
+                            "echo LISTEN=$(ss -ltn | awk 'NR>1{print $4}' | grep -E ':(443|80|8006)$' | sed 's/.*://' | sort -n | tr '\\n' ,)")
+                self.step("web-standard-ports-443-https-80-redirect",
+                          rc == 0 and re.search(r"HTTP80=30[78] https://", o) is not None and "LISTEN=80,443," in o.replace(" ", ""),
+                          re.sub(r"\s+", " ", o).strip()[:200])
             self.ssh_checks()
             if a.headless_gates:
                 self.headless_checks(late)

@@ -55,7 +55,7 @@ for n in "$N1" "$N2"; do
 set -e
 STORAGE=\${1:-/var/lib/hx/vms}
 if [ -f /var/lib/hx/api.pid ]; then kill \$(cat /var/lib/hx/api.pid) 2>/dev/null || true; sleep 2; fi
-HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/var/lib/hx \\
+HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/var/lib/hx \\
 HORCRUX_DATABASE_URL=sqlite:///var/lib/hx/horcrux.db HORCRUX_SSL_DIR=/var/lib/hx/ssl \\
 HORCRUX_VM_STORAGE=\$STORAGE ADMIN_PASSWORD=admin JWT_SECRET=$JWT \\
 RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \\
@@ -70,7 +70,7 @@ EOS
   docker cp /tmp/$TAG-start-api.sh "$n":/hx/start-api.sh
   docker exec "$n" bash -c 'echo boot-1 > /var/lib/hx/bootid'
   cat > /tmp/$TAG-env.sh <<EOS
-export HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/var/lib/hx
+export HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/var/lib/hx
 export HORCRUX_DATABASE_URL=sqlite:///var/lib/hx/horcrux.db HORCRUX_SSL_DIR=/var/lib/hx/ssl
 export HORCRUX_VM_STORAGE=/var/lib/hx/vms HORCRUX_BOOT_ID_FILE=/var/lib/hx/bootid
 EOS

@@ -56,7 +56,7 @@ docker exec "$CLI" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive
 docker exec -e SRV_IP="$SRV_IP" "$CLI" bash -c '
 set -euo pipefail
 mkdir -p /tmp/dev && cd /tmp/dev
-HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/dev \
+HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/tmp/dev \
 HORCRUX_DATABASE_URL=sqlite:///tmp/dev/horcrux.db HORCRUX_SSL_DIR=/tmp/dev/ssl \
 HORCRUX_VM_STORAGE=/tmp/dev/vms ADMIN_PASSWORD=admin RUST_LOG=info \
   nohup horcrux-api >> /tmp/dev/api.log 2>&1 &

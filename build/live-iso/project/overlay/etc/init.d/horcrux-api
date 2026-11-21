@@ -1,5 +1,5 @@
 #!/sbin/openrc-run
-description="Horcrux API server and web UI (https://:8006)"
+description="Horcrux API server and web UI (https://:443, http :80 redirect)"
 command=/usr/bin/horcrux-api
 # supervised: the manager IS the HA supervisor (heartbeat, self-fence, recovery) of its node. A killed or crashed manager is restarted within seconds; without
 # this a dead manager left the node unmanaged for good (lab finding 2026-11-06: pkill -KILL horcrux-api on a cluster node was never undone). `rc-service stop`
@@ -14,7 +14,10 @@ directory=/var/lib/horcrux
 depend() { need net localmount; use logger libvirtd docker; }
 start_pre() {
 	checkpath -d -m 0755 /var/lib/horcrux /var/log/horcrux /etc/horcrux /etc/horcrux/ssl
-	export HORCRUX_HOST=0.0.0.0 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/var/lib/horcrux \
+	# Runs as root, so ports below 1024 (the default 443 + 80) bind without a capability; a deployment that sets `command_user` must also set
+	# capabilities="^cap_net_bind_service,..." (ci/check-web-listen-units.sh checks this). Listening ports are configuration (Settings > Web
+	# listeners, /etc/horcrux/config.toml [server], HORCRUX_PORT / HORCRUX_HTTP_REDIRECT_PORT / HORCRUX_EXTRA_HTTPS_PORTS in conf.d), not script text.
+	export HORCRUX_HOST=0.0.0.0 HORCRUX_DATA_DIR=/var/lib/horcrux \
 		HORCRUX_DATABASE_URL=sqlite:///var/lib/horcrux/horcrux.db HORCRUX_SSL_DIR=/etc/horcrux/ssl \
 		HORCRUX_UI_DIR=/usr/share/horcrux/ui
 	# optional overrides (HORCRUX_ADMIN_GROUPS, HORCRUX_ALLOW_ROOT_LOGIN ...). There is no admin account: the web UI signs in system users (PAM)

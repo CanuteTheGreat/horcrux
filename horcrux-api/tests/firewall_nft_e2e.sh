@@ -26,7 +26,7 @@ docker cp "$(dirname "$0")/firewall_objects_e2e.py" "$NAME":/tmp/firewall_object
 docker exec "$NAME" bash -c '
 set -euo pipefail
 mkdir -p /tmp/fw && cd /tmp/fw
-HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/fw \
+HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/tmp/fw \
 HORCRUX_DATABASE_URL=sqlite:///tmp/fw/horcrux.db HORCRUX_SSL_DIR=/tmp/fw/ssl ADMIN_PASSWORD=admin RUST_LOG=warn \
   nohup horcrux-api > /tmp/fw/api.log 2>&1 &
 for i in $(seq 1 60); do curl -skf https://127.0.0.1:8006/api/health >/dev/null && break; sleep 1; done

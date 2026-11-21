@@ -542,14 +542,14 @@ mod tests {
 
     #[test]
     fn test_client_creation() {
-        let client = HorcruxClient::with_options("https://localhost:8006", false);
+        let client = HorcruxClient::with_options("https://localhost", false);
         assert!(client.token.is_none());
     }
 
     #[test]
     fn test_client_with_token() {
         let client =
-            HorcruxClient::with_options("https://localhost:8006", false).with_token("test-token");
+            HorcruxClient::with_options("https://localhost", false).with_token("test-token");
         assert_eq!(client.token, Some("test-token".to_string()));
     }
 }

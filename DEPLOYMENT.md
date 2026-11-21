@@ -37,7 +37,8 @@ sudo ./install.sh --with-systemd
 Edit `/etc/horcrux/config.toml`:
 ```toml
 [server]
-bind_address = "0.0.0.0:8006"
+host = "0.0.0.0"
+port = 443
 workers = 8
 
 [storage]
@@ -47,7 +48,7 @@ default_pool = "local"
 ### 3. Start Service
 ```bash
 sudo systemctl enable --now horcrux
-curl -k https://localhost:8006/api/health
+curl -k https://localhost/api/health
 ```
 
 ## Clustered Deployment
@@ -128,7 +129,7 @@ tls_key = "/etc/letsencrypt/live/horcrux.example.com/privkey.pem"
 
 ### Firewall Rules
 ```bash
-sudo iptables -A INPUT -p tcp --dport 8006 -j ACCEPT  # API
+sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT  # web UI / API (80 redirects to HTTPS)
 sudo iptables -A INPUT -p udp --dport 5404:5406 -j ACCEPT  # Cluster
 sudo iptables -A INPUT -p tcp --dport 5900:5999 -j ACCEPT  # VNC
 ```

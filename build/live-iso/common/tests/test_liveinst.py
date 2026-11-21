@@ -15,7 +15,7 @@ from liveinst import stages as ST  # noqa: E402
 from liveinst import useflags as UF  # noqa: E402
 
 PROFILE = {"name": "horcrux", "title": "Horcrux", "filesystems": ["ext4", "xfs", "zfs"], "swap_mb": 0, "network_mode": "management",
-           "services": [], "web_scheme": "https", "web_port": 8006, "default_hostname": "h.localdomain"}
+           "services": [], "web_scheme": "https", "web_port": 443, "default_hostname": "h.localdomain"}
 FW = dict(PROFILE, name="patronus", title="Patronus", filesystems=["xfs", "ext4"], network_mode="wan-lan")
 GOOD_PW = "Kx9!mQv2-tle-77Zp"
 HASH = "$6$salt$" + "a" * 86

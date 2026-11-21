@@ -55,7 +55,7 @@
                 <div class="terminal-body">
                     <div class="terminal-line"><span class="prompt">$</span> docker-compose up -d</div>
                     <div class="terminal-line">Creating horcrux-api... <span class="success">done</span></div>
-                    <div class="terminal-line"><span class="prompt">$</span> curl http://localhost:8006/api/health</div>
+                    <div class="terminal-line"><span class="prompt">$</span> curl https://localhost/api/health</div>
                     <div class="terminal-line">{"status": "healthy"}</div>
                     <div class="terminal-line"><span class="prompt">$</span> horcrux vm create --name my-vm --cpus 2 --memory 2048</div>
                     <div class="terminal-line">VM created successfully! <span class="cursor">▊</span></div>
@@ -268,8 +268,8 @@ git clone https://github.com/CanuteTheGreat/horcrux.git
 cd horcrux
 docker-compose up -d
 
-# API running at http://localhost:8006
-curl http://localhost:8006/api/health
+# API running at https://localhost
+curl https://localhost/api/health
 
 # Create your first VM
 docker-compose --profile cli run horcrux-cli vm create \

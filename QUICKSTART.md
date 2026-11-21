@@ -51,7 +51,7 @@ sudo ./install.sh --with-systemd
 # Start the API server
 ./target/release/horcrux-api
 
-# Server starts on http://localhost:8006
+# Server starts on https://localhost
 ```
 
 ### Option B: With systemd (Production)
@@ -80,7 +80,7 @@ sudo rc-service horcrux status
 
 ```bash
 # Set the API server (if not localhost)
-export HORCRUX_SERVER=http://localhost:8006
+export HORCRUX_SERVER=https://localhost
 
 # Create a VM
 ./target/release/horcrux-cli vm create \
@@ -107,7 +107,7 @@ export HORCRUX_SERVER=http://localhost:8006
 
 ```bash
 # Create a VM
-curl -X POST http://localhost:8006/api/vms \
+curl -X POST https://localhost/api/vms \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-first-vm",
@@ -119,13 +119,13 @@ curl -X POST http://localhost:8006/api/vms \
   }'
 
 # List VMs
-curl http://localhost:8006/api/vms
+curl https://localhost/api/vms
 
 # Start VM
-curl -X POST http://localhost:8006/api/vms/my-first-vm/start
+curl -X POST https://localhost/api/vms/my-first-vm/start
 
 # Get VM status
-curl http://localhost:8006/api/vms/my-first-vm
+curl https://localhost/api/vms/my-first-vm
 ```
 
 ## Step 6: Access the Web UI (Optional)
@@ -217,7 +217,8 @@ Edit `/etc/horcrux/config.toml` (or `config.toml` in the project root):
 
 ```toml
 [server]
-bind_address = "0.0.0.0:8006"
+host = "0.0.0.0"
+port = 443
 workers = 4
 
 [database]
@@ -234,7 +235,7 @@ session_timeout = 7200  # 2 hours
 
 ```bash
 # API server configuration
-export HORCRUX_SERVER=http://localhost:8006
+export HORCRUX_SERVER=https://localhost
 export HORCRUX_LOG_LEVEL=info
 export RUST_LOG=horcrux_api=debug
 
@@ -247,7 +248,7 @@ export DATABASE_URL=sqlite:///var/lib/horcrux/horcrux.db
 ### Check API Health
 
 ```bash
-curl http://localhost:8006/api/health
+curl https://localhost/api/health
 ```
 
 Expected response:
@@ -288,10 +289,10 @@ tail -f /var/log/horcrux/horcrux.log
 
 ### API Server Won't Start
 
-**Problem:** Port 8006 already in use
+**Problem:** Port 443 (or 80) already in use
 ```bash
 # Check what's using the port
-sudo lsof -i :8006
+sudo lsof -i :443
 
 # Change port in config.toml
 bind_address = "0.0.0.0:8007"
@@ -329,13 +330,13 @@ newgrp kvm
 **Problem:** Connection refused
 ```bash
 # Check if API server is running
-curl http://localhost:8006/api/health
+curl https://localhost/api/health
 
 # Check server address
-export HORCRUX_SERVER=http://localhost:8006
+export HORCRUX_SERVER=https://localhost
 
 # Or specify in command
-horcrux-cli --server http://localhost:8006 vm list
+horcrux-cli --server https://localhost vm list
 ```
 
 ## Next Steps
@@ -399,7 +400,7 @@ horcrux-cli user list
 - **Documentation**: See `docs/` directory
 - **Issues**: https://github.com/CanuteTheGreat/horcrux/issues
 - **Discussions**: https://github.com/CanuteTheGreat/horcrux/discussions
-- **API Reference**: http://localhost:8006/api/docs (when server is running)
+- **API Reference**: https://localhost/api/docs (when server is running)
 
 ---
 

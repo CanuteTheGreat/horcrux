@@ -12,7 +12,7 @@
 //! `macro:SSH`; they are expanded when the nft rules are built, and the
 //! kernel rules are rebuilt when an IP set or alias changes.
 use crate::error::ApiError;
-use crate::firewall::objects::{Alias, FwOptions, IpSet, MacroInfo, MACROS};
+use crate::firewall::objects::{macros as all_macros, Alias, FwOptions, IpSet, MacroInfo};
 use crate::AppState;
 use axum::{
     extract::{Path, Query, State},
@@ -227,8 +227,8 @@ async fn delete_alias(
     }
 }
 
-async fn macros() -> Json<&'static [MacroInfo]> {
-    Json(MACROS)
+async fn macros() -> Json<Vec<MacroInfo>> {
+    Json(all_macros())
 }
 
 async fn get_options(State(s): State<Arc<AppState>>) -> Json<FwOptions> {

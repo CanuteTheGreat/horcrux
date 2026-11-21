@@ -91,7 +91,7 @@ vfio_virqfd
 horcrux gpu list
 
 # Via API
-curl http://localhost:8006/api/gpu/devices
+curl https://localhost/api/gpu/devices
 ```
 
 Response:
@@ -114,7 +114,7 @@ Response:
 
 ```bash
 # Via API
-curl http://localhost:8006/api/gpu/iommu-status
+curl https://localhost/api/gpu/iommu-status
 ```
 
 Response:
@@ -129,7 +129,7 @@ Response:
 
 ```bash
 # Via API
-curl -X POST http://localhost:8006/api/gpu/devices/0000:01:00.0/bind-vfio
+curl -X POST https://localhost/api/gpu/devices/0000:01:00.0/bind-vfio
 ```
 
 Any PCI device can be passed through (NICs, HBAs, NVMe, USB controllers, SR-IOV
@@ -173,7 +173,7 @@ or when it is created. A PCI address needs the device bound to `vfio-pci`
 the VM starts, and says which one is missing.
 
 ```bash
-curl -X PUT http://localhost:8006/api/vms/vm-100/config \
+curl -X PUT https://localhost/api/vms/vm-100/config \
   -H "Content-Type: application/json" \
   -d '{"hardware": {"hostpci": [
         {"device": "0000:01:00.0", "primary_gpu": true},
@@ -191,7 +191,7 @@ be live-migrated.
 Some GPUs have multiple functions (GPU, Audio, USB) in the same IOMMU group. All devices must be passed through together:
 
 ```bash
-curl http://localhost:8006/api/gpu/devices/0000:01:00.0/iommu-group
+curl https://localhost/api/gpu/devices/0000:01:00.0/iommu-group
 ```
 
 Response:
@@ -276,22 +276,22 @@ already be installed and loaded - Horcrux does not install drivers.
 
 ```bash
 # what the host can create (parent GPU, type id, name, free instances)
-curl http://localhost:8006/api/gpu/mdev/types
+curl https://localhost/api/gpu/mdev/types
 
 # create one (uuid is generated unless you pass "uuid")
-curl -X POST http://localhost:8006/api/gpu/mdev/devices \
+curl -X POST https://localhost/api/gpu/mdev/devices \
   -H "Content-Type: application/json" \
   -d '{"parent": "0000:00:02.0", "type": "i915-GVTg_V5_4"}'
 # -> {"uuid": "6b1f3a6e-...", "parent": "0000:00:02.0", "mdev_type": "i915-GVTg_V5_4"}
 
 # give it to a VM (hostpci accepts the mdev UUID)
-curl -X PUT http://localhost:8006/api/vms/vm-100/config \
+curl -X PUT https://localhost/api/vms/vm-100/config \
   -H "Content-Type: application/json" \
   -d '{"hardware": {"hostpci": [{"device": "6b1f3a6e-5d0b-4b5f-9f61-0123456789ab"}]}}'
 
 # list (shows the VM using each one) and remove
-curl http://localhost:8006/api/gpu/mdev/devices
-curl -X DELETE http://localhost:8006/api/gpu/mdev/devices/6b1f3a6e-5d0b-4b5f-9f61-0123456789ab
+curl https://localhost/api/gpu/mdev/devices
+curl -X DELETE https://localhost/api/gpu/mdev/devices/6b1f3a6e-5d0b-4b5f-9f61-0123456789ab
 ```
 
 QEMU gets `-device vfio-pci,sysfsdev=/sys/bus/mdev/devices/<uuid>,id=hostpciN`.

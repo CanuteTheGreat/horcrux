@@ -27,10 +27,10 @@ docker-compose ps
 docker-compose logs -f horcrux-api
 
 # Access API
-curl http://localhost:8006/api/health
+curl https://localhost/api/health
 ```
 
-That's it! Horcrux API is now running at http://localhost:8006
+That's it! Horcrux API is now running at https://localhost
 
 ## Docker Compose Services
 
@@ -38,7 +38,7 @@ That's it! Horcrux API is now running at http://localhost:8006
 
 #### horcrux-api (Always runs)
 - Main API server
-- Ports: 8006 (API), 5900-5910 (VNC)
+- Ports: 443 (HTTPS API and web UI), 80 (HTTP: redirects to HTTPS), 5900-5910 (VNC)
 - Volumes: Data and logs persistence
 - Privileged mode for KVM access
 
@@ -72,7 +72,7 @@ docker-compose --profile cli run horcrux-cli vm list
 
 Using API:
 ```bash
-curl -X POST http://localhost:8006/api/vms \
+curl -X POST https://localhost/api/vms \
   -H "Content-Type: application/json" \
   -d '{
     "name": "test-vm",
@@ -97,7 +97,7 @@ docker-compose --profile cli run horcrux-cli vm create \
 
 ```bash
 # Using API
-curl http://localhost:8006/api/vms
+curl https://localhost/api/vms
 
 # Using CLI
 docker-compose --profile cli run horcrux-cli vm list
@@ -256,7 +256,8 @@ services:
     image: horcrux/api:latest
     restart: always
     ports:
-      - "8006:8006"
+      - "443:443"
+      - "80:80"
     volumes:
       - /data/horcrux:/var/lib/horcrux
       - /var/log/horcrux:/var/log/horcrux
@@ -302,7 +303,7 @@ docker-compose logs horcrux-api
 
 **Check if port is in use:**
 ```bash
-sudo lsof -i :8006
+sudo lsof -i :443
 ```
 
 **Check KVM access:**
@@ -357,7 +358,7 @@ docker network inspect horcrux_horcrux-net
 
 **Test connectivity:**
 ```bash
-docker-compose exec horcrux-api curl http://localhost:8006/api/health
+docker-compose exec horcrux-api curl https://localhost/api/health
 ```
 
 ## Development Workflow

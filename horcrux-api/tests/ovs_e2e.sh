@@ -24,7 +24,7 @@ docker exec "$NAME" bash -c '
 set -euo pipefail
 mkdir -p /tmp/ovs && cd /tmp/ovs
 cat > start-api.sh <<EOS
-HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/ovs \
+HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/tmp/ovs \
 HORCRUX_DATABASE_URL=sqlite:///tmp/ovs/horcrux.db HORCRUX_SSL_DIR=/tmp/ovs/ssl \
 ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \
   nohup horcrux-api >> /tmp/ovs/api.log 2>&1 &

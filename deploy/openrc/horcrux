@@ -5,7 +5,7 @@
 description="Horcrux Virtualization Platform"
 
 command="/usr/bin/horcrux-api"
-command_user="root:root"
+command_user="root:root"   # root: ports below 1024 (the default 443 + 80) need no capability
 command_background=true
 pidfile="/run/${RC_SVCNAME}.pid"
 output_log="/var/log/horcrux/horcrux.log"
@@ -54,7 +54,7 @@ start_pre() {
 
 start_post() {
 	einfo "Horcrux Virtualization Platform started"
-	einfo "Web interface available at https://$(hostname):8006"
+	einfo "Web interface available at https://$(hostname)"
 }
 
 stop() {

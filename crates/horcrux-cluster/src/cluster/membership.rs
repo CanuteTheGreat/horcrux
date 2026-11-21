@@ -191,7 +191,7 @@ impl MembershipManager {
             node_id,
             name: local_node.name.clone(),
             address: local_node.ip.clone(),
-            port: 8443, // Default API port
+            port: crate::config::HorcruxConfig::load().server.port, // this node's API port
             is_master: true,
             status: NodeStatus::Online,
             architecture: local_node.architecture.clone(),

@@ -1,7 +1,7 @@
 # Horcrux API Documentation
 
 Version: 0.1.0
-Base URL: `https://localhost:8006/api`
+Base URL: `https://localhost/api`
 Authentication: Bearer tokens
 
 ## Table of Contents
@@ -146,7 +146,7 @@ Content-Type: application/json
 
 {
   "address": "192.168.1.101",
-  "port": 8006
+  "port": 443
 }
 
 Response 201: Created

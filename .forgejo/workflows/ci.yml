@@ -119,6 +119,8 @@ jobs:
           fetch-depth: 0
       - name: Leak guard (files)
         run: python3 ci/check-public-leaks.py
+      - name: Web listener units bind the standard ports (443/80) and pin no port
+        run: sh ci/check-web-listen-units.sh
       - name: CHANGELOG.md matches the release tags (ci/changelog.py; releases are cut with ci/release.sh)
         run: python3 ci/changelog.py --check
       - name: Leak guard (PR commit messages)
@@ -425,7 +427,7 @@ jobs:
           sudo mkdir -p /var/lib/horcrux/backups /var/lib/horcrux/storage/snapshot-test
           sudo chown -R "$(id -u):$(id -g)" /var/lib/horcrux
           HORCRUX_HOST=127.0.0.1 \
-          HORCRUX_PORT=8006 \
+          HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 \
           HORCRUX_DATA_DIR=/tmp/horcrux-ci-data \
           HORCRUX_DATABASE_URL="sqlite:///tmp/horcrux-ci-data/horcrux.db" \
           HORCRUX_CNI_BIN_DIR=/tmp/horcrux-ci-cni/bin \
@@ -1410,7 +1412,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Start horcrux-api serving the built UI"
           docker info --format 'docker {{.ServerVersion}}'
           mkdir -p /tmp/e2e-data /tmp/e2e-cni/bin /tmp/e2e-cni/conf.d
-          HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 \
+          HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 \
           HORCRUX_DATA_DIR=/tmp/e2e-data \
           HORCRUX_CNI_BIN_DIR=/tmp/e2e-cni/bin HORCRUX_CNI_CONF_DIR=/tmp/e2e-cni/conf.d \
           HORCRUX_DATABASE_URL="sqlite:///tmp/e2e-data/horcrux.db" \
@@ -1493,7 +1495,7 @@ jobs:
           # does not exist, so the container pages show the node's own 424 "Docker not available" state.
           kill "$(cat /tmp/horcrux-e2e.pid)" 2>/dev/null || true
           for i in $(seq 1 30); do curl -sfk -o /dev/null https://127.0.0.1:8006/api/health || break; sleep 1; done
-          HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 \
+          HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 \
           HORCRUX_DATA_DIR=/tmp/e2e-data \
           HORCRUX_CNI_BIN_DIR=/tmp/e2e-cni/bin HORCRUX_CNI_CONF_DIR=/tmp/e2e-cni/conf.d \
           HORCRUX_DATABASE_URL="sqlite:///tmp/e2e-data/horcrux.db" \

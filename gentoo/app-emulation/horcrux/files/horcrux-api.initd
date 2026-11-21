@@ -6,6 +6,8 @@ name="Horcrux API Server"
 description="Virtualization management API server"
 
 command="/usr/bin/horcrux-api"
+# runs as root (no command_user): ports below 1024 (443, 80) bind without a capability. A setup with command_user needs
+# capabilities="^cap_net_bind_service,..." (ci/check-web-listen-units.sh).
 command_background="yes"
 pidfile="/run/${RC_SVCNAME}.pid"
 

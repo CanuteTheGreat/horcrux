@@ -49,7 +49,7 @@ chmod +x /etc/init.d/hxtest
 rc-status -s | head -5
 mkdir -p /tmp/sa
 cat > /tmp/sa/start-api.sh <<EOS
-HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR=/tmp/sa \\
+HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_HTTP_REDIRECT_PORT=0 HORCRUX_DATA_DIR=/tmp/sa \\
 HORCRUX_DATABASE_URL=sqlite:///tmp/sa/horcrux.db HORCRUX_SSL_DIR=/tmp/sa/ssl \\
 ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=100000 RUST_LOG=info \\
   nohup horcrux-api >> /tmp/sa/api.log 2>&1 &

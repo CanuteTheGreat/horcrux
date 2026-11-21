@@ -316,12 +316,19 @@ impl NftablesManager {
                 .await?;
             if policy == "drop" {
                 // never cut the host off from itself, its replies or its
-                // management ports (SSH, the Horcrux API and the HA fence agent's attestation, 8026)
+                // management ports (SSH, the configured Horcrux web listeners and the HA fence agent's attestation port)
                 let implicit: Vec<String> = if dir == "in" {
                     vec![
                         "ct state established,related accept".into(),
                         "iifname \"lo\" accept".into(),
-                        "tcp dport { 22, 8006, 8026 } accept".into(),
+                        format!(
+                            "tcp dport {{ {} }} accept",
+                            super::objects::implicit_management_ports()
+                                .iter()
+                                .map(|p| p.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
                     ]
                 } else {
                     vec![

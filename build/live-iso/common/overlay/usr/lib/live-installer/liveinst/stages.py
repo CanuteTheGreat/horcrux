@@ -369,7 +369,7 @@ class RootpassStage(Stage):
             return [
                 Field("user", "Administrator user name", "text", c.get("user_name", ""), width=30,
                       validate=lambda v, a: _user_problem(v),
-                      hint=f"A system account in the wheel + {ctx.p.get('web_admin_group', 'horcrux-admin')} groups: it signs in to the console and to the web UI (https, port {ctx.p.get('web_port', 8006)}). root cannot sign in to the web UI"),
+                      hint=f"A system account in the wheel + {ctx.p.get('web_admin_group', 'horcrux-admin')} groups: it signs in to the console and to the web UI (https, port {ctx.p.get('web_port', 443)}). root cannot sign in to the web UI"),
                 Field("pw", "Password", "password", c["root_password"], width=40,
                       hint="At least 12 characters, mixed. Password of this administrator (console login, sudo, web UI). root stays locked. Never the disk passphrase"),
                 Field("pw2", "Confirm password", "password", c["root_password"], width=40),

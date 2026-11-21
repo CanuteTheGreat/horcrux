@@ -444,15 +444,15 @@ Test the metrics system:
 cargo test --release -p horcrux-api metrics::tests
 
 # Test node metrics collection
-curl http://localhost:8006/api/monitoring/node/metrics
+curl https://localhost/api/monitoring/node/metrics
 
 # Test container metrics (requires running container)
 docker run -d --name test-nginx nginx
 CONTAINER_ID=$(docker ps -qf "name=test-nginx")
-curl http://localhost:8006/api/containers/$CONTAINER_ID/metrics
+curl https://localhost/api/containers/$CONTAINER_ID/metrics
 
 # Monitor WebSocket in real-time
-websocat ws://localhost:8006/ws
+websocat wss://localhost/ws
 ```
 
 ## Troubleshooting

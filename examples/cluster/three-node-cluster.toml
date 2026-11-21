@@ -10,7 +10,8 @@
 # Save as: /etc/horcrux/config.toml on node1
 
 [server]
-bind_address = "0.0.0.0:8006"
+host = "0.0.0.0"
+port = 443
 workers = 16
 tls_enabled = true
 tls_cert = "/etc/horcrux/certs/server.crt"
