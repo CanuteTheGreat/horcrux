@@ -1004,15 +1004,59 @@ C3c (2026-11-20): the desktop client on Windows and macOS, connection window.
   `gamepad_in` (handed to the guest tools); the WAN e2e checks it for the
   desktop client paths.
 
+C3c follow-ups (2026-11-21):
+- Windows build of the desktop client against a real node in CI
+  (`.forgejo/workflows/console-desktop-win-e2e.yml`,
+  `horcrux-api/tests/hx_console_desktop_win_e2e.{sh,py}`): a node with an
+  Alpine console VM, and the cached Windows 11 test image of the guest-tools
+  e2e (C2b; now fetched by the shared `ci/windows-test-image-cached.sh`) booted
+  as the CLIENT machine with QEMU user-mode networking. The release
+  `horcrux-console.exe` (x86_64-pc-windows-gnu) goes in through the QEMU guest
+  agent (`guest-file-write`, SHA-256 checked in the guest) and runs there
+  headless (`guest-exec`): `--exercise-input --type-text ... --snapshot`,
+  direct and with WAN access + `force_relay` (the relay is pinned to the
+  node address the guest uses while the node lacks
+  `wan.relay_reply_from_request_address`; with it, the relay stays on every
+  address). Checks, as for the WAN e2e desktop paths: at least 10
+  frames decoded by Media Foundation with 0 decode errors, the path seen by
+  the node and by the client, `keys_in` >= 24, `gamepad_rx` >= 2, and the
+  decoded snapshot copied back (PNG artifact) and not blank. Run like CI
+  (act-26.04, 6 GiB / 4 CPUs, KVM; Windows 11 24H2 client, build 26100,
+  software Media Foundation MFT): direct 89 frames 1280x800, 0 decode errors,
+  keystroke-to-picture median 62 ms (p90 87), 12/12 keystrokes answered;
+  relay 96 frames, 0 errors, median 49 ms (p90 63); both `keys_in` 98,
+  `gamepad_rx` 2; the snapshot shows the typed login and command output.
+- macOS links: Launch Services hands a clicked `horcrux-console://` link to
+  the app as an Apple Event (`kInternetEventClass`/`kAEGetURL`), never on the
+  command line, and winit has no handler for it. `horcrux-desktop/src/macos_link.rs`
+  registers one with `NSAppleEventManager` (objc2) before the event loop runs;
+  the URL goes through the same strict `config::parse_link` and fills the
+  connection window (password always asked; a running console keeps going).
+  Compile-checked only (clippy for aarch64 and x86_64-apple-darwin in
+  console-desktop.yml): there is no macOS runner for this repo, so link
+  opening, the VideoToolbox decoder, GameController and the `.pkg` build have
+  never been executed on a Mac.
+- Connection window, found in Windows QA and fixed: a new window larger than
+  the monitor is shrunk to 90 % and, when the system placed it partly off the
+  monitor (Windows cascades new windows), centred on it; keyboard focus on a
+  button is a ring clear of the button (the outline drawn on the button was
+  nearly invisible against its fill); status lines wrap to five lines before
+  an ellipsis (the certificate check's advice was cut at three); VM names in
+  the list sit at the list's edge (they were indented by the whole list's
+  padding). Re-checked on the Windows Server 2022 eval VM (1024x768): link ->
+  window wholly on screen with node and user filled in, Tab -> focus ring on
+  Connect, Enter -> certificate advice and the full fingerprint inside the
+  window, Enter on "Trust certificate" -> the link's VM opened.
+- Screenshot review: a unit test (`ui::connection_window_screenshots`) draws
+  the window's states with the app's own renderer (empty, from a link with
+  focus on Connect, untrusted certificate, VM list with focus on Open, small
+  window) and checks focus ring, wrapping and the whole fingerprint;
+  console-desktop.yml uploads them as PNGs (artifact
+  `console-desktop-connection-window`) for the UX screenshot review.
+
 Open:
-- macOS was compile-checked only (clippy for both architectures): there is no
-  macOS CI runner for this repo, so the VideoToolbox decode, the
-  GameController path, the `.pkg` build and link opening have not been
-  executed. Link opening on macOS also needs an Apple Event (`kAEGetURL`)
-  handler: winit does not pass the URL, so a clicked link currently opens an
-  empty connection window there.
-- Windows headless run in CI against a node: needs the installed Windows test
-  image of the guest-tools e2e (C2b, `hx-console-guest-e2e.yml`) on main.
+- macOS: everything is compile-checked only (no macOS runner exists for this
+  repo); first run on a Mac when one is available to CI.
 - Relay bound to the unspecified address answers from the address of the
   outgoing route, not the one the request reached (seen with a client inside
   a container on the node itself: the reply came from the bridge address and

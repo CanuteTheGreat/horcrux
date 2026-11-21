@@ -16,6 +16,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 mod config;
 mod gamepad;
+#[cfg(target_os = "macos")]
+mod macos_link;
 mod net;
 mod session;
 mod ui;
@@ -322,6 +324,52 @@ fn headless(
     }))
 }
 
+/// How to change a new window so it fits on its monitor.
+#[derive(Debug, PartialEq, Default)]
+struct Fit {
+    inner: Option<(u32, u32)>,
+    position: Option<(i32, i32)>,
+}
+
+/// `monitor` = (x, y, width, height), `pos` = the window's outer position
+/// (None where the system does not tell, e.g. Wayland: it places windows
+/// itself), `inner`/`outer` = the window's sizes, all in physical pixels.
+/// The inner size shrinks to 90 % of the monitor; a window that would then
+/// stick out of the monitor is centred on it.
+fn fit_on_monitor(
+    monitor: (i32, i32, u32, u32),
+    pos: Option<(i32, i32)>,
+    inner: (u32, u32),
+    outer: (u32, u32),
+) -> Fit {
+    let (mx, my, mw, mh) = monitor;
+    if mw == 0 || mh == 0 {
+        return Fit::default();
+    }
+    let (lw, lh) = (mw * 9 / 10, mh * 9 / 10);
+    let new_inner = (inner.0.min(lw), inner.1.min(lh));
+    let mut fit = Fit::default();
+    if new_inner != inner {
+        fit.inner = Some(new_inner);
+    }
+    // frame and title bar keep their size
+    let frame = (
+        outer.0.saturating_sub(inner.0),
+        outer.1.saturating_sub(inner.1),
+    );
+    let (ow, oh) = (
+        (new_inner.0 + frame.0).min(mw) as i32,
+        (new_inner.1 + frame.1).min(mh) as i32,
+    );
+    if let Some((x, y)) = pos {
+        let inside = x >= mx && y >= my && x + ow <= mx + mw as i32 && y + oh <= my + mh as i32;
+        if !inside {
+            fit.position = Some((mx + (mw as i32 - ow) / 2, my + (mh as i32 - oh) / 2));
+        }
+    }
+    fit
+}
+
 /// A failed login, with the fingerprint of an untrusted certificate.
 struct LoginFail {
     msg: String,
@@ -334,6 +382,10 @@ enum UserEvent {
     Session(FromSession),
     LoggedIn(LoggedIn),
     Started(Box<Result<(session::Started, Settings), String>>),
+    /// A `horcrux-console://` link the system handed to the running app
+    /// (macOS sends clicked links as an Apple Event, see `macos_link`).
+    #[cfg(target_os = "macos")]
+    Link(String),
 }
 
 /// The node's VMs the Horcrux Console can show now (running QEMU VMs whose
@@ -465,6 +517,21 @@ impl App {
             .map(|w| w.scale_factor())
             .unwrap_or(1.0);
         ((2.0 * f).round() as i32).clamp(1, 4)
+    }
+
+    /// Fill the connection window from a `horcrux-console://` link: node,
+    /// user, profile and the VM to open once logged in. The password is
+    /// always asked for (any web page can open a link). A running console
+    /// keeps going; the window shows the link's node when it closes.
+    fn apply_link(&mut self, l: config::Link) {
+        let user = l.user.clone().unwrap_or_else(|| self.s.user.clone());
+        let mut form = ui::Form::new(&l.node, &user, l.profile.as_deref().unwrap_or_default());
+        form.want_vm = Some(l.vm);
+        self.form = form;
+        self.auto_open = true;
+        if self.mode == Mode::Connect {
+            self.api = None;
+        }
     }
 
     fn present(&mut self) {
@@ -787,15 +854,23 @@ impl ApplicationHandler<UserEvent> for App {
         };
         // a window bigger than the screen hides its own controls: shrink it
         // to 90 % of the monitor (the settings' size stays the upper bound)
+        // and move it so it is wholly on that monitor (systems place new
+        // windows cascaded, which pushed a large window off the screen)
         if w.fullscreen().is_none() {
             if let Some(mon) = w.current_monitor() {
-                let (ms, is) = (mon.size(), w.inner_size());
-                let (mw, mh) = (ms.width * 9 / 10, ms.height * 9 / 10);
-                if mw > 0 && mh > 0 && (is.width > mw || is.height > mh) {
-                    let _ = w.request_inner_size(winit::dpi::PhysicalSize::new(
-                        is.width.min(mw),
-                        is.height.min(mh),
-                    ));
+                let (mp, ms) = (mon.position(), mon.size());
+                let (is, os) = (w.inner_size(), w.outer_size());
+                let fit = fit_on_monitor(
+                    (mp.x, mp.y, ms.width, ms.height),
+                    w.outer_position().ok().map(|p| (p.x, p.y)),
+                    (is.width, is.height),
+                    (os.width, os.height),
+                );
+                if let Some((iw, ih)) = fit.inner {
+                    let _ = w.request_inner_size(winit::dpi::PhysicalSize::new(iw, ih));
+                }
+                if let Some((x, y)) = fit.position {
+                    w.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
                 }
             }
         }
@@ -881,6 +956,21 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     Err(e) => self.fail(e),
                 }
+                return;
+            }
+            #[cfg(target_os = "macos")]
+            UserEvent::Link(url) => {
+                match config::parse_link(&url) {
+                    Ok(l) => self.apply_link(l),
+                    Err(e) => {
+                        tracing::warn!("refused link: {e}");
+                        if self.mode == Mode::Connect {
+                            self.form.error = true;
+                            self.form.status = format!("Link refused: {e}");
+                        }
+                    }
+                }
+                self.present();
                 return;
             }
             UserEvent::Session(m) => m,
@@ -1221,12 +1311,7 @@ fn real_main(args: Args) -> Result<(), String> {
     } else {
         let r = &app.recent;
         let (node, user, profile, vm) = match &link {
-            Some(l) => (
-                l.node.clone(),
-                l.user.clone().unwrap_or_else(|| s.user.clone()),
-                l.profile.clone().unwrap_or_default(),
-                Some(l.vm.clone()),
-            ),
+            Some(_) => Default::default(),
             None if !s.node.is_empty() => (
                 s.node.clone(),
                 s.user.clone(),
@@ -1244,10 +1329,18 @@ fn real_main(args: Args) -> Result<(), String> {
                 (!r.vm.is_empty()).then(|| r.vm.clone()),
             ),
         };
-        app.auto_open = link.is_some() || s.has_target();
+        app.auto_open = s.has_target();
         app.form = ui::Form::new(&node, &user, &profile);
         app.form.want_vm = vm;
+        if let Some(l) = link {
+            app.apply_link(l);
+        }
     }
+    // macOS hands clicked links to the running app as an Apple Event, not
+    // on the command line: install the handler before the event loop runs
+    // (the launch's own link arrives while it finishes launching).
+    #[cfg(target_os = "macos")]
+    macos_link::install(el.create_proxy());
     el.run_app(&mut app).map_err(|e| e.to_string())
 }
 
@@ -1263,6 +1356,48 @@ mod tests {
         assert_eq!(w3c_code(KeyCode::SuperLeft), "MetaLeft");
         assert_eq!(w3c_code(KeyCode::ArrowUp), "ArrowUp");
         assert_eq!(w3c_code(KeyCode::F11), "F11");
+    }
+
+    #[test]
+    fn new_windows_fit_on_their_monitor() {
+        // the Windows eval VM: 1024x768, default 1280x800 window cascaded to
+        // (164, 157) with an 8+31 px frame
+        let f = fit_on_monitor(
+            (0, 0, 1024, 768),
+            Some((164, 157)),
+            (1280, 800),
+            (1296, 839),
+        );
+        assert_eq!(f.inner, Some((921, 691)));
+        let (x, y) = f.position.unwrap();
+        assert_eq!((x, y), ((1024 - 937) / 2, (768 - 730) / 2));
+        // fits already: nothing changes
+        let f = fit_on_monitor(
+            (0, 0, 2560, 1440),
+            Some((100, 100)),
+            (1280, 800),
+            (1296, 839),
+        );
+        assert_eq!(f, Fit::default());
+        // a second monitor to the left (negative coordinates)
+        let f = fit_on_monitor(
+            (-1920, 0, 1920, 1080),
+            Some((-200, 50)),
+            (1280, 800),
+            (1296, 839),
+        );
+        assert_eq!(f.inner, None);
+        assert_eq!(
+            f.position,
+            Some((-1920 + (1920 - 1296) / 2, (1080 - 839) / 2))
+        );
+        // the system does not report positions (Wayland): size only
+        let f = fit_on_monitor((0, 0, 1024, 768), None, (1280, 800), (1280, 800));
+        assert_eq!((f.inner, f.position), (Some((921, 691)), None));
+        assert_eq!(
+            fit_on_monitor((0, 0, 0, 0), None, (1, 1), (1, 1)),
+            Fit::default()
+        );
     }
 
     #[test]

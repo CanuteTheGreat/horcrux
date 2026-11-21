@@ -23,6 +23,7 @@ on:
       - 'horcrux-api/horcrux-ui/src/pages/console.rs'
       - 'horcrux-api/tests/hx_console_guest_e2e.*'
       - 'ci/windows-test-image.py'
+      - 'ci/windows-test-image-cached.sh'
       - 'ci/windows-test/**'
       - 'ci/linux-test-image.py'
       - 'ci/build-guest-tools-*.sh'
@@ -100,41 +101,7 @@ jobs:
           bash ci/build-guest-tools-iso.sh
 
       - name: Windows test image (runner cache volume hxc-win-img)
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/hxw
-          docker volume create hxc-win-iso >/dev/null
-          docker volume create hxc-win-img >/dev/null
-          docker run --rm -e URL="$WIN_EVAL_URL" -e VURL="$VIRTIO_WIN_URL" -e VSUM="$VIRTIO_WIN_SHA256" \
-            -v hxc-win-iso:/c debian:bookworm bash -c '
-            set -e
-            need=0; [ -s /c/win11-eval.iso ] || need=1
-            echo "$VSUM  /c/virtio-win.iso" | sha256sum -c --quiet 2>/dev/null || need=1
-            [ $need = 0 ] && exit 0
-            apt-get update -qq >/dev/null && apt-get install -y -qq curl ca-certificates >/dev/null
-            if [ ! -s /c/win11-eval.iso ]; then
-              curl -fsSL --retry 3 -o /c/win11-eval.iso.part "$URL" && mv /c/win11-eval.iso.part /c/win11-eval.iso
-            fi
-            if ! echo "$VSUM  /c/virtio-win.iso" | sha256sum -c --quiet 2>/dev/null; then
-              curl -fsSL --retry 3 -o /c/virtio-win.iso.part "$VURL"
-              echo "$VSUM  /c/virtio-win.iso.part" | sha256sum -c --quiet
-              mv /c/virtio-win.iso.part /c/virtio-win.iso
-            fi'
-          docker run --rm -v hxc-win-iso:/c:ro debian:bookworm cat /c/win11-eval.iso > /tmp/hxw/win11-eval.iso
-          docker run --rm -v hxc-win-iso:/c:ro debian:bookworm cat /c/virtio-win.iso > /tmp/hxw/virtio-win.iso
-          KEY=$(python3 ci/windows-test-image.py key /tmp/hxw/win11-eval.iso /tmp/hxw/virtio-win.iso)
-          echo "image key $KEY"
-          if docker run --rm -v hxc-win-img:/c:ro debian:bookworm test -s "/c/win-$KEY.qcow2"; then
-            docker run --rm -v hxc-win-img:/c:ro debian:bookworm cat "/c/win-$KEY.qcow2" > /tmp/hxw/win-test.qcow2
-            echo "cached image win-$KEY.qcow2"
-          else
-            python3 -u ci/windows-test-image.py build /tmp/hxw/win11-eval.iso /tmp/hxw/virtio-win.iso /tmp/hxw/win-test.qcow2
-            docker run -i --rm -v hxc-win-img:/c debian:bookworm sh -c \
-              "cat > /c/win-$KEY.qcow2.part && mv /c/win-$KEY.qcow2.part /c/win-$KEY.qcow2 && find /c -name 'win-*.qcow2*' ! -name win-$KEY.qcow2 -delete" \
-              < /tmp/hxw/win-test.qcow2
-          fi
-          rm -f /tmp/hxw/win11-eval.iso /tmp/hxw/virtio-win.iso
-          ls -l /tmp/hxw
+        run: bash ci/windows-test-image-cached.sh /tmp/hxw/win-test.qcow2
 
       - name: Debian test image (FFmpeg + qemu-guest-agent, no Horcrux tools)
         run: python3 -u ci/linux-test-image.py /tmp/hxw/debian-test.qcow2

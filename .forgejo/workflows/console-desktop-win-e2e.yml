@@ -1,0 +1,116 @@
+name: Horcrux Console desktop client on Windows against a real node (KVM)
+
+# Phase C3c of docs/design/horcrux-console.md: the Windows build of the
+# desktop client (horcrux-console.exe, x86_64-pc-windows-gnu release) runs
+# headless inside a real Windows 11 guest against a real node with an Alpine
+# console VM, over the direct path and through the node's WAN relay
+# (force_relay): frames decoded by Media Foundation, keystrokes, gamepad
+# states and the path checked on the node, the decoded picture copied back
+# (horcrux-api/tests/hx_console_desktop_win_e2e.{sh,py}). The program goes
+# into the guest through the QEMU guest agent; the guest reaches the node
+# through QEMU's user-mode network.
+#
+# The installed Windows image is the one hx-console-guest-e2e.yml uses,
+# cached per runner in the Docker volume hxc-win-img
+# (ci/windows-test-image-cached.sh).
+on:
+  push:
+    paths:
+      - 'horcrux-desktop/**'
+      - 'crates/horcrux-media/**'
+      - 'crates/horcrux-turn/**'
+      - 'crates/horcrux-vm/src/console/hxc/**'
+      - 'horcrux-api/src/api/hx_console.rs'
+      - 'horcrux-api/tests/hx_console_desktop_win_e2e.*'
+      - 'ci/windows-test-image.py'
+      - 'ci/windows-test-image-cached.sh'
+      - 'ci/windows-test/**'
+      - '.forgejo/workflows/console-desktop-win-e2e.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: "replace:${{ github.workflow }}@${{ github.ref }}"
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: "3"
+  # same image inputs as hx-console-guest-e2e.yml (same cache key)
+  WIN_EVAL_URL: https://go.microsoft.com/fwlink/?linkid=2289031&clcid=0x409&culture=en-us&country=us
+  VIRTIO_WIN_URL: https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win.iso
+  VIRTIO_WIN_SHA256: 303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d
+  # client VM size inside the job's memory cap (the node's Alpine VM is 512 MiB)
+  HXD_WIN_MEM_MB: "3584"
+  HXD_WIN_CPUS: "4"
+
+jobs:
+  desktop-win:
+    name: horcrux-console.exe headless in a Windows 11 guest, direct + relay
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-26.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Install tools
+        run: |
+          for i in 1 2 3; do
+            sudo apt-get update -qq || true
+            apt-cache policy swtpm | grep -q 'Candidate: [0-9]' && break
+            sleep 15
+          done
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            build-essential clang libvirt-dev libpam0g-dev qemu-system-x86 qemu-utils \
+            qemu-system-modules-opengl ffmpeg ovmf swtpm swtpm-tools iproute2 \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 curl python3
+          ls -l /dev/kvm
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-hx-desktop-win-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-hx-desktop-win-e2e-
+
+      - name: Build horcrux-api (all features) and horcrux-console.exe (release)
+        run: |
+          cargo build -p horcrux-api --all-features
+          cargo build --release -p horcrux-desktop --target x86_64-pc-windows-gnu
+          x86_64-w64-mingw32-strip -o /tmp/horcrux-console.exe target/x86_64-pc-windows-gnu/release/horcrux-console.exe
+          ls -l /tmp/horcrux-console.exe
+
+      - name: Windows test image (runner cache volume hxc-win-img)
+        run: |
+          mkdir -p /tmp/hxw
+          bash ci/windows-test-image-cached.sh /tmp/hxw/win-test.qcow2
+
+      - name: Desktop client in the Windows guest (direct + relay)
+        run: |
+          set -o pipefail
+          HXD_WIN_IMAGE=/tmp/hxw/win-test.qcow2 HXC_OUT=/tmp/hxd-win-e2e \
+            bash horcrux-api/tests/hx_console_desktop_win_e2e.sh target/debug/horcrux-api /tmp/horcrux-console.exe 2>&1 | tee /tmp/hxd-win-e2e.log
+          grep -E '^(PATH|RESULTS)' /tmp/hxd-win-e2e.log || true
+
+      - name: Results
+        if: always()
+        run: |
+          cat /tmp/hxd-win-e2e/results.json 2>/dev/null || true
+          rm -rf /tmp/hxw
+
+      - uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: console-desktop-win-e2e
+          path: |
+            /tmp/hxd-win-e2e/*.png
+            /tmp/hxd-win-e2e/*.log
+            /tmp/hxd-win-e2e/results.json

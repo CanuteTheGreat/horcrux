@@ -13,6 +13,10 @@ name: Horcrux Console desktop client (Linux, Windows, macOS)
 #            is really decoded by Windows Media Foundation; then the MSI from
 #            the cross job is installed, checked (program, Start menu entry,
 #            horcrux-console:// handler, settings example) and removed.
+# The connection window's states are drawn by the app's renderer in a unit
+# test and uploaded as PNGs (artifact console-desktop-connection-window) for
+# the UX screenshot review. The Windows build's headless run against a real
+# node in a Windows 11 guest is console-desktop-win-e2e.yml.
 # The Linux client's headless WAN e2e stays in hx-console-e2e.yml.
 on:
   push:
@@ -82,8 +86,20 @@ jobs:
 
       - name: Linux unit tests + clippy (decoder = libavcodec)
         run: |
-          HX_REQUIRE_DECODER=1 cargo test -p horcrux-media -p horcrux-desktop
+          HX_REQUIRE_DECODER=1 HX_UI_SHOTS=/tmp/ui-shots cargo test -p horcrux-media -p horcrux-desktop
           cargo clippy -p horcrux-media -p horcrux-desktop --all-targets -- -D warnings
+
+      - name: Connection window pictures (drawn by the app's own renderer)
+        run: |
+          set -euo pipefail
+          mkdir -p dist/connection-window
+          n=0
+          for f in /tmp/ui-shots/connection-window-*.ppm; do
+            ffmpeg -loglevel error -y -i "$f" "dist/connection-window/$(basename "${f%.ppm}").png"
+            n=$((n + 1))
+          done
+          [ "$n" -ge 5 ] || { echo "only $n connection window pictures"; exit 1; }
+          ls -l dist/connection-window
 
       - name: Windows clippy, release build, test binaries
         run: |
@@ -124,6 +140,12 @@ jobs:
         with:
           name: horcrux-console-msi
           path: dist/horcrux-console-*-x64.msi
+
+      # picked up by the UX screenshot review of the desktop client
+      - uses: actions/upload-artifact@v3
+        with:
+          name: console-desktop-connection-window
+          path: dist/connection-window/*.png
 
   windows:
     name: Windows (native MSVC tests, Media Foundation decode, MSI install)

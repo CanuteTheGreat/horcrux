@@ -324,7 +324,8 @@ impl Layout {
         y += fh + ch;
         l.status_y = y;
         let cols = ((w - 2 * m) / ch).max(10) as usize;
-        l.status_lines = wrap(&f.status, cols, 3);
+        // errors are read in full: up to five lines before the ellipsis
+        l.status_lines = wrap(&f.status, cols, 5);
         l.detail_lines = wrap(&f.detail, cols, 2);
         let lines = (l.status_lines.len() + l.detail_lines.len()).max(2) as i32;
         y += lines * (ch + ch / 2) + ch / 2;
@@ -591,18 +592,40 @@ pub fn draw(f: &Form, l: &Layout, c: &mut Canvas) {
                     } else {
                         format!("{} ({})", vm.name, vm.id)
                     };
-                    c.text(r.x + pad, ry + (l.row_h - ch) / 2, &t, col, s, inner);
+                    // row padding, not the whole list's (that centred
+                    // the names far into the list)
+                    let rpad = ch / 2;
+                    c.text(
+                        r.x + 2 + rpad,
+                        ry + (l.row_h - ch) / 2,
+                        &t,
+                        col,
+                        s,
+                        r.w - 4 - 2 * rpad,
+                    );
                 }
             }
         }
         if focused {
-            // buttons are filled with the accent colour: outline them in
-            // the text colour so the keyboard focus shows there too
-            let col = match field {
-                Field::Connect | Field::Trust | Field::Open => TEXT,
-                _ => ACCENT,
-            };
-            c.frame(*r, col, s.max(1));
+            match field {
+                // buttons are filled with the accent colour: a ring in the
+                // text colour, clear of the button, shows the keyboard focus
+                // against the window background
+                Field::Connect | Field::Trust | Field::Open => {
+                    let g = 2 * s.max(1);
+                    c.frame(
+                        Rect {
+                            x: r.x - g,
+                            y: r.y - g,
+                            w: r.w + 2 * g,
+                            h: r.h + 2 * g,
+                        },
+                        TEXT,
+                        s.max(1),
+                    );
+                }
+                _ => c.frame(*r, ACCENT, s.max(1)),
+            }
         }
     }
     let mut y = l.status_y;
@@ -753,5 +776,99 @@ mod tests {
                 h: 80,
             },
         );
+    }
+
+    fn render(f: &Form, w: i32, h: i32, scale: i32) -> (Layout, Vec<u32>) {
+        let l = Layout::new(f, w, h, scale);
+        let mut px = vec![0u32; (w * h) as usize];
+        draw(f, &l, &mut Canvas { px: &mut px, w, h });
+        (l, px)
+    }
+
+    /// The connection window in the states a user meets, drawn exactly as
+    /// the app draws it. Checks keyboard focus on a button, wrapped status
+    /// and fingerprint text inside the window; with `HX_UI_SHOTS=DIR` the
+    /// pictures are written there as PPM for the screenshot review
+    /// (console-desktop.yml uploads them as PNG).
+    #[test]
+    fn connection_window_screenshots() {
+        let fp = "3f9a".repeat(16);
+        let mut states: Vec<(&str, Form, i32, i32, i32)> = Vec::new();
+        states.push(("empty", Form::new("", "", ""), 900, 640, 2));
+        let mut f = Form::new("https://node.example:8006", "alice", "gaming");
+        f.status = "Opened from a link: enter the password to connect.".into();
+        f.password = "secret".into();
+        f.focus = Some(Field::Connect);
+        states.push(("link-focus-connect", f, 900, 640, 2));
+        let mut f = Form::new("https://node.example:8006", "alice", "");
+        f.error = true;
+        f.status = "The node's certificate is not trusted yet. Compare this fingerprint with the one the node shows (System > Certificates) before you trust it.".into();
+        f.detail = fp.clone();
+        f.untrusted = Some(fp.clone());
+        f.focus = Some(Field::Trust);
+        states.push(("untrusted-certificate", f, 720, 600, 2));
+        let mut f = Form::new("https://node.example:8006", "alice", "");
+        f.set_vms(vms(7), 3);
+        f.status = "Logged in as alice - 7 VMs can be shown".into();
+        f.focus = Some(Field::Open);
+        states.push(("vm-list-focus-open", f, 1280, 800, 2));
+        let mut f = Form::new("https://node.example:8006", "alice", "");
+        f.set_vms(vms(30), 0);
+        f.status = "Logged in as alice - 30 VMs can be shown".into();
+        states.push(("vm-list-small-window", f, 640, 520, 1));
+        let dir = std::env::var_os("HX_UI_SHOTS").map(std::path::PathBuf::from);
+        for (name, f, w, h, scale) in &states {
+            let (l, px) = render(f, *w, *h, *scale);
+            let ch = 8 * scale;
+            // every wrapped line fits between the margins
+            for t in l.status_lines.iter().chain(&l.detail_lines) {
+                assert!(
+                    t.chars().count() as i32 * ch <= w - 4 * ch,
+                    "{name}: line wider than the window: {t}"
+                );
+            }
+            if let Some(field) = f.focus {
+                if matches!(field, Field::Connect | Field::Trust | Field::Open) {
+                    let r = l.rect(field).unwrap();
+                    let at = |x: i32, y: i32| px[(y * w + x) as usize];
+                    let g = 2 * scale;
+                    assert_eq!(
+                        at(r.x - g, r.y - g),
+                        TEXT,
+                        "{name}: focus ring around the button"
+                    );
+                    assert_eq!(
+                        at(r.x + r.w / 2, r.y + r.h + g - 1),
+                        TEXT,
+                        "{name}: ring bottom"
+                    );
+                    assert_eq!(
+                        at(r.x - 1, r.y + r.h / 2),
+                        BG,
+                        "{name}: gap between ring and button"
+                    );
+                    assert_eq!(
+                        at(r.x + r.w - scale - 2, r.y + r.h / 2),
+                        ACCENT,
+                        "{name}: inside the outline the button stays filled"
+                    );
+                }
+            }
+            if !f.detail.is_empty() {
+                assert_eq!(
+                    l.detail_lines.concat(),
+                    f.detail,
+                    "{name}: whole fingerprint shown"
+                );
+            }
+            if let Some(d) = &dir {
+                std::fs::create_dir_all(d).unwrap();
+                let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+                for p in &px {
+                    out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]);
+                }
+                std::fs::write(d.join(format!("connection-window-{name}.ppm")), out).unwrap();
+            }
+        }
     }
 }

@@ -62,4 +62,13 @@ objc2-game-controller = { version = "0.3", default-features = false, features = 
     "GCControllerAxisInput",
     "GCControllerDirectionPad",
 ] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray"] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSAppleEventDescriptor",
+    "NSAppleEventManager",
+    "NSString",
+] }
+# horcrux-console:// links arrive as an Apple Event (kAEGetURL): a small
+# Objective-C handler class (MIT, objc2 family)
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
