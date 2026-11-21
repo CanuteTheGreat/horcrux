@@ -547,6 +547,26 @@ class FinishStage(Stage):
         return ["Install the boot loader (" + ("UEFI" if ctx.efi else "BIOS") + ") and unmount"]
 
 
+class MachineStage(Stage):
+    """machine profile + detected hardware layers, applied inside the new system from binary packages (machineprofile.py)"""
+    id, title, short = "machine", "Machine profile and hardware support", "Machine"
+    ui = "none"
+
+    def applies(self, ctx):
+        return bool(ctx.c.get("machine_profile") or ctx.c.get("_hw_layers"))
+
+    def plan(self, ctx):
+        mp = ctx.c.get("machine_profile") or {}
+        out = []
+        if mp:
+            sw = mp.get("software", {})
+            out.append(f"Machine profile {mp.get('machine', {}).get('hostname', '?')}: {len(sw.get('packages', [])) + len(sw.get('sets', []))} package(s)/set(s), "
+                       f"{len(mp.get('users', []))} user(s), {len(mp.get('wifi', []))} Wi-Fi network(s) - binary packages from the binhosts")
+        if ctx.c.get("_hw_layers"):
+            out.append("Hardware support: " + ", ".join(ctx.c["_hw_layers"]))
+        return out
+
+
 class DesktopStage(Stage):
     id, title, short = "desktop", "Desktop user", "Desktop"
     intro = "A touch-friendly desktop (sway, on-screen keyboard, pen) is installed for this machine."
@@ -657,11 +677,11 @@ class GnomeStage(Stage):
 
 
 STAGES = [KeymapStage(), HostnameStage(), DiskStage(), ExtractStage(), RootpassStage(), DesktopStage(), T2Stage(), GnomeStage(), NetconfigStage(),
-          ServicesStage(), HardeningStage(), UseFlagsStage(), FinishStage()]
+          ServicesStage(), HardeningStage(), UseFlagsStage(), MachineStage(), FinishStage()]
 BY_ID = {s.id: s for s in STAGES}
 UI_ORDER = [s.id for s in STAGES]
 # disks must exist and be extracted before anything is written into the new system
-APPLY_ORDER = ["disk", "extract", "keymap", "hostname", "rootpass", "desktop", "t2", "gnome", "netconfig", "services", "hardening", "use_flags", "finish"]
+APPLY_ORDER = ["disk", "extract", "keymap", "hostname", "rootpass", "desktop", "t2", "gnome", "netconfig", "services", "hardening", "use_flags", "machine", "finish"]
 
 
 def stage_list(ctx, ui_only=False):

@@ -1,0 +1,38 @@
+# Apple Macs with the T2 security chip (MacBook Pro/Air 2018-2020, Mac mini 2018, iMac Pro, iMac 2020): detected by the T2 bridge (PCI 106b:1801).
+# Public: the t2linux kernel patches, Touch Bar, fan and audio support are open source. Apple's Wi-Fi/Bluetooth firmware is NOT
+# redistributable: the installer reads it from the Mac itself (macOS volume or t2linux's firmware-raw.tar.gz on the EFI partition) or from the
+# machine profile bundle, and installs it as sys-firmware/apple-t2-firmware-local (firmware_package below).
+id = "apple-t2"
+title = "Apple Mac with the T2 security chip"
+packages = ["sys-kernel/horcrux-t2-config", "sys-apps/tiny-dfr", "sys-apps/t2fanrd"]
+# desktop editions only: the speaker/mic profiles plug into the desktop's PipeWire
+desktop_packages = ["sys-apps/horcrux-t2-audio"]
+
+[match]
+pci = ["106b:1801"]
+
+# installed only when the installer captured this Mac's firmware into DISTDIR/<distfile>
+[firmware_package]
+atom = "sys-firmware/apple-t2-firmware-local"
+distfile = "apple-t2-firmware-local.tar"
+
+# the T2 kernel (gentoo-kernel + the t2linux patch set from sys-kernel/horcrux-t2-config) and ZFS built against it come from their own binhost
+# lane; the stock gentoo-kernel-bin is replaced
+[kernel]
+packages = ["sys-kernel/gentoo-kernel", "sys-fs/zfs-kmod"]
+unmerge = ["sys-kernel/gentoo-kernel-bin"]
+binrepo = { name = "ctg-binhost-t2", uri = "https://f002.backblazeb2.com/file/ctg-binhost/amd64/t2", priority = 9000 }
+
+[portage.accept_keywords]
+"sys-kernel/horcrux-t2-config" = "~amd64"
+"sys-apps/tiny-dfr" = "~amd64"
+"sys-apps/t2fanrd" = "~amd64"
+"sys-apps/horcrux-t2-audio" = "~amd64"
+"sys-firmware/apple-t2-firmware-local" = "~amd64"
+
+# the firmware package carries this Mac's own Apple files (not redistributable): accepted for this one local package only
+[portage.license]
+"sys-firmware/apple-t2-firmware-local" = "all-rights-reserved"
+
+[services]
+enable = ["t2fanrd", "tiny-dfr"]

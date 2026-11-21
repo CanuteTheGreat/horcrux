@@ -38,7 +38,7 @@ if [ "$mode" = stable ]; then tag=${GITHUB_REF_NAME:?}; suffix=$tag; else suffix
 
 echo "::group::host deps"
 export DEBIAN_FRONTEND=noninteractive
-(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools >/dev/null) || fail deps "apt install failed"
+(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools gdisk dosfstools mtools >/dev/null) || fail deps "apt install failed"
 echo "::endgroup::"
 
 # stable gate: the repo's own CI must not be red on the tagged commit
@@ -224,6 +224,21 @@ if [ "$result" = pass ]; then
     zfs_enc_run "$name" --server --public --late-network ${SERVER_LATE_NET_S:-90} $ovl
     echo "::endgroup::"
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
+    if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
+  fi
+  if [ "$PROJECT" = horcrux ] && [ "$ARCH" = x86_64 ] && [ -e /dev/kvm ]; then
+    # ONE ISO, ANY MACHINE: this stock ISO + a machine profile (tests/fixtures/profiles) = the machine, from binary packages, no image build.
+    # Server ISO: the generic server profile. GNOME ISO: a laptop profile on a simulated Apple T2 Mac (hardware layer + firmware read from a
+    # synthetic Mac EFI partition). Install wall time is a gate (< 30 min). Branch runs bundle the branch's overlay (not published yet).
+    name=machine-profile; prof=generic-server; margs=""
+    if [ "$IMG_DE" != server ]; then prof=generic-desktop; margs="--desktop --fake-t2"; fi
+    movl=""
+    if [ "${GITHUB_REF_TYPE:-}" = branch ] && [ -n "${GITHUB_REF_NAME:-}" ] && [ "${GITHUB_REF_NAME}" != main ]; then movl="--dev-overlay $(cd "$HERE/../../.." && pwd)/gentoo"; fi
+    echo "::group::QEMU test $name ($prof)"
+    with_deadline $DL_ZFS python3 -u "$HERE/machine-profile-test.py" --iso "$ISO" --out "$EVI/$name" --profile "$HERE/tests/fixtures/profiles/$prof" $margs $movl 2>&1 | tee "$EVI/test-$name.log" | tail -60
+    rc=${PIPESTATUS[0]}
+    echo "::endgroup::"
+    rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img "$EVI/$name"/mac-esp.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
   fi
   # boot menu + rescue / forensic / live / persistence modes (UEFI + BIOS): see boot-modes-test.py

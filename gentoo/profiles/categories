@@ -5,4 +5,5 @@ gnome-extra
 net-misc
 sec-keys
 sys-apps
+sys-firmware
 sys-kernel

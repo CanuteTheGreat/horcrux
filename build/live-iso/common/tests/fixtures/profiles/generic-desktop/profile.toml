@@ -1,0 +1,34 @@
+# Generic GNOME laptop machine profile for the machine-profile QEMU gate (with --fake-t2: an Apple T2 Mac): stock GNOME ISO + this file.
+schema = 1
+
+[machine]
+hostname = "hx-profile-laptop"
+edition = "gnome-light"
+timezone = "America/New_York"
+locale = "en_US.UTF-8"
+
+[disk]
+disks = ["first"]
+filesystem = "zfs"
+encryption = true
+swap = "auto"
+
+[[users]]
+name = "owner"
+fullname = "Laptop Owner"
+admin = true
+groups = ["audio", "video", "input", "plugdev"]
+
+[hardware]
+layers = "auto"
+
+[software]
+packages = ["app-misc/tmux", "sys-apps/smartmontools"]
+
+[[wifi]]
+ssid = "Gate Test Net"
+psk_file = "bundle:secrets/wifi.psk"
+
+[[files]]
+path = "/etc/motd.d/50-role"
+content = "Role: profile-gate laptop\n"
