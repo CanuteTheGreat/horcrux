@@ -21,6 +21,8 @@ distfile = "apple-t2-firmware-local.tar"
 [kernel]
 packages = ["sys-kernel/gentoo-kernel", "sys-fs/zfs-kmod"]
 unmerge = ["sys-kernel/gentoo-kernel-bin"]
+# module packages merged again from the lane once the kernel is in (a kernel of the same version as the stock one does not trigger the slot-operator rebuild)
+reinstall = ["sys-fs/zfs-kmod"]
 binrepo = { name = "ctg-binhost-t2", uri = "https://f002.backblazeb2.com/file/ctg-binhost/amd64/t2", priority = 9000 }
 
 # the USE the kernel binhost lane (ctg-binhost/amd64/t2) is built with: a binary package is only used when the USE matches

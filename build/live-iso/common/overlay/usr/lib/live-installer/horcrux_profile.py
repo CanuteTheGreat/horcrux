@@ -553,6 +553,47 @@ def apply_accounts(mp, sy):
                 os.chown(p, pw.pw_uid, pw.pw_gid)
 
 
+DRACUT_KERNEL_TXN = "/etc/dracut.conf.d/00-horcrux-profile-kernel-install.conf"
+
+
+def kernel_transaction(sy, cmd, reinstall=()):
+    """emerge a transaction that brings a new dist-kernel (a hardware layer's kernel binhost) together with its ZFS module.
+
+    The kernel's postinst builds an initramfs through installkernel/dracut BEFORE zfs-kmod for that kernel is merged (zfs-kmod depends on
+    the kernel), and dracut's `zfs` module (forced by the live image's dracut config, and by encrypted-ZFS installs) dies with
+    "Failed to find module 'zfs'" on the new kernel, which fails the kernel's postinst and with it the whole transaction. So the zfs
+    module is omitted for the duration of the transaction, and every kernel that appeared in /lib/modules is then given its real initramfs
+    (all dracut config again, zfs included, now that zfs.ko exists for it); a missing module is a hard error, never a silent
+    initramfs without it.
+
+    `reinstall` = the layer's [kernel] reinstall list: module packages (sys-fs/zfs-kmod) that must be merged again from the kernel lane once the
+    kernel is in. A kernel of the SAME version as the one already installed (the stock kernel-bin vs the layer's patched gentoo-kernel) does not
+    trigger Portage's slot-operator rebuild, so the old zfs.ko stays under the old kernel and the new kernel has none. Binary-only: the lane
+    publishes the module built against exactly that kernel, a source build here would be a bug."""
+    mods = "/lib/modules"
+    before = set(os.listdir(mods)) if os.path.isdir(mods) else set()
+    if not sy.dry:
+        sy.write(DRACUT_KERNEL_TXN, "# horcrux-profile: only while a kernel layer's packages are merged (removed afterwards, the initramfs is rebuilt)\n"
+                                    'omit_dracutmodules+=" zfs "\n')
+    try:
+        sy.run(cmd, env={"PORTAGE_NICENESS": "10"})
+        if reinstall:
+            sy.run(["emerge", "--oneshot", "--usepkgonly", "--getbinpkg", "--binpkg-respect-user-patches=n", "--quiet-build=y", "--with-bdeps=n", *reinstall],
+                   env={"PORTAGE_NICENESS": "10"})
+    finally:
+        if not sy.dry and os.path.exists(DRACUT_KERNEL_TXN):
+            os.remove(DRACUT_KERNEL_TXN)
+    if sy.dry:
+        return
+    chost = (sy.run(["portageq", "envvar", "CHOST"], check=False, capture=True) or "").strip()
+    env = {"CHOST": chost} if chost else None
+    for kr in sorted(set(os.listdir(mods)) - before if os.path.isdir(mods) else ()):
+        if not os.path.isdir(os.path.join(mods, kr, "kernel")):
+            continue
+        sy.log(f"kernel {kr}: building its initramfs (dracut, zfs included)")
+        sy.run(["dracut", "--force", "--no-hostonly", "--kver", kr, f"/boot/initramfs-{kr}.img", kr], env=env)
+
+
 def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
     """converge the running system (or the installer's chroot) to the profile; returns the generation record"""
     errs = problems(mp, sy.bundle)
@@ -636,7 +677,11 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
         if bad:
             raise RuntimeError("these would be compiled on this machine (no binary package on the binhosts): " + ", ".join(bad)
                                + " - publish them on the binhost or list them in software.allow_source")
-        sy.run(base + atoms, env={"PORTAGE_NICENESS": "10"})
+        kernel_layers = [lay for lay in layers if lay.get("kernel", {}).get("packages")]
+        if kernel_layers:
+            kernel_transaction(sy, base + atoms, sorted({a for lay in kernel_layers for a in lay["kernel"].get("reinstall", [])}))
+        else:
+            sy.run(base + atoms, env={"PORTAGE_NICENESS": "10"})
     for a in prev.get("packages", []):
         if a not in atoms and a != SELF_ATOM:
             sy.run(["emerge", "--deselect", a], check=False)
