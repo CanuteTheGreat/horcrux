@@ -485,6 +485,13 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
                     shutil.rmtree(dst)
                 if not os.path.isdir(dst):
                     shutil.copytree(src, dst, symlinks=True)
+                    # the bundle is root-only (0700/0600); a repository must be readable by Portage's unprivileged metadata/build user
+                    for dp, dn, fn in os.walk(dst):
+                        os.chmod(dp, 0o755)
+                        for f in fn:
+                            fp = os.path.join(dp, f)
+                            if not os.path.islink(fp):
+                                os.chmod(fp, 0o644)
             sy.log(f"repo {r['name']}: snapshot from the profile bundle")
     owned_files = portage_files(mp, layers)
     for p, t in owned_files.items():
@@ -619,7 +626,8 @@ def main(argv=None):
     if a.cmd == "plan":
         sy = Sys(bundle)
         prev = load_json(f"{STATE}/current")
-        state = {"world": sy.world(), "files": {p: (open(p).read() if os.path.exists(p) else None) for p in portage_files(mp, layers)},
+        paths = list(portage_files(mp, layers)) + [f["path"] for f in mp.get("files", []) if "content" in f]
+        state = {"world": sy.world(), "files": {p: (open(p, errors="replace").read() if os.path.exists(p) else None) for p in paths},
                  "groups": {u: sy.groups_of(u) for u in user_groups(mp)}, "prev": prev}
         for l in plan(mp, layers, state) or ["(nothing to change)"]:
             print(l)
