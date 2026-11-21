@@ -528,23 +528,30 @@ def run_vm():
     # (reconnects, closed tabs). This used to kill QEMU (display channel
     # closed while the SPICE server waited for its init) or incusd (console
     # operation cancelled while it was already ending) every few rounds.
+    # The crashes hit after 5-150 rounds on a loaded node; 60 rounds take
+    # about half a minute.
     pid_before = incusd_pid()
-    rounds = int(os.environ.get("SPICE_ROUNDS", "15"))
+    rounds = int(os.environ.get("SPICE_ROUNDS", "60"))
     for i in range(rounds):
-        s, rd, wr = tcp_io(host, port)
-        if spice_link(rd, wr, pw) != 0:
-            fail(f"round {i + 1}: main channel link refused")
-        session, _ = spice_main_channels(rd, wr)
-        s2, rd2, wr2 = tcp_io(host, port)
-        if spice_link(rd2, wr2, pw, channel=2, connection_id=session) != 0:
-            fail(f"round {i + 1}: display channel link refused")
-        s2.close()
-        s.close()
-        if i % 2:
+        try:
             s, rd, wr = tcp_io(host, port)
-            if spice_link(rd, wr, "wrong-password") != 7:
-                fail(f"round {i + 1}: wrong password not refused")
+            if spice_link(rd, wr, pw) != 0:
+                fail(f"round {i + 1}: main channel link refused")
+            session, _ = spice_main_channels(rd, wr)
+            s2, rd2, wr2 = tcp_io(host, port)
+            if spice_link(rd2, wr2, pw, channel=2, connection_id=session) != 0:
+                fail(f"round {i + 1}: display channel link refused")
+            s2.close()
             s.close()
+            if i % 2:
+                s, rd, wr = tcp_io(host, port)
+                if spice_link(rd, wr, "wrong-password") != 7:
+                    fail(f"round {i + 1}: wrong password not refused")
+                s.close()
+        except OSError as e:
+            state = incus(f"list {VM} --format csv -c s", False).strip()
+            fail(f"round {i + 1} of {rounds}: the SPICE relay stopped answering ({e!r}); "
+                 f"VM state {state!r}, incusd pid {pid_before} -> {incusd_pid()}")
     state = incus(f"list {VM} --format csv -c s", False).strip().upper()
     check(state == "RUNNING", f"VM still running after {rounds} SPICE sessions (state {state})")
     check(incusd_pid() == pid_before,
