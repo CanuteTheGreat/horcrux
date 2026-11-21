@@ -184,7 +184,8 @@ if host_is_vm:
     check(any("third level" in w for w in plan["warnings"]), "plan warns: VBS on a host that is itself a VM")
     no_vbs = dict(req, vbs=None)
     _, p2 = call("POST", "/vms/gaming", no_vbs, ok=(200,))
-    check(p2["config"]["hardware"]["adv"].get("nested_virt") is False,
+    # false is left out of the JSON (skip_serializing_if), so absent = off
+    check(p2["config"]["hardware"]["adv"].get("nested_virt", False) is False,
           "VBS stays off by default when the host is itself a VM")
 st, _ = call("GET", "/vms/ci-gaming", ok=None)
 check(st == 404, "dry run created nothing")
