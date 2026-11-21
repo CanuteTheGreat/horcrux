@@ -372,7 +372,8 @@ pub fn GamingVmWizard() -> impl IntoView {
                 </div>
                 <div class="form-group">
                     <label for="gaming-memory">"Memory (GB)"</label>
-                    <input id="gaming-memory" type="number" min="4" placeholder="automatic (half the host, capped)" prop:value=memory on:input=move |ev| memory.set(event_target_value(&ev))/>
+                    <input id="gaming-memory" type="number" min="4" placeholder="auto" prop:value=memory on:input=move |ev| memory.set(event_target_value(&ev))/>
+                    <p class="form-help">"Empty = automatic: half the host's memory, capped."</p>
                 </div>
                 <div class="form-group">
                     <label for="gaming-disk">"System disk (GB)"</label>
@@ -405,8 +406,9 @@ pub fn GamingVmWizard() -> impl IntoView {
                     {move || settings.get().map(|s| view! { <a id="gaming-eval-page" href=s.windows_eval_page.clone() target="_blank" rel="noopener">"90-day evaluation"</a> })}
                     "), choose the 64-bit ISO and paste its download link here; it goes straight into the ISO library. Or upload your own ISO on the ISO Library page."
                 </p>
+                <label for="gaming-windows-url">"Windows 11 ISO download link"</label>
                 <div class="form-row">
-                    <input id="gaming-windows-url" type="url" placeholder="https://software.download.prss.microsoft.com/..." prop:value=windows_url on:input=move |ev| windows_url.set(event_target_value(&ev))/>
+                    <input id="gaming-windows-url" type="url" prop:value=windows_url on:input=move |ev| windows_url.set(event_target_value(&ev))/>
                     <button type="button" class="btn" id="gaming-windows-download" on:click=download_windows>"Download to the library"</button>
                     <button type="button" class="btn" id="gaming-eval-download" on:click=download_eval>"Download the 90-day evaluation ISO"</button>
                     <A href="/storage/isos" class="btn">"ISO Library"</A>
@@ -435,7 +437,8 @@ pub fn GamingVmWizard() -> impl IntoView {
                 </div>
                 <div class="form-group">
                     <label for="gaming-key">"Product key (optional)"</label>
-                    <input id="gaming-key" type="text" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" prop:value=product_key on:input=move |ev| product_key.set(event_target_value(&ev))/>
+                    <input id="gaming-key" type="text" prop:value=product_key on:input=move |ev| product_key.set(event_target_value(&ev))/>
+                    <p class="form-help">"25 characters (XXXXX-XXXXX-XXXXX-XXXXX-XXXXX). Empty = no key now; activate later in Windows."</p>
                 </div>
                 <div class="form-group">
                     <label for="gaming-edition">"Edition (optional)"</label>
@@ -449,7 +452,8 @@ pub fn GamingVmWizard() -> impl IntoView {
 
             <h3>"5. Games you plan to play"</h3>
             <div class="form-group">
-                <textarea id="gaming-games" rows="2" placeholder="e.g. Counter-Strike 2, Valorant" prop:value=games on:input=move |ev| games.set(event_target_value(&ev))></textarea>
+                <label for="gaming-games">"Games (comma separated, e.g. Counter-Strike 2, Valorant)"</label>
+                <textarea id="gaming-games" rows="2" prop:value=games on:input=move |ev| games.set(event_target_value(&ev))></textarea>
                 <p class="form-help">"Checked against the anti-cheat table below before anything is created."</p>
             </div>
 
