@@ -405,6 +405,8 @@ mod qemu {
                     allow_clipboard: has(Privilege::VmConsoleClipboard),
                     allow_mic: has(Privilege::VmConsoleAudioMic),
                     candidate_ips: Vec::new(),
+                    // Same-host viewers use the local socket, never the relay.
+                    relay_tag: String::new(),
                     expires_at: 0,
                 },
                 settings.ticket_lifetime_secs,
