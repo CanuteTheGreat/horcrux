@@ -423,7 +423,12 @@ def apply(inst):
         kver = target_kernel_version(inst.target)
     if not kver and inst.c.get("t2_kernel") == "skip":
         write_config(inst)
-        inst.log("TEST ONLY: t2_kernel = skip: T2 configuration written, kernel and apple-bce initramfs check skipped")
+        # the stock kernel has no apple-bce: dracut would abort on force_drivers t2bce_* (from this file and from sys-kernel/horcrux-t2-config's
+        # copy of it), so a later file drops the T2 driver lists again; only ever written for this test-only answer key
+        inst.write("/etc/dracut.conf.d/99-horcrux-test-stock-kernel.conf",
+                   "# TEST ONLY (answer file t2_kernel = skip, QEMU): the stock kernel has no apple-bce\n"
+                   'force_drivers=" "\nadd_drivers=" nvme dm_crypt dm_mod xhci_pci xhci_hcd hid hid_generic usbhid "\n')
+        inst.log("TEST ONLY: t2_kernel = skip: T2 configuration written (T2 dracut drivers neutralised), kernel and apple-bce initramfs check skipped")
         return
     if not kver:
         msg = ("this image has no T2 kernel (apple-bce): the internal keyboard would not work at the disk-passphrase "

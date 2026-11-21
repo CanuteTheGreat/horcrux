@@ -199,10 +199,11 @@ class PRun(ZE.ZRun):
             rc, o = self.sh("for p in sys-kernel/horcrux-t2-config sys-apps/tiny-dfr sys-apps/t2fanrd sys-apps/horcrux-t2-audio sys-firmware/apple-t2-firmware-local; do "
                             "qlist -IC $p >/dev/null && echo \"OK $p\" || echo \"MISS $p\"; done; "
                             "ls /lib/firmware/brcm | grep -c apple; qfile -q /lib/firmware/brcm/brcmfmac4364b2-pcie.apple,hanauma.bin; "
-                            "test -f /etc/dracut.conf.d/90-horcrux-t2.conf && echo DRACUT; test -f /etc/modprobe.d/90-horcrux-t2.conf && echo MODPROBE")
+                            "test -f /etc/modprobe.d/90-horcrux-t2.conf && echo MODPROBE; ls /etc/modules-load.d/ | grep -c t2")
             self.step("t2-layer-packages-installed", "MISS" not in o and o.count("OK ") == 5, re.sub(r"\s+", " ", o)[:300])
             self.step("t2-firmware-package-owned-incl-hard-linked-names", "sys-firmware/apple-t2-firmware-local" in o, re.sub(r"\s+", " ", o)[:300])
-            self.step("t2-dracut-and-modprobe-config-written", "DRACUT" in o and "MODPROBE" in o, "")
+            # (the T2 dracut drivers file is left out with t2_kernel = skip: the stock kernel has no apple-bce)
+            self.step("t2-modprobe-config-written", "MODPROBE" in o, "")
         else:
             rc, o = self.sh("ls /lib/firmware/brcm 2>/dev/null | grep -ci apple; qlist -I | grep -cE 'apple-t2|tiny-dfr|t2fanrd'")
             self.step("non-mac-gets-no-t2-layer-and-no-apple-firmware", o.split() == ["0", "0"], o.strip().replace("\n", " "))
