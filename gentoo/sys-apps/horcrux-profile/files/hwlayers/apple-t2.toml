@@ -30,5 +30,9 @@ binrepo = { name = "ctg-binhost-t2", uri = "https://f002.backblazeb2.com/file/ct
 "sys-apps/horcrux-t2-audio" = "~amd64"
 "sys-firmware/apple-t2-firmware-local" = "~amd64"
 
+# the firmware package carries this Mac's own Apple files (not redistributable): accepted for this one local package only
+[portage.license]
+"sys-firmware/apple-t2-firmware-local" = "all-rights-reserved"
+
 [services]
 enable = ["t2fanrd", "tiny-dfr"]

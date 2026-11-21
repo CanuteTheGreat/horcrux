@@ -15,6 +15,7 @@ Where a profile comes from (first match):
 Secrets never come from the profile: the disk passphrase and login passwords are typed (or come from the answer file used by
 automated tests); a profile may carry password HASHES only, and secretcheck still refuses reuse of the disk passphrase.
 """
+import json
 import os
 import re
 import shutil
@@ -277,6 +278,9 @@ def stage(inst):
             f.write(txt)
         prof = "/var/lib/horcrux/profile/bundle/profile.toml"
     os.makedirs(f"{st}/layers", exist_ok=True)
+    if c.get("t2_kernel") == "skip":          # TEST ONLY (QEMU): every later `horcrux-profile apply` keeps the stock kernel too
+        with open(f"{st}/options.json", "w") as f:
+            json.dump({"layer_kernels": False, "why": "answer file t2_kernel = skip (QEMU test: no T2 hardware)"}, f)
     src = layer_dir(inst.p)
     for lay in layers:
         shutil.copy(os.path.join(src, f"{lay['id']}.toml"), f"{st}/layers/{lay['id']}.toml")

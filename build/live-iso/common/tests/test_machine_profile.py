@@ -1,6 +1,7 @@
 """Machine profiles + hardware layers + Apple firmware capture: one stock installer ISO for every machine (pure logic, no disks, no network)."""
 import importlib.util
 import io
+import json
 import os
 import sys
 import tarfile
@@ -285,6 +286,7 @@ class InstallerSide(unittest.TestCase):
             st = os.path.join(I.target, "var/lib/horcrux/profile")
             self.assertEqual(os.stat(os.path.join(st, "bundle/secrets/w")).st_mode & 0o777, 0o600)
             self.assertTrue(os.path.exists(os.path.join(st, "layers/apple-t2.toml")))
+            self.assertEqual(json.load(open(os.path.join(st, "options.json")))["layer_kernels"], False)     # t2_kernel = skip persists
             self.assertEqual(runs[0][0][-3:], ["apple-t2", "apply", "--install"])
             self.assertTrue(runs[0][1] and runs[1][1])
             self.assertEqual(runs[1][0][-2:], ["apply", "--accounts-only"])

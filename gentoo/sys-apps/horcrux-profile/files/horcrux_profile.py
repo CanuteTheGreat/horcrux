@@ -394,6 +394,8 @@ def load_layers(ids, layer_dirs):
                 with open(p, "rb") as f:
                     lay = tomllib.load(f)
                 lay.setdefault("id", i)
+                if load_json(f"{STATE}/options.json").get("layer_kernels") is False:
+                    lay.pop("kernel", None)     # this machine keeps the image's stock kernel (set by the installer; TEST ONLY in QEMU)
                 out.append(lay)
                 break
         else:
