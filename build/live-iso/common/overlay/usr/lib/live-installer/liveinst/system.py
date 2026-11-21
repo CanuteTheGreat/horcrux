@@ -841,9 +841,18 @@ class Installer:
             raise InstallError("refusing to install: " + " ".join(bad))
         if p.get("encryption") == "tpm-or-none":
             self.log("Disk encryption: " + (c.get("enc_why") or "none"))
+        from . import machineprofile
+        self.hw_layers = machineprofile.choose_layers(self)
+        c["_hw_layers"] = [l["id"] for l in self.hw_layers]
+        if self.hw_layers:
+            self.log("hardware support layers: " + ", ".join(c["_hw_layers"]))
+        bad = machineprofile.kernel_preflight(self, self.hw_layers)
+        if bad:          # before the disk is touched
+            raise InstallError("refusing to install (nothing was written to the disk): " + "; ".join(bad))
         if self.t2:
             from . import t2
-            t2.preflight(self)
+            t2.preflight(self, layer_kernel=any(l["id"] == "apple-t2" and l.get("kernel", {}).get("packages") for l in self.hw_layers))
+            t2.capture_firmware(self)   # the Mac's own Wi-Fi/BT firmware, read BEFORE the disk (and its EFI partition) is erased
         stages.run_stages(self)
         self.prog(100, "Done")
 
@@ -890,6 +899,11 @@ class Installer:
     def stage_use_flags(self):
         self.prog(87, "Software settings (USE flags)")
         self.cfg_use_flags()
+
+    def stage_machine(self):
+        self.prog(88, "Machine profile and hardware support (binary packages)")
+        from . import machineprofile
+        machineprofile.stage(self)
 
     def stage_finish(self):
         self.cfg_finish_config()

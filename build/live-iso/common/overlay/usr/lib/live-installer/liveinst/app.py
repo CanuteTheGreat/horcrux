@@ -18,6 +18,10 @@ class State:
     def __init__(self, profile):
         self.p = profile
         self.c = S.default_config(profile)
+        try:            # a machine profile found at boot prefills every screen (the user still confirms and types the secrets)
+            apply_machine_profile(profile, self.c)
+        except Exception as e:  # noqa - a broken profile must not stop the guided install
+            print("machine profile ignored:", e, file=sys.stderr)
         self.nics = []
         self.dry = False
         self.ctx = ST.Ctx(profile, self.c)
@@ -616,12 +620,32 @@ def pick_first_disk():
     return None
 
 
+def apply_machine_profile(profile, c, answers_path=None, say=print):
+    """machine profile (kernel arg / PROFILE volume / answer file [profile] source) -> installer config; raises on a broken profile"""
+    from . import machineprofile as MP
+    answers = {}
+    if answers_path:
+        import tomllib
+        with open(answers_path, "rb") as f:
+            answers = tomllib.load(f)
+    bundle = MP.find(profile["name"], S.read("/proc/cmdline"), answers=answers, wait=3 if answers_path else 1)
+    if not bundle:
+        return None
+    mp = MP.load(bundle)
+    errs = MP.to_config(mp, c, bundle)
+    if errs:
+        raise S.InstallError("machine profile: " + "; ".join(errs))
+    say(f"MACHINE-PROFILE {mp['machine']['hostname']} edition={mp['machine'].get('edition', 'server')}")
+    return mp
+
+
 def unattended(profile, answers_path, halt=True):
     def say(s):
         print(s, flush=True)
     say("AUTOINSTALL-START answer file " + answers_path)
     try:
         c = S.config_from_answers(profile, answers_path)
+        apply_machine_profile(profile, c, answers_path, say)
         c["disks"] = [pick_first_disk() if d == "first" else d for d in c["disks"]]
         if None in c["disks"]:
             raise S.InstallError("no suitable internal disk for 'first'")

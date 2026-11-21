@@ -1,0 +1,11 @@
+# Microsoft Surface tablets/laptops (linux-surface kernel patches and firmware tooling): detected by DMI vendor + product.
+id = "microsoft-surface"
+title = "Microsoft Surface"
+packages = ["sys-kernel/horcrux-surface-config"]
+
+[match]
+dmi_sys_vendor = ["Microsoft Corporation"]
+dmi_product_prefix = ["Surface"]
+
+[portage.accept_keywords]
+"sys-kernel/horcrux-surface-config" = "~amd64"
