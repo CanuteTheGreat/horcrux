@@ -39,6 +39,10 @@ MEM = os.environ.get("HXD_WIN_MEM_MB", "4096")
 CPUS = os.environ.get("HXD_WIN_CPUS", "4")
 AGENT_WAIT = int(os.environ.get("HXD_AGENT_WAIT_SECS", "900"))
 RUN_WAIT = int(os.environ.get("HXD_RUN_WAIT_SECS", "300"))
+# how long a guest file transfer may keep timing out while the Windows agent
+# stalls around a guest-exec child's exit (see Qga._transfer)
+FILE_GRACE = int(os.environ.get("HXD_FILE_GRACE_SECS", "300"))
+EXEC_START_WAIT = int(os.environ.get("HXD_EXEC_START_WAIT_SECS", "180"))
 GUEST_DIR = os.environ.get("HXD_GUEST_DIR", r"C:\hxc")
 TYPED = os.environ.get("HXD_TYPE_TEXT", r"root\necho horcrux-console-on-windows\n")
 # Relay listen address for the relay run: HXD_RELAY_LISTEN=<addr> pins it,
@@ -130,7 +134,9 @@ class Qga:
         a = {"path": path, "arg": argv, "capture-output": True}
         if env is not None:
             a["env"] = env
-        pid = self("guest-exec", a)["pid"]
+        # never re-sent (a lost reply would start the program twice): wait
+        # out an agent stall instead (see _transfer)
+        pid = self("guest-exec", a, timeout=EXEC_START_WAIT)["pid"]
         end = time.time() + wait
         while time.time() < end:
             try:
@@ -150,33 +156,65 @@ class Qga:
     def ps(self, script, wait=120):
         return self.exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], wait=wait)
 
-    def put(self, local, remote, chunk=1 << 20):
-        h = self("guest-file-open", {"path": remote, "mode": "wb"})
+    # The Windows agent stalls for a minute or more around a guest-exec
+    # child's exit (it is still collecting the child's output), so file calls
+    # right after a run can time out: CI saw guest-file-read/close of the
+    # snapshot time out 90 s after horcrux-console.exe exited, and a CI-like
+    # run saw the exe copy's write/close time out right after a PowerShell
+    # call. The agent still runs a timed-out command later (one queue), but
+    # the handle's offset is then unknown, so a transfer starts over with a
+    # fresh handle until the grace window ends; a real agent error (missing
+    # file, access denied) fails at once.
+    def _transfer(self, what, fn, grace):
+        end = time.time() + grace
+        while True:
+            try:
+                return fn()
+            except (TimeoutError, OSError, ValueError) as e:
+                if time.time() >= end:
+                    raise
+                print(f"   {what}: {e!r}, starting the transfer again", flush=True)
+                time.sleep(5)
+
+    def _close(self, h):
         try:
-            with open(local, "rb") as f:
+            self("guest-file-close", {"handle": h}, timeout=60)
+        except (TimeoutError, OSError, ValueError) as e:
+            # the agent closes it when it reaches the queued command; callers
+            # check the content afterwards (SHA-256 of a put; a get ends only on eof)
+            print(f"   guest-file-close: {e!r} (queued in the agent)", flush=True)
+
+    def put(self, local, remote, chunk=1 << 20, grace=FILE_GRACE):
+        def once():
+            h = self("guest-file-open", {"path": remote, "mode": "wb"}, timeout=60)
+            try:
+                with open(local, "rb") as f:
+                    while True:
+                        b = f.read(chunk)
+                        if not b:
+                            break
+                        w = self("guest-file-write", {"handle": h, "buf-b64": base64.b64encode(b).decode()},
+                                 timeout=60)
+                        if w.get("count") != len(b):
+                            raise RuntimeError(f"short write {w} of {len(b)}")
+            finally:
+                self._close(h)
+        self._transfer(f"guest-file write of {remote}", once, grace)
+
+    def get(self, remote, chunk=1 << 20, grace=FILE_GRACE):
+        def once():
+            h = self("guest-file-open", {"path": remote, "mode": "rb"}, timeout=60)
+            out = bytearray()
+            try:
                 while True:
-                    b = f.read(chunk)
-                    if not b:
+                    r = self("guest-file-read", {"handle": h, "count": chunk}, timeout=60)
+                    out += base64.b64decode(r.get("buf-b64", ""))
+                    if r.get("eof") or not r.get("count"):
                         break
-                    w = self("guest-file-write", {"handle": h, "buf-b64": base64.b64encode(b).decode()}, timeout=60)
-                    if w.get("count") != len(b):
-                        raise RuntimeError(f"short write {w} of {len(b)}")
-        finally:
-            self("guest-file-close", {"handle": h})
-
-    def get(self, remote, chunk=1 << 20):
-        h = self("guest-file-open", {"path": remote, "mode": "rb"})
-        out = bytearray()
-        try:
-            while True:
-                r = self("guest-file-read", {"handle": h, "count": chunk}, timeout=60)
-                out += base64.b64decode(r.get("buf-b64", ""))
-                if r.get("eof") or not r.get("count"):
-                    break
-        finally:
-            self("guest-file-close", {"handle": h})
-        return bytes(out)
-
+            finally:
+                self._close(h)
+            return bytes(out)
+        return self._transfer(f"guest-file read of {remote}", once, grace)
 
 def qmp(path, cmd, **args):
     s = socket.socket(socket.AF_UNIX)
