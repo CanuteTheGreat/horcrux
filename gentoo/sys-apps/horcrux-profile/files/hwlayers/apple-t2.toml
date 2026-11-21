@@ -23,6 +23,11 @@ packages = ["sys-kernel/gentoo-kernel", "sys-fs/zfs-kmod"]
 unmerge = ["sys-kernel/gentoo-kernel-bin"]
 binrepo = { name = "ctg-binhost-t2", uri = "https://f002.backblazeb2.com/file/ctg-binhost/amd64/t2", priority = 9000 }
 
+# the USE the kernel binhost lane (ctg-binhost/amd64/t2) is built with: a binary package is only used when the USE matches
+# (no vmlinux with debug info: gentoo-kernel IUSE-defaults debug on, and kernel-build.eclass then installs it, hundreds of MB)
+[portage.use]
+"sys-kernel/gentoo-kernel" = "-debug"
+
 [portage.accept_keywords]
 "sys-kernel/horcrux-t2-config" = "~amd64"
 "sys-apps/tiny-dfr" = "~amd64"
