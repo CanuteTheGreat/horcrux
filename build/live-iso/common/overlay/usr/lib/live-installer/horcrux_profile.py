@@ -588,15 +588,16 @@ def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules"):
                                     'omit_dracutmodules+=" zfs "\n')
     try:
         sy.run(cmd, env={"PORTAGE_NICENESS": "10"})
-        if reinstall and not sy.dry:
-            # zfs-kmod's postinst reinstalls the kernel through /usr/src/linux (dist-kernel_reinstall_initramfs): while that symlink still
-            # names the stock kernel (the kernel's own postinst leaves it as-is when it points elsewhere) /boot/vmlinuz-<new release>,
-            # System.map and config are overwritten with the STOCK kernel's files and the machine boots the unpatched kernel
-            # against the new kernel's initramfs. Point it at the new kernel first.
-            for kr in sorted(set(os.listdir(mods)) - before if os.path.isdir(mods) else ()):
-                if os.path.isdir(f"/usr/src/linux-{kr}"):
-                    sy.run(["eselect", "kernel", "set", f"linux-{kr}"], check=False)
-        if reinstall:
+        newk = [] if sy.dry else sorted(set(os.listdir(mods)) - before if os.path.isdir(mods) else ())
+        # zfs-kmod's postinst reinstalls the kernel through /usr/src/linux (dist-kernel_reinstall_initramfs): while that symlink still
+        # names the stock kernel (the kernel's own postinst leaves it as-is when it points elsewhere) /boot/vmlinuz-<new release>,
+        # System.map and config are overwritten with the STOCK kernel's files and the machine boots the unpatched kernel
+        # against the new kernel's initramfs. Point it at the new kernel first.
+        for kr in newk:
+            if os.path.isdir(f"/usr/src/linux-{kr}"):
+                sy.run(["eselect", "kernel", "set", f"linux-{kr}"], check=False)
+        # only when this transaction brought a kernel: a later `apply` of an installed machine (profile edit) has nothing to re-merge
+        if reinstall and (sy.dry or newk):
             sy.run(["emerge", "--oneshot", "--usepkgonly", "--getbinpkg", "--binpkg-respect-user-patches=n", "--quiet-build=y", "--with-bdeps=n", *reinstall],
                    env={"PORTAGE_NICENESS": "10"})
     finally:

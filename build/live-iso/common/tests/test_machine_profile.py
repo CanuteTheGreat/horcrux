@@ -490,6 +490,28 @@ class KernelLayerTransaction(unittest.TestCase):
             self.assertFalse(seen[-1])
 
 
+class KernelTransactionLater(unittest.TestCase):
+    def test_second_apply_without_new_kernel_does_not_remerge_the_module(self):
+        with tempfile.TemporaryDirectory() as d:
+            mods = os.path.join(d, "modules")
+            os.makedirs(os.path.join(mods, "6.18.64-p1-gentoo-dist-t2", "kernel"))
+            cmds = []
+
+            class SY(E.Sys):
+                def run(self, cmd, check=True, capture=False, env=None):
+                    cmds.append(list(cmd))
+                    return "x86_64-pc-linux-gnu" if cmd[:2] == ["portageq", "envvar"] else 0
+
+            conf = os.path.join(d, "dracut.conf")
+            old = E.DRACUT_KERNEL_TXN
+            E.DRACUT_KERNEL_TXN = conf
+            try:
+                E.kernel_transaction(SY(log=lambda *a: None), ["emerge", "sys-kernel/gentoo-kernel"], ["sys-fs/zfs-kmod"], mods=mods)
+            finally:
+                E.DRACUT_KERNEL_TXN = old
+            self.assertEqual(cmds, [["emerge", "sys-kernel/gentoo-kernel"], ["portageq", "envvar", "CHOST"]])
+
+
 class KernelPreflightWaits(unittest.TestCase):
     """the answer-file install starts when DHCP is only *started* and the clock is wrong: the binhost index is retried, and "unreachable" is
     not reported as "not published yet" (QEMU run 2026-11-21: the T2 install was refused 1 s after boot with the lane published)"""
