@@ -259,6 +259,24 @@ class Layers(unittest.TestCase):
             txt = repr(l).lower()
             self.assertNotIn("bundle:", txt)
 
+    def test_surface_layer_installs_kernel_and_desktop_from_its_binhost_lane(self):
+        """the Surface profile must be installable from binary packages only: the layer points at the amd64/surface lane (kernel, ZFS module and the
+        XFCE desktop packages the official binhost lacks), uses the lane's USE and keeps the kernel on the linux-surface series (6.18)"""
+        lay = {l["id"]: l for l in HL.load_all(PROJECT_LAYERS)}["microsoft-surface"]
+        k = lay["kernel"]
+        self.assertTrue(k["binrepo"]["uri"].endswith("/ctg-binhost/amd64/surface"), k["binrepo"])
+        self.assertEqual(k["binrepo"]["name"], "ctg-binhost-surface")
+        self.assertIn("sys-kernel/gentoo-kernel", k["packages"])
+        self.assertIn("sys-fs/zfs-kmod", k["packages"])
+        self.assertIn("sys-kernel/gentoo-kernel-bin", k["unmerge"])
+        use = lay["portage"]["use"]["sys-kernel/gentoo-kernel"].split()
+        self.assertIn("-debug", use)
+        self.assertIn("-initramfs", use)
+        self.assertIn(">=sys-kernel/gentoo-kernel-6.19", lay["portage"]["mask"])
+        files = E.portage_files({"schema": 1, "machine": {"hostname": "x"}}, [lay])
+        self.assertIn("ctg-binhost/amd64/surface", files["/etc/portage/binrepos.conf/horcrux-profile.conf"])
+        self.assertIn(">=sys-kernel/gentoo-kernel-6.19", files["/etc/portage/package.mask/horcrux-profile"])
+
     def test_facts_from_fake_sysfs(self):
         with tempfile.TemporaryDirectory() as d:
             tree(d, {"pci/0000:00:01.0/vendor": "0x106b\n", "pci/0000:00:01.0/device": "0x1801\n",

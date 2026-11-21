@@ -7,5 +7,23 @@ packages = ["sys-kernel/horcrux-surface-config"]
 dmi_sys_vendor = ["Microsoft Corporation"]
 dmi_product_prefix = ["Surface"]
 
+# the Surface kernel (gentoo-kernel + the linux-surface 6.18 patch series from sys-kernel/horcrux-surface-config) and ZFS built against it come from
+# their own binhost lane (ctg-binhost/amd64/surface, which also carries the Surface XFCE desktop packages the official binhost lacks); the stock
+# gentoo-kernel-bin is replaced. Portage looks in every binrepo for any package, so the lane serves the desktop packages too.
+[kernel]
+packages = ["sys-kernel/gentoo-kernel", "sys-fs/zfs-kmod"]
+unmerge = ["sys-kernel/gentoo-kernel-bin"]
+binrepo = { name = "ctg-binhost-surface", uri = "https://f002.backblazeb2.com/file/ctg-binhost/amd64/surface", priority = 9000 }
+
+# the USE the binhost lane is built with (config/portage-amd64-surface/package.use/surface in gentoo-binhost): a binary package is only used when the USE matches.
+# no vmlinux with debug info (gentoo-kernel IUSE-defaults debug on); -initramfs = installkernel+dracut builds the initramfs at install time with the
+# Surface dracut config (USB HID Type Cover, LUKS, LVM) from horcrux-surface-config, same value app-misc/horcrux-surface-desktop ships
+[portage.use]
+"sys-kernel/gentoo-kernel" = "-debug -initramfs"
+
+# the linux-surface series is pinned to the 6.18 stable branch (sys-kernel/horcrux-surface-config LS_SERIES)
+[portage.mask]
+">=sys-kernel/gentoo-kernel-6.19" = ""
+
 [portage.accept_keywords]
 "sys-kernel/horcrux-surface-config" = "~amd64"
