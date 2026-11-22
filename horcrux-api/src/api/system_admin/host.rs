@@ -1179,6 +1179,12 @@ fn is_volume_mount_point(p: &std::path::Path) -> bool {
     std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false)
 }
 
+/// A mount that counts as a disk: a real on-disk or network filesystem, or the root of a container (overlay),
+/// which is the only storage a containerised host has. Overlay mounts elsewhere (docker layers) stay out.
+fn is_disk_fs(real: &[&str], mount_point: &str, fstype: &str) -> bool {
+    real.contains(&fstype) || (fstype == "overlay" && mount_point == "/")
+}
+
 fn disks() -> Vec<DiskUsage> {
     const REAL: &[&str] = &[
         "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "vfat", "ntfs", "exfat", "nfs",
@@ -1191,7 +1197,7 @@ fn disks() -> Vec<DiskUsage> {
         .lines()
     {
         let f: Vec<&str> = l.split_whitespace().collect();
-        if f.len() < 3 || !REAL.contains(&f[2]) || !seen.insert(f[0].to_string() + f[1]) {
+        if f.len() < 3 || !is_disk_fs(REAL, f[1], f[2]) || !seen.insert(f[0].to_string() + f[1]) {
             continue;
         }
         let mp = f[1].replace("\\040", " ");
@@ -1291,6 +1297,19 @@ pub(crate) fn data_dir_usage_percent() -> f64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn container_root_overlay_counts_as_a_disk() {
+        let real = ["ext4", "xfs"];
+        assert!(super::is_disk_fs(&real, "/", "overlay"));
+        assert!(super::is_disk_fs(&real, "/data", "xfs"));
+        assert!(!super::is_disk_fs(
+            &real,
+            "/var/lib/docker/overlay2/x/merged",
+            "overlay"
+        ));
+        assert!(!super::is_disk_fs(&real, "/proc", "proc"));
+    }
+
     #[test]
     fn file_bind_mounts_are_not_volumes() {
         let dir = std::env::temp_dir();
