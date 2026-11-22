@@ -33,11 +33,14 @@ on:
         required: false
         default: 'auto'
 
-# A newer queued run replaces an older one that has not started (ci-supersede-sweeper,
-# replace: groups); a started run is never cancelled.
+# latest: group (ci-supersede-sweeper): started runs are never cancelled; of the unstarted runs
+# the sweeper keeps the NEWEST and, while nothing in the group has started, also the OLDEST, which
+# holds its queue position. A replace: group kept only the newest, so on a busy main (a push every
+# few minutes) each push cancelled the queued run and no mutation run ever reached the lane (shard 0
+# of run 5241 stayed red 28 h although its fix was on main). Branch runs still cancel older ones.
 concurrency:
-  group: "replace:${{ github.workflow }}@${{ github.ref }}"
-  cancel-in-progress: false
+  group: "latest:${{ github.workflow }}@${{ github.ref }}"
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: never
