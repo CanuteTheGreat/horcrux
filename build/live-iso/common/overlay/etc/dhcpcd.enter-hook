@@ -5,3 +5,13 @@
 if [ ! -S /run/systemd/resolve/io.systemd.Resolve ] && [ "$(readlink -f "$(command -v resolvconf 2>/dev/null)" 2>/dev/null)" = /usr/bin/resolvectl ]; then
 	resolvconf=dhcpcd-write-resolv-conf-directly
 fi
+# openresolv (net-dns/openresolv, pulled in by other packages on some images) refuses to touch a /etc/resolv.conf it did not write
+# ("signature mismatch", 3.17.4 counts the EMPTY placeholder file an image export leaves there as foreign), so a bound lease brought no
+# nameserver at all (Patronus live ISO: curl rc 6 and no NTP pool for the installer's RTC write). `resolvconf -u` adopts an empty or
+# missing file; a file somebody wrote by hand is left alone (the refusal is intended there).
+rc_conf=${RESOLV_CONF:-/etc/resolv.conf}
+if [ ! -s "$rc_conf" ] && command -v resolvconf >/dev/null 2>&1 \
+	&& [ "$(readlink -f "$(command -v resolvconf)" 2>/dev/null)" != /usr/bin/resolvectl ]; then
+	resolvconf -u >/dev/null 2>&1 || :
+fi
+unset rc_conf

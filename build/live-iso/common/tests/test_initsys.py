@@ -153,6 +153,29 @@ class DhcpcdDns(unittest.TestCase):
         r = subprocess.run(["sh", "-c", f". {h}; echo \"[${{resolvconf:-}}]\""], capture_output=True, text=True)
         self.assertEqual(r.stdout.strip(), "[]")
 
+    def test_enter_hook_adopts_an_empty_resolv_conf_for_openresolv(self):
+        # openresolv 3.17.4 answers "signature mismatch" for the empty placeholder an image export leaves: the lease then brings no nameserver
+        h = os.path.join(COMMON, "overlay/etc/dhcpcd.enter-hook")
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "calls")
+        fake = os.path.join(d, "resolvconf")
+        open(fake, "w").write(f"#!/bin/sh\necho \"$*\" >> {log}\n")
+        os.chmod(fake, 0o755)
+        for content, want in ((None, "-u"), ("", "-u"), ("nameserver 1.2.3.4\n", "")):
+            rc = os.path.join(d, "resolv.conf")
+            if content is None:
+                if os.path.exists(rc):
+                    os.remove(rc)
+            else:
+                open(rc, "w").write(content)
+            if os.path.exists(log):
+                os.remove(log)
+            env = dict(os.environ, PATH=d + ":" + os.environ["PATH"], RESOLV_CONF=rc)
+            r = subprocess.run(["sh", "-c", f". {h}; echo \"[${{resolvconf:-}}]\""], capture_output=True, text=True, env=env)
+            self.assertEqual(r.stdout.strip(), "[]")
+            got = open(log).read().strip() if os.path.exists(log) else ""
+            self.assertEqual(got, want, f"resolv.conf={content!r}")
+
 
 class PkgList(unittest.TestCase):
     def test_conditions(self):
