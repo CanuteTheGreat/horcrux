@@ -1060,6 +1060,11 @@ def serial_probe(vm, wait=45):
                     # gateway (x.x.x.2) the ping above never touched, so the probe could not refresh that stack's view of the guest. Ping the .2 peer of
                     # every global IPv4 subnet the guest has.
                     "for a in $(ip -4 -o addr show scope global | awk '{print $4}'); do g=${a%.*/*}.2; ping -c2 -W2 $g >/dev/null 2>&1; echo PING-$g-$?; done; "
+                    # 2026-11-22 (gringotts j08032): the only input accept for 22/80/443/8443 sat on the WAN-side NIC, none on the LAN NIC the host
+                    # forwards to, i.e. the LAN role was missing from the store after the reset. Print the roles the product believes in.
+                    "echo ROLES; grep -A4 '^\\[network' /etc/patronus/patronus.toml 2>/dev/null | sed 's/^/ROLE-TOML /'; "
+                    "sqlite3 -readonly /var/lib/patronus/config.db 'select name, role from interfaces' 2>&1 | head -6 | sed 's/^/ROLE-DB /'; "
+                    "nft list chain inet patronus input 2>&1 | grep -E 'iifname|dport' | head -6 | sed 's/^/ROLE-NFT /'; "
                     "ip neigh | head -4 | sed 's/^/NEIGH /'; "
                     "nft list chain inet patronus input 2>&1 | grep -c 'ct state' | sed 's/^/CTRULES-/'; "
                     "echo APPLY-LOGS; tail -n 4 /var/log/patronus/*.log /var/log/horcrux/*.log 2>/dev/null | cut -c1-160; "
@@ -1070,7 +1075,7 @@ def serial_probe(vm, wait=45):
             out = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", m.group(0).decode(errors="replace")) if m else "<<no shell answer>>"
             vm.send("exit\r")
         print("--- serial probe (guest console menu %s) ---\n%s\n---" % ("answers" if alive else "SILENT", out), flush=True)
-        facts = [l.strip() for l in out.splitlines() if re.match(r"\s*(lo|enp\S*|eth\S*|\d+:\d+:\d+ up|LOCALWEB-)", l) or "LISTEN" in l or "policy" in l or re.match(r"(PING-|CTRULES|NEIGH)", l.strip())][:16]
+        facts = [l.strip() for l in out.splitlines() if re.match(r"\s*(lo|enp\S*|eth\S*|\d+:\d+:\d+ up|LOCALWEB-)", l) or "LISTEN" in l or "policy" in l or re.match(r"(PING-|CTRULES|NEIGH|ROLE-)", l.strip())][:24]
         return " [serial probe: console menu " + ("answers" if alive else "SILENT (guest hung?)") + ("; " + " // ".join(facts) if facts else "") + "]"
     except Exception as e:  # diagnostics must never mask the failure
         return f" [serial probe failed: {e}]"
@@ -2181,8 +2186,8 @@ class Runner:
             # probe below) got a 401, so the forwarded ports came back late. ONE bounded retry of the no-answer case (a second 120 s wait for the
             # SAME login); a wrong answer (401) or a guest that never answers still fails, and the assertion below is unchanged.
             print(f"[factory-reset] no HTTP answer for 180 s ({err3!r}); one more 120 s wait for the same login", flush=True)
-            # guest-originated traffic on every NIC (serial shell pings each slirp peer) before the second wait: the guest was idle in both
-            # recorded stalls (j05543, j06220, j08032) and the forwards only came back once it spoke; the probe output says whether it helped
+            # the serial probe prints the guest's own view (roles, input rules, local web) before the second wait, so a stall that does not
+            # clear leaves its cause in the log; it also makes the guest send packets on every NIC (pings each slirp peer)
             print("[factory-reset] nudge: " + serial_probe(vm, 60), flush=True)
             c3 = self.web_login_code(PW2 if self.P.get("web_user") else PW3, 120)
             err3 = self.login_err
