@@ -1175,6 +1175,10 @@ fn statvfs(path: &str) -> Option<(u64, u64, u64)> {
     Some((total, total.saturating_sub(free), avail))
 }
 
+fn is_volume_mount_point(p: &std::path::Path) -> bool {
+    std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false)
+}
+
 fn disks() -> Vec<DiskUsage> {
     const REAL: &[&str] = &[
         "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "vfat", "ntfs", "exfat", "nfs",
@@ -1191,6 +1195,10 @@ fn disks() -> Vec<DiskUsage> {
             continue;
         }
         let mp = f[1].replace("\\040", " ");
+        // Single-file bind mounts (container /etc/hosts, /etc/hostname) are not volumes.
+        if !is_volume_mount_point(std::path::Path::new(&mp)) {
+            continue;
+        }
         if let Some((total, used, avail)) = statvfs(&mp) {
             if total > 0 {
                 out.push(DiskUsage {
@@ -1283,6 +1291,17 @@ pub(crate) fn data_dir_usage_percent() -> f64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn file_bind_mounts_are_not_volumes() {
+        let dir = std::env::temp_dir();
+        assert!(super::is_volume_mount_point(&dir));
+        let f = dir.join(format!("hx-bind-{}", std::process::id()));
+        std::fs::write(&f, b"x").unwrap();
+        assert!(!super::is_volume_mount_point(&f));
+        std::fs::remove_file(&f).ok();
+        assert!(!super::is_volume_mount_point(std::path::Path::new("/nonexistent/hx")));
+    }
+
     use super::*;
 
     #[test]
