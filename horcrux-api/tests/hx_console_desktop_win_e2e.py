@@ -192,17 +192,36 @@ class Qga:
                 print(f"   {what}: {e!r}, starting the transfer again", flush=True)
                 time.sleep(5)
 
-    def _close(self, h):
-        try:
-            self("guest-file-close", {"handle": h}, timeout=60)
-        except (TimeoutError, OSError, ValueError) as e:
-            # the agent closes it when it reaches the queued command; callers
-            # check the content afterwards (SHA-256 of a put; a get ends only on eof)
-            print(f"   guest-file-close: {e!r} (queued in the agent)", flush=True)
+    def _close(self, h, confirm=False, grace=FILE_GRACE):
+        """Close a guest file handle. A read handle's close may time out
+        (the agent closes it when it reaches the queued command; a get ends
+        only on eof). A write handle must really be closed before anything
+        reads the file (CI-like run: the close timed out, and Get-FileHash
+        right after it saw no hash), so confirm=True asks again until the
+        agent closes it or answers that the handle is gone (the queued
+        close got there first)."""
+        end = time.time() + grace
+        while True:
+            try:
+                self("guest-file-close", {"handle": h}, timeout=60)
+                return
+            except RuntimeError as e:
+                if "not found" in str(e) or "not been found" in str(e):
+                    return
+                raise
+            except (TimeoutError, OSError, ValueError) as e:
+                if not confirm:
+                    print(f"   guest-file-close: {e!r} (queued in the agent)", flush=True)
+                    return
+                if time.time() >= end:
+                    raise
+                print(f"   guest-file-close: {e!r}, asking again until the handle is closed", flush=True)
+                time.sleep(2)
 
     def put(self, local, remote, chunk=1 << 20, grace=FILE_GRACE):
         def once():
             h = self("guest-file-open", {"path": remote, "mode": "wb"}, timeout=60)
+            done = False
             try:
                 with open(local, "rb") as f:
                     while True:
@@ -213,8 +232,12 @@ class Qga:
                                  timeout=60)
                         if w.get("count") != len(b):
                             raise RuntimeError(f"short write {w} of {len(b)}")
+                done = True
             finally:
-                self._close(h)
+                if not done:
+                    self._close(h)
+            # the written file is read next (SHA-256, run): its handle must be closed
+            self._close(h, confirm=True)
         self._transfer(f"guest-file write of {remote}", once, grace)
 
     def get(self, remote, chunk=1 << 20, grace=FILE_GRACE):
@@ -384,7 +407,8 @@ qga.put(EXE, exe)
 want = hashlib.sha256(open(EXE, "rb").read()).hexdigest()
 rc, out, err = guest_ps(f"(Get-FileHash -Algorithm SHA256 '{exe}').Hash", "SHA-256 of the copied exe")
 check(out.strip().lower() == want, f"horcrux-console.exe ({os.path.getsize(EXE)} bytes) copied in through the guest "
-      f"agent in {time.time() - t1:.0f} s, SHA-256 matches in the guest ({out.strip()[:16].lower()}...)")
+      f"agent in {time.time() - t1:.0f} s, SHA-256 matches in the guest ({out.strip()[:16].lower()}...)"
+      + ("" if out.strip().lower() == want else f" [rc {rc}: {err.strip()[:300]}]"))
 
 # the guest agent's environment (SYSTEM), plus the password variable: a
 # guest-exec env list replaces the whole environment
