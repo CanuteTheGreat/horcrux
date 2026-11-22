@@ -5,8 +5,22 @@ pub mod config_store;
 pub mod migrations;
 
 use horcrux_common::Result;
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+};
 use std::path::Path;
+use std::str::FromStr;
+use std::time::Duration;
+
+/// Default SQLite busy timeout in ms; override with HORCRUX_DB_BUSY_TIMEOUT_MS.
+const DEFAULT_BUSY_TIMEOUT_MS: u64 = 30_000;
+
+fn busy_timeout_ms() -> u64 {
+    std::env::var("HORCRUX_DB_BUSY_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(DEFAULT_BUSY_TIMEOUT_MS)
+}
 
 /// Database connection pool
 pub struct Database {
@@ -25,44 +39,33 @@ impl Database {
             }
         }
 
-        // Ensure database URL has create mode for new databases
-        let connect_url = if database_url.contains('?') {
-            database_url.to_string()
-        } else {
-            format!("{}?mode=rwc", database_url)
-        };
+        // Options are applied to EVERY pooled connection (a one-off PRAGMA only
+        // reaches the connection it happens to run on): WAL journaling so
+        // readers and writers do not block each other; synchronous=NORMAL (the
+        // WAL-safe level, no fsync per commit, so a write does not stall for
+        // seconds on a busy disk); and a generous busy_timeout so contention
+        // between the pooled connections waits instead of failing with
+        // "database is locked" (code 5). Configurable: HORCRUX_DB_BUSY_TIMEOUT_MS.
+        let busy_ms = busy_timeout_ms();
+        let options = SqliteConnectOptions::from_str(database_url)
+            .map_err(|e| horcrux_common::Error::System(format!("Invalid database URL: {}", e)))?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_millis(busy_ms));
 
-        // Create connection pool
         let pool = SqlitePoolOptions::new()
             .max_connections(32)
-            .connect(&connect_url)
+            .connect_with(options)
             .await
             .map_err(|e| {
                 horcrux_common::Error::System(format!("Database connection failed: {}", e))
             })?;
 
-        // WAL journaling lets readers and writers run concurrently instead of
-        // blocking each other, and a generous busy_timeout makes sqlx retry
-        // internally (rather than fail outright) on the brief lock contention
-        // that's normal with 32 pooled connections hitting one SQLite file.
-        // Without these, a write under concurrent load can return "database
-        // is locked" - and call sites that don't surface that error (see
-        // `logout`'s delete_session call) would silently no-op instead of
-        // actually persisting the change.
-        sqlx::query("PRAGMA journal_mode=WAL;")
-            .execute(&pool)
-            .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to set WAL journal mode: {}", e))
-            })?;
-        sqlx::query("PRAGMA busy_timeout=5000;")
-            .execute(&pool)
-            .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to set busy_timeout: {}", e))
-            })?;
-
-        tracing::info!("Database connection established (WAL journal mode, 5s busy_timeout)");
+        tracing::info!(
+            "Database connection established (WAL journal mode, {}ms busy_timeout)",
+            busy_ms
+        );
 
         Ok(Self { pool })
     }
