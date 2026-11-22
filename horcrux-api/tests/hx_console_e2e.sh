@@ -114,7 +114,7 @@ env HORCRUX_HOST=127.0.0.1 HORCRUX_PORT=8006 HORCRUX_DATA_DIR="$DATA" \
   HORCRUX_DATABASE_URL="sqlite://$DATA/horcrux.db" HORCRUX_SSL_DIR="$DATA/ssl" \
   HORCRUX_VM_STORAGE="$DATA/vms" HORCRUX_CONSOLE_SETTINGS="$DATA/console.json" \
   ADMIN_PASSWORD=admin RATE_LIMIT_MAX_REQUESTS=100000 AUTH_RATE_LIMIT_MAX_REQUESTS=1000 \
-  RUST_LOG=info,horcrux_vm::console=debug "${ui_env[@]}" \
+  RUST_LOG="${HXC_RUST_LOG:-info,horcrux_vm::console=debug}" "${ui_env[@]}" \
   nohup "$BIN" >> "$DATA/api.log" 2>&1 &
 echo $! > "$DATA/api.pid"
 for i in $(seq 1 90); do curl -skf https://127.0.0.1:8006/api/health >/dev/null && break; sleep 1; done

@@ -293,6 +293,10 @@ def stage_summary(page, name, n):
     time.sleep(0.5)
     stages = page.evaluate(f"window.hxc.stages.slice(-{max(1, n)})")
     out: dict = {"samples": len(stages), "with_node_stages": len([s for s in stages if s.get("node")])}
+    # pictures whose answering frame sat in the browser for a long time
+    # before it showed (renderer held it until a later frame arrived)
+    held_ms = float(os.environ.get("HXC_HELD_MS", "400"))
+    out["held_in_browser"] = len([s for s in stages if (s.get("timing_age_ms") or 0) > held_ms])
 
     def med(vals):
         v = [x for x in vals if isinstance(x, (int, float))]
@@ -386,7 +390,9 @@ with sync_playwright() as pw:
     got = len([x for x in oskeys if x is not None])
     check(got >= 8, f"keyboard input reaches the running OS ({got}/10 keystrokes echoed at the shell)")
     latency_summary("os_key_input_to_picture", oskeys)
-    stage_summary(page, "os_key_stages", got)
+    st = stage_summary(page, "os_key_stages", got)
+    check(st["held_in_browser"] == 0,
+          f"no keystroke picture waits in the browser for a later frame ({st['held_in_browser']} held)")
     # Optional longer series for latency runs (HXC_LAT_SAMPLES keystrokes,
     # a letter and Backspace in turn so the line never wraps).
     extra_n = int(os.environ.get("HXC_LAT_SAMPLES", "0"))
@@ -396,7 +402,9 @@ with sync_playwright() as pw:
             extra.append(trial(page, key("KeyX" if i % 2 == 0 else "Backspace"), timeout=4))
             time.sleep(0.25)
         latency_summary("os_key_input_to_picture_long", extra)
-        stage_summary(page, "os_key_stages_long", len([x for x in extra if x is not None]))
+        st = stage_summary(page, "os_key_stages_long", len([x for x in extra if x is not None]))
+        check(st["held_in_browser"] == 0,
+              f"no keystroke picture of the long series waits in the browser ({st['held_in_browser']} held)")
     type_text("\nod -tx1 -w3 -v /dev/input/mice\n")
     wait_static(page, quiet_ms=1500, timeout=30)
     page.screenshot(path=f"{OUT}/linux-od.png")

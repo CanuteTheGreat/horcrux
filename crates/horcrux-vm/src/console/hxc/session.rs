@@ -1203,6 +1203,8 @@ async fn compositor(
     let mut submitted: VecDeque<(u64, Instant)> = VecDeque::new();
     let mut dirty = false;
     let mut last_sent = Instant::now() - Duration::from_secs(3600);
+    // repeat of the picture after a burst (ProfileSettings::settle_frame)
+    let mut settle_at: Option<Instant> = None;
     // frame-rate cap (average over `frame_burst` frames, see pace.rs)
     let mut pacer =
         super::pace::FramePacer::new(profile.max_fps, profile.frame_burst, Instant::now());
@@ -1257,6 +1259,7 @@ async fn compositor(
                         if let Some(f) = fb.as_mut() {
                             if PixelFormat::from_pixman(format) == Some(f.format) {
                                 f.update(x, y, width, height, stride, &data);
+                                tracing::trace!(target: "hxc_frames", "update {x},{y} {width}x{height}");
                                 dirty = true;
                                 mark_update(&ctx, &mut answer);
                             }
@@ -1393,8 +1396,12 @@ async fn compositor(
                     dirty = true;
                 }
                 let idle_due = idle_gap.map(|g| last_sent.elapsed() >= g).unwrap_or(false);
-                if !dirty && !idle_due { continue; }
-                if !pacer.ready(Instant::now()) { continue; }
+                let settle_due = settle_at.map(|t| Instant::now() >= t).unwrap_or(false);
+                if !dirty && !idle_due && !settle_due { continue; }
+                if !pacer.ready(Instant::now()) {
+                    tracing::trace!(target: "hxc_frames", "held by the frame cap");
+                    continue;
+                }
                 if encoder.as_mut().map(|e| !e.alive()).unwrap_or(false) {
                     encoder = None;
                 }
@@ -1445,6 +1452,18 @@ async fn compositor(
                 if let Some(e) = encoder.as_mut() {
                     if let Some(seq) = e.submit(f.pixels.clone()) {
                         let now = Instant::now();
+                        tracing::trace!(target: "hxc_frames", "submit {seq} dirty={dirty} settle={settle_due}");
+                        // After a change, the picture goes out once more one
+                        // frame interval after the last changed frame (see
+                        // ProfileSettings::settle_frame); a newer change moves
+                        // it, the repeat itself never schedules another.
+                        settle_at = if profile.settle_frame && !profile.fixed_rate && dirty {
+                            Some(now + pacer.gap())
+                        } else if settle_due {
+                            None
+                        } else {
+                            settle_at
+                        };
                         submitted.push_back((seq, now));
                         if submitted.len() > 120 { submitted.pop_front(); }
                         dirty = false;
@@ -1935,6 +1954,7 @@ async fn transport(
                                         _ => s.pointer_in += 1,
                                     }
                                     if starts_probe {
+                                        tracing::trace!(target: "hxc_frames", "input");
                                         s.probe.mark_input(Instant::now());
                                     }
                                 }
@@ -2145,6 +2165,7 @@ async fn transport(
                                 str0m::media::Frequency::NINETY_KHZ,
                             );
                             let len = frame.data.len();
+                            tracing::trace!(target: "hxc_frames", "send {} {len} B", frame.seq);
                             write_video(&mut rtc, &fec, low_latency, (mid, pt), now, rtp, frame.data);
                             if let Some(m) = timing.and_then(|t| t.message(Instant::now())) {
                                 if let Ok(s) = serde_json::to_string(&m) {

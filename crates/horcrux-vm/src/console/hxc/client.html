@@ -171,7 +171,16 @@
           receive_ms: typeof m.receiveTime === "number" ? m.receiveTime - inputAt : null,
           decode_ms: typeof m.processingDuration === "number" ? m.processingDuration * 1000 : null,
           present_ms: typeof m.presentationTime === "number" ? m.presentationTime - inputAt : null,
-          display_ms: typeof m.expectedDisplayTime === "number" ? m.expectedDisplayTime - inputAt : null };
+          display_ms: typeof m.expectedDisplayTime === "number" ? m.expectedDisplayTime - inputAt : null,
+          // first frame received after the input and frames shown since:
+          // a late picture after an early first frame means the change
+          // arrived but was not visible (or not shown) until a later frame
+          first_receive_ms: firstRxAfterInput === null ? null : firstRxAfterInput - inputAt,
+          frames_after_input: framesAfterInput,
+          presented_frames: typeof m.presentedFrames === "number" ? m.presentedFrames : null };
+        // timing_age_ms: how long the node's answering frame had been here
+        // before its picture showed (a renderer holding it shows as a large age)
+        if (hxc.pendingTiming) { st.timing_age_ms = now - hxc.pendingTiming.at; }
         if (hxc.pendingTiming && now - hxc.pendingTiming.at < 300) { st.node = hxc.pendingTiming.m; }
         hxc.pendingTiming = null;
         hxc.stages.push(st); if (hxc.stages.length > 50) hxc.stages.shift();

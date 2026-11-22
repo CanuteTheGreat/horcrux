@@ -103,6 +103,13 @@ pub struct ProfileSettings {
     /// guest mid-draw at once, instead of a whole frame interval later.
     /// 1 = a strict minimum interval between frames.
     pub frame_burst: u32,
+    /// When the picture stops changing, send it once more one `max_fps`
+    /// interval after the last changed frame. Browsers' WebRTC renderers can
+    /// hold a frame that arrives sooner than the stream's recent pace (two
+    /// frames close together after a still screen) until a newer frame
+    /// comes; without a repeat that was the next idle refresh, so a typed
+    /// character showed up to a second late. Costs one small frame per change.
+    pub settle_frame: bool,
 }
 
 impl ProfileSettings {
@@ -125,6 +132,7 @@ impl ProfileSettings {
                 low_latency_playout: true,
                 display_poll_hz: 120,
                 frame_burst: 2,
+                settle_frame: true,
             },
             ConsoleProfile::Gaming => Self {
                 max_fps: 120,
@@ -140,6 +148,7 @@ impl ProfileSettings {
                 low_latency_playout: true,
                 display_poll_hz: 240,
                 frame_burst: 1,
+                settle_frame: true,
             },
             ConsoleProfile::Console => Self {
                 max_fps: 15,
@@ -155,6 +164,7 @@ impl ProfileSettings {
                 low_latency_playout: true,
                 display_poll_hz: 60,
                 frame_burst: 2,
+                settle_frame: true,
             },
         }
     }
@@ -793,6 +803,11 @@ mod tests {
             bad.desktop.frame_burst = b;
             assert!(bad.validate().is_err(), "frame_burst {b}");
         }
+        assert!(s.desktop.settle_frame && s.console.settle_frame);
+        assert!(
+            partial.desktop.settle_frame,
+            "an older settings file gets the default"
+        );
     }
 
     #[test]

@@ -269,6 +269,11 @@ fn ProfileFields(name: &'static str, sig: RwSignal<ConsoleSettings>) -> impl Int
                     prop:value=move || get().frame_burst.to_string()
                     on:change=move |ev| { let v = num(&ev, get().frame_burst); set(&|p| p.frame_burst = v) }/>
             </label>
+            <label class="checkbox" title="Browsers can hold a frame that arrives sooner than the stream's recent pace until the next one; this sends the picture once more one frame interval after it stops changing, so the change shows at once.">
+                <input type="checkbox" name=format!("{name}-settle_frame") prop:checked=move || get().settle_frame
+                    on:change=move |ev| { let v = event_target_checked(&ev); set(&|p| p.settle_frame = v) }/>
+                "Repeat the picture once after it stops changing"
+            </label>
             <label class="checkbox">
                 <input type="checkbox" name=format!("{name}-fixed_rate") prop:checked=move || get().fixed_rate
                     on:change=move |ev| { let v = event_target_checked(&ev); set(&|p| p.fixed_rate = v) }/>
