@@ -98,7 +98,8 @@ fn opt(v: &Value, k: &str) -> Option<String> {
 }
 
 /// Disks (and their partitions) from `lsblk -J -b` output. Loop, ram, rom
-/// and device-mapper devices are not physical disks and are left out.
+/// and device-mapper devices, and empty (0-byte) devices such as unattached
+/// `nbd*`, are not physical disks and are left out.
 pub fn parse_lsblk(json: &str) -> Result<Vec<DiskInfo>, String> {
     let root: Value = serde_json::from_str(json).map_err(|e| format!("lsblk output: {e}"))?;
     let devs = root
@@ -111,7 +112,9 @@ pub fn parse_lsblk(json: &str) -> Result<Vec<DiskInfo>, String> {
             continue;
         }
         let name = s(d, "name");
-        if name.starts_with("zram") {
+        // zram is swap; an unattached nbd/loop-like device or any 0-byte
+        // device has no media and is not a disk the user can manage.
+        if name.starts_with("zram") || num(d, "size") == 0 {
             continue;
         }
         let tran = s(d, "tran");
@@ -622,6 +625,7 @@ mod tests {
                    {"name":"sda2","path":"/dev/sda2","size":999000000000,"type":"part","fstype":"ext4","mountpoint":"/","label":null,"fsused":"500000000"}]},
       {"name":"nvme0n1","path":"/dev/nvme0n1","size":512110190592,"model":"WD","serial":"X","type":"disk","rota":"0","tran":"nvme"},
       {"name":"loop0","path":"/dev/loop0","size":1,"type":"loop"},
+      {"name":"nbd0","path":"/dev/nbd0","size":0,"type":"disk","rota":false},
       {"name":"zram0","path":"/dev/zram0","size":1,"type":"disk","rota":false}]}"#;
 
     #[test]
