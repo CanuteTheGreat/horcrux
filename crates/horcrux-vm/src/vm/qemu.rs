@@ -1562,7 +1562,10 @@ impl QemuManager {
             // Same-host raw frames: a frame ring the guest tools write and
             // the native viewer reads. A failure only costs the local
             // raw-frame path, never the VM start.
-            if c.shm_frames {
+            // An incoming migration/resume starts without a ring: QEMU
+            // cannot migrate a guest that has one, so the source removed
+            // it first and the device sets must match.
+            if c.shm_frames && !incoming {
                 let fps = c.gaming.max_fps;
                 match super::display::create_frame_ring(
                     &c.shm_frames_dir,

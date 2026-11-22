@@ -172,6 +172,10 @@ impl DisplayRuntime {
     }
 }
 
+/// QEMU ids of the frame ring's memory backend and ivshmem device.
+pub const FRAME_RING_OBJECT_ID: &str = "hxfbmem";
+pub const FRAME_RING_DEVICE_ID: &str = "hxframes";
+
 /// Backing file of a VM's Horcrux frame ring.
 pub fn frame_ring_path(dir: &str, vm_id: &str) -> PathBuf {
     let safe: String = vm_id
@@ -350,7 +354,7 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
     // (guest tools write, the viewer reads; see horcrux-guest-proto ring).
     if let Some(ring) = &rt.frame_ring {
         let mem = format!(
-            "memory-backend-file,id=hxfbmem,size={}M,mem-path={},share=on",
+            "memory-backend-file,id={FRAME_RING_OBJECT_ID},size={}M,mem-path={},share=on",
             rt.frame_ring_mib,
             ring.display()
         );
@@ -358,7 +362,7 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
             "-object",
             &mem,
             "-device",
-            "ivshmem-plain,memdev=hxfbmem,id=hxframes",
+            &format!("ivshmem-plain,memdev={FRAME_RING_OBJECT_ID},id={FRAME_RING_DEVICE_ID}"),
         ]);
     }
 
@@ -474,6 +478,73 @@ pub async fn qmp_command(socket: &Path, command: serde_json::Value) -> Result<se
         return Err(fail(err.to_string()));
     }
     Ok(reply["return"].clone())
+}
+
+/// Take the frame ring (an `ivshmem` device) out of a running VM.
+///
+/// QEMU refuses to migrate or save a guest that has an ivshmem device
+/// ("peer mode"), so a live migration or a save-to-file first hot-unplugs
+/// the ring; the same-host viewer then falls back to the stream. The
+/// receiving QEMU starts without a ring (see `start_vm_launch`), so both
+/// device sets match. Returns whether a ring was removed.
+pub async fn detach_frame_ring(
+    socket: &Path,
+    disk: &Path,
+    wait: std::time::Duration,
+) -> Result<bool> {
+    let devices = qmp_command(
+        socket,
+        serde_json::json!({"execute": "qom-list", "arguments": {"path": "/machine/peripheral"}}),
+    )
+    .await?;
+    let has = |v: &serde_json::Value| {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .any(|d| d["name"].as_str() == Some(FRAME_RING_DEVICE_ID))
+            })
+            .unwrap_or(false)
+    };
+    if !has(&devices) {
+        return Ok(false);
+    }
+    qmp_command(
+        socket,
+        serde_json::json!({"execute": "device_del", "arguments": {"id": FRAME_RING_DEVICE_ID}}),
+    )
+    .await?;
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let now = qmp_command(
+            socket,
+            serde_json::json!({"execute": "qom-list", "arguments": {"path": "/machine/peripheral"}}),
+        )
+        .await?;
+        if !has(&now) {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(horcrux_common::Error::System(format!(
+                "the guest did not release the frame ring within {} s (live migration and save need it removed)",
+                wait.as_secs()
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    let _ = qmp_command(
+        socket,
+        serde_json::json!({"execute": "object-del", "arguments": {"id": FRAME_RING_OBJECT_ID}}),
+    )
+    .await;
+    // The viewer reads the state file: tell it there is no ring now.
+    if let Ok(mut rt) = DisplayRuntime::load(disk).await {
+        if let Some(ring) = rt.frame_ring.take() {
+            let _ = tokio::fs::remove_file(ring).await;
+            rt.frame_ring_mib = 0;
+            let _ = rt.save(disk).await;
+        }
+    }
+    Ok(true)
 }
 
 /// Next greeting/reply line from QMP, skipping asynchronous events.
@@ -761,5 +832,63 @@ mod tests {
         let f = virt_viewer_file("vm1", "10.0.0.5", &rt(DisplayProtocol::Spice)).unwrap();
         assert!(f.contains("type=spice") && f.contains("port=61002") && f.contains("password=pw"));
         assert!(f.contains("host=10.0.0.5"));
+    }
+
+    /// A fake QMP server that has a frame ring until `device_del`.
+    async fn fake_qmp(sock: PathBuf, log: std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let l = tokio::net::UnixListener::bind(&sock).unwrap();
+        let present = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        loop {
+            let (st, _) = l.accept().await.unwrap();
+            let (log, present) = (log.clone(), present.clone());
+            tokio::spawn(async move {
+                let (r, mut w) = st.into_split();
+                let mut lines = BufReader::new(r).lines();
+                w.write_all(b"{\"QMP\":{}}\n").await.unwrap();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+                    let cmd = v["execute"].as_str().unwrap().to_string();
+                    log.lock().unwrap().push(cmd.clone());
+                    let ret = match cmd.as_str() {
+                        "qom-list" if present.load(std::sync::atomic::Ordering::SeqCst) => {
+                            serde_json::json!([{"name": "hxframes"}, {"name": "other"}])
+                        }
+                        "qom-list" => serde_json::json!([{"name": "other"}]),
+                        "device_del" => {
+                            present.store(false, std::sync::atomic::Ordering::SeqCst);
+                            serde_json::json!({})
+                        }
+                        _ => serde_json::json!({}),
+                    };
+                    w.write_all(format!("{{\"return\":{ret}}}\n").as_bytes())
+                        .await
+                        .unwrap();
+                }
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn detach_frame_ring_unplugs_device_and_backend_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let disk = dir.path().join("vm.qcow2");
+        let sock = DisplayRuntime::qmp_socket(&disk);
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        tokio::spawn(fake_qmp(sock.clone(), log.clone()));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let w = std::time::Duration::from_secs(5);
+        assert!(detach_frame_ring(&sock, &disk, w).await.unwrap());
+        assert!(log.lock().unwrap().iter().any(|c| c == "device_del"));
+        assert!(log.lock().unwrap().iter().any(|c| c == "object-del"));
+        // Already gone: nothing more is sent.
+        let before = log.lock().unwrap().len();
+        assert!(!detach_frame_ring(&sock, &disk, w).await.unwrap());
+        let after: Vec<String> = log.lock().unwrap()[before..].to_vec();
+        assert!(
+            after
+                .iter()
+                .all(|c| c == "qom-list" || c == "qmp_capabilities"),
+            "{after:?}"
+        );
     }
 }

@@ -741,6 +741,10 @@ impl Plan {
             )
             .await?;
         let sock = self.source_qmp().await;
+        // QEMU cannot migrate a guest that has the frame ring (ivshmem);
+        // the target starts without one.
+        crate::vm::display::detach_frame_ring(&sock, &self.disk0(), Duration::from_secs(20))
+            .await?;
         let speed = self.bandwidth.map(|mb| mb * 1024 * 1024).unwrap_or(0);
 
         // 1. Mirror each non-shared disk into the target's NBD export.
