@@ -1299,7 +1299,9 @@ mod tests {
         std::fs::write(&f, b"x").unwrap();
         assert!(!super::is_volume_mount_point(&f));
         std::fs::remove_file(&f).ok();
-        assert!(!super::is_volume_mount_point(std::path::Path::new("/nonexistent/hx")));
+        assert!(!super::is_volume_mount_point(std::path::Path::new(
+            "/nonexistent/hx"
+        )));
     }
 
     use super::*;
