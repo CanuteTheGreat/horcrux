@@ -1,0 +1,103 @@
+From 55ac4ae050cb0edfeedc82e0b417cb4f4c9421a2 Mon Sep 17 00:00:00 2001
+From: Horcrux <horcrux@invalid>
+Date: Sat, 21 Nov 2026 17:19:20 -0800
+Subject: [PATCH] ui/dbus: let a display listener ask for a refresh rate
+
+QEMU polls display devices that do not report their own updates (VGA,
+cirrus, ...) from the gui timer, at GUI_REFRESH_INTERVAL_DEFAULT (30 ms)
+for every listener that does not set an update_interval. The GTK display
+sets it from the monitor refresh rate; D-Bus listeners cannot set it at
+all, so a D-Bus client sees a guest change up to 30 ms late.
+
+Add an optional RefreshRate property (millihertz) to
+org.qemu.Display1.Listener, read when the listener registers and
+followed on PropertiesChanged, and turn it into the listener's update
+interval the same way the GTK display does. Clients that do not provide
+the property keep the 30 ms default.
+---
+ ui/dbus-display1.xml | 15 +++++++++++++++
+ ui/dbus-listener.c   | 23 +++++++++++++++++++++++
+ ui/trace-events      |  1 +
+ 3 files changed, 39 insertions(+)
+
+diff --git a/ui/dbus-display1.xml b/ui/dbus-display1.xml
+index d96bae2e..bcd37dc4 100644
+--- a/ui/dbus-display1.xml
++++ b/ui/dbus-display1.xml
+@@ -467,6 +467,21 @@
+         (earlier version of the display interface do not provide this property)
+     -->
+     <property name="Interfaces" type="as" access="read"/>
++
++    <!--
++        RefreshRate:
++
++        The refresh rate, in millihertz, at which the listener would like to
++        receive display updates (for example the refresh rate of the monitor
++        it draws on). QEMU polls display devices that do not report their own
++        updates (such as VGA) at least this often while this listener is
++        registered. 0, or a missing property, keeps the default interval
++        (30 ms). Changes are followed when the listener emits
++        ``PropertiesChanged``.
++
++        (earlier versions of QEMU ignore this property)
++    -->
++    <property name="RefreshRate" type="u" access="read"/>
+   </interface>
+ 
+   <!--
+diff --git a/ui/dbus-listener.c b/ui/dbus-listener.c
+index 2e2f6ba4..1e2e852f 100644
+--- a/ui/dbus-listener.c
++++ b/ui/dbus-listener.c
+@@ -1022,6 +1022,22 @@ dbus_display_listener_implements(DBusDisplayListener *ddl, const char *iface)
+     return implements;
+ }
+ 
++static void
++dbus_display_listener_update_refresh(DBusDisplayListener *ddl)
++{
++    QemuDBusDisplay1Listener *l = QEMU_DBUS_DISPLAY1_LISTENER(ddl->proxy);
++    uint32_t refresh_rate = qemu_dbus_display1_listener_get_refresh_rate(l);
++    uint64_t interval = 0;
++
++    /* T = 1 / f = 1 [s*Hz] / f = 1000*1000 [ms*mHz] / f */
++    if (refresh_rate) {
++        interval = MAX(1, MIN(1000 * 1000 / refresh_rate,
++                              GUI_REFRESH_INTERVAL_DEFAULT));
++    }
++    trace_dbus_listener_refresh_rate(refresh_rate, interval);
++    qemu_console_listener_set_refresh(&ddl->dcl, interval);
++}
++
+ #ifdef WIN32
+ static bool
+ dbus_display_listener_setup_peer_process(DBusDisplayListener *ddl)
+@@ -1282,5 +1298,12 @@ dbus_display_listener_new(const char *bus_name,
+ #endif
+     qemu_console_register_listener(con, &ddl->dcl, ops);
+ 
++    if (qemu_dbus_display1_listener_get_refresh_rate(ddl->proxy)) {
++        dbus_display_listener_update_refresh(ddl);
++    }
++    g_signal_connect_object(ddl->proxy, "notify::refresh-rate",
++                            G_CALLBACK(dbus_display_listener_update_refresh),
++                            ddl, G_CONNECT_SWAPPED);
++
+     return ddl;
+ }
+diff --git a/ui/trace-events b/ui/trace-events
+index 339a61f3..649e32cd 100644
+--- a/ui/trace-events
++++ b/ui/trace-events
+@@ -207,6 +207,7 @@ dbus_scanout_texture(uint32_t tex_id, bool backing_y_0_top, uint32_t backing_wid
+ dbus_gl_gfx_switch(void *p) "surf: %p"
+ dbus_filter(unsigned int serial, unsigned int filter) "serial=%u (<= %u)"
+ dbus_can_share_map(bool share) "can_share_map: %d"
++dbus_listener_refresh_rate(uint32_t rate_mhz, uint64_t interval_ms) "refresh rate %u mHz, interval %" PRIu64 " ms"
+ 
+ # egl-helpers.c
+ egl_init_d3d11_device(void *p) "d3d device: %p"
+-- 
+2.34.1
+

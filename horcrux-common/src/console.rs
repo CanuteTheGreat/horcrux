@@ -88,9 +88,27 @@ pub struct ProfileSettings {
     /// playout delay 0): no smoothing buffer, lowest input-to-picture time.
     /// Off: the browser paces playout itself (smoother on jittery links).
     pub low_latency_playout: bool,
+    /// How often QEMU looks for changes on display devices that do not
+    /// report their own (std VGA, cirrus, QXL in VGA mode, virtio-vga before
+    /// the guest's driver loads), in checks per second, while a viewer of
+    /// this profile is connected. A change waits up to one interval before
+    /// it reaches the node, so a higher rate means less delay between a
+    /// keystroke and the picture. Independent of `max_fps` (the rate frames
+    /// are sent at). Needs a QEMU whose D-Bus listener honours `RefreshRate`
+    /// (other builds keep their own 30 ms interval). 0 = QEMU's default.
+    pub display_poll_hz: u32,
+    /// Frames the node's encoder may send back to back after a pause; the
+    /// `max_fps` cap then holds on average over this many frames. 2 lets
+    /// the frame that completes a change follow a frame that caught the
+    /// guest mid-draw at once, instead of a whole frame interval later.
+    /// 1 = a strict minimum interval between frames.
+    pub frame_burst: u32,
 }
 
 impl ProfileSettings {
+    /// Upper bound for `display_poll_hz` (QEMU's timer works in whole ms).
+    pub const MAX_DISPLAY_POLL_HZ: u32 = 1000;
+
     pub fn for_profile(p: ConsoleProfile) -> Self {
         match p {
             ConsoleProfile::Desktop => Self {
@@ -105,6 +123,8 @@ impl ProfileSettings {
                 intra_refresh: false,
                 guest_capture: true,
                 low_latency_playout: true,
+                display_poll_hz: 120,
+                frame_burst: 2,
             },
             ConsoleProfile::Gaming => Self {
                 max_fps: 120,
@@ -118,6 +138,8 @@ impl ProfileSettings {
                 intra_refresh: false,
                 guest_capture: true,
                 low_latency_playout: true,
+                display_poll_hz: 240,
+                frame_burst: 1,
             },
             ConsoleProfile::Console => Self {
                 max_fps: 15,
@@ -131,6 +153,8 @@ impl ProfileSettings {
                 intra_refresh: false,
                 guest_capture: false,
                 low_latency_playout: true,
+                display_poll_hz: 60,
+                frame_burst: 2,
             },
         }
     }
@@ -156,7 +180,22 @@ impl ProfileSettings {
         if self.idle_refresh_fps > self.max_fps {
             return Err(format!("{name}.idle_refresh_fps must not exceed max_fps"));
         }
+        if self.display_poll_hz > Self::MAX_DISPLAY_POLL_HZ {
+            return Err(format!(
+                "{name}.display_poll_hz must be 0..={}",
+                Self::MAX_DISPLAY_POLL_HZ
+            ));
+        }
+        if self.frame_burst == 0 || self.frame_burst > 8 {
+            return Err(format!("{name}.frame_burst must be 1..=8"));
+        }
         Ok(())
+    }
+
+    /// The `RefreshRate` (millihertz) the node's D-Bus display listener
+    /// offers QEMU for this profile (0 = QEMU's default interval).
+    pub fn display_poll_mhz(&self) -> u32 {
+        self.display_poll_hz.min(Self::MAX_DISPLAY_POLL_HZ) * 1000
     }
 }
 
@@ -728,6 +767,32 @@ mod tests {
         assert!(bad(&|s| s.local_socket = "console.sock".into()));
         assert!(bad(&|s| s.audio_frame_ms = 7));
         assert!(!bad(&|s| s.shm_frames_size_mib = 64));
+    }
+
+    #[test]
+    fn display_poll_rate_is_checked_and_offered_in_millihertz() {
+        let s = ConsoleSettings::default();
+        assert_eq!(s.desktop.display_poll_mhz(), 120_000);
+        assert_eq!(s.gaming.display_poll_mhz(), 240_000);
+        assert_eq!(s.console.display_poll_mhz(), 60_000);
+        // Older documents without the key keep the profile default.
+        let partial: ConsoleSettings =
+            serde_json::from_str(r#"{"desktop":{"max_fps":20}}"#).unwrap();
+        assert_eq!(partial.desktop.display_poll_hz, 120);
+        let mut off = s.clone();
+        off.desktop.display_poll_hz = 0;
+        off.validate().unwrap();
+        assert_eq!(off.desktop.display_poll_mhz(), 0);
+        let mut bad = s.clone();
+        bad.console.display_poll_hz = ProfileSettings::MAX_DISPLAY_POLL_HZ + 1;
+        assert!(bad.validate().is_err());
+        assert_eq!((s.desktop.frame_burst, s.gaming.frame_burst), (2, 1));
+        assert_eq!(partial.desktop.frame_burst, 2);
+        for b in [0, 9] {
+            let mut bad = s.clone();
+            bad.desktop.frame_burst = b;
+            assert!(bad.validate().is_err(), "frame_burst {b}");
+        }
     }
 
     #[test]

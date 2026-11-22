@@ -203,13 +203,15 @@ async fn handle(
     };
     let session_id = uuid::Uuid::new_v4().simple().to_string();
     let (disp_tx, mut disp_rx) = mpsc::channel::<DisplayEvent>(64);
-    let display = match DbusDisplay::connect(&rt.qmp_socket, &session_id, disp_tx, false).await {
-        Ok(d) => d,
-        Err(e) => {
-            send_error(&mut s, &e).await;
-            return Err(fail(e));
-        }
-    };
+    let poll_mhz = settings.profile(t.profile).display_poll_mhz();
+    let display =
+        match DbusDisplay::connect(&rt.qmp_socket, &session_id, disp_tx, false, poll_mhz).await {
+            Ok(d) => d,
+            Err(e) => {
+                send_error(&mut s, &e).await;
+                return Err(fail(e));
+            }
+        };
     let ring = rt.frame_ring.as_ref().and_then(|p| open_ring(p).ok());
     // Guest tools for raw relative motion and gamepads (the port serves
     // one session at a time; without them those inputs are unavailable).

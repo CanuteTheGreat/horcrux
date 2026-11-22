@@ -257,6 +257,18 @@ fn ProfileFields(name: &'static str, sig: RwSignal<ConsoleSettings>) -> impl Int
                     prop:value=move || get().idle_refresh_fps.to_string()
                     on:change=move |ev| { let v = num(&ev, get().idle_refresh_fps); set(&|p| p.idle_refresh_fps = v) }/>
             </label>
+            <label title="How often QEMU checks display devices that do not report changes themselves (VGA). Higher = less delay between input and picture. Needs a QEMU with the D-Bus listener refresh-rate support.">
+                "Display checks per second (0 = QEMU default, 33/s)"
+                <input type="number" min="0" max=ProfileSettings::MAX_DISPLAY_POLL_HZ.to_string() name=format!("{name}-display_poll_hz")
+                    prop:value=move || get().display_poll_hz.to_string()
+                    on:change=move |ev| { let v = num(&ev, get().display_poll_hz); set(&|p| p.display_poll_hz = v) }/>
+            </label>
+            <label title="After a pause, this many frames may leave back to back (the frame rate cap holds on average). 2 sends the frame that completes a change at once; 1 = strict interval.">
+                "Frames in a burst (1-8)"
+                <input type="number" min="1" max="8" name=format!("{name}-frame_burst")
+                    prop:value=move || get().frame_burst.to_string()
+                    on:change=move |ev| { let v = num(&ev, get().frame_burst); set(&|p| p.frame_burst = v) }/>
+            </label>
             <label class="checkbox">
                 <input type="checkbox" name=format!("{name}-fixed_rate") prop:checked=move || get().fixed_rate
                     on:change=move |ev| { let v = event_target_checked(&ev); set(&|p| p.fixed_rate = v) }/>

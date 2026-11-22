@@ -575,6 +575,7 @@ pub async fn start(req: SessionRequest) -> Result<(SessionHandle, String), Strin
         &req.session_id,
         disp_tx,
         req.settings.audio,
+        req.settings.profile(req.profile).display_poll_mhz(),
     )
     .await?;
     // Guest tools, when the VM has the port and the tools answer in time.
@@ -1202,7 +1203,9 @@ async fn compositor(
     let mut submitted: VecDeque<(u64, Instant)> = VecDeque::new();
     let mut dirty = false;
     let mut last_sent = Instant::now() - Duration::from_secs(3600);
-    let mut frame_gap = Duration::from_secs_f64(1.0 / profile.max_fps.max(1) as f64);
+    // frame-rate cap (average over `frame_burst` frames, see pace.rs)
+    let mut pacer =
+        super::pace::FramePacer::new(profile.max_fps, profile.frame_burst, Instant::now());
     // adaptation target (bitrate, output size, frame rate), when set
     let mut rate: Option<abr::Target> = None;
     // (kbit/s, output width, output height, fps) of the running encoder
@@ -1212,7 +1215,7 @@ async fn compositor(
     // Wake often and send as soon as the guest drew something and the
     // frame-rate cap allows it, instead of waiting for the next frame slot
     // (up to one frame interval of extra latency).
-    let mut tick = tokio::time::interval(frame_gap.min(Duration::from_millis(4)));
+    let mut tick = tokio::time::interval(pacer.gap().min(Duration::from_millis(4)));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut codec: Option<(VideoCodec, encode::EncoderBackend)> = None;
     // QEMU audio voices (id -> format, encoder once data flows)
@@ -1391,7 +1394,7 @@ async fn compositor(
                 }
                 let idle_due = idle_gap.map(|g| last_sent.elapsed() >= g).unwrap_or(false);
                 if !dirty && !idle_due { continue; }
-                if last_sent.elapsed() < frame_gap { continue; }
+                if !pacer.ready(Instant::now()) { continue; }
                 if encoder.as_mut().map(|e| !e.alive()).unwrap_or(false) {
                     encoder = None;
                 }
@@ -1446,6 +1449,7 @@ async fn compositor(
                         if submitted.len() > 120 { submitted.pop_front(); }
                         dirty = false;
                         last_sent = now;
+                        pacer.sent(now);
                         if let Some(probe) = answer.take() {
                             timed = Some((seq, super::probe::FrameTiming { probe, submitted: now, encoded: None }));
                         }
@@ -1456,7 +1460,7 @@ async fn compositor(
         // Apply the newest link-adaptation target (set by the transport).
         let want = ctx.stats.lock().ok().and_then(|s| s.target);
         if let Some(t) = want.filter(|t| Some(*t) != rate) {
-            frame_gap = Duration::from_secs_f64(1.0 / t.fps.max(1) as f64);
+            pacer.set_fps(t.fps, Instant::now());
             rate = Some(t);
             if ctx.guest_video.load(Ordering::Relaxed) {
                 // the guest encoder restarts with the new rate

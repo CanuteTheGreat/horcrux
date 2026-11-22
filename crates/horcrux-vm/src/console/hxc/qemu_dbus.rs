@@ -179,6 +179,8 @@ pub trait Audio {
 /// The listener QEMU pushes the framebuffer to.
 struct Listener {
     tx: mpsc::Sender<DisplayEvent>,
+    /// `RefreshRate` offered to QEMU (millihertz, 0 = QEMU's default).
+    refresh_mhz: u32,
 }
 
 // `spawn = false`: QEMU pushes Update calls without waiting for replies;
@@ -257,6 +259,16 @@ impl Listener {
     #[zbus(property)]
     async fn interfaces(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// How often (millihertz) QEMU should poll display devices that do not
+    /// report their own changes (VGA) while this listener is registered.
+    /// QEMU builds with the listener refresh-rate support read it when the
+    /// listener registers (GDBus loads every property then); others never
+    /// ask and keep their 30 ms interval, so nothing depends on it.
+    #[zbus(property)]
+    async fn refresh_rate(&self) -> u32 {
+        self.refresh_mhz
     }
 }
 
@@ -616,17 +628,19 @@ async fn audio_for(qmp_socket: &Path, control: &Control, session: &str) -> Optio
 
 impl DbusDisplay {
     /// Connect to the VM whose QMP socket is `qmp_socket`. Events (frames,
-    /// cursor, audio when `audio`) arrive on `tx`.
+    /// cursor, audio when `audio`) arrive on `tx`. `refresh_mhz` is the
+    /// display poll rate offered to QEMU (`ProfileSettings::display_poll_mhz`).
     pub async fn connect(
         qmp_socket: &Path,
         session: &str,
         tx: mpsc::Sender<DisplayEvent>,
         audio: bool,
+        refresh_mhz: u32,
     ) -> Result<Self, String> {
         // A wedged QEMU (or monitor) must fail the request, not hang it.
         match tokio::time::timeout(
             std::time::Duration::from_secs(20),
-            Self::connect_inner(qmp_socket, session, tx, audio),
+            Self::connect_inner(qmp_socket, session, tx, audio, refresh_mhz),
         )
         .await
         {
@@ -640,6 +654,7 @@ impl DbusDisplay {
         session: &str,
         tx: mpsc::Sender<DisplayEvent>,
         audio: bool,
+        refresh_mhz: u32,
     ) -> Result<Self, String> {
         let control = control_for(qmp_socket, session, None).await?;
 
@@ -649,7 +664,10 @@ impl DbusDisplay {
         let serve = serve_listener(
             ours,
             "/org/qemu/Display1/Listener",
-            Listener { tx: tx.clone() },
+            Listener {
+                tx: tx.clone(),
+                refresh_mhz,
+            },
         );
         let register = control
             .console

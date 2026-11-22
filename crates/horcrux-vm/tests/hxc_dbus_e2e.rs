@@ -142,8 +142,11 @@ async fn dbus_display_frames_keyboard_and_pointer() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
+    // The desktop profile's display poll rate (QEMU builds without the
+    // listener refresh-rate support ignore it).
+    let poll_mhz = horcrux_common::console::ProfileSettings::default().display_poll_mhz();
     let (tx, mut rx) = mpsc::channel::<DisplayEvent>(64);
-    let display = DbusDisplay::connect(&qmp, "t", tx, false)
+    let display = DbusDisplay::connect(&qmp, "t", tx, false, poll_mhz)
         .await
         .expect("connect");
     let updates = Arc::new(AtomicU64::new(0));
@@ -247,7 +250,7 @@ async fn dbus_display_frames_keyboard_and_pointer() {
     // objects on only the newest client connection, so a second connection
     // per viewer would cut the first viewer's keyboard and mouse off.
     let (tx2, mut rx2) = mpsc::channel::<DisplayEvent>(64);
-    let second = DbusDisplay::connect(&qmp, "t2", tx2, false)
+    let second = DbusDisplay::connect(&qmp, "t2", tx2, false, poll_mhz)
         .await
         .expect("second viewer connects");
     let updates2 = Arc::new(AtomicU64::new(0));

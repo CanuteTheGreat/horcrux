@@ -20,6 +20,7 @@ pub mod guest;
 pub mod input_route;
 pub mod keymap;
 pub mod local;
+pub mod pace;
 pub mod page;
 pub mod portmap;
 pub mod probe;
