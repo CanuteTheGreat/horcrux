@@ -193,6 +193,10 @@ impl VmManager {
         let uri = format!("exec:cat > '{}'", shell_safe(&tmp)?);
         let _ = tokio::fs::remove_file(&tmp).await;
 
+        // QEMU cannot save a guest that has the frame ring (ivshmem):
+        // remove it first, before the guest is frozen.
+        super::display::detach_frame_ring(&sock, &vm.disk_path, Duration::from_secs(20)).await?;
+
         // Freeze the guest (stays frozen if it already was: a paused VM is
         // saved as paused-then-running like any other).
         let was_running = query_status(&sock).await? == "running";
