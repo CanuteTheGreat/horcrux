@@ -991,15 +991,27 @@ Proven:
   guest, a view-only session's keys refused and counted, single use, audit
   entries, ring file removed at VM stop. The host-encode console e2e still
   passes with the audio change.
+- Viewer window on a real Wayland compositor (`viewer_window_e2e.sh` /
+  `.py`, CI `guest-tools.yml` job `viewer-window`): headless sway (pixman,
+  no GPU) with the real `horcrux-viewer --vm` signed in to a real
+  `horcrux-api` over the local socket, VM booted with the tools CD and the
+  ring. The window opens as an xdg_shell toplevel with keyboard focus; the
+  guest paints red/green/blue/magenta bands and a `grim` screenshot of the
+  compositor matches QMP `screendump` of the guest on the whole sampled grid
+  (aspect-fit, per-channel tolerance) while the ring sequence advances; keys
+  typed into the compositor through the virtual-keyboard protocol (real evdev
+  codes, `wl_keys.py`) reach the window, go over the local socket to the
+  guest, and run a command there (marker on the guest's serial port, console
+  turns red in the next screenshot; the comparison is shown to discriminate).
+  Screenshots are uploaded as an artifact (best effort).
 - Unit tests: ring layout/consistency/hostile sizes/stale reader stamps,
   local protocol framing, uid-bound tickets, frame-ring/local-socket/audio
   settings validation, QEMU argv, FFmpeg PCM -> Opus packets with the real
   FFmpeg, evdev -> standard gamepad mapping, viewer settings.
 
 Not proven yet:
-- The viewer window itself has not been shown on a Horcrux desktop session
-  (no compositor in CI; the window code is compiled and its input encoding
-  is unit tested, the ring reader it uses is the one measured above).
+- The viewer window on a real Horcrux desktop session with a GPU (the CI
+  proof below uses a headless compositor with the pixman renderer).
 - Guest-originated sound through D-Bus audio into a browser (needs a guest
   that plays audio in CI); the encoder half runs against real FFmpeg.
 - The Windows ring writer on a Windows guest with the IVSHMEM driver.

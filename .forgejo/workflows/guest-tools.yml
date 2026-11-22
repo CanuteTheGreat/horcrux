@@ -15,6 +15,12 @@ name: Horcrux guest tools (Windows MSI, Linux agent, real Linux guest)
 #   shm_guest_e2e.py gives the guest the ivshmem frame ring, the Linux agent
 #   writes raw frames into it, and horcrux-viewer's headless reader measures
 #   frame-to-viewer and keystroke-to-frame times.
+# - Viewer window on a real compositor (job viewer-window): a real horcrux-api
+#   node and Alpine guest with the tools CD and the frame ring, headless sway
+#   (pixman, no GPU) with the real horcrux-viewer window, grim screenshots
+#   compared with the guest's own screen, and keys typed into the compositor
+#   (virtual-keyboard protocol) that must run a command in the guest
+#   (crates/horcrux-viewer/tests/viewer_window_e2e.sh).
 # The Windows agent's own real-Windows checks are
 # crates/horcrux-guest-tools/tests/win_harness.py (Windows eval VM).
 on:
@@ -127,3 +133,69 @@ jobs:
         # step of upload-artifact on this instance (see docs.yml). Shipping the
         # tools to nodes is the packaging work of phase C2b.
         run: sha256sum dist/horcrux-guest-tools-*-x64.msi dist/horcrux-guest-tools.iso dist/linux/x86_64/horcrux-guest-tools.* target/x86_64-unknown-linux-musl/release/horcrux-guest-agent 2>/dev/null || true
+
+  viewer-window:
+    name: Viewer window on headless sway (KVM)
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install tools (build, QEMU, compositor)
+        run: |
+          for i in 1 2 3; do
+            sudo apt-get update -qq || true
+            apt-cache policy sway | grep -q 'Candidate: [0-9]' && break
+            sleep 15
+          done
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            build-essential clang musl-tools libvirt-dev libpam0g-dev qemu-system-x86 qemu-utils \
+            qemu-system-modules-opengl ffmpeg xorriso curl xkb-data sway grim python3
+          ls -l /dev/kvm
+          sway --version
+          qemu-system-x86_64 -display help | grep -x dbus
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-viewer-window-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-viewer-window-
+
+      - name: Build node, viewer, Linux agent
+        run: |
+          cargo build -p horcrux-api --all-features
+          cargo build -p horcrux-viewer
+          cargo build -p horcrux-guest-tools --release --target x86_64-unknown-linux-musl
+
+      - name: Viewer window e2e (sway headless, grim screenshots, typed keys)
+        run: |
+          set -o pipefail
+          HXW_OUT=/tmp/hxw-out bash crates/horcrux-viewer/tests/viewer_window_e2e.sh \
+            target/debug/horcrux-api target/debug/horcrux-viewer \
+            target/x86_64-unknown-linux-musl/release/horcrux-guest-agent 2>&1 | tee /tmp/hxw-e2e.log
+
+      - name: Screenshots
+        if: always()
+        # Same instance limitation as above (docs.yml): the upload may fail,
+        # which must not turn a passing test red.
+        continue-on-error: true
+        uses: actions/upload-artifact@v3
+        with:
+          name: viewer-window-screenshots
+          path: |
+            /tmp/hxw-out/*.png
+            /tmp/hxw-out/*.json
+            /tmp/hxw-out/*.log
+            /tmp/hxw-e2e.log
+          if-no-files-found: warn
