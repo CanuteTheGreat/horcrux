@@ -385,8 +385,9 @@ class Tests:
         self.step("disk-hash-unchanged", after == before, f"{before[:16]} == {after[:16]}" if after == before else f"CHANGED {before[:16]} -> {after[:16]}")
         os.unlink(disk)
 
-    def web_code(self, pw, wait=240, port=None, user=None):
-        end = time.time() + wait
+    def web_code(self, pw, wait=None, port=None, user=None):
+        # the default wait is scaled for emulation (aarch64 TCG is ~3x slower; an unscaled 240 s gave `login -> 0` in the live session, run 2598/2874)
+        end = time.time() + (T(240) if wait is None else wait)
         port = port or qt.FWD_WEB
         while True:
             sc, code, resp = http(port, "/api/auth/login", "POST", {"username": user or self.P.get("web_user", "admin"), "password": pw})
