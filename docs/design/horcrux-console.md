@@ -288,7 +288,7 @@ latency runs).
 | Same host, raw frames (ivshmem) | < 8 ms frame-to-viewer | capture 1-2 ms, copy 1 ms, present up to 1 frame | **met**: median 2.0 ms, p95 4.0 ms at 120 fps; median 2.7-2.8 ms, p95 3.7 ms at 60 fps (1280x800, without window present) |
 | LAN, encoded | < 20 ms click-to-photon | input 1 ms, game frame 4 ms, capture 1 ms, encode 2-4 ms, network 1-2 ms, decode 2-4 ms, present 4 ms | guest half only: keystroke to encoded frame at the node median 16.5 ms (60 fps, software x264 in a 2-vCPU guest); full path needs GPU hardware |
 | WAN | LAN + RTT + jitter buffer | adaptive bitrate fits the uplink; FEC instead of retransmission when RTT is high | C3 |
-| Desktop profile, LAN | < 50 ms, text lossless within 500 ms of last change | | **met, barely**: keystroke to picture in the browser median 47.6 / 49.9 ms in two runs (was 64.6 / 66.0 ms) with QEMU's display poll at 120 Hz and frame bursts of 2, host software encode, no tools, shared build host (details: "Measured: QEMU display poll rate") |
+| Desktop profile, LAN | < 50 ms, text lossless within 500 ms of last change | | **met**: keystroke to picture in the browser median 41.6-45.7 ms in five runs, p90 51-61 ms, none of 150 keystrokes over 500 ms (was 64.6 / 66.0 ms before the QEMU display poll fix, and 7-20 % of keystrokes at ~1 s before the settle frame), QEMU display poll 120 Hz, frame bursts of 2, settle frame, host software encode, no tools, shared build host at load 3-7 (details: "Measured: QEMU display poll rate" and "Measured: settle frame") |
 
 Measured numbers per path go into this table and into the GeForce NOW
 comparison in docs/design/gaming-vm.md section 14 as phases land. Tests measure
@@ -521,9 +521,8 @@ Reading:
   presentation (headless Chromium's frame clock, not seen by a user).
   Zero playout delay (`playout-delay` extension, `jitterBufferTarget = 0`)
   was already on; pacing off changed nothing on a LAN. On a busy shared host
-  the medians were 54-73 ms; the < 50 ms target needs the refresh fix
-  (QEMU: let a D-Bus listener set its refresh interval, follow-up in
-  progress) and a less loaded node to confirm.
+  the medians were 54-73 ms; the QEMU display poll fix and the settle frame
+  (next two subsections) brought them under the 50 ms target.
 - Write-combining matters on AMD hosts (guest memory types honoured): an
   uncached BAR mapping took 65 ms per 1280x800 frame (14 fps), write-
   combined 2.7 ms. kmsgrab does not hold its frame rate once copy-out is
@@ -585,12 +584,63 @@ Reading:
   varies by run (0-14 of 30 samples): in the interleaved series above the
   median gain was about 1 ms; an earlier series of strict-gap 120 Hz runs
   with many such samples had medians of 57-61 ms.
-- The single ~1.1 s maximum in some runs (one sample of 30) also appears
-  with stock QEMU and with the strict gap, so it is not caused by polling or
-  the bucket; its cause is not read yet.
+- The ~1.1 s maxima in some runs were a browser rendering effect, found and
+  fixed afterwards: see "Measured: settle frame".
 - Remaining budget at the median: guest reaction ~15 ms, encode 6 ms, node
   bookkeeping ~3 ms, network + decode ~7 ms, browser present and frame
   callback ~8 ms.
+
+### Measured: settle frame (2026-11-22)
+
+With the poll fix, 2-6 of every 30 keystrokes (7-20 %) still took ~1.05 s,
+so p90 was up to 1049 ms while the median looked fine. A frame trace (trace
+target `hxc_frames`: input, display update, submit, send) lined up with the
+page's stages showed the same picture every time: the node sent the frame
+that caught the guest mid-draw and the frame that completed it 6-18 ms
+apart, 25-60 ms after the key, the browser received both at once
+(`first_receive_ms` 16-48 ms), and the change appeared only with the next
+frame the node sent, the idle refresh one second later (with
+`idle_refresh_fps` 4 the outliers became ~300 ms). The FFmpeg program
+encoder showed it as well, so it is not the in-process encoder. Chromium's
+WebRTC renderer holds a frame that arrives sooner than the stream's recent
+pace until a newer one comes; after a still screen two frames a few ms
+apart are exactly that. Two frames back to back became common once QEMU
+polled at 120 Hz and the frame cap allowed bursts, which is why the earlier
+30 ms poll with a strict gap never showed it.
+
+Fix (node, every browser): `settle_frame` (per profile, default on;
+fixed-rate profiles send every frame anyway): one frame interval after the
+last frame
+of a change the picture goes out once more, so a held frame is always
+pushed out at once. Costs one small frame (~1 KB on a text console) per
+change. The page now reports `first_receive_ms`, `frames_after_input` and
+`timing_age_ms` (how long the node's answering frame sat in the browser
+before its picture showed), and `hx_console_e2e` fails when any keystroke
+picture waited more than `HXC_HELD_MS` (400 ms) in the browser; with the
+setting off that check failed on the 10-key series.
+
+Same shared 16-thread build host (load 3-7 from other jobs during the
+runs), Ubuntu 24.04 container with KVM and 4 CPUs, QEMU 11.1.3 built from
+the release tarball, `HXC_LAT_SAMPLES=30`, node built from main 2026-11-22:
+
+| Setup | Keystroke to picture, median | p90 | max | Samples > 500 ms |
+|---|---|---|---|---|
+| Stock QEMU, defaults before the fix (3 runs) | 59.1 / 59.8 / 57.3 ms | 68-71 ms | 75-236 ms | 0 / 90 |
+| Patched QEMU, defaults before the fix (6 runs) | 43.2-49.5 ms | 53-1049 ms | 1053-1133 ms | 20 / 180 |
+| Patched QEMU, `frame_burst` 1 (2 runs) | 50.5 / 45.2 ms | 70 / 77 ms | 76 / 96 ms | 0 / 60 |
+| **Patched QEMU, settle frame (defaults, 5 runs)** | **41.6 / 42.9 / 44.3 / 45.7 / 45.2 ms** | **51-61 ms** | **91-129 ms** | **0 / 150** |
+| Patched QEMU, settle frame, `max_fps` 60 strict gap (2 runs) | 40.0 / 48.7 ms | 58-60 ms | 75-79 ms | 0 / 60 |
+| Stock QEMU, settle frame (2 runs) | 55.1 / 53.4 ms | 66-69 ms | 78-80 ms | 0 / 60 |
+
+Reading: the desktop target (< 50 ms) is met at the median in every run
+with the patched QEMU and the settle frame, and the second-long stalls are
+gone (0 of 210 keystrokes over 500 ms with the fix, 20 of 180 without).
+A stock QEMU stays around 55 ms (its 30 ms display poll). The host was
+not idle: no lab machine was free, so these are shared-host numbers, which
+only flatter the idle case. The first three settle runs repeated the
+picture only after bursts (frames closer than one interval); the released
+rule repeats it after every change, because a 60 fps strict-gap stream
+showed the same hold once in 30 keys before the fix.
 
 ## 7. Standalone machine
 
@@ -618,8 +668,8 @@ the VM locally. No shared storage or second node is assumed anywhere.
 
 Default profile per guest type; per-profile codec preference order, chroma,
 max resolution/refresh, bitrate floor/ceiling, keyframe interval, lossless
-refinement delay, QEMU display poll rate (`display_poll_hz`) and frame
-burst (`frame_burst`); ticket lifetime; relay enabled/port/realm/credential
+refinement delay, QEMU display poll rate (`display_poll_hz`), frame
+burst (`frame_burst`) and the repeat after a change (`settle_frame`); ticket lifetime; relay enabled/port/realm/credential
 lifetime; UPnP mapping on/off; clipboard/file/USB/mic defaults for own vs
 shared guests; audit of clipboard sizes on/off; recording on/off and retention;
 native viewer default (window vs fullscreen, vsync). No value is baked into
@@ -1113,6 +1163,12 @@ Done:
   through the path that pressed it), WebRTC and local socket sessions;
   `-display dbus` now names the audiodev (without it QEMU exports no Audio
   object and the guest's sound never reached the console).
+- Follow-ups (2026-11-21/22): QEMU display poll rate per profile
+  (`display_poll_hz`, Horcrux QEMU patch) and the frame-cap token bucket
+  (`frame_burst`); the settle frame (`settle_frame`, default on) after a
+  browser renderer was found holding the last frame of a change until the
+  next idle refresh (~1 s for 7-20 % of keystrokes); `hx_console_e2e`
+  checks that no keystroke picture waits in the browser (section 6).
 
 Proven:
 - Ring path in a real VM (`shm_guest_e2e.py`, CI `guest-tools.yml`, std VGA
@@ -1175,9 +1231,11 @@ Not proven yet:
   its behaviour with a GPU-driven desktop (it ran on a QEMU std VGA guest;
   see the Windows row in section 6). The agent's virtio-serial path on
   Windows was not part of that run (no port was given to the VM).
-- Host-encode desktop target (< 50 ms): met only barely (median 47.6 / 49.9
-  ms on a shared build host, after the QEMU display poll fix in section 6)
-  and not yet re-measured on an idle node or with the patched QEMU from the
-  Horcrux binhost on a real install.
+- Host-encode desktop target (< 50 ms) on an idle node and with the patched
+  QEMU from the Horcrux binhost on a real install: met at the median on a
+  shared build host (41.6-45.7 ms, p90 51-61 ms, section 6 "Measured:
+  settle frame"); no idle lab machine was free for the run, and the binhost
+  package (gentoo-binhost lists app-emulation/qemu since 2026-11-22) has not
+  yet run on an installed node.
 - Needs real GPU hardware: 240 Hz capture of a GPU-rendered desktop into the
   ring, hardware encode in the guest and on the host.
