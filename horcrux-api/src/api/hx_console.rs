@@ -540,6 +540,11 @@ mod qemu {
         let vm = state.vm_manager.get_vm(&vm_id).await?;
         let disk = crate::console::runtime_disk(&vm)?;
         let qga = crate::vm::display::DisplayRuntime::qga_socket(&disk);
+        // Record "installing" before spawning: the 202 below must already
+        // show it (the spawned task may not have run yet when we answer),
+        // and a refused second request is not audited as requested.
+        let ticket =
+            hxc::deliver::begin_install(&vm_id, &user.username).map_err(ApiError::Conflict)?;
         let audit = state.audit_logger.clone();
         audit
             .log(event(
@@ -555,7 +560,7 @@ mod qemu {
         let (vm2, name) = (vm_id.clone(), user.username.clone());
         let timeout = hxc_settings::get().guest_tools_install_timeout_secs.into();
         tokio::spawn(async move {
-            let r = hxc::deliver::install_recorded(&vm2, &qga, &name, timeout).await;
+            let r = hxc::deliver::run_install(ticket, &qga, timeout).await;
             let (ok, detail) = match &r {
                 Ok(rep) => (
                     rep.ok,
@@ -579,7 +584,6 @@ mod qemu {
                 ))
                 .await;
         });
-        // let the record show "installing" before answering
         let st = tools_status(&state, &vm_id).await?;
         Ok((axum::http::StatusCode::ACCEPTED, Json(st)))
     }

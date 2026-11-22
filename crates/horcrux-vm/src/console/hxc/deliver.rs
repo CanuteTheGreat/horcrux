@@ -128,23 +128,35 @@ fn set_state(vm: &str, st: InstallState) {
     }
 }
 
-/// Run an install and record it (`by` = `auto` or the requesting user).
-/// Refused while another install of the same VM runs.
-pub async fn install_recorded(
-    vm: &str,
-    qga: &Path,
-    by: &str,
-    timeout_secs: u64,
-) -> Result<InstallReport, String> {
-    if last_install(vm)
+/// An install recorded as `installing` by [`begin_install`]; finish it
+/// with [`run_install`].
+#[derive(Debug)]
+pub struct InstallTicket {
+    vm: String,
+    by: String,
+    started: chrono::DateTime<chrono::Utc>,
+}
+
+/// Record an install of this VM as `installing` (`by` = `auto` or the
+/// requesting user), checked and set under one lock, so two triggers can't
+/// both start one and a caller that answers right after this call (the
+/// install API's 202) already shows the record. Refused while another
+/// install of the same VM runs.
+pub fn begin_install(vm: &str, by: &str) -> Result<InstallTicket, String> {
+    let mut g = STATES
+        .lock()
+        .map_err(|_| "the guest tools install record is unavailable".to_string())?;
+    let map = g.get_or_insert_with(HashMap::new);
+    if map
+        .get(vm)
         .map(|s| s.state == "installing")
         .unwrap_or(false)
     {
         return Err("an install of the guest tools is already running in this VM".into());
     }
     let started = chrono::Utc::now();
-    set_state(
-        vm,
+    map.insert(
+        vm.to_string(),
         InstallState {
             state: "installing".into(),
             by: by.into(),
@@ -154,6 +166,32 @@ pub async fn install_recorded(
             error: None,
         },
     );
+    Ok(InstallTicket {
+        vm: vm.to_string(),
+        by: by.to_string(),
+        started,
+    })
+}
+
+/// Run an install and record it (`by` = `auto` or the requesting user).
+/// Refused while another install of the same VM runs.
+pub async fn install_recorded(
+    vm: &str,
+    qga: &Path,
+    by: &str,
+    timeout_secs: u64,
+) -> Result<InstallReport, String> {
+    run_install(begin_install(vm, by)?, qga, timeout_secs).await
+}
+
+/// Run the install a [`begin_install`] ticket recorded and store its outcome.
+pub async fn run_install(
+    ticket: InstallTicket,
+    qga: &Path,
+    timeout_secs: u64,
+) -> Result<InstallReport, String> {
+    let InstallTicket { vm, by, started } = ticket;
+    let (vm, by) = (vm.as_str(), by.as_str());
     let r = install(qga, timeout_secs).await;
     let (state, report, error) = match &r {
         Ok(rep) if rep.ok => ("installed", Some(rep.clone()), None),
@@ -389,6 +427,29 @@ mod tests {
         let t = tail(Some(&v));
         assert!(t.len() <= 2000 && t.ends_with("end"));
         assert_eq!(tail(None), "");
+    }
+
+    #[test]
+    fn begin_install_records_installing_at_once_and_refuses_a_second() {
+        let t = begin_install("vm-begin", "admin").expect("first install starts");
+        let st = last_install("vm-begin").expect("recorded before any await");
+        assert_eq!((st.state.as_str(), st.by.as_str()), ("installing", "admin"));
+        assert!(begin_install("vm-begin", "auto").is_err());
+        // another VM is independent
+        assert!(begin_install("vm-begin-other", "auto").is_ok());
+        // a finished install allows the next one
+        set_state(
+            "vm-begin",
+            InstallState {
+                state: "failed".into(),
+                by: t.by.clone(),
+                started: t.started,
+                finished: Some(chrono::Utc::now()),
+                report: None,
+                error: Some("x".into()),
+            },
+        );
+        assert!(begin_install("vm-begin", "admin").is_ok());
     }
 
     #[test]
