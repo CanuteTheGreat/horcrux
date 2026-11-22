@@ -349,7 +349,7 @@ class RtcSync(unittest.TestCase):
     NOW = 1793000000.0            # the real time (Nov 2026)
     HDR = "HTTP/1.1 200 OK\r\nDate: Tue, 03 Nov 2026 18:40:00 GMT\r\nServer: x\r\n\r\n"
 
-    def fake(self, chrony=None, http=None, hw_rc=0, date_rc=0):
+    def fake(self, chrony=None, http=None, hw_rc=0, date_rc=0, ntp=None):
         calls = []
 
         def sh(cmd, timeout=15):
@@ -358,6 +358,8 @@ class RtcSync(unittest.TestCase):
                 return (0, chrony) if chrony is not None else (1, "506 Cannot talk to daemon")
             if cmd[0] == "curl":
                 return (0, http) if http is not None else (7, "")
+            if cmd[0] == "chronyd":
+                return (0, ntp) if ntp is not None else (1, "chronyd: no suitable source")
             if cmd[0] == "date":
                 return date_rc, ""
             if cmd[0] == "hwclock":
@@ -368,7 +370,7 @@ class RtcSync(unittest.TestCase):
     def test_synced_chrony_writes_rtc_without_touching_the_clock(self):
         sh, calls = self.fake(chrony="Stratum         : 2\nLeap status     : Normal\n")
         lines = []
-        self.assertTrue(RTC.sync(lines.append, sh=sh, now=lambda: self.NOW))
+        self.assertTrue(RTC.sync(lines.append, sh=sh, now=lambda: self.NOW, wait=0))
         self.assertIn(["hwclock", "-w", "-u"], calls)
         self.assertNotIn("date", [c[0] for c in calls])
         self.assertIn("rtc: hardware clock written (UTC) from a synced clock (chrony)", lines[-1])
@@ -380,7 +382,7 @@ class RtcSync(unittest.TestCase):
     def test_months_off_live_clock_is_stepped_from_http_date_then_written(self):
         sh, calls = self.fake(http=self.HDR)
         lines = []
-        self.assertTrue(RTC.sync(lines.append, sh=sh, now=lambda: self.JULY))
+        self.assertTrue(RTC.sync(lines.append, sh=sh, now=lambda: self.JULY, wait=0))
         names = [c[0] for c in calls if c[0] in ("date", "hwclock")]
         self.assertEqual(names, ["date", "hwclock"], "the clock must be stepped BEFORE it is written to the RTC")
         self.assertTrue(any("stepped from an HTTP Date header" in x for x in lines))
@@ -388,9 +390,59 @@ class RtcSync(unittest.TestCase):
     def test_offline_never_writes_an_unverified_clock(self):
         sh, calls = self.fake()
         lines = []
-        self.assertFalse(RTC.sync(lines.append, sh=sh, now=lambda: self.JULY))
+        self.assertFalse(RTC.sync(lines.append, sh=sh, now=lambda: self.JULY, wait=0))
         self.assertNotIn("hwclock", [c[0] for c in calls])
         self.assertIn("NOT written", lines[-1])
+
+    def test_ntp_measurement_is_a_source_when_http_is_not(self):
+        """gate finding (patronus runs 2749/2750): no Date header answered in the guest; one NTP measurement (UDP 123) is an equally verified source"""
+        sh, calls = self.fake(ntp="2026-11-22T10:00:00Z System clock wrong by 9000000.5 seconds (ignored)\n")
+        lines = []
+        self.assertTrue(RTC.sync(lines.append, sh=sh, now=lambda: self.JULY, wait=0))
+        self.assertEqual([c[0] for c in calls if c[0] in ("date", "hwclock")], ["date", "hwclock"])
+        self.assertTrue(any("stepped from an NTP measurement" in x for x in lines))
+        self.assertIn("(ntp)", lines[-1])
+        self.assertEqual(RTC.ntp_time(sh, lambda: self.JULY), self.JULY + 9000000.5)
+
+    def test_ntp_that_says_nothing_is_not_a_source(self):
+        sh, calls = self.fake(ntp="chronyd: Could not resolve pool.ntp.org\n")
+        self.assertIsNone(RTC.ntp_time(sh, lambda: self.NOW))
+
+    def test_network_that_comes_up_during_the_wait_is_used(self):
+        """the live lease can still be in flight when the install ends: sources are retried inside the window, then the RTC is written"""
+        state = {"n": 0}
+        base, calls = self.fake()
+
+        def sh(cmd, timeout=15):
+            if cmd[0] == "curl":
+                state["n"] += 1
+                if state["n"] > 6:                 # third pass over the three sources answers
+                    return 0, self.HDR
+            return base(cmd, timeout)
+        clock = {"t": 0.0}
+        slept = []
+
+        def sleep(s):
+            slept.append(s)
+            clock["t"] += s
+        lines = []
+        self.assertTrue(RTC.sync(lines.append, sh=sh, now=lambda: self.NOW, wait=60, sleep=sleep, mono=lambda: clock["t"]))
+        self.assertEqual(len(slept), 2)
+        self.assertIn("hardware clock written", lines[-1])
+
+    def test_offline_for_the_whole_wait_is_not_written_and_says_why(self):
+        sh, calls = self.fake()
+        clock = {"t": 0.0}
+        lines = []
+
+        def sleep(s):
+            clock["t"] += s
+        self.assertFalse(RTC.sync(lines.append, sh=sh, now=lambda: self.JULY, wait=20, sleep=sleep, mono=lambda: clock["t"]))
+        self.assertNotIn("hwclock", [c[0] for c in calls])
+        self.assertIn("[sources: http www.google.com: curl rc=7", lines[-1])
+        self.assertIn("ntp pool.ntp.org", lines[-1])
+        self.assertIn("[net: addr=none; route=none; dns=none; dhcpcd=none]", lines[-1])
+        self.assertGreaterEqual(clock["t"], 15, "must have waited out the window")
 
     def test_garbage_date_header_is_ignored(self):
         sh, calls = self.fake(http="HTTP/1.1 200 OK\r\nDate: Thu, 01 Jan 1970 00:00:00 GMT\r\n\r\n")

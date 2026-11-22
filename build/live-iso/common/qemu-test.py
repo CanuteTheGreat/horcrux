@@ -1346,7 +1346,7 @@ class Runner:
                     except OSError:
                         txt = ""
                     m = re.findall(r"rtc: [^\r\n]*", txt)
-                    self.step("installer-writes-rtc-from-a-synced-clock", any("hardware clock written (UTC) from a synced clock" in x for x in m), " | ".join(m)[:300] or "no `rtc:` line in the install log")
+                    self.step("installer-writes-rtc-from-a-synced-clock", any("hardware clock written (UTC) from a synced clock" in x for x in m), " | ".join(m)[:1500] or "no `rtc:` line in the install log")
             elif a.flow == "tui":
                 self.drive_tui(vm, kb)
             elif a.flow == "gui":
