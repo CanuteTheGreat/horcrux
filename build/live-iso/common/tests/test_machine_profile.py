@@ -7,6 +7,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LI = os.path.join(HERE, "..", "overlay", "usr", "lib", "live-installer")
@@ -364,8 +365,11 @@ class InstallerSide(unittest.TestCase):
                     runs.append((cmd, chroot))
                     return 0
             os.makedirs(os.path.join(I.target, "etc"))
-            MP.stage(I())
-            MP.accounts(I())
+            # detection must not read the machine running the test: an Intel CI host added the intel-cpu layer
+            fixed = {"pci": set(), "sys_vendor": "", "product_name": "", "cpu_vendor": "AuthenticAMD"}
+            with mock.patch.object(HL, "facts", return_value=fixed):
+                MP.stage(I())
+                MP.accounts(I())
             st = os.path.join(I.target, "var/lib/horcrux/profile")
             self.assertEqual(os.stat(os.path.join(st, "bundle/secrets/w")).st_mode & 0o777, 0o600)
             self.assertTrue(os.path.exists(os.path.join(st, "layers/apple-t2.toml")))
