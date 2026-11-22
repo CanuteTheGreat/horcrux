@@ -174,10 +174,23 @@ pub fn cluster_summary(nodes: &[(String, CpuGroup)]) -> ClusterCpuSummary {
         })
         .collect();
     let mixed_vendors = known.iter().any(|g| g.vendor != known[0].vendor);
-    let base = common_baseline(&known);
+    // Within one vendor the baseline is `<vendor>-vN`. Across vendors it is the
+    // lowest level on any node, named `generic-vN`: QEMU's synthetic models
+    // (qemu64, x86-64-v2/v3/v4) are vendor-neutral, so a guest given that model
+    // can live-migrate between AMD and Intel nodes. Guests on the host CPU model
+    // still cannot.
+    let base = if mixed_vendors {
+        let lowest = known.iter().map(|g| g.level).min();
+        lowest.map(|level| CpuGroup {
+            vendor: "generic".to_string(),
+            level,
+        })
+    } else {
+        common_baseline(&known)
+    };
     if mixed_vendors {
         warnings.push(
-            "AMD and Intel nodes in one cluster: running guests can only move within one vendor (cold migrate across)"
+            "AMD and Intel nodes in one cluster: guests on the host CPU can only live-migrate within one vendor (cold migrate across); guests on the generic baseline model can move anywhere"
                 .to_string(),
         );
     }
@@ -329,8 +342,17 @@ mod tests {
         ];
         let m = cluster_summary(&mixed);
         assert!(m.mixed_vendors);
-        assert_eq!(m.common_baseline, None);
-        assert_eq!(m.recommended_cpu_model, None);
+        assert_eq!(m.common_baseline.as_deref(), Some("generic-v3"));
+        assert_eq!(m.recommended_cpu_model.as_deref(), Some("x86-64-v3"));
+        // A 2006-era Intel node (v1) in an AMD v3 + Intel v3 cluster: qemu64 everywhere.
+        let old = vec![
+            ("a".to_string(), g("amd", 3)),
+            ("b".to_string(), g("intel", 3)),
+            ("c".to_string(), g("intel", 1)),
+        ];
+        let o = cluster_summary(&old);
+        assert_eq!(o.common_baseline.as_deref(), Some("generic-v1"));
+        assert_eq!(o.recommended_cpu_model.as_deref(), Some("qemu64"));
         assert_eq!(qemu_cpu_model(0), None);
     }
 }

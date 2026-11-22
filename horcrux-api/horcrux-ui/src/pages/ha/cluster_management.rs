@@ -118,7 +118,7 @@ pub(crate) fn cpu_baseline_note(g: &CpuGroupsView) -> String {
             "Cluster baseline {b}: no QEMU model is defined for it, so guests keep the host CPU."
         ),
         (None, _) if g.mixed_vendors => {
-            "AMD and Intel nodes: no CPU model is safe across both, live migration stays inside one vendor."
+            "AMD and Intel nodes: no common CPU level is known, live migration stays inside one vendor."
                 .to_string()
         }
         (None, _) => "No node has reported a CPU group yet.".to_string(),
@@ -1188,6 +1188,10 @@ mod tests {
         g.common_baseline = None;
         g.mixed_vendors = true;
         assert!(cpu_baseline_note(&g).contains("inside one vendor"));
+        g.common_baseline = Some("generic-v1".into());
+        g.recommended_cpu_model = Some("qemu64".into());
+        assert!(cpu_baseline_note(&g).contains("qemu64"));
+        g.common_baseline = None;
         g.mixed_vendors = false;
         assert!(cpu_baseline_note(&g).contains("No node"));
     }
