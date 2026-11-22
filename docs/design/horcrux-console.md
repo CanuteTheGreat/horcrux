@@ -288,7 +288,7 @@ latency runs).
 | Same host, raw frames (ivshmem) | < 8 ms frame-to-viewer | capture 1-2 ms, copy 1 ms, present up to 1 frame | **met**: median 2.0 ms, p95 4.0 ms at 120 fps; median 2.7-2.8 ms, p95 3.7 ms at 60 fps (1280x800, without window present) |
 | LAN, encoded | < 20 ms click-to-photon | input 1 ms, game frame 4 ms, capture 1 ms, encode 2-4 ms, network 1-2 ms, decode 2-4 ms, present 4 ms | guest half only: keystroke to encoded frame at the node median 16.5 ms (60 fps, software x264 in a 2-vCPU guest); full path needs GPU hardware |
 | WAN | LAN + RTT + jitter buffer | adaptive bitrate fits the uplink; FEC instead of retransmission when RTT is high | C3 |
-| Desktop profile, LAN | < 50 ms, text lossless within 500 ms of last change | | **not met**: keystroke to picture in the browser median 95 ms (min 65 ms), host software encode, no tools |
+| Desktop profile, LAN | < 50 ms, text lossless within 500 ms of last change | | **not met yet**: keystroke to picture in the browser median 54-73 ms on a busy shared host (host software encode, no tools); the largest stage is QEMU's 30 ms display refresh poll (section 6, C2d) |
 
 Measured numbers per path go into this table and into the GeForce NOW
 comparison in docs/design/gaming-vm.md section 14 as phases land. Tests measure
@@ -488,6 +488,9 @@ changed frames.
 | Keystroke to raw frame in the viewer (QEMU keyboard, no encode) | median 24.4 ms (min 15.6, p95 28.7) at 120 fps; 32.6-34.2 ms (min 23.8) at 60 fps | includes the guest's own reaction (shell + console redraw) and on average half a capture period |
 | Keystroke to encoded frame at the node (guest tools: uinput keyboard, in-guest kmsgrab + x264) | median 16.5 ms, p95 19.8 ms, 40/40 | 60 fps, CBR 2 Mbit/s, encode median 2.1 ms |
 | Keystroke to picture in the browser, host encode (no tools) | median 95.3 ms (min 64.5, max 197.7), 10/10 | QEMU D-Bus display, software x264 encode 13.3 ms average, data-channel RTT 2.8 ms, headless Chromium software decode |
+| Keystroke to picture in the browser, host encode, per stage (C2d follow-up probe, 30-40 keystrokes per run, 4 runs) | median 54-73 ms total: node input -> QEMU 1.4-2.7 ms, QEMU injected -> first display update 26-36 ms (spread 3-50 ms), update -> encoder 0.9-1.9 ms, encode 5.4-10.8 ms, encoded -> sent 0.1-0.2 ms, sent -> last packet in the browser 4-5 ms typical (half RTT 0.5-1.6 ms), decode 0.8-1.8 ms, compositor hand-off 1-4 ms, frame callback 5-11 ms after presentation | shared 16-core runner host (load 5-11, test capped at 4-6 CPUs), QEMU 10.2.1, std VGA, Alpine console; pacing off vs on made no difference (median 60.4 vs 63.4 ms); the 95 ms row above was a 10-keystroke run without the probe |
+| Keystroke to raw frame in the viewer, QEMU keyboard vs guest tools' uinput keyboard (same run) | median 36.3 vs 35.8 ms (min 25.1 vs 24.8, p95 45.8 vs 89.1), 30/30 each | 120 fps ring capture (111 fps delivered), release viewer, same shared host (load 6-8, 6 CPUs) |
+| Guest sound to the browser (QEMU D-Bus audio, no tools) | 778-779 Opus packets in 8 s while the guest played a 440 Hz tone, browser `totalAudioEnergy` +0.54-0.59 (0 before), audio level 0.27-0.30 | Alpine + alsa-utils `speaker-test`, intel-hda, 10 ms Opus frames |
 | Pre-OS keystroke / pointer move / click to picture, host encode | median 127 / 446 / 370 ms | boot loader 640x480; pointer and click include the guest kernel and `od` printing the event |
 | Windows ring writer, ring frame-to-viewer (Server 2022 eval guest, virtio-win IVSHMEM driver 100.76.104.16100, DXGI duplication, `horcrux-viewer measure`) | median 6.5 ms, p95 11.9 ms (capture->publish 5.5, publish->seen 0.32, copy 0.67); 592 frames in 14 s (42 fps, desktop redrawn by a ~56 fps GDI animation; idle desktop ~2 fps) | 1024x768 raw BGRX, 2 vCPUs, std VGA, guest in a container with KVM; writer 0.5-2.7 ms per frame to the BAR (write-combined and uncached mappings showed no difference here) |
 
@@ -498,17 +501,29 @@ Reading:
   numbers: the measuring reader has no window).
 - Keystroke-to-picture on the ring path is dominated by the guest, not the
   transport: after half a capture period (4-8 ms) the remaining 16-26 ms
-  are QEMU's emulated keyboard, the guest shell and the console redraw. The same keystroke through the guest
-  tools' uinput keyboard reaches an encoded frame in 16.5 ms, so input
-  through the tools is faster than QEMU's PS/2 keyboard; routing keys
-  through the tools when they run is a follow-up.
-- Host encode misses the desktop target (95 ms vs < 50 ms) even on an idle
-  node. Known parts: encode 13 ms, transport 3 ms, guest reaction about
-  25-30 ms (from the ring numbers); the remaining 40-50 ms sit in the
-  browser (jitter buffer, software decode in headless Chromium, the
-  detector's frame callback). Follow-up: per-stage timestamps (RTP
-  header extension with the capture time), a zero playout delay hint for
-  `desktop`/`gaming`, and hardware encode.
+  are the input path, the guest shell and the console redraw. Keys now go
+  through the guest tools' uinput keyboard while the tools run (QEMU input
+  before they start, and always for the Windows secure desktop); measured
+  side by side on the same guest the two input paths are equal (36.3 vs
+  35.8 ms median). The earlier 16.5 ms tools figure counts to an encoded
+  frame at a different detector and is not comparable.
+- Host encode, per stage (probe: the node stamps input, injection, the first
+  display update, encode and send and sends them with the frame; the page
+  adds receive, decode and presentation from requestVideoFrameCallback):
+  the largest single stage is QEMU injected -> first display update,
+  26-36 ms median with a 3-50 ms spread. That is the guest's own reaction
+  (~15-20 ms, see the ring rows) plus 0-30 ms waiting for QEMU's display
+  refresh timer: `ui/console.c` polls a std VGA/cirrus/qxl display every
+  30 ms (GUI_REFRESH_INTERVAL_DEFAULT) unless a listener asks for another
+  interval, and the D-Bus listener never does. Encode (5-11 ms software),
+  network (4-5 ms on loopback), decode (1-2 ms) and the node's own steps
+  (~3 ms) add ~15-20 ms; the browser's frame callback lands 5-11 ms after
+  presentation (headless Chromium's frame clock, not seen by a user).
+  Zero playout delay (`playout-delay` extension, `jitterBufferTarget = 0`)
+  was already on; pacing off changed nothing on a LAN. On a busy shared host
+  the medians were 54-73 ms; the < 50 ms target needs the refresh fix
+  (QEMU: let a D-Bus listener set its refresh interval, follow-up in
+  progress) and a less loaded node to confirm.
 - Write-combining matters on AMD hosts (guest memory types honoured): an
   uncached BAR mapping took 65 ms per 1280x800 frame (14 fps), write-
   combined 2.7 ms. kmsgrab does not hold its frame rate once copy-out is
@@ -976,6 +991,17 @@ Done:
   `audio_frame_ms` 5/10/20/40/60) and sends it on the WebRTC audio track;
   guest-tools audio takes priority when it arrives.
 - Latency run on an unloaded node (section 6, "Measured in C2d").
+- Follow-ups (2026-11-21): per-stage latency probe (node stamps sent with
+  the frame as a ctl `timing` message, client stages from
+  requestVideoFrameCallback, `window.hxc.stages`, STAGES lines in
+  `hx_console_e2e`); keys, buttons, wheel and absolute pointer through the
+  guest tools' uinput devices while the tools run and offer them (caps
+  `keyboard`/`absolute_pointer`, guest setting `offer_input`, node setting
+  `input_via_guest_tools`, default on, API + UI; QEMU input pre-OS, after
+  the tools stop and for the Windows secure desktop; a key is released
+  through the path that pressed it), WebRTC and local socket sessions;
+  `-display dbus` now names the audiodev (without it QEMU exports no Audio
+  object and the guest's sound never reached the console).
 
 Proven:
 - Ring path in a real VM (`shm_guest_e2e.py`, CI `guest-tools.yml`, std VGA
@@ -1017,6 +1043,15 @@ Proven:
   guest, and run a command there (marker on the guest's serial port, console
   turns red in the next screenshot; the comparison is shown to discriminate).
   Screenshots are uploaded as an artifact (best effort).
+- Guest sound to the browser (`hx_console_e2e`, CI `hx-console-e2e.yml`):
+  an Alpine guest with a sound card and alsa-utils (packages from the
+  mirror on a data CD, `alpine_apks.py`) plays a 440 Hz tone; the browser's
+  inbound audio stream counts ~780 Opus packets in 8 s and audio energy
+  (0 before the guest plays).
+- Input through the guest tools (`shm_guest_e2e.py` series
+  `latency_tools`): the tools report keyboard/absolute pointer in their
+  Hello and 30/30 keystrokes sent as tool input changed the guest's
+  screen, timed next to the QEMU keyboard (section 6).
 - Unit tests: ring layout/consistency/hostile sizes/stale reader stamps,
   local protocol framing, uid-bound tickets, frame-ring/local-socket/audio
   settings validation, QEMU argv, FFmpeg PCM -> Opus packets with the real
@@ -1025,13 +1060,13 @@ Proven:
 Not proven yet:
 - The viewer window on a real Horcrux desktop session with a GPU (the CI
   proof above uses a headless compositor with the pixman renderer).
-- Guest-originated sound through D-Bus audio into a browser (needs a guest
-  that plays audio in CI); the encoder half runs against real FFmpeg.
 - The Windows ring writer's write-combined mapping on AMD hardware, and
   its behaviour with a GPU-driven desktop (it ran on a QEMU std VGA guest;
   see the Windows row in section 6). The agent's virtio-serial path on
   Windows was not part of that run (no port was given to the VM).
-- Host-encode desktop target (< 50 ms) is missed (95 ms median on an idle
-  node); follow-ups listed in section 6.
+- Host-encode desktop target (< 50 ms): 54-73 ms median on a busy shared
+  host; the per-stage probe puts the biggest piece in QEMU's 30 ms display
+  refresh poll (section 6). A run on an unloaded node and the QEMU refresh
+  interval change are pending.
 - Needs real GPU hardware: 240 Hz capture of a GPU-rendered desktop into the
   ring, hardware encode in the guest and on the host.
