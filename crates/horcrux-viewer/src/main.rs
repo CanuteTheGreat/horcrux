@@ -10,7 +10,7 @@
 //! ```text
 //! horcrux-viewer --vm ID [--server URL] [--user NAME] [--profile P]
 //!                [--fullscreen] [--grab] [--fps N]
-//! horcrux-viewer measure (--ring FILE | --vm ID ...) [--secs S] [--json FILE]
+//! horcrux-viewer measure (--ring FILE | --vm ID ...) [--secs S] [--json FILE] [--dump FILE.ppm]
 //! horcrux-viewer ring-init FILE MIB SLOTS FPS
 //! ```
 //!
@@ -36,6 +36,7 @@ struct Opts {
     ring: Option<String>,
     secs: f64,
     json: Option<String>,
+    dump: Option<String>,
 }
 
 impl Default for Opts {
@@ -62,6 +63,7 @@ impl Default for Opts {
             ring: None,
             secs: 10.0,
             json: None,
+            dump: None,
         }
     }
 }
@@ -96,6 +98,7 @@ fn set(o: &mut Opts, k: &str, v: &str) -> Result<(), String> {
         "ring" => o.ring = Some(v.into()),
         "secs" => o.secs = v.parse().map_err(|_| format!("secs: {v}"))?,
         "json" => o.json = Some(v.into()),
+        "dump" => o.dump = Some(v.into()),
         _ => return Err(format!("unknown setting {k}")),
     }
     Ok(())
@@ -231,7 +234,19 @@ fn cmd_measure(o: &Opts) -> Result<(), String> {
         Some(p) => Box::new(std::fs::File::create(p).map_err(|e| format!("{p}: {e}"))?),
         None => Box::new(std::io::sink()),
     };
-    let s = measure::run(&ring, o.secs, o.view.poll_us, o.view.fps, &mut *out);
+    let mut last = None;
+    let s = measure::run(
+        &ring,
+        o.secs,
+        o.view.poll_us,
+        o.view.fps,
+        &mut *out,
+        &mut last,
+    );
+    if let Some(p) = &o.dump {
+        let (fi, px) = last.ok_or("--dump: no frame arrived")?;
+        measure::write_ppm(p, &fi, &px)?;
+    }
     let (c2p, c2p95) =
         measure::med_p95(s.iter().map(|x| x.capture_to_publish_us / 1000.0).collect());
     let (p2s, p2s95) = measure::med_p95(
@@ -268,7 +283,7 @@ fn cmd_measure(o: &Opts) -> Result<(), String> {
 }
 
 const HELP: &str = "usage: horcrux-viewer --vm ID [--server URL] [--user NAME] [--profile desktop|gaming|console] \
-[--fullscreen] [--grab] [--fps N]\n       horcrux-viewer measure (--ring FILE | --vm ID ...) [--secs S] [--json FILE]\n       \
+[--fullscreen] [--grab] [--fps N]\n       horcrux-viewer measure (--ring FILE | --vm ID ...) [--secs S] [--json FILE] [--dump FILE.ppm]\n       \
 horcrux-viewer ring-init FILE MIB SLOTS FPS\nPassword: HORCRUX_PASSWORD or password_file in ~/.config/horcrux/viewer.conf";
 
 #[cfg(test)]

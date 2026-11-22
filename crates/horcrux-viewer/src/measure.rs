@@ -40,16 +40,28 @@ pub struct Sample {
     pub height: u32,
     pub capture_to_publish_us: f64,
     /// Publish -> this reader saw it, on the host clock (0 when the writer
-    /// had no reader clock to copy).
+    /// had no reader clock of this run to copy: a frame left in the ring by
+    /// an earlier reader).
     pub publish_to_seen_us: f64,
     pub copy_us: f64,
     pub changed: u64,
 }
 
-/// Poll the ring for `secs`, writing one JSON line per frame to `out`.
-pub fn run(m: &Mapped, secs: f64, poll_us: u64, fps: u32, out: &mut dyn Write) -> Vec<Sample> {
+/// Poll the ring for `secs`, writing one JSON line per frame to `out` and
+/// leaving the newest frame (header and pixels) in `keep`.
+pub fn run(
+    m: &Mapped,
+    secs: f64,
+    poll_us: u64,
+    fps: u32,
+    out: &mut dyn Write,
+    keep: &mut Option<(FrameInfo, Vec<u8>)>,
+) -> Vec<Sample> {
     let r = &m.ring;
     let end = Instant::now() + Duration::from_secs_f64(secs);
+    // The first stamp of this run: a frame published under an older stamp
+    // is left over from an earlier reader and has no publish-to-seen time.
+    let started = now_ns();
     let mut last = 0u64;
     let mut buf = Vec::new();
     let mut prev: Vec<u8> = Vec::new();
@@ -59,9 +71,10 @@ pub fn run(m: &Mapped, secs: f64, poll_us: u64, fps: u32, out: &mut dyn Write) -
         let t0 = now_ns();
         if let Some(fi) = r.read_latest(last, &mut buf) {
             let t1 = now_ns();
-            let s = sample(&fi, t0, t1, &prev, &buf);
+            let s = sample(&fi, t0, t1, started, &prev, &buf);
             let _ = writeln!(out, "{}", serde_json::to_string(&s).unwrap_or_default());
             last = fi.seq;
+            *keep = Some((fi, buf.clone()));
             std::mem::swap(&mut prev, &mut buf);
             samples.push(s);
         } else {
@@ -71,14 +84,14 @@ pub fn run(m: &Mapped, secs: f64, poll_us: u64, fps: u32, out: &mut dyn Write) -
     samples
 }
 
-fn sample(fi: &FrameInfo, t0: u64, t1: u64, prev: &[u8], cur: &[u8]) -> Sample {
+fn sample(fi: &FrameInfo, t0: u64, t1: u64, started: u64, prev: &[u8], cur: &[u8]) -> Sample {
     Sample {
         seq: fi.seq,
         seen_ns: t0,
         width: fi.width,
         height: fi.height,
         capture_to_publish_us: fi.publish_ns.saturating_sub(fi.capture_ns) as f64 / 1000.0,
-        publish_to_seen_us: if fi.reader_clock_at_publish > 0 {
+        publish_to_seen_us: if fi.reader_clock_at_publish >= started {
             t0.saturating_sub(fi.reader_clock_at_publish) as f64 / 1000.0
         } else {
             0.0
@@ -86,6 +99,26 @@ fn sample(fi: &FrameInfo, t0: u64, t1: u64, prev: &[u8], cur: &[u8]) -> Sample {
         copy_us: (t1 - t0) as f64 / 1000.0,
         changed: changed_pixels(prev, cur, 64),
     }
+}
+
+/// Write a ring frame (BGRX rows of `stride` bytes) as a binary PPM (P6).
+pub fn write_ppm(path: &str, fi: &FrameInfo, px: &[u8]) -> Result<(), String> {
+    let (w, h, stride) = (fi.width as usize, fi.height as usize, fi.stride as usize);
+    if stride < w * 4 || px.len() < stride * h.saturating_sub(1) + w * 4 {
+        return Err(format!(
+            "frame {w}x{h} stride {stride} does not match {} bytes",
+            px.len()
+        ));
+    }
+    let mut out = Vec::with_capacity(w * h * 3 + 32);
+    out.extend_from_slice(format!("P6\n{w} {h}\n255\n").as_bytes());
+    for y in 0..h {
+        let row = &px[y * stride..y * stride + w * 4];
+        for x in 0..w {
+            out.extend_from_slice(&[row[x * 4 + 2], row[x * 4 + 1], row[x * 4]]);
+        }
+    }
+    std::fs::write(path, out).map_err(|e| format!("{path}: {e}"))
 }
 
 /// Median and 95th percentile.
@@ -103,6 +136,28 @@ pub fn med_p95(mut v: Vec<f64>) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ppm_dump_swaps_channels_and_honours_stride() {
+        let fi = FrameInfo {
+            width: 2,
+            height: 2,
+            stride: 12,
+            ..Default::default()
+        };
+        // BGRX pixels, 4 bytes of row padding
+        let px = [
+            1, 2, 3, 0, 4, 5, 6, 0, 9, 9, 9, 9, //
+            7, 8, 9, 0, 10, 11, 12, 0, 9, 9, 9, 9,
+        ];
+        let p = std::env::temp_dir().join(format!("hxv-ppm-{}", std::process::id()));
+        write_ppm(p.to_str().unwrap(), &fi, &px).unwrap();
+        let got = std::fs::read(&p).unwrap();
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(&got[..11], b"P6\n2 2\n255\n");
+        assert_eq!(&got[11..], &[3, 2, 1, 6, 5, 4, 9, 8, 7, 12, 11, 10]);
+        assert!(write_ppm("/nonexistent/x", &fi, &px[..10]).is_err());
+    }
 
     #[test]
     fn change_counter() {
@@ -153,7 +208,7 @@ mod tests {
             }
         });
         let mut sink = Vec::new();
-        let s = run(&rd, 0.6, 200, 60, &mut sink);
+        let s = run(&rd, 0.6, 200, 60, &mut sink, &mut None);
         writer.join().unwrap();
         assert!(s.len() >= 15, "{} frames", s.len());
         // frames alternate black/white: every frame seen is either all changed

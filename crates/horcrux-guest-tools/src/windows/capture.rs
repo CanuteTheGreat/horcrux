@@ -7,6 +7,7 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 /// What one `grab` produced.
 pub enum Grab {
@@ -24,6 +25,31 @@ pub trait Capturer {
     fn size(&self) -> (u32, u32);
     /// Wait up to `timeout_ms` for a new frame; tight BGRA rows into `buf`.
     fn grab(&mut self, timeout_ms: u32, buf: &mut Vec<u8>) -> Grab;
+    /// Age of the picture the last `grab` delivered, counted from when Windows
+    /// presented it (ns; 0 when the source cannot tell).
+    fn frame_age_ns(&self) -> u64 {
+        0
+    }
+}
+
+/// Nanoseconds from a QPC timestamp (`then`) to now, 0 when unknown.
+fn qpc_age_ns(then: i64) -> u64 {
+    if then <= 0 {
+        return 0;
+    }
+    let (mut now, mut freq) = (0i64, 0i64);
+    // SAFETY: plain out-parameters.
+    unsafe {
+        if QueryPerformanceCounter(&mut now).is_err()
+            || QueryPerformanceFrequency(&mut freq).is_err()
+        {
+            return 0;
+        }
+    }
+    if freq <= 0 || now < then {
+        return 0;
+    }
+    ((now - then) as u128 * 1_000_000_000 / freq as u128).min(u64::MAX as u128) as u64
 }
 
 /// Desktop rectangle (left, top) of the output to capture.
@@ -37,6 +63,8 @@ pub struct Dup {
     w: u32,
     h: u32,
     got_first: bool,
+    /// QPC time Windows presented the last delivered picture.
+    presented: i64,
 }
 
 impl Dup {
@@ -115,6 +143,7 @@ impl Dup {
                 w,
                 h,
                 got_first: false,
+                presented: 0,
             })
         }
     }
@@ -126,6 +155,9 @@ impl Capturer for Dup {
     }
     fn size(&self) -> (u32, u32) {
         (self.w, self.h)
+    }
+    fn frame_age_ns(&self) -> u64 {
+        qpc_age_ns(self.presented)
     }
     fn grab(&mut self, timeout_ms: u32, buf: &mut Vec<u8>) -> Grab {
         // SAFETY: COM calls on interfaces owned by self; the mapped memory
@@ -147,6 +179,7 @@ impl Capturer for Dup {
                 let _ = self.dup.ReleaseFrame();
                 return Grab::Idle;
             }
+            self.presented = info.LastPresentTime;
             let Some(tex) = res.and_then(|r| r.cast::<ID3D11Texture2D>().ok()) else {
                 let _ = self.dup.ReleaseFrame();
                 return Grab::Err("frame is not a texture".into());

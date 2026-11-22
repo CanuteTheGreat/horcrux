@@ -104,13 +104,17 @@ pub struct Config {
     pub shm_reader_timeout_ms: u64,
     /// Linux: PCI sysfs directory searched for the ivshmem device.
     pub shm_pci_dir: String,
-    /// Windows: IVSHMEM driver device interface path override (empty =
-    /// enumerate the driver's interface class).
-    /// Map the frame ring write-combined (`resource2_wc`) when the kernel
-    /// offers it: the default uncached BAR mapping makes every frame write
+    /// Map the frame ring write-combined (Linux `resource2_wc` when the
+    /// kernel offers it, the IVSHMEM driver's write-combined mode on
+    /// Windows): the default uncached BAR mapping makes every frame write
     /// slow on hosts that honour the guest's memory types (AMD).
     pub shm_write_combine: bool,
+    /// Windows: IVSHMEM driver device interface path override (empty =
+    /// enumerate the driver's interface class).
     pub shm_device: String,
+    /// Windows: print the frame ring writer's rate and per-frame capture and
+    /// write times to stderr every this many seconds (0 = off).
+    pub shm_stats_secs: u64,
 }
 
 impl Default for Config {
@@ -161,6 +165,7 @@ impl Default for Config {
             shm_pci_dir: "/sys/bus/pci/devices".into(),
             shm_device: String::new(),
             shm_write_combine: true,
+            shm_stats_secs: 0,
         }
     }
 }
@@ -287,6 +292,7 @@ impl Config {
             "shm_pci_dir" => self.shm_pci_dir = v.into(),
             "shm_device" => self.shm_device = v.into(),
             "shm_write_combine" => self.shm_write_combine = b(v),
+            "shm_stats_secs" => self.shm_stats_secs = num(v)?.min(3600),
             _ => return Err(format!("unknown setting {k}")),
         }
         Ok(())

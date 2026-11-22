@@ -26,8 +26,9 @@ const fn ctl_code(function: u32) -> u32 {
 const IOCTL_IVSHMEM_REQUEST_SIZE: u32 = ctl_code(0x801);
 const IOCTL_IVSHMEM_REQUEST_MMAP: u32 = ctl_code(0x802);
 const IOCTL_IVSHMEM_RELEASE_MMAP: u32 = ctl_code(0x803);
-/// Cache mode asked of the driver: write-combined suits a write-mostly
-/// frame buffer.
+/// Cache modes the driver offers (its `IVSHMEM_CACHE_MODE`): write-combined
+/// suits a write-mostly frame buffer.
+const CACHE_NONCACHED: u8 = 0;
 const CACHE_WRITECOMBINED: u8 = 2;
 
 #[repr(C)]
@@ -118,7 +119,7 @@ fn interface_paths() -> Vec<String> {
     v
 }
 
-fn open(path: &str) -> Result<(Mapping, Ring), String> {
+fn open(path: &str, write_combine: bool) -> Result<(Mapping, Ring), String> {
     let w = wide(path);
     // SAFETY: CreateFileW/DeviceIoControl with correctly sized buffers.
     unsafe {
@@ -147,7 +148,11 @@ fn open(path: &str) -> Result<(Mapping, Ring), String> {
             let _ = CloseHandle(dev);
             return Err(format!("IVSHMEM size: {e}"));
         }
-        let mode = CACHE_WRITECOMBINED;
+        let mode = if write_combine {
+            CACHE_WRITECOMBINED
+        } else {
+            CACHE_NONCACHED
+        };
         let mut reply = MmapReply::default();
         if let Err(e) = DeviceIoControl(
             dev,
@@ -183,7 +188,7 @@ pub fn find(cfg: &Config) -> Option<(Mapping, Ring)> {
         vec![cfg.shm_device.clone()]
     };
     for p in paths {
-        match open(&p) {
+        match open(&p, cfg.shm_write_combine) {
             Ok(x) => return Some(x),
             Err(e) => eprintln!("frame ring: {e}"),
         }
@@ -244,11 +249,16 @@ fn writer(cfg: Config) {
             }
             r.set_writer_state(1, &format!("raw {w}x{h} {}", cap.name()));
             let mut buf = Vec::new();
+            let mut stats = Stats::new(cfg.shm_stats_secs);
             let wait = (1000 / r.want_fps().max(1)).max(1);
             loop {
+                let g0 = Instant::now();
                 match cap.grab(wait.max(cfg.idle_poll_ms as u32), &mut buf) {
                     Grab::New => {
-                        let t = now_ns(t0);
+                        let grabbed = g0.elapsed();
+                        // The picture counts from when Windows presented it,
+                        // not from when this thread got to look at it.
+                        let t = now_ns(t0).saturating_sub(cap.frame_age_ns()).max(1);
                         let (cw, ch) = cap.size();
                         let info = FrameInfo {
                             width: cw,
@@ -258,9 +268,11 @@ fn writer(cfg: Config) {
                             capture_ns: t,
                             ..Default::default()
                         };
+                        let w0 = Instant::now();
                         if r.write_frame(&info, &buf, now_ns(t0)).is_err() {
                             break;
                         }
+                        stats.frame(grabbed, w0.elapsed());
                     }
                     Grab::Idle => {}
                     Grab::Lost | Grab::Err(_) => break,
@@ -277,9 +289,61 @@ fn writer(cfg: Config) {
     }
 }
 
+/// Optional writer statistics (`shm_stats_secs`).
+struct Stats {
+    every: Duration,
+    since: Instant,
+    frames: u32,
+    grab: Duration,
+    write: Duration,
+}
+
+impl Stats {
+    fn new(secs: u64) -> Stats {
+        Stats {
+            every: Duration::from_secs(secs),
+            since: Instant::now(),
+            frames: 0,
+            grab: Duration::ZERO,
+            write: Duration::ZERO,
+        }
+    }
+
+    fn frame(&mut self, grab: Duration, write: Duration) {
+        if self.every.is_zero() {
+            return;
+        }
+        self.frames += 1;
+        self.grab += grab;
+        self.write += write;
+        let el = self.since.elapsed();
+        if el >= self.every {
+            let n = self.frames.max(1) as f64;
+            eprintln!(
+                "frame ring: {:.1} fps, grab {:.2} ms (includes the wait for a change), write {:.2} ms per frame",
+                self.frames as f64 / el.as_secs_f64(),
+                self.grab.as_secs_f64() * 1000.0 / n,
+                self.write.as_secs_f64() * 1000.0 / n
+            );
+            *self = Stats::new(self.every.as_secs());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stats_off_by_default_and_reset_after_a_report() {
+        let mut s = Stats::new(0);
+        s.frame(Duration::from_millis(1), Duration::from_millis(1));
+        assert_eq!(s.frames, 0);
+        let mut s = Stats::new(3600);
+        s.frame(Duration::from_millis(1), Duration::from_millis(2));
+        assert_eq!(s.frames, 1);
+        assert_eq!(s.write, Duration::from_millis(2));
+    }
 
     #[test]
     fn ioctl_codes() {

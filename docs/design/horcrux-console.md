@@ -489,6 +489,7 @@ changed frames.
 | Keystroke to encoded frame at the node (guest tools: uinput keyboard, in-guest kmsgrab + x264) | median 16.5 ms, p95 19.8 ms, 40/40 | 60 fps, CBR 2 Mbit/s, encode median 2.1 ms |
 | Keystroke to picture in the browser, host encode (no tools) | median 95.3 ms (min 64.5, max 197.7), 10/10 | QEMU D-Bus display, software x264 encode 13.3 ms average, data-channel RTT 2.8 ms, headless Chromium software decode |
 | Pre-OS keystroke / pointer move / click to picture, host encode | median 127 / 446 / 370 ms | boot loader 640x480; pointer and click include the guest kernel and `od` printing the event |
+| Windows ring writer, ring frame-to-viewer (Server 2022 eval guest, virtio-win IVSHMEM driver 100.76.104.16100, DXGI duplication, `horcrux-viewer measure`) | median 6.5 ms, p95 11.9 ms (capture->publish 5.5, publish->seen 0.32, copy 0.67); 592 frames in 14 s (42 fps, desktop redrawn by a ~56 fps GDI animation; idle desktop ~2 fps) | 1024x768 raw BGRX, 2 vCPUs, std VGA, guest in a container with KVM; writer 0.5-2.7 ms per frame to the BAR (write-combined and uncached mappings showed no difference here) |
 
 Reading:
 - The ring path meets its target with room to spare: at 120 fps a frame
@@ -982,6 +983,18 @@ Proven:
   without a reader, deliver 1280x800 raw frames at the asked 60/120 fps,
   stop when the reader leaves; frame-to-viewer and keystroke-to-frame times
   in section 6.
+- Windows ring writer on a real Server 2022 guest (`tests/win_ring.py`,
+  `tests/win_ring_anim.ps1`): virtio-win IVSHMEM driver installed with
+  `pnputil`, the agent mapped the device with `IOCTL_IVSHMEM_REQUEST_MMAP`,
+  captured with DXGI Desktop Duplication in the logged-in session and
+  `horcrux-viewer measure --dump` read 1024x768 frames from the ring file
+  (the dumped frame is the Windows desktop). Found and fixed: the frame
+  time was taken after the capture wait returned (a frame then looked
+  ~20 ms newer than it was; it now counts from `LastPresentTime`), the
+  viewer's measure reported a bogus publish-to-seen time for a frame an
+  earlier reader left in the ring, and the writer had no way to report its
+  own rate (`shm_stats_secs`). `shm_write_combine=false` now also selects
+  the driver's uncached mode on Windows.
 - Node half end to end (`hx_local_viewer_e2e.sh`, CI `hx-console-e2e.yml`,
   real horcrux-api + QEMU + Alpine): ring device and D-Bus audio in the VM's
   argv, root-only ring file with the node's header, 403 without VM.Console,
@@ -1014,7 +1027,10 @@ Not proven yet:
   proof below uses a headless compositor with the pixman renderer).
 - Guest-originated sound through D-Bus audio into a browser (needs a guest
   that plays audio in CI); the encoder half runs against real FFmpeg.
-- The Windows ring writer on a Windows guest with the IVSHMEM driver.
+- The Windows ring writer's write-combined mapping on AMD hardware, and
+  its behaviour with a GPU-driven desktop (it ran on a QEMU std VGA guest;
+  see the Windows row in section 6). The agent's virtio-serial path on
+  Windows was not part of that run (no port was given to the VM).
 - Host-encode desktop target (< 50 ms) is missed (95 ms median on an idle
   node); follow-ups listed in section 6.
 - Needs real GPU hardware: 240 Hz capture of a GPU-rendered desktop into the
