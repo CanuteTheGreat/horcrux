@@ -448,6 +448,11 @@ pub fn ConsoleSettingsPage() -> impl IntoView {
                         on:change=move |ev| { let v = event_target_checked(&ev); sig.update(|s| s.guest_tools = v) }/>
                     "Horcrux guest tools port on console VMs (applies at the next VM start)"
                 </label>
+                <label class="checkbox">
+                    <input type="checkbox" name="input_via_guest_tools" prop:checked=move || sig.get().input_via_guest_tools
+                        on:change=move |ev| { let v = event_target_checked(&ev); sig.update(|s| s.input_via_guest_tools = v) }/>
+                    "Keyboard and pointer through the guest tools while they run (QEMU's input before they start)"
+                </label>
                 <label>"Guest tools port name"
                     <input type="text" name="guest_tools_port" prop:value=move || sig.get().guest_tools_port
                         on:change=move |ev| { let v = event_target_value(&ev); sig.update(|s| s.guest_tools_port = v) }/>

@@ -315,6 +315,21 @@ pub fn mode_size(capture: Capture, sv: &StartVideo) -> (u32, u32) {
     (0, 0)
 }
 
+/// Size of the guest's display when the tools are not capturing it: the
+/// first connected KMS output's mode, else the framebuffer console's size.
+pub fn display_size() -> (u32, u32) {
+    match mode_size(Capture::Kms, &StartVideo::default()) {
+        (0, 0) => std::fs::read_to_string("/sys/class/graphics/fb0/virtual_size")
+            .ok()
+            .and_then(|s| {
+                let (w, h) = s.trim().split_once(',')?;
+                Some((w.parse().ok()?, h.parse().ok()?))
+            })
+            .unwrap_or((0, 0)),
+        s => s,
+    }
+}
+
 pub fn start(cfg: &Config, sv: &StartVideo, out: Out) -> Result<(Running, VideoStatus), String> {
     let (capture, backend) = pick(cfg)?;
     let display = super::session::find().and_then(|s| s.display.clone());

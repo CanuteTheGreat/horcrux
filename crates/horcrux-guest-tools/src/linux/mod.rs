@@ -28,6 +28,20 @@ pub struct Linux {
 }
 
 impl Linux {
+    /// Create the uinput keyboard/mouse/tablet once (a failure is not
+    /// retried: no /dev/uinput or no permission).
+    fn ensure_input(&mut self) {
+        if self.input.is_none() && !self.input_failed {
+            match uinput::Devices::create(&self.cfg.input_device_name) {
+                Ok(d) => self.input = Some(d),
+                Err(e) => {
+                    self.input_failed = true;
+                    eprintln!("uinput: {e}");
+                }
+            }
+        }
+    }
+
     pub fn new(cfg: Config) -> Self {
         Self {
             cfg,
@@ -100,6 +114,9 @@ impl Platform for Linux {
                 chroma444: true,
                 hdr: false,
                 shm_frames: shm::available(&self.cfg),
+                // uinput keyboard/tablet created by prepare_input
+                keyboard: self.cfg.offer_input && self.input.is_some(),
+                absolute_pointer: self.cfg.offer_input && self.input.is_some(),
             },
         }
     }
@@ -183,18 +200,22 @@ impl Platform for Linux {
         s.layout().ok()
     }
 
-    fn input(&mut self, i: &Input) {
-        if self.input.is_none() && !self.input_failed {
-            match uinput::Devices::create(&self.cfg.input_device_name) {
-                Ok(d) => self.input = Some(d),
-                Err(e) => {
-                    self.input_failed = true;
-                    eprintln!("uinput: {e}");
-                }
-            }
+    fn prepare_input(&mut self) {
+        if self.cfg.offer_input {
+            self.ensure_input();
         }
+    }
+
+    fn input(&mut self, i: &Input) {
+        self.ensure_input();
         if let Some(d) = self.input.as_mut() {
-            let size = video::current_size(&self.video);
+            // Absolute positions are in the guest display's pixels: the
+            // captured size while the tools capture, else the display mode
+            // (the node encodes QEMU's display, same size).
+            let size = match video::current_size(&self.video) {
+                (0, 0) => video::display_size(),
+                s => s,
+            };
             if let Err(e) = d.inject(i, size) {
                 eprintln!("uinput: {e}");
             }

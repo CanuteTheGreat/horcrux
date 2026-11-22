@@ -18,6 +18,10 @@ pub type Out = mpsc::SyncSender<Msg>;
 pub trait Platform: Send {
     /// Capabilities found on this guest (probed, not assumed).
     fn hello(&self) -> Hello;
+    /// Get the input devices ready before [`Platform::hello`] reports them,
+    /// so the first key routed here is not lost while the guest OS picks a
+    /// new device up.
+    fn prepare_input(&mut self) {}
     /// Start or restart capture + encode with these parameters.
     fn start_video(&mut self, cfg: &StartVideo, out: Out) -> VideoStatus;
     fn stop_video(&mut self);
@@ -93,6 +97,7 @@ pub fn run(cfg: &Config, mut p: Box<dyn Platform>) -> Result<(), String> {
             }
         }
     });
+    p.prepare_input();
     let hello = p.hello();
     tx.send(Msg::Hello(hello)).map_err(|e| e.to_string())?;
     let mut clip_max = cfg.clipboard_max_bytes;
@@ -115,6 +120,7 @@ pub fn run(cfg: &Config, mut p: Box<dyn Platform>) -> Result<(), String> {
                 // The node connects to its end of the port whenever a viewer
                 // opens; anything sent before that was dropped by QEMU, so
                 // every HostHello is answered with a fresh Hello.
+                p.prepare_input();
                 let _ = tx.send(Msg::Hello(p.hello()));
                 if h.clipboard_max_bytes > 0 {
                     clip_max = clip_max.min(h.clipboard_max_bytes as usize);

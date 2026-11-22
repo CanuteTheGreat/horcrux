@@ -10,6 +10,7 @@
 //! the absolute pointer through QEMU's D-Bus input, raw relative motion and
 //! gamepads through the guest tools when they answer.
 use super::guest;
+use super::input_route::{InputRouter, Routed};
 use super::qemu_dbus::{DbusDisplay, DisplayEvent};
 use super::session::{self, parse_keys, parse_motion, parse_pad, InputEvent, SessionStats};
 use super::{Broker, HxcTicket};
@@ -289,6 +290,10 @@ async fn handle(
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
         l.tx
     });
+    // keys, buttons, wheel and absolute pointer: the guest tools' devices
+    // while they offer them, QEMU's input otherwise (input_route.rs)
+    let mut router = InputRouter::default();
+    let tools_caps = (settings.input_via_guest_tools && guest_tx.is_some()).then_some(&caps);
     let (mut rd, mut wr) = s.into_split();
     // read_exact is not cancel-safe: frames are read in their own task
     let (in_tx, mut in_rx) = mpsc::channel::<(u8, Vec<u8>)>(256);
@@ -351,7 +356,7 @@ async fn handle(
                             if let Ok(mut st) = stats.lock() {
                                 match ev { InputEvent::Key { .. } => st.keys_in += 1, _ => st.pointer_in += 1 }
                             }
-                            let _ = input_tx.try_send(ev);
+                            route(&mut router, ev, tools_caps, &guest_tx, &input_tx, &stats);
                         }
                     }
                     kind::MOTION => {
@@ -361,7 +366,7 @@ async fn handle(
                                 (InputEvent::Rel { dx, dy }, Some(g)) if caps.relative_mouse => {
                                     let _ = g.try_send(gproto::Msg::Input(gproto::Input::Rel { dx: *dx, dy: *dy }));
                                 }
-                                _ => { let _ = input_tx.try_send(ev); }
+                                _ => route(&mut router, ev, tools_caps, &guest_tx, &input_tx, &stats),
                             }
                         }
                     }
@@ -420,6 +425,39 @@ fn open_ring(p: &Path) -> std::io::Result<(std::fs::File, u64)> {
     let f = std::fs::OpenOptions::new().read(true).write(true).open(p)?;
     let n = f.metadata()?.len();
     Ok((f, n))
+}
+
+/// Hand one event to the guest tools or QEMU (see `input_route.rs`).
+fn route(
+    router: &mut InputRouter,
+    ev: InputEvent,
+    tools: Option<&gproto::Caps>,
+    guest_tx: &Option<mpsc::Sender<gproto::Msg>>,
+    input_tx: &mpsc::Sender<InputEvent>,
+    stats: &std::sync::Mutex<SessionStats>,
+) {
+    let mut is_key = false;
+    let routed = router.route(ev, tools, |i| {
+        is_key = matches!(i, gproto::Input::Key { .. } | gproto::Input::Button { .. });
+        guest_tx
+            .as_ref()
+            .map(|g| g.try_send(gproto::Msg::Input(i)).is_ok())
+            .unwrap_or(false)
+    });
+    match routed {
+        Routed::Tools => {
+            if let Ok(mut st) = stats.lock() {
+                if is_key {
+                    st.keys_via_tools += 1
+                } else {
+                    st.pointer_via_tools += 1
+                }
+            }
+        }
+        Routed::Qemu(ev) => {
+            let _ = input_tx.try_send(ev);
+        }
+    }
 }
 
 #[cfg(test)]

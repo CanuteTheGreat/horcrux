@@ -193,7 +193,7 @@ if not wait_serial("HX_43_APK", 300):
     fail("setup", "apk add ffmpeg did not finish: " + serial_text()[-400:])
 stype("echo 0 > /sys/class/graphics/fbcon/cursor_blink\n")
 stype("lspci -n | grep -c 1af4:1110; echo HX_$((40+4))_IVSHMEM\n")
-stype("mkdir -p /mnt/t; mount -o ro $(findfs LABEL=HXTOOLS) /mnt/t; "
+stype("modprobe uinput; mkdir -p /mnt/t; mount -o ro $(findfs LABEL=HXTOOLS) /mnt/t; "
       "/mnt/t/horcrux-guest-agent --shm-poll-ms 20 >/dev/ttyS0 2>&1 &\n")
 stype("sleep 3; /mnt/t/horcrux-guest-agent --print-caps | grep shm_frames; echo HX_$((40+5))_CAPS\n")
 if wait_serial("HX_45_CAPS", 30) and '"shm_frames": true' in serial_text():
@@ -250,22 +250,26 @@ else:
     fail("frames", f"{summary}; writer {st} {info!r}; serial {serial_text()[-300:]}")
 
 # ---- keystroke -> picture in the viewer ----
-jl = os.path.join(W, "lat.jsonl")
-pm = subprocess.Popen([VIEWER, "measure", "--ring", RING, "--secs", "30", "--fps", str(FPS),
-                       "--poll-us", "200", "--json", jl], stdout=subprocess.PIPE, text=True)
-time.sleep(4)  # capture restarts with the new reader
-quiet_from = time.monotonic_ns()
-time.sleep(3)  # negative control window: no input
-quiet_to = time.monotonic_ns()
-sends = []
-for i in range(30):
-    time.sleep(0.35)
-    t = time.monotonic_ns()
-    qkey("x" if i % 2 == 0 else "y")
-    sends.append(t)
-pm.wait(timeout=60)
-frames = [json.loads(line) for line in open(jl) if line.strip()]
-if frames:
+def key_series(name, press, label):
+    """30 keystrokes (x / y in turn) through `press`, measured in the viewer."""
+    jl = os.path.join(W, f"{name}.jsonl")
+    pm = subprocess.Popen([VIEWER, "measure", "--ring", RING, "--secs", "30", "--fps", str(FPS),
+                           "--poll-us", "200", "--json", jl], stdout=subprocess.PIPE, text=True)
+    time.sleep(4)  # capture restarts with the new reader
+    quiet_from = time.monotonic_ns()
+    time.sleep(3)  # negative control window: no input
+    quiet_to = time.monotonic_ns()
+    sends = []
+    for i in range(30):
+        time.sleep(0.35)
+        t = time.monotonic_ns()
+        press("x" if i % 2 == 0 else "y")
+        sends.append(t)
+    pm.wait(timeout=60)
+    frames = [json.loads(line) for line in open(jl) if line.strip()]
+    if not frames:
+        fail(name, "no frames")
+        return
     full = frames[-1]["width"] * frames[-1]["height"]
     # first visible reaction: more than 3 pixels moved by more than 64
     # levels (the C1 definition); full reaction: a quarter of the screen
@@ -286,18 +290,81 @@ if frames:
         return {"samples": len(v), "median": v[len(v) // 2], "min": v[0], "p95": v[max(0, int(len(v) * 0.95) - 1)]}
 
     if false_hits:
-        fail("latency", f"{false_hits} frames changed without input")
+        fail(name, f"{false_hits} frames changed without input")
     elif len(first) >= 25 and len(whole) >= 20:
-        results["latency_first_change_ms"] = stats(first)
-        results["latency_full_reaction_ms"] = stats(whole)
         f1, w1 = stats(first), stats(whole)
-        ok("latency", f"keystroke (QEMU keyboard) -> raw frame in the viewer: first change median {f1['median']:.1f} ms "
+        results[f"{name}_first_change_ms"] = f1
+        results[f"{name}_full_reaction_ms"] = w1
+        ok(name, f"keystroke ({label}) -> raw frame in the viewer: first change median {f1['median']:.1f} ms "
            f"(min {f1['min']:.1f}, p95 {f1['p95']:.1f}), whole-screen reaction median {w1['median']:.1f} ms "
            f"(p95 {w1['p95']:.1f}) over {len(first)} keystrokes ({FPS} fps capture, 0 changed frames in 3 s idle)")
     else:
-        fail("latency", f"only {len(first)}/{len(whole)} of {len(sends)} keystrokes produced a changed frame")
+        fail(name, f"only {len(first)}/{len(whole)} of {len(sends)} keystrokes produced a changed frame")
+
+
+key_series("latency", qkey, "QEMU keyboard")
+
+# ---- the same keystrokes through the guest tools' keyboard ----
+# The test is the node on the guest-tools port: HostHello, the tools'
+# Hello (must report `keyboard`), then Msg::Input keys like the node sends
+# while the tools run.
+HELLO, HOST_HELLO, INPUT = 1, 2, 0x40
+QNUM_XY = {"x": 0x2d, "y": 0x15}
+gs = socket.socket(socket.AF_UNIX)
+gs.connect(gt_path)
+gs.settimeout(1.0)
+
+
+def gsend(kind, payload=b""):
+    gs.sendall(struct.pack("<I", len(payload) + 1) + bytes([kind]) + payload)
+
+
+hello, buf = None, bytearray()
+for _ in range(6):
+    gsend(HOST_HELLO, json.dumps({"v": 1, "clipboard_max_bytes": 1 << 20}).encode())
+    end = time.time() + 1.5
+    # every Hello counts (the one sent when the tools opened the port and
+    # the answer to HostHello); the newest carries the current caps
+    while time.time() < end and not (hello or {}).get("caps", {}).get("keyboard"):
+        try:
+            d = gs.recv(1 << 16)
+        except socket.timeout:
+            continue
+        if not d:
+            break
+        buf.extend(d)
+        while len(buf) >= 4 and len(buf) >= 4 + struct.unpack_from("<I", buf)[0]:
+            n = struct.unpack_from("<I", buf)[0]
+            kind, payload = buf[4], bytes(buf[5:4 + n])
+            del buf[:4 + n]
+            if kind == HELLO:
+                hello = json.loads(payload)
+    if (hello or {}).get("caps", {}).get("keyboard"):
+        break
+
+
+def drain():
+    gs.settimeout(None)
+    while True:
+        try:
+            if not gs.recv(1 << 16):
+                return
+        except OSError:
+            return
+
+
+caps = (hello or {}).get("caps", {})
+if caps.get("keyboard") and caps.get("absolute_pointer"):
+    ok("tools_caps", "the guest tools report keyboard and absolute_pointer (uinput devices ready before Hello)")
+    threading.Thread(target=drain, daemon=True).start()
+
+    def tkey(ch):
+        q = QNUM_XY[ch]
+        gsend(INPUT, struct.pack("<BHB", 1, q, 1))
+        gsend(INPUT, struct.pack("<BHB", 1, q, 0))
+    key_series("latency_tools", tkey, "guest tools uinput keyboard")
 else:
-    fail("latency", "no frames")
+    fail("tools_caps", f"Hello {hello}; serial {serial_text()[-400:]}")
 stype("chvt 1\n")
 
 # ---- the reader left: capture stops ----

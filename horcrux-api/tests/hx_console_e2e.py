@@ -75,7 +75,7 @@ def login(user, pw):
 ADMIN = login("admin", "admin")
 
 
-def make_vm(vm_id, iso, memory, cpus=2, extra_hw=None, relative_mouse=False):
+def make_vm(vm_id, iso, memory, cpus=2, extra_hw=None, relative_mouse=False, sound="none"):
     call("POST", f"/vms/{vm_id}/stop", token=ADMIN, ok=None)
     call("DELETE", f"/vms/{vm_id}", token=ADMIN, ok=None)
     hw = {"nets": [], "cdrom": iso, "boot": ["cdrom", "disk"]}
@@ -83,7 +83,7 @@ def make_vm(vm_id, iso, memory, cpus=2, extra_hw=None, relative_mouse=False):
     call("POST", "/vms", {
         "id": vm_id, "name": vm_id, "hypervisor": "qemu", "architecture": "x86_64",
         "cpus": cpus, "memory": memory, "disk_size": 1, "status": "stopped",
-        "display": {"protocol": "vnc", "video": "std", "sound": "none", "relative_mouse": relative_mouse},
+        "display": {"protocol": "vnc", "video": os.environ.get("HXC_VIDEO", "std"), "sound": sound, "relative_mouse": relative_mouse},
         "hardware": hw,
     }, token=ADMIN)
     call("POST", f"/vms/{vm_id}/start", token=ADMIN, ok=(200, 202))
@@ -157,6 +157,10 @@ check(s["enabled"] and s["ticket_lifetime_secs"] == 60 and s["codecs"] == ["h264
 st, err = call("PUT", "/console/settings", dict(s, codecs=["mpeg2"]), token=ADMIN, ok=None)
 check(st in (400, 422) and "mpeg2" in json.dumps(err), "invalid settings are refused with the reason")
 s2 = dict(s, desktop=dict(s["desktop"], max_fps=30), session_idle_timeout_secs=45)
+# Latency experiments: HXC_SETTINGS_PATCH='{"wan": {"pace_video": false}}'
+# is merged into the saved settings (one level deep per section).
+for k, v in json.loads(os.environ.get("HXC_SETTINGS_PATCH") or "{}").items():
+    s2[k] = dict(s2[k], **v) if isinstance(v, dict) and isinstance(s2.get(k), dict) else v
 _, saved = call("PUT", "/console/settings", s2, token=ADMIN)
 _, again = call("GET", "/console/settings", token=ADMIN)
 check(again["session_idle_timeout_secs"] == 45, "settings changes persist (GET returns them)")
@@ -280,6 +284,37 @@ def latency_summary(name, values):
     return d
 
 
+def stage_summary(page, name, n):
+    """Median per-stage times of the last n input-to-picture samples: the
+    node's stages (input -> guest -> display change -> encoder -> sent)
+    from its ctl "timing" messages and the client's (last packet received,
+    decode, compositor hand-off) from requestVideoFrameCallback metadata,
+    all measured from the client sending the input."""
+    time.sleep(0.5)
+    stages = page.evaluate(f"window.hxc.stages.slice(-{max(1, n)})")
+    out: dict = {"samples": len(stages), "with_node_stages": len([s for s in stages if s.get("node")])}
+
+    def med(vals):
+        v = [x for x in vals if isinstance(x, (int, float))]
+        return round(statistics.median(v), 1) if v else None
+    for k in ("total_ms", "receive_ms", "decode_ms", "present_ms", "display_ms", "rtt_ms"):
+        out[k] = med([s.get(k) for s in stages])
+    for k in ("input_to_inject_ms", "inject_to_update_ms", "update_to_submit_ms", "encode_ms",
+              "encoded_to_sent_ms", "node_ms"):
+        out["node_" + k] = med([(s.get("node") or {}).get(k) for s in stages])
+    # where the time goes, in order (half the RTT each way for the network)
+    if out["node_node_ms"] is not None and out["receive_ms"] is not None and out["rtt_ms"] is not None:
+        out["client_to_node_ms"] = round(out["rtt_ms"] / 2, 1)
+        out["sent_to_received_ms"] = round(out["receive_ms"] - out["rtt_ms"] / 2 - out["node_node_ms"], 1)
+        if out["present_ms"] is not None:
+            out["received_to_presented_ms"] = round(out["present_ms"] - out["receive_ms"], 1)
+            out["presented_to_callback_ms"] = round(out["total_ms"] - out["present_ms"], 1)
+    print("STAGES " + json.dumps({name: out}), flush=True)
+    print("STAGES-RAW " + json.dumps({name: stages}), flush=True)
+    RESULTS[name] = out
+    return out
+
+
 with sync_playwright() as pw:
     browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
     admin = login_context(browser, "admin", "admin")
@@ -317,10 +352,11 @@ with sync_playwright() as pw:
     g = page.evaluate("window.hxc.guest")
 
     def code_of(c):
-        return {" ": "Space", "-": "Minus", "/": "Slash", ".": "Period", "\n": "Enter"}.get(
+        return {" ": "Space", "-": "Minus", "/": "Slash", ".": "Period", "\n": "Enter", ";": "Semicolon",
+                "=": "Equal", ",": "Comma"}.get(
             c, f"Digit{c}" if c.isdigit() else f"Key{c.upper()}")
 
-    SHIFTED = {">": "Period", "_": "Minus"}
+    SHIFTED = {">": "Period", "_": "Minus", "*": "Digit8", "%": "Digit5", ":": "Semicolon", "&": "Digit7"}
 
     def keystroke(c):
         if c in SHIFTED:
@@ -350,6 +386,17 @@ with sync_playwright() as pw:
     got = len([x for x in oskeys if x is not None])
     check(got >= 8, f"keyboard input reaches the running OS ({got}/10 keystrokes echoed at the shell)")
     latency_summary("os_key_input_to_picture", oskeys)
+    stage_summary(page, "os_key_stages", got)
+    # Optional longer series for latency runs (HXC_LAT_SAMPLES keystrokes,
+    # a letter and Backspace in turn so the line never wraps).
+    extra_n = int(os.environ.get("HXC_LAT_SAMPLES", "0"))
+    if extra_n > 0:
+        extra = []
+        for i in range(extra_n):
+            extra.append(trial(page, key("KeyX" if i % 2 == 0 else "Backspace"), timeout=4))
+            time.sleep(0.25)
+        latency_summary("os_key_input_to_picture_long", extra)
+        stage_summary(page, "os_key_stages_long", len([x for x in extra if x is not None]))
     type_text("\nod -tx1 -w3 -v /dev/input/mice\n")
     wait_static(page, quiet_ms=1500, timeout=30)
     page.screenshot(path=f"{OUT}/linux-od.png")
@@ -491,6 +538,67 @@ with sync_playwright() as pw:
     text = json.dumps(audit)
     check("ConsoleSessionStarted" in text and "ConsoleAccessDenied" in text,
           "console sessions and refused tickets are in the audit log")
+
+    # ------------------------------------------------------------ guest audio
+    # A guest that plays sound, no guest tools: the sound card's PCM goes
+    # through QEMU's D-Bus audio to the node, FFmpeg/libopus, and the
+    # session's WebRTC audio track. The browser's own receive statistics
+    # must count packets AND audio energy (a silent stream fails), measured
+    # against the same session before the guest plays.
+    AUDIO_ISO = os.environ.get("HXC_AUDIO_ISO", "")
+    if AUDIO_ISO:
+        call("POST", f"/vms/{VM}/stop", token=ADMIN, ok=None)
+        AVM = "hxc-audio"
+        make_vm(AVM, AUDIO_ISO, 512, sound="intel-hda")
+        aargv = " ".join(qemu_cmdline(AVM))
+        check("-audiodev dbus" in aargv and "audiodev=snd0" in aargv.split("-display", 1)[-1].split(" ", 2)[1]
+              and "hda-duplex" in aargv,
+              "the audio VM's sound card plays into QEMU's D-Bus audio (-audiodev dbus named by -display dbus, "
+              "intel-hda + hda-duplex)")
+        page = open_console(admin, AVM, "audio")
+        check(page.evaluate("window.hxc.hello.audio") is True, "the session offers an audio track for a VM with a sound card")
+        time.sleep(int(os.environ.get("HXC_ALPINE_BOOT_SECS", "40")))
+        type_text("root\n")
+        time.sleep(3)
+        # the data dir on the boot CD carries alsa-utils (no network here)
+        # and play.sh (driver, packages, mixer; `play.sh tone` plays)
+        type_text("sh /media/*/hxapk/play.sh\n")
+        time.sleep(20)
+        page.screenshot(path=f"{OUT}/audio-setup.png")
+        type_text("clear\n")
+        time.sleep(3)
+
+        def audio_stats():
+            return page.evaluate("""async () => {
+              const st = await window.hxc.pc.getStats(); let r = {packets: 0, energy: 0, level: 0, samples: 0};
+              st.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'audio')
+                r = {packets: s.packetsReceived || 0, energy: s.totalAudioEnergy || 0, level: s.audioLevel || 0,
+                     samples: s.totalSamplesReceived || 0}; });
+              return r; }""")
+        a0 = audio_stats()
+        time.sleep(3)
+        a1 = audio_stats()
+        quiet_energy = a1["energy"] - a0["energy"]
+        type_text("sh /media/*/hxapk/play.sh tone\n")
+        time.sleep(8)
+        a2 = audio_stats()
+        _, asess = call("GET", f"/console/{AVM}/hxc/sessions", token=ADMIN, ok=None)
+        node_packets = asess[0]["stats"]["audio_packets"] if asess else None
+        played = {"packets": a2["packets"] - a1["packets"], "energy": round(a2["energy"] - a1["energy"], 4),
+                  "seconds": 8, "quiet_energy": round(quiet_energy, 6), "node_audio_packets": node_packets,
+                  "level_after": a2["level"]}
+        RESULTS["guest_audio"] = played
+        print("AUDIO " + json.dumps(played), flush=True)
+        if played["packets"] <= 50 or played["energy"] <= max(0.01, 10 * quiet_energy):
+            page.screenshot(path=f"{OUT}/audio-failed.png")
+        check(played["packets"] > 50,
+              f"the browser receives the guest's sound on the WebRTC audio track ({played['packets']} Opus packets "
+              f"in 8 s while the guest played a 440 Hz tone, node sent {node_packets})")
+        check(played["energy"] > max(0.01, 10 * quiet_energy),
+              f"the received audio is not silence (totalAudioEnergy +{played['energy']} while playing vs "
+              f"+{played['quiet_energy']} in 3 s before)")
+        page.close()
+        call("POST", f"/vms/{AVM}/stop", token=ADMIN, ok=None)
 
     # ------------------------------------------------------------ Windows VM
     if WIN_ISO:

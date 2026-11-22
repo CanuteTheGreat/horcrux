@@ -273,6 +273,15 @@ fn random_password(len: usize) -> String {
     s
 }
 
+/// The sound card plays into QEMU's D-Bus audio (read by the Horcrux
+/// Console) rather than SPICE or nowhere.
+fn dbus_audio(display: &VmDisplay, rt: &DisplayRuntime) -> bool {
+    display.sound != SoundDevice::None
+        && display.protocol != DisplayProtocol::Spice
+        && rt.dbus_display
+        && rt.dbus_audio
+}
+
 /// QEMU arguments for the serial console, display, video and sound.
 /// `pc` is false for non-PC machine types (aarch64/riscv64 `virt`, ppc64).
 pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime) -> Vec<String> {
@@ -294,7 +303,14 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
     // The Horcrux Console reads the display over peer-to-peer D-Bus
     // (connections are handed to QEMU through QMP add_client).
     if rt.dbus_display {
-        push(&["-display", "dbus,p2p=yes"]);
+        // QEMU exports the D-Bus Audio interface only for the audiodev the
+        // display names (`-display dbus,audiodev=`); a bare `-audiodev dbus`
+        // plays into nothing a client can reach.
+        if dbus_audio(display, rt) {
+            push(&["-display", "dbus,p2p=yes,audiodev=snd0"]);
+        } else {
+            push(&["-display", "dbus,p2p=yes"]);
+        }
     } else {
         push(&["-display", "none"]);
     }
@@ -399,7 +415,7 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
     if display.sound != SoundDevice::None {
         let backend = if display.protocol == DisplayProtocol::Spice {
             "spice,id=snd0"
-        } else if rt.dbus_display && rt.dbus_audio {
+        } else if dbus_audio(display, rt) {
             // the Horcrux Console reads it over the D-Bus display
             "dbus,id=snd0"
         } else {
@@ -590,6 +606,8 @@ mod tests {
             "{a}"
         );
         assert!(a.contains("-audiodev dbus,id=snd0"), "{a}");
+        // the display must name the audiodev, or QEMU exports no Audio object
+        assert!(a.contains("-display dbus,p2p=yes,audiodev=snd0"), "{a}");
         // without the D-Bus display there is no D-Bus audio
         r.dbus_display = false;
         let a = qemu_args(&d, &VmArchitecture::X86_64, &r).join(" ");

@@ -44,7 +44,7 @@
   // State exposed for diagnostics and automated tests.
   const hxc = window.hxc = {
     state: "starting", hello: null, guest: { width: 0, height: 0 }, codec: null,
-    framesDecoded: 0, rttMs: null, inputToFrameMs: [], inputToFrameCount: 0, inputToReceiveMs: [], framesSinceInput: [], lastError: null, denied: [],
+    framesDecoded: 0, rttMs: null, inputToFrameMs: [], inputToFrameCount: 0, inputToReceiveMs: [], framesSinceInput: [], stages: [], pendingTiming: null, lastError: null, denied: [],
     server: null, link: null, refreshHz: null,
   };
   function setState(s, text) {
@@ -163,6 +163,18 @@
         hxc.inputToReceiveMs.push(firstRxAfterInput === null ? null : firstRxAfterInput - inputAt);
         hxc.framesSinceInput.push(framesAfterInput);
         if (hxc.inputToReceiveMs.length > 50) { hxc.inputToReceiveMs.shift(); hxc.framesSinceInput.shift(); }
+        // per-stage times of this picture: arrival of its last packet,
+        // decode, hand-off to the compositor, this callback (all from the
+        // input); the node's own stages arrive as a ctl "timing" message
+        const m = meta || {};
+        const st = { total_ms: ms, at: now, node: null, rtt_ms: hxc.rttMs,
+          receive_ms: typeof m.receiveTime === "number" ? m.receiveTime - inputAt : null,
+          decode_ms: typeof m.processingDuration === "number" ? m.processingDuration * 1000 : null,
+          present_ms: typeof m.presentationTime === "number" ? m.presentationTime - inputAt : null,
+          display_ms: typeof m.expectedDisplayTime === "number" ? m.expectedDisplayTime - inputAt : null };
+        if (hxc.pendingTiming && now - hxc.pendingTiming.at < 300) { st.node = hxc.pendingTiming.m; }
+        hxc.pendingTiming = null;
+        hxc.stages.push(st); if (hxc.stages.length > 50) hxc.stages.shift();
         inputAt = null; firstRxAfterInput = null; framesAfterInput = 0;
         hxc.inputToFrameMs.push(ms); hxc.inputToFrameCount++;
         if (hxc.inputToFrameMs.length > 50) hxc.inputToFrameMs.shift();
@@ -336,6 +348,12 @@
       hxc.server = m;
       const last = hxc.inputToFrameMs.length ? hxc.inputToFrameMs[hxc.inputToFrameMs.length - 1].toFixed(0) + " ms input-to-picture, " : "";
       statsEl.textContent = (m.width ? m.width + "x" + m.height + ", " : "") + last + (hxc.rttMs !== null ? hxc.rttMs.toFixed(1) + " ms RTT, " : "") + "encode " + (m.encode_ms || 0).toFixed(1) + " ms" + linkText();
+    } else if (m.t === "timing") {
+      // the node's stages of the picture answering the last input: attach
+      // to that sample when it is already decoded, else keep for it
+      const last = hxc.stages[hxc.stages.length - 1], now = performance.now();
+      if (last && !last.node && now - last.at < 100) last.node = m;
+      else hxc.pendingTiming = { m, at: now };
     } else if (m.t === "link") {
       hxc.link = m;
     } else if (m.t === "source") {

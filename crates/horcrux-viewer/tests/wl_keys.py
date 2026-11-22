@@ -144,9 +144,30 @@ class Wl:
         self.send(kb, 1, struct.pack("<III", int(time.monotonic() * 1000) & 0xFFFFFFFF, code, 1 if down else 0))
 
 
+_KB = None
+
+
+def _keyboard():
+    """One virtual keyboard for the whole test, like a real one: the first
+    key of a freshly created virtual keyboard was dropped on a loaded CI
+    runner (the guest saw "oot" for "root"), while the compositor switched
+    its seat to the new device. It is created once and warmed up with a
+    modifier tap before the first real key."""
+    global _KB
+    if _KB is None:
+        wl = Wl()
+        kb = wl.keyboard()
+        for down in (True, False):
+            wl.key(kb, KEY_LEFTSHIFT, down)
+            wl.roundtrip()
+            time.sleep(0.05)
+        time.sleep(0.5)
+        _KB = (wl, kb)
+    return _KB
+
+
 def type_text(text, delay_ms=40):
-    wl = Wl()
-    kb = wl.keyboard()
+    wl, kb = _keyboard()
     for ch in text:
         shift, code = key_for(ch)
         if shift:

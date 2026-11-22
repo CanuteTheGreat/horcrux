@@ -79,6 +79,27 @@ if [ ! -s "$AISO" ]; then
 fi
 cp "$AISO" "$DATA/images/alpine-virt.iso"
 
+# Guest-originated audio: the same Alpine ISO with alsa-utils and its
+# dependencies added under /hxapk (the test VMs have no NIC), for the
+# branch the ISO itself names. Off with HXC_AUDIO=0.
+if [ "${HXC_AUDIO:-1}" = 1 ]; then
+  command -v xorriso >/dev/null || $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xorriso >/dev/null
+  vol=$(xorriso -indev "$AISO" -pvd_info 2>/dev/null | awk -F': *' '/^Volume Id/{print $2}')
+  branch=v$(printf '%s\n' "$vol" | grep -oE '[0-9]+\.[0-9]+' | head -1)
+  AAUDIO="$CACHE/alpine-virt-audio-${branch}-$(sha256sum "$HERE/hx_console_audio_play.sh" | cut -c1-8).iso"
+  if [ ! -s "$AAUDIO" ]; then
+    rm -rf "$DATA/hxapk"
+    python3 "$HERE/alpine_apks.py" "${HXC_ALPINE_PKG_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}" "$branch" \
+      "$DATA/hxapk" alsa-utils >/dev/null
+    cp "$HERE/hx_console_audio_play.sh" "$DATA/hxapk/play.sh"
+    xorriso -indev "$AISO" -outdev "$AAUDIO.part" -boot_image any replay -map "$DATA/hxapk" /hxapk >/dev/null 2>&1
+    mv "$AAUDIO.part" "$AAUDIO"
+  fi
+  cp "$AAUDIO" "$DATA/images/alpine-virt-audio.iso"
+  export HXC_AUDIO_ISO="$DATA/images/alpine-virt-audio.iso"
+  echo "ok - Alpine ISO with alsa-utils for the guest-audio check ($vol, $branch)"
+fi
+
 cleanup() {
   [ -f "$DATA/api.pid" ] && kill "$(cat "$DATA/api.pid")" 2>/dev/null || true
   pkill -f "[q]emu-system-x86_64.*$DATA" 2>/dev/null || true

@@ -76,6 +76,14 @@ pub struct Caps {
     /// [`ring`]) and write raw frames into it while a same-host viewer
     /// watches.
     pub shm_frames: bool,
+    /// The guest tools inject keyboard keys, mouse buttons and the wheel
+    /// through their own input device (reaches everything the guest OS
+    /// shows once the tools run); the node may route them there instead of
+    /// QEMU's emulated keyboard.
+    pub keyboard: bool,
+    /// The guest tools take absolute pointer positions in the guest
+    /// display's pixels without capturing it themselves.
+    pub absolute_pointer: bool,
 }
 
 /// Guest -> node, first message after the port opens.

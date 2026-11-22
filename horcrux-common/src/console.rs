@@ -449,6 +449,11 @@ pub struct ConsoleSettings {
     /// Give every VM the Horcrux guest-tools port (virtio-serial) and use
     /// the guest tools when they answer.
     pub guest_tools: bool,
+    /// Send keyboard, mouse buttons, wheel and the absolute pointer through
+    /// the guest tools' own input devices while they run and offer them
+    /// (faster than QEMU's emulated PS/2 keyboard); QEMU's input before the
+    /// tools start (firmware, boot loader, disk unlock) and when they stop.
+    pub input_via_guest_tools: bool,
     /// Name of the guest-tools virtio-serial port (the guest tools open
     /// `/dev/virtio-ports/<name>` or `\\.\Global\<name>`).
     pub guest_tools_port: String,
@@ -536,6 +541,7 @@ impl Default for ConsoleSettings {
             session_idle_timeout_secs: 30,
             audit_sessions: true,
             guest_tools: true,
+            input_via_guest_tools: true,
             guest_tools_port: "org.horcrux.console.0".into(),
             guest_tools_wait_ms: 1500,
             guest_tools_retry_secs: 5,

@@ -113,6 +113,11 @@ impl Platform for Windows {
                 chroma444: false,
                 hdr: false,
                 shm_frames: shm::available(&self.cfg),
+                // SendInput cannot reach the secure desktop (sign-in,
+                // UAC, Ctrl+Alt+Del): keys and the pointer stay on QEMU's
+                // devices, which reach every desktop.
+                keyboard: false,
+                absolute_pointer: false,
             },
         }
     }

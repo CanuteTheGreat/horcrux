@@ -73,6 +73,10 @@ pub struct Config {
     pub print_caps: bool,
     /// Name given to the virtual input devices.
     pub input_device_name: String,
+    /// Offer the node keyboard, buttons and absolute pointer through the
+    /// tools' own input devices (Linux uinput; the node then prefers them
+    /// over QEMU's emulated keyboard while the tools run).
+    pub offer_input: bool,
     /// Windows: run as a service that launches the agent in the console session.
     pub service: bool,
     /// Windows: BGRA->NV12 conversion threads (0 = up to 4, by CPU count).
@@ -148,6 +152,7 @@ impl Default for Config {
             once: false,
             print_caps: false,
             input_device_name: "Horcrux virtual input".into(),
+            offer_input: true,
             service: false,
             convert_threads: 0,
             gdi_poll_ms: 8,
@@ -273,6 +278,7 @@ impl Config {
             "once" => self.once = b(v),
             "print_caps" => self.print_caps = b(v),
             "input_device_name" => self.input_device_name = v.into(),
+            "offer_input" => self.offer_input = b(v),
             "service" => self.service = b(v),
             "convert_threads" => self.convert_threads = num(v)? as usize,
             "gdi_poll_ms" => self.gdi_poll_ms = num(v)?.max(1),

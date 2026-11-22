@@ -17,6 +17,7 @@
 use super::abr::{self, Abr, AbrConfig};
 use super::encode::{self, EncodeParams, EncodedFrame, Encoder, PixelFormat, VideoCodec};
 use super::guest::{self, GuestLink};
+use super::input_route::{InputRouter, Routed};
 use super::keymap;
 use super::qemu_dbus::{DbusDisplay, DisplayEvent, GuestInput};
 use base64::Engine as _;
@@ -132,6 +133,14 @@ pub struct SessionStats {
     pub fec: bool,
     pub fec_active: bool,
     pub fec_packets: u64,
+    /// Keys and buttons handed to the guest tools' input devices instead of
+    /// QEMU's emulated keyboard (tools connected and offering it).
+    pub keys_via_tools: u64,
+    /// Absolute pointer positions handed to the guest tools.
+    pub pointer_via_tools: u64,
+    /// Running input-to-picture probe (node stages, see `probe.rs`).
+    #[serde(skip)]
+    pub probe: super::probe::LatencyProbe,
 }
 
 pub struct SessionHandle {
@@ -184,7 +193,9 @@ impl SessionHandle {
 
 /// What the transport loop is told by the other tasks.
 enum ToRtc {
-    Frame(EncodedFrame, Instant),
+    /// An encoded frame, when it went into the encoder, and the input probe
+    /// it answers (the first picture change after an input).
+    Frame(EncodedFrame, Instant, Option<super::probe::FrameTiming>),
     /// An access unit encoded in the guest, forwarded as it is.
     GuestFrame(Vec<u8>, Instant),
     Ctl(String),
@@ -948,9 +959,18 @@ async fn guest_task(
                 let _ = to_rtc.try_send(ToRtc::Audio(a.data));
             }
             // the duplicate Hello of the handshake (one sent when the tools
-            // opened the port, one answering HostHello) is not a reopen
-            gproto::Msg::Hello(_) if linked_at.elapsed() < Duration::from_secs(2) => {}
-            gproto::Msg::Hello(_) => {
+            // opened the port, one answering HostHello) is not a reopen,
+            // but its capabilities are the newer ones (input devices made
+            // ready in between)
+            gproto::Msg::Hello(h) if linked_at.elapsed() < Duration::from_secs(2) => {
+                if let Ok(mut g) = ctx.guest_caps.lock() {
+                    *g = Some(h.caps);
+                }
+            }
+            gproto::Msg::Hello(h) => {
+                if let Ok(mut g) = ctx.guest_caps.lock() {
+                    *g = Some(h.caps);
+                }
                 let again: Vec<gproto::Msg> = ctx
                     .guest_started
                     .lock()
@@ -1092,6 +1112,8 @@ pub(super) async fn input_task(
         };
         if let Err(e) = r {
             tracing::debug!("console input: {e}");
+        } else if let Ok(mut s) = stats.lock() {
+            s.probe.mark_injected(Instant::now());
         }
     }
     drop(stats);
@@ -1155,6 +1177,16 @@ struct CursorShape<'a> {
     bgra: String,
 }
 
+/// The guest's display changed: note it on a running input probe; the first
+/// change after the input is the picture that answers it.
+fn mark_update(ctx: &Ctx, answer: &mut Option<super::probe::LatencyProbe>) {
+    if let Ok(mut s) = ctx.stats.lock() {
+        if s.probe.mark_update(Instant::now()) {
+            *answer = s.probe.take();
+        }
+    }
+}
+
 async fn compositor(
     ctx: Arc<Ctx>,
     mut disp: mpsc::Receiver<DisplayEvent>,
@@ -1187,6 +1219,10 @@ async fn compositor(
     let mut voices: HashMap<u64, (super::audio::PcmFormat, Option<super::audio::Encoder>)> =
         HashMap::new();
     let mut last_keyframe_restart = Instant::now() - Duration::from_secs(60);
+    // Input probe: the first display change after an input (`answer`) and
+    // the submitted frame that carries it (`timed`).
+    let mut answer: Option<super::probe::LatencyProbe> = None;
+    let mut timed: Option<(u64, super::probe::FrameTiming)> = None;
 
     loop {
         tokio::select! {
@@ -1212,12 +1248,14 @@ async fn compositor(
                             let _ = to_rtc.send(ToRtc::Ctl(msg)).await;
                         }
                         dirty = true;
+                        mark_update(&ctx, &mut answer);
                     }
                     DisplayEvent::Update { x, y, width, height, stride, format, data } => {
                         if let Some(f) = fb.as_mut() {
                             if PixelFormat::from_pixman(format) == Some(f.format) {
                                 f.update(x, y, width, height, stride, &data);
                                 dirty = true;
+                                mark_update(&ctx, &mut answer);
                             }
                         }
                     }
@@ -1321,7 +1359,21 @@ async fn compositor(
                     if seq == frame.seq { at = t; break; }
                     if seq > frame.seq { break; }
                 }
-                if to_rtc.send(ToRtc::Frame(frame, at)).await.is_err() { break; }
+                // the probe's picture: this frame or a later one carries it
+                let timing = match timed {
+                    Some((seq, mut ft)) if seq <= frame.seq
+                        && ft.submitted.elapsed() < super::probe::PROBE_WINDOW => {
+                        timed = None;
+                        ft.encoded = Some(Instant::now());
+                        Some(ft)
+                    }
+                    Some((_, ft)) if ft.submitted.elapsed() >= super::probe::PROBE_WINDOW => {
+                        timed = None;
+                        None
+                    }
+                    _ => None,
+                };
+                if to_rtc.send(ToRtc::Frame(frame, at, timing)).await.is_err() { break; }
             }
             _ = tick.tick() => {
                 if to_rtc.is_closed() { break; }
@@ -1389,10 +1441,14 @@ async fn compositor(
                 }
                 if let Some(e) = encoder.as_mut() {
                     if let Some(seq) = e.submit(f.pixels.clone()) {
-                        submitted.push_back((seq, Instant::now()));
+                        let now = Instant::now();
+                        submitted.push_back((seq, now));
                         if submitted.len() > 120 { submitted.pop_front(); }
                         dirty = false;
-                        last_sent = Instant::now();
+                        last_sent = now;
+                        if let Some(probe) = answer.take() {
+                            timed = Some((seq, super::probe::FrameTiming { probe, submitted: now, encoded: None }));
+                        }
                     }
                 }
             }
@@ -1555,6 +1611,8 @@ async fn transport(
     let mut pending_cursor: Option<String> = None;
     let start = Instant::now();
     let low_latency = ctx.profile().low_latency_playout;
+    // keyboard/pointer: guest tools devices or QEMU (input_route.rs)
+    let mut router = InputRouter::default();
     let mut enc_lat: VecDeque<f64> = VecDeque::new();
     let mut stats_tick = tokio::time::interval(Duration::from_secs(2));
     let allow_input = ctx.req.allow_input;
@@ -1857,6 +1915,14 @@ async fn transport(
                         };
                         if let Some(ev) = ev {
                             if allow_input {
+                                let starts_probe = matches!(
+                                    ev,
+                                    InputEvent::Key { down: true, .. }
+                                        | InputEvent::Button { down: true, .. }
+                                        | InputEvent::Abs { .. }
+                                        | InputEvent::Rel { .. }
+                                        | InputEvent::Wheel { .. }
+                                );
                                 if let Ok(mut s) = ctx.stats.lock() {
                                     match ev {
                                         InputEvent::Key { .. } | InputEvent::Button { .. } => {
@@ -1864,18 +1930,51 @@ async fn transport(
                                         }
                                         _ => s.pointer_in += 1,
                                     }
+                                    if starts_probe {
+                                        s.probe.mark_input(Instant::now());
+                                    }
                                 }
                                 // raw relative motion through the guest tools
                                 // (no pointer acceleration in Linux uinput)
                                 let via_guest = matches!(ev, InputEvent::Rel { .. })
                                     && ctx.guest_can(|c| c.relative_mouse);
                                 if let (true, InputEvent::Rel { dx, dy }) = (via_guest, &ev) {
-                                    let _ = ctx.to_guest(gproto::Msg::Input(gproto::Input::Rel {
+                                    if ctx.to_guest(gproto::Msg::Input(gproto::Input::Rel {
                                         dx: *dx,
                                         dy: *dy,
-                                    }));
+                                    })) {
+                                        if let Ok(mut s) = ctx.stats.lock() {
+                                            s.probe.mark_injected(Instant::now());
+                                        }
+                                    }
                                 } else {
-                                    let _ = input.try_send(ev);
+                                    let caps = settings
+                                        .input_via_guest_tools
+                                        .then(|| ctx.guest_caps.lock().ok().and_then(|g| g.clone()))
+                                        .flatten();
+                                    let mut is_key = false;
+                                    match router.route(ev, caps.as_ref(), |i| {
+                                        is_key = matches!(
+                                            i,
+                                            gproto::Input::Key { .. }
+                                                | gproto::Input::Button { .. }
+                                        );
+                                        ctx.to_guest(gproto::Msg::Input(i))
+                                    }) {
+                                        Routed::Tools => {
+                                            if let Ok(mut s) = ctx.stats.lock() {
+                                                if is_key {
+                                                    s.keys_via_tools += 1
+                                                } else {
+                                                    s.pointer_via_tools += 1
+                                                }
+                                                s.probe.mark_injected(Instant::now());
+                                            }
+                                        }
+                                        Routed::Qemu(ev) => {
+                                            let _ = input.try_send(ev);
+                                        }
+                                    }
                                 }
                             } else {
                                 if let Ok(mut s) = ctx.stats.lock() {
@@ -2033,8 +2132,8 @@ async fn transport(
                             pending_out.push_back(("console", b, true));
                         }
                     }
-                    Some(ToRtc::Frame(_, _)) if ctx.guest_video.load(Ordering::Relaxed) => {}
-                    Some(ToRtc::Frame(frame, at)) => {
+                    Some(ToRtc::Frame(_, _, _)) if ctx.guest_video.load(Ordering::Relaxed) => {}
+                    Some(ToRtc::Frame(frame, at, timing)) => {
                         if let Some((mid, pt, _)) = video {
                             let now = Instant::now();
                             let rtp = MediaTime::new(
@@ -2043,6 +2142,11 @@ async fn transport(
                             );
                             let len = frame.data.len();
                             write_video(&mut rtc, &fec, low_latency, (mid, pt), now, rtp, frame.data);
+                            if let Some(m) = timing.and_then(|t| t.message(Instant::now())) {
+                                if let Ok(s) = serde_json::to_string(&m) {
+                                    pending_ctl.push(s);
+                                }
+                            }
                             enc_lat.push_back((now - at).as_secs_f64() * 1000.0);
                             if enc_lat.len() > 60 { enc_lat.pop_front(); }
                             if let Ok(mut s) = ctx.stats.lock() {
