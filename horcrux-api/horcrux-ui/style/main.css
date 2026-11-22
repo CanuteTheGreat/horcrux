@@ -1279,3 +1279,10 @@ td .actions { flex-wrap: nowrap; }
 .time-controls label { font-weight: 600; color: var(--secondary); font-size: .9rem; }
 /* a label directly followed by its control, outside a stacked .form-group: keep a gap (jammed-label rule) */
 :where(main.container) :where(*:not(.form-group):not(.stack-form)) > label:not(.checkbox) + :is(select, input:not([type=checkbox]):not([type=radio]), textarea) { margin-inline-start: .5rem; }
+
+/* Phone width: a wide table scrolls inside its own box instead of widening the whole page. */
+@media (max-width: 900px) {
+    main.container table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    main.container pre, main.container code.block { max-width: 100%; overflow-x: auto; }
+    main.container .form-row.fields .form-group { flex-basis: 100%; }
+}
