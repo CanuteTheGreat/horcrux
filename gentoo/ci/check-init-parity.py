@@ -10,6 +10,7 @@ Machine-layer packages that another workstream owns are listed in EXEMPT with th
 INIT_HALF lists packages that ARE one init system's implementation of something whose other half is a different
 package (gnome-session-openrc on OpenRC, upstream gnome-session on systemd): they may depend on their init system,
 and every ebuild that pulls them must do so under the matching USE conditional (`!systemd? ( ... )`).
+SYSTEMD_NATIVE lists packages whose systemd half is a systemd facility fed by a file the ebuild installs (systemd-binfmt).
 Exit 1 with the whole list of findings.
 """
 import os, re, sys
@@ -20,6 +21,12 @@ EXEMPT = {
 INIT_HALF = {
     # GNOME's session manager on OpenRC; systemd systems run ::gentoo gnome-base/gnome-session (horcrux-gnome-defaults).
     "gnome-base/gnome-session-openrc": "!systemd?",
+}
+# Packages whose OpenRC script's systemd half is a systemd facility fed by a config file the same ebuild installs
+# (not a unit of its own). Value: a string that must appear in the ebuild (proof the systemd half is installed).
+SYSTEMD_NATIVE = {
+    # qemu-binfmt (OpenRC) <-> systemd-binfmt.service reading /usr/share/qemu/binfmt.d/qemu.conf (copy of ::gentoo).
+    "app-emulation/qemu": "binfmt.d",
 }
 INIT_CALL = re.compile(r"\b(newinitd|doinitd)\b")
 UNIT_CALL = re.compile(r"\b(systemd_dounit|systemd_newunit|systemd_install_serviced)\b")
@@ -74,7 +81,10 @@ def main():
         text = open(os.path.join(pd, f)).read()
         body = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
         has_init, has_unit = bool(INIT_CALL.search(body)), bool(UNIT_CALL.search(body))
-        if has_init and not has_unit and cp not in EXEMPT:
+        native = cp in SYSTEMD_NATIVE and SYSTEMD_NATIVE[cp] in body
+        if cp in SYSTEMD_NATIVE and not native:
+            bad.append(f"{cp}/{f}: SYSTEMD_NATIVE expects `{SYSTEMD_NATIVE[cp]}` (the systemd half) in the ebuild")
+        if has_init and not has_unit and not native and cp not in EXEMPT:
             bad.append(f"{cp}/{f}: installs an OpenRC script but no systemd unit")
         if has_unit and not re.search(r"^inherit .*\bsystemd\b", body, re.M):
             bad.append(f"{cp}/{f}: systemd_dounit without `inherit systemd`")

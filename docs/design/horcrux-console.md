@@ -288,7 +288,7 @@ latency runs).
 | Same host, raw frames (ivshmem) | < 8 ms frame-to-viewer | capture 1-2 ms, copy 1 ms, present up to 1 frame | **met**: median 2.0 ms, p95 4.0 ms at 120 fps; median 2.7-2.8 ms, p95 3.7 ms at 60 fps (1280x800, without window present) |
 | LAN, encoded | < 20 ms click-to-photon | input 1 ms, game frame 4 ms, capture 1 ms, encode 2-4 ms, network 1-2 ms, decode 2-4 ms, present 4 ms | guest half only: keystroke to encoded frame at the node median 16.5 ms (60 fps, software x264 in a 2-vCPU guest); full path needs GPU hardware |
 | WAN | LAN + RTT + jitter buffer | adaptive bitrate fits the uplink; FEC instead of retransmission when RTT is high | C3 |
-| Desktop profile, LAN | < 50 ms, text lossless within 500 ms of last change | | **not met yet**: keystroke to picture in the browser median 54-73 ms on a busy shared host (host software encode, no tools); the largest stage is QEMU's 30 ms display refresh poll (section 6, C2d) |
+| Desktop profile, LAN | < 50 ms, text lossless within 500 ms of last change | | **met, barely**: keystroke to picture in the browser median 47.6 / 49.9 ms in two runs (was 64.6 / 66.0 ms) with QEMU's display poll at 120 Hz and frame bursts of 2, host software encode, no tools, shared build host (details: "Measured: QEMU display poll rate") |
 
 Measured numbers per path go into this table and into the GeForce NOW
 comparison in docs/design/gaming-vm.md section 14 as phases land. Tests measure
@@ -530,6 +530,68 @@ Reading:
   faster than the frame period (376 frames/s asked for 120 starved the
   guest), so raw capture caps its output with `-fpsmax`.
 
+### Measured: QEMU display poll rate (2026-11-21)
+
+Where the host-encode time went (per-stage probe of `hx_console_e2e.sh`,
+`HXC_LAT_SAMPLES=30`, std VGA, Alpine 1280x800 text console, desktop
+profile at 30 fps): of 60-66 ms keystroke-to-picture, 31-35 ms was "QEMU
+injected the key -> first D-Bus display update". QEMU polls display devices
+that do not report their own changes (std VGA, cirrus, QXL in VGA mode,
+virtio-vga before its driver loads) from its gui timer, every 30 ms for a
+D-Bus listener (`GUI_REFRESH_INTERVAL_DEFAULT`; only the GTK, SDL, VNC and
+SPICE displays set their own interval), so on top of the guest's own ~15 ms
+reaction a change waited 0-30 ms. No QEMU release or master (checked
+v11.1.3 and master 2026-11-20) lets a D-Bus client change it; the `UIInfo`
+refresh rate on master is guest-facing (EDID) and refuses exactly these
+devices.
+
+Fix, two parts:
+- QEMU: an optional `RefreshRate` property (millihertz) on the client's
+  `org.qemu.Display1.Listener`, read when the listener registers and
+  followed on PropertiesChanged, turned into that listener's update
+  interval like the GTK display does. Carried as a patch in the Horcrux
+  overlay (`gentoo/app-emulation/qemu`, ::gentoo 11.1.3 ebuild + patch,
+  revision -r100; the binhost builds it). QEMU builds without it ignore the
+  property, so nothing else changes on them.
+- Node: the listener offers `display_poll_hz` of the session's profile
+  (desktop 120, gaming 240, console 60; 0 = QEMU's default). The faster
+  poll then exposed a second wait: when a poll catches the guest mid-draw,
+  that partial frame used up the 30 fps slot and the completing frame
+  waited a whole frame interval. The encoder's cap is now a token bucket
+  (`frame_burst`, desktop/console 2, gaming 1): same average rate, but the
+  completing frame leaves at once.
+
+Same host (shared 16-thread build host, load 5-11 during the runs; Ubuntu
+24.04 container with KVM, 4 CPUs; QEMU 11.1.3 built from the release
+tarball, stock vs patched), interleaved, 30 keystrokes per run:
+
+| Setup | Keystroke to picture, median (min-max) | QEMU injected -> display update, median | Node total (input -> frame sent) |
+|---|---|---|---|
+| Before: stock QEMU, `frame_burst` 1 (two runs) | 66.0 (40.8-107.5) / 64.6 (44.4-94.0) ms | 33.9 / 34.1 ms | 45.0 / 45.5 ms |
+| Stock QEMU, `frame_burst` 2 (two runs) | 65.5 / 65.4 ms | 32.6 / 33.1 ms | 43.5 / 44.5 ms |
+| Patched QEMU, `display_poll_hz` 0 (= QEMU default, two runs) | 58.5 / 59.9 ms | 31.2 / 35.0 ms | 41.2 / 44.0 ms |
+| Patched QEMU, 120 Hz, `frame_burst` 1 (two runs) | 49.0 / 50.2 ms | 18.6 / 16.8 ms | 28.0 / 27.4 ms |
+| **After (defaults): patched QEMU, 120 Hz, `frame_burst` 2 (two runs)** | **47.6 (31.7-1050.8) / 49.9 (31.5-1135.1) ms** | **17.1 / 16.4 ms** | **27.2 / 29.2 ms** |
+| Patched QEMU, 120 Hz, `max_fps` 60 / 120 (strict gap) | 45.2 / 44.1 ms | 17.9 / 17.0 ms | 27.0 / 27.1 ms |
+
+Reading:
+- QEMU injected -> display update drops by 16-18 ms (median), and the
+  keystroke-to-picture median by 15-17 ms, to just under the 50 ms desktop
+  target. 240 Hz polls gave nothing over 120 Hz (14.1 vs 13.7 ms in the
+  same series): the rest is the guest's own reaction.
+- The bucket matters for the samples whose first update came within 12 ms
+  of the key (the guest still drawing): with a strict 30 fps gap they took
+  65-75 ms median, with `frame_burst` 2 44-55 ms. How often that happens
+  varies by run (0-14 of 30 samples): in the interleaved series above the
+  median gain was about 1 ms; an earlier series of strict-gap 120 Hz runs
+  with many such samples had medians of 57-61 ms.
+- The single ~1.1 s maximum in some runs (one sample of 30) also appears
+  with stock QEMU and with the strict gap, so it is not caused by polling or
+  the bucket; its cause is not read yet.
+- Remaining budget at the median: guest reaction ~15 ms, encode 6 ms, node
+  bookkeeping ~3 ms, network + decode ~7 ms, browser present and frame
+  callback ~8 ms.
+
 ## 7. Standalone machine
 
 One box runs everything: the guest, the broker, the encoder and, if WAN access
@@ -547,12 +609,17 @@ the VM locally. No shared storage or second node is assumed anywhere.
   VNC.
 - Existing console URLs keep working until the new viewer covers them; the UI
   offers "classic console (VNC/SPICE/serial)" as a switch.
+- A QEMU without the D-Bus listener `RefreshRate` patch (any distribution
+  build) ignores the node's `display_poll_hz` and keeps its 30 ms poll:
+  the console works the same, about 16 ms slower per change on polled
+  display devices.
 
 ## 9. Settings (all with defaults; `[console]` in /etc/horcrux/config.toml, API, UI)
 
 Default profile per guest type; per-profile codec preference order, chroma,
 max resolution/refresh, bitrate floor/ceiling, keyframe interval, lossless
-refinement delay; ticket lifetime; relay enabled/port/realm/credential
+refinement delay, QEMU display poll rate (`display_poll_hz`) and frame
+burst (`frame_burst`); ticket lifetime; relay enabled/port/realm/credential
 lifetime; UPnP mapping on/off; clipboard/file/USB/mic defaults for own vs
 shared guests; audit of clipboard sizes on/off; recording on/off and retention;
 native viewer default (window vs fullscreen, vsync). No value is baked into
@@ -1064,9 +1131,9 @@ Not proven yet:
   its behaviour with a GPU-driven desktop (it ran on a QEMU std VGA guest;
   see the Windows row in section 6). The agent's virtio-serial path on
   Windows was not part of that run (no port was given to the VM).
-- Host-encode desktop target (< 50 ms): 54-73 ms median on a busy shared
-  host; the per-stage probe puts the biggest piece in QEMU's 30 ms display
-  refresh poll (section 6). A run on an unloaded node and the QEMU refresh
-  interval change are pending.
+- Host-encode desktop target (< 50 ms): met only barely (median 47.6 / 49.9
+  ms on a shared build host, after the QEMU display poll fix in section 6)
+  and not yet re-measured on an idle node or with the patched QEMU from the
+  Horcrux binhost on a real install.
 - Needs real GPU hardware: 240 Hz capture of a GPU-rendered desktop into the
   ring, hardware encode in the guest and on the host.
