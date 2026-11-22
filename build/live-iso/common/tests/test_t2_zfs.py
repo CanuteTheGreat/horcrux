@@ -444,6 +444,19 @@ class RtcSync(unittest.TestCase):
         self.assertIn("[net: addr=none; route=none; dns=none; dhcpcd=none]", lines[-1])
         self.assertGreaterEqual(clock["t"], 15, "must have waited out the window")
 
+    def test_unresolvable_host_adds_a_dns_diag_line(self):
+        base, calls = self.fake()
+
+        def sh(cmd, timeout=15):
+            if cmd[0] == "curl":
+                return 6, "curl: (6) Could not resolve host"
+            if cmd[0] == "sh":
+                return 0, "-rw-r--r-- 1 root root 0 /etc/resolv.conf\n[head: ]\n"
+            return base(cmd, timeout)
+        lines = []
+        self.assertFalse(RTC.sync(lines.append, sh=sh, now=lambda: self.JULY, wait=0))
+        self.assertTrue(lines[-1].startswith("rtc: DNS diag: -rw-r--r-- 1 root root 0 /etc/resolv.conf [head: ]"), lines[-1])
+
     def test_garbage_date_header_is_ignored(self):
         sh, calls = self.fake(http="HTTP/1.1 200 OK\r\nDate: Thu, 01 Jan 1970 00:00:00 GMT\r\n\r\n")
         self.assertIsNone(RTC.http_date(sh))

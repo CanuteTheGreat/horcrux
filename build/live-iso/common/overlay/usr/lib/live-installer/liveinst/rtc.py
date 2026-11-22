@@ -94,6 +94,19 @@ def net_state(sh=_sh):
     return "; ".join(parts)
 
 
+# why the resolver is empty while a lease is bound: file state, what the lease offered, which hooks/daemons own /etc/resolv.conf
+_DNS_PROBE = r"""ls -l /etc/resolv.conf /etc/resolv.conf.head /etc/resolvconf.conf 2>&1 | sed 's/^[^/]*//'; echo "[head: $(head -c 240 /etc/resolv.conf 2>&1 | tr '\n' '/')]";
+for i in $(ls /sys/class/net); do [ "$i" = lo ] || echo "[lease $i: $(dhcpcd -U "$i" 2>&1 | grep -E 'domain_name_servers|interface=' | tr '\n' ' ')]"; done;
+echo "[resolvconf: $(command -v resolvconf 2>&1) hooks: $(ls /lib/dhcpcd/dhcpcd-hooks /usr/lib/dhcpcd/dhcpcd-hooks 2>/dev/null | tr '\n' ' ')]";
+echo "[dhcpcd.conf: $(grep -E '^(nohook|resolvconf|denyinterfaces|allowinterfaces)' /etc/dhcpcd.conf 2>&1 | tr '\n' ';')]";
+echo "[svc: $(rc-status -a 2>/dev/null | grep -E 'dnsmasq|unbound|dhcpcd|chrony|patronus' | tr -s ' ' | tr '\n' ';')]" """
+
+
+def dns_diag(sh=_sh):
+    rc, out = sh(["sh", "-c", _DNS_PROBE], 20)
+    return " ".join(out.split())[:900]
+
+
 def reference_time(sh=_sh, now=time.time, wait=None, sleep=time.sleep, mono=time.monotonic, errors=None):
     """(source, epoch) from the first verified source that answers within `wait` seconds, else (None, None). One pass when wait is 0."""
     wait = NET_WAIT_S if wait is None else wait
@@ -132,6 +145,8 @@ def sync(log, sh=_sh, now=time.time, wait=None, sleep=time.sleep, mono=time.mono
         why = " ".join(l.strip() for l in out.splitlines() if l.split(":")[0].strip() in ("Reference ID", "Stratum", "Leap status"))[:160]
         log("rtc: NOT written: no verified time source (offline install); chrony + the NetworkManager hook correct the clock at the first network"
             f" [chronyc rc={rc}: {why or out.strip()[:120]}] [sources: {' | '.join(errs)[:400] or 'none tried'}] [net: {net_state(sh)}]")
+        if any("rc=6" in e for e in errs):          # curl rc 6 = could not resolve the host: say what the resolver and the lease look like
+            log(f"rtc: DNS diag: {dns_diag(sh)}")
         return False
     rc, out = sh(["hwclock", "-w", "-u"])
     if rc != 0:
