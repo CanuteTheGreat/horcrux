@@ -9,7 +9,7 @@ if [ "$1" = tone ]; then
   exit 0
 fi
 modprobe snd-hda-intel
-apk add -q --allow-untrusted --no-network "$d"/*.apk
+apk add -q --allow-untrusted --force-non-repository --no-network "$d"/*.apk
 for i in 1 2 3 4 5; do [ -e /dev/snd/pcmC0D0p ] && break; sleep 1; done
 for c in Master PCM Front; do amixer -q -c 0 sset "$c" 100% unmute 2>/dev/null; done
 ls /dev/snd
