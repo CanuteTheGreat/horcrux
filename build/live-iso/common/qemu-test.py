@@ -1055,7 +1055,12 @@ def serial_probe(vm, wait=45):
                     # 2026-11-17 (hogshead j06220, same stall: rules fine, 22/8443 listening, local curl 303, host forwards dead 300 s): QEMU slirp may have
                     # lost the guest's ARP entry; a guest-originated packet to the gateway refreshes it. Report whether the gateway answers, the neighbour table
                     # and whether an established/related accept exists in the input chain.
-                    "ping -c2 -W2 10.0.2.2 >/dev/null 2>&1; echo PING-GW-$?; ip neigh | head -4 | sed 's/^/NEIGH /'; "
+                    "ping -c2 -W2 10.0.2.2 >/dev/null 2>&1; echo PING-GW-$?; "
+                    # 2026-11-22 (gringotts j08032, plain, 1 of ~160 runs): the web/ssh forwards of a two-NIC guest ride the SECOND slirp stack (LAN net), whose
+                    # gateway (x.x.x.2) the ping above never touched, so the probe could not refresh that stack's view of the guest. Ping the .2 peer of
+                    # every global IPv4 subnet the guest has.
+                    "for a in $(ip -4 -o addr show scope global | awk '{print $4}'); do g=${a%.*/*}.2; ping -c2 -W2 $g >/dev/null 2>&1; echo PING-$g-$?; done; "
+                    "ip neigh | head -4 | sed 's/^/NEIGH /'; "
                     "nft list chain inet patronus input 2>&1 | grep -c 'ct state' | sed 's/^/CTRULES-/'; "
                     "echo APPLY-LOGS; tail -n 4 /var/log/patronus/*.log /var/log/horcrux/*.log 2>/dev/null | cut -c1-160; "
                     "for p in 443 8443 8006; do ss -ltn | grep -q \":$p \" && echo LOCALWEB-$p-$(curl -sk -m8 -o /dev/null -w %{http_code} https://127.0.0.1:$p/ 2>&1 | tail -c 40); done; "
@@ -1065,7 +1070,7 @@ def serial_probe(vm, wait=45):
             out = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", m.group(0).decode(errors="replace")) if m else "<<no shell answer>>"
             vm.send("exit\r")
         print("--- serial probe (guest console menu %s) ---\n%s\n---" % ("answers" if alive else "SILENT", out), flush=True)
-        facts = [l.strip() for l in out.splitlines() if re.match(r"\s*(lo|enp\S*|eth\S*|\d+:\d+:\d+ up|LOCALWEB-)", l) or "LISTEN" in l or "policy" in l or re.match(r"(PING-GW|CTRULES|NEIGH)", l.strip())][:16]
+        facts = [l.strip() for l in out.splitlines() if re.match(r"\s*(lo|enp\S*|eth\S*|\d+:\d+:\d+ up|LOCALWEB-)", l) or "LISTEN" in l or "policy" in l or re.match(r"(PING-|CTRULES|NEIGH)", l.strip())][:16]
         return " [serial probe: console menu " + ("answers" if alive else "SILENT (guest hung?)") + ("; " + " // ".join(facts) if facts else "") + "]"
     except Exception as e:  # diagnostics must never mask the failure
         return f" [serial probe failed: {e}]"
@@ -2176,6 +2181,9 @@ class Runner:
             # probe below) got a 401, so the forwarded ports came back late. ONE bounded retry of the no-answer case (a second 120 s wait for the
             # SAME login); a wrong answer (401) or a guest that never answers still fails, and the assertion below is unchanged.
             print(f"[factory-reset] no HTTP answer for 180 s ({err3!r}); one more 120 s wait for the same login", flush=True)
+            # guest-originated traffic on every NIC (serial shell pings each slirp peer) before the second wait: the guest was idle in both
+            # recorded stalls (j05543, j06220, j08032) and the forwards only came back once it spoke; the probe output says whether it helped
+            print("[factory-reset] nudge: " + serial_probe(vm, 60), flush=True)
             c3 = self.web_login_code(PW2 if self.P.get("web_user") else PW3, 120)
             err3 = self.login_err
             print(f"[factory-reset] after the retry: new password -> {c3}", flush=True)
