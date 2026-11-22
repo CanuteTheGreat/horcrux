@@ -115,6 +115,13 @@ Use --autounmask-write to write changes to config files
         for frag in ("schema", "hostname", "edition", "root", "not a package atom", "https://", "refusing path", "exactly one", "psk"):
             self.assertIn(frag, errs)
 
+    def test_hostname_may_be_an_fqdn(self):
+        # the installer accepts FQDNs; the generated hardware-layer profile carries the install's hostname as is
+        for h in ("box1", "zfs-enc.test.lan", "a.b"):
+            self.assertEqual(E.problems(dict(GOOD, machine={"hostname": h, "edition": "server"}, software={})), [], h)
+        for h in ("", "-x", "a..b", "a.-b", "b-.c", "a_b", "x" * 64, "a." + "x" * 64):
+            self.assertTrue(any("hostname" in e for e in E.problems(dict(GOOD, machine={"hostname": h, "edition": "server"}, software={}))), h)
+
     def test_portage_wildcards_allowed_only_in_portage_tables(self):
         mp = dict(GOOD, portage={"accept_keywords": {"*/*::private": "~amd64"}, "license": {"*/*": "*"}})
         self.assertEqual([e for e in E.problems(mp) if "bundle:" not in e], [])

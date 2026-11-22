@@ -57,7 +57,7 @@ ATOM_RE = re.compile(r"^(@[A-Za-z0-9_.+-]+|[<>=~]{0,2}[A-Za-z0-9+_.-]+/[A-Za-z0-
 # package.* files also take wildcards: */*, */*::repo, cat/*, */pkg (never in software.packages)
 PORTAGE_KEY_RE = re.compile(r"^(\*|[A-Za-z0-9+_.-]+)/(\*|[A-Za-z0-9+_-]+)(::[A-Za-z0-9_-]+)?$")
 NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
-HOST_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
+HOST_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$")  # FQDN allowed, as in the installer
 REPO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
 DEFAULT_SOURCE_OK_REPOS = ("horcrux",)          # our own script/config packages; everything else must be a binary package
 NO_COMPILE_CATEGORIES = ("acct-group", "acct-user", "virtual")   # never compile anything: fine from the ebuild on any machine
