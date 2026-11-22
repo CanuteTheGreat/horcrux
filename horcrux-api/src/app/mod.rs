@@ -4765,7 +4765,10 @@ async fn get_cpu_groups(State(state): State<Arc<AppState>>) -> Json<serde_json::
 /// `GET /api/cluster/nics` -- local NICs/bonds (1-100 GbE), per-NIC warnings
 /// (down, below `min_mbps`, MTU < 9000, single-slave bond) and the suggested
 /// background-traffic cap scaled to the fastest link. Read-only.
-async fn get_local_nics(Query(q): Query<NicsQuery>) -> Json<serde_json::Value> {
+async fn get_local_nics(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<NicsQuery>,
+) -> Json<serde_json::Value> {
     use crate::cluster::nic;
     let nics = nic::scan_nics(std::path::Path::new("/sys"));
     let min = q.min_mbps.unwrap_or(10_000);
@@ -4775,7 +4778,18 @@ async fn get_local_nics(Query(q): Query<NicsQuery>) -> Json<serde_json::Value> {
     }
     let best = nic::best_speed_mbps(&nics);
     let cap = best.map(|b| nic::background_cap_mbps(b, q.percent.unwrap_or(70)));
+    // Other nodes' reported fastest link (the local node is covered above).
+    let peers: Vec<(String, u64)> = state
+        .cluster_manager
+        .list_nodes_with_local()
+        .await
+        .into_iter()
+        .filter(|n| !n.is_local)
+        .map(|n| (n.name.clone(), n.uplink_mbps))
+        .collect();
+    let peer_warnings = nic::peer_link_warnings(&peers, min);
     Json(serde_json::json!({
+        "peer_warnings": peer_warnings,
         "nics": nics,
         "best_speed_mbps": best,
         "background_cap_mbps": cap,

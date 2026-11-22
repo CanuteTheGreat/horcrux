@@ -768,6 +768,9 @@ pub struct NicsView {
     pub background_cap_mbps: Option<u64>,
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Other nodes whose reported fastest link is below the policy minimum.
+    #[serde(default)]
+    pub peer_warnings: Vec<String>,
 }
 
 pub async fn get_local_nics() -> Result<NicsView, ApiError> {

@@ -911,6 +911,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                         </table>
                         <div class="px-6 py-3">
                             {n.warnings.iter().map(|w| view! { <p class="nic-warning text-sm text-yellow-700">{w.clone()}</p> }).collect_view()}
+                            {n.peer_warnings.iter().map(|w| view! { <p class="nic-peer-warning text-sm text-yellow-700">{w.clone()}</p> }).collect_view()}
                         </div>
                     </div>
                 }

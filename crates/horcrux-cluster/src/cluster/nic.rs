@@ -256,6 +256,26 @@ pub fn check_storage_nic(nic: &NicInfo, min_mbps: u64) -> Vec<String> {
     w
 }
 
+/// Warnings for the cluster's other nodes, from the fastest link each one
+/// reports (`uplink_mbps`, 0 = unknown / older node, skipped). A node below
+/// the policy minimum drags Ceph and migration down to its speed.
+pub fn peer_link_warnings(nodes: &[(String, u64)], min_mbps: u64) -> Vec<String> {
+    let mut w: Vec<String> = nodes
+        .iter()
+        .filter(|(_, s)| *s > 0 && *s < min_mbps)
+        .map(|(n, s)| {
+            format!(
+                "node {}: fastest link is {}, below the required {} (degraded link or 1 GbE fallback?)",
+                n,
+                speed_label(*s),
+                speed_label(min_mbps)
+            )
+        })
+        .collect();
+    w.sort();
+    w
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +434,21 @@ mod tests {
         mk(t.path(), "eth0", "25000", "9000", "up", "mlx5_core");
         fs::write(t.path().join("class/net/eth0/device/sriov_numvfs"), "8\n").unwrap();
         assert_eq!(scan_nics(t.path())[0].sriov_vfs, 8);
+    }
+
+    #[test]
+    fn peer_warnings_flag_slow_nodes_only() {
+        let nodes = vec![
+            ("b".to_string(), 1_000),
+            ("a".to_string(), 10_000),
+            ("c".to_string(), 0),
+            ("d".to_string(), 2_500),
+        ];
+        let w = peer_link_warnings(&nodes, 10_000);
+        assert_eq!(w.len(), 2);
+        assert!(w[0].starts_with("node b:"), "{w:?}");
+        assert!(w[1].starts_with("node d:"), "{w:?}");
+        assert!(peer_link_warnings(&nodes, 1_000).is_empty());
     }
 
     #[test]
