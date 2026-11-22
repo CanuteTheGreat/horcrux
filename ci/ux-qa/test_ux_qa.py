@@ -187,5 +187,26 @@ class UnstyledControls(unittest.TestCase):
         self.assertEqual(f["bareTables"], [], f)
 
 
+    def test_wide_vm_table_scrolls_inside_its_box_on_a_phone(self):
+        """2026-11-22 (lab real-browser journey): 9 pages (DHCP, audit, power, bridges, SDN, tasks...) scrolled the whole page sideways at 390 px because
+        the phone rule covered .data-table but those pages use .vm-table."""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("playwright not installed")
+        wide = "<main class=\"container\"><table class=\"vm-table\"><thead><tr>" + "".join(f"<th>Configuration{i}</th>" for i in range(8)) + "</tr></thead><tbody><tr>" + "<td>192.168.100.200</td>" * 8 + "</tr></tbody></table></main>"
+        with sync_playwright() as p:
+            try:
+                b = p.firefox.launch()
+            except Exception as e:  # noqa: BLE001
+                self.skipTest(f"no firefox: {e}")
+            pg = b.new_page(viewport={"width": 390, "height": 800})
+            pg.set_content(f"<style>{open(self.CSS).read()}</style>{wide}")
+            # the shared stylesheet hides body overflow, so measure the table box itself: it must fit the phone and scroll inside
+            over = pg.evaluate("() => Math.round(document.querySelector('table').getBoundingClientRect().right - document.documentElement.clientWidth)")
+            b.close()
+        self.assertLessEqual(over, 1, f"a wide .vm-table sticks out {over}px past a 390 px phone (it must scroll inside its own box)")
+
+
 if __name__ == "__main__":
     unittest.main()
