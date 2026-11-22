@@ -167,20 +167,32 @@ pub fn uses_ovmf(vm: &QemuVm) -> bool {
         && vm.hardware.firmware == horcrux_common::Firmware::Ovmf
 }
 
-/// Start this VM with QEMU's D-Bus display for the Horcrux Console?
-#[cfg(feature = "qemu")]
-async fn console_dbus_display(vm: &QemuVm) -> bool {
-    vm.display.video != horcrux_common::VideoDevice::None
-        && crate::console::hxc_settings::get().enabled
-        && crate::console::hxc::qemu_dbus::qemu_has_dbus_display(
-            qemu_binary_and_machine(&vm.architecture).0,
-        )
-        .await
+/// Start the VM with QEMU's D-Bus display for the Horcrux Console? It needs a
+/// framebuffer, the node's console setting, and the D-Bus display module in
+/// this QEMU; the module is probed last, only when the first two hold.
+async fn dbus_display_wanted<F, Fut>(
+    video: &horcrux_common::VideoDevice,
+    console_enabled: bool,
+    module_present: F,
+) -> bool
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    *video != horcrux_common::VideoDevice::None && console_enabled && module_present().await
 }
 
-#[cfg(not(feature = "qemu"))]
-async fn console_dbus_display(_vm: &QemuVm) -> bool {
-    false
+/// The guest-tools ISO to attach: the configured path, when one is set and
+/// the file exists.
+fn guest_tools_iso_if_present(path: &str) -> Option<PathBuf> {
+    let iso = PathBuf::from(path);
+    (!path.is_empty() && iso.is_file()).then_some(iso)
+}
+
+/// Does a start check that the VM's TPM state exists? Every start but the
+/// receiving side of a live migration, whose stream carries the state.
+fn tpm_state_check_needed(incoming: bool) -> bool {
+    !incoming
 }
 
 /// The complete QEMU command line for `vm`: binary plus every argument.
@@ -1505,7 +1517,7 @@ impl QemuManager {
         if vm.hardware.tpm {
             // An incoming live migration brings the TPM state in its stream;
             // every other start needs the state the VM had (never an empty TPM).
-            if !incoming {
+            if tpm_state_check_needed(incoming) {
                 super::firmware::check_tpm_state_for_start(&vm.id, &vm.disk_path, &vm.hardware)?;
             }
             super::firmware::start_swtpm(&vm.disk_path).await?;
@@ -1526,18 +1538,25 @@ impl QemuManager {
         // the VM has a framebuffer and this QEMU ships the module; the
         // classic consoles stay as they are either way.
         let mut runtime = runtime;
-        runtime.dbus_display = console_dbus_display(vm).await;
+        let c = crate::console::hxc_settings::get();
+        runtime.dbus_display = dbus_display_wanted(&vm.display.video, c.enabled, || async {
+            #[cfg(feature = "qemu")]
+            let present = crate::console::hxc::qemu_dbus::qemu_has_dbus_display(
+                qemu_binary_and_machine(&vm.architecture).0,
+            )
+            .await;
+            #[cfg(not(feature = "qemu"))]
+            let present = false;
+            present
+        })
+        .await;
         if runtime.dbus_display {
-            let c = crate::console::hxc_settings::get();
             if c.guest_tools {
                 runtime.guest_tools_port = Some(c.guest_tools_port.clone());
                 runtime.guest_tools_socket = Some(
                     super::display::DisplayRuntime::guest_tools_socket_path(&vm.disk_path),
                 );
-                let iso = std::path::PathBuf::from(&c.guest_tools_iso);
-                if !c.guest_tools_iso.is_empty() && iso.is_file() {
-                    runtime.guest_tools_iso = Some(iso);
-                }
+                runtime.guest_tools_iso = guest_tools_iso_if_present(&c.guest_tools_iso);
             }
             runtime.dbus_audio = c.audio;
             // Same-host raw frames: a frame ring the guest tools write and
@@ -2156,6 +2175,111 @@ mod tests {
         v.hardware.extra_cdroms = vec!["/isos/x.iso".into()];
         let a = qemu_command(&v, &rt, true, None).1.join(" ");
         assert!(!a.contains("cdx1"), "{a}");
+    }
+
+    /// More drives than free AHCI ports: the ports run ide.0-ide.4 on q35
+    /// (ide.5 is the CD-ROM's), the rest fall back to ide.0.
+    #[test]
+    fn q35_extra_cdroms_use_ports_up_to_ide4_then_fall_back() {
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        v.hardware.machine = horcrux_common::MachineType::Q35;
+        v.disks = vec![disk("/vms/t1.qcow2", "virtio")];
+        v.hardware.extra_cdroms = (1..=6).map(|i| format!("/isos/{i}.iso")).collect();
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        for (n, port) in [(1, 0), (2, 1), (3, 2), (4, 3), (5, 4)] {
+            assert!(
+                a.contains(&format!("ide-cd,bus=ide.{port},drive=cdx{n},")),
+                "cdx{n} on ide.{port}: {a}"
+            );
+        }
+        assert!(a.contains("ide-cd,bus=ide.0,drive=cdx6,"), "{a}");
+    }
+
+    /// i440FX with two legacy disks (ide.0 units 0 and 1): the only port
+    /// left is ide.1 unit 1.
+    #[test]
+    fn i440fx_extra_cdrom_takes_the_port_the_legacy_disks_leave() {
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        v.hardware.machine = horcrux_common::MachineType::I440fx;
+        v.disks = vec![
+            disk("/vms/t1.qcow2", "default"),
+            disk("/vms/t1b.qcow2", "default"),
+        ];
+        v.hardware.extra_cdroms = vec!["/isos/a.iso".into(), "/isos/b.iso".into()];
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(a.contains("ide-cd,bus=ide.1,unit=1,drive=cdx1,"), "{a}");
+        // no port left for the second: QEMU's own error will name it
+        assert!(a.contains("ide-cd,bus=ide.0,drive=cdx2,"), "{a}");
+    }
+
+    #[tokio::test]
+    async fn dbus_display_needs_video_setting_and_module_and_probes_last() {
+        use horcrux_common::VideoDevice;
+        use std::cell::Cell;
+        for (video, enabled, module, want, probed) in [
+            (VideoDevice::Qxl, true, true, true, true),
+            (VideoDevice::Qxl, true, false, false, true),
+            (VideoDevice::Qxl, false, true, false, false),
+            (VideoDevice::None, true, true, false, false),
+            (VideoDevice::None, false, true, false, false),
+            (VideoDevice::Qxl, false, false, false, false),
+        ] {
+            let called = Cell::new(false);
+            let got = dbus_display_wanted(&video, enabled, || async {
+                called.set(true);
+                module
+            })
+            .await;
+            assert_eq!(got, want, "{video:?} enabled={enabled} module={module}");
+            assert_eq!(called.get(), probed, "{video:?} enabled={enabled}");
+        }
+    }
+
+    #[test]
+    fn guest_tools_iso_only_when_set_and_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let iso = dir.path().join("tools.iso");
+        assert_eq!(guest_tools_iso_if_present(""), None);
+        assert_eq!(guest_tools_iso_if_present(&iso.to_string_lossy()), None);
+        std::fs::write(&iso, b"x").unwrap();
+        assert_eq!(
+            guest_tools_iso_if_present(&iso.to_string_lossy()),
+            Some(iso)
+        );
+        // a directory is not an ISO
+        assert_eq!(
+            guest_tools_iso_if_present(&dir.path().to_string_lossy()),
+            None
+        );
+    }
+
+    #[test]
+    fn tpm_state_is_checked_except_for_an_incoming_migration() {
+        assert!(tpm_state_check_needed(false));
+        assert!(!tpm_state_check_needed(true));
+    }
+
+    /// The launch step stops at its first failed check (a passed-through
+    /// device that is not on this host) and reports it; it never "succeeds"
+    /// without having started anything.
+    #[tokio::test]
+    async fn start_vm_launch_reports_a_missing_passthrough_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = QemuManager::new();
+        let mut v = temp_vm(dir.path(), "launch");
+        v.hardware.hostpci = vec![horcrux_common::VmHostPci {
+            device: "0000:ff:1f.7".into(),
+            primary_gpu: false,
+            ..Default::default()
+        }];
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let err = mgr.start_vm_launch(&v, rt, false).await.unwrap_err();
+        assert!(
+            matches!(&err, horcrux_common::Error::Validation(m) if m.contains("0000:ff:1f.7")),
+            "{err}"
+        );
     }
 
     fn disk(path: &str, bus: &str) -> horcrux_common::VmDisk {
@@ -3094,6 +3218,13 @@ esac
             "{err}"
         );
         v.hardware.cdrom = None;
+        v.hardware.extra_cdroms = vec![iso.clone()];
+        let err = mgr.start_vm(&v).await.unwrap_err();
+        assert!(
+            matches!(&err, horcrux_common::Error::Validation(m) if m.contains("extra CD-ROM") && m.contains(&iso)),
+            "{err}"
+        );
+        v.hardware.extra_cdroms = vec![];
         let err = mgr.start_vm(&v).await.unwrap_err();
         assert!(
             matches!(&err, horcrux_common::Error::Validation(m) if m.contains("disk0") && m.contains("missing")),
