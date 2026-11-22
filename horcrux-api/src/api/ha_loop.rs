@@ -376,6 +376,21 @@ fn require_peer(user: &Option<Extension<AuthUser>>) -> Result<(), ApiError> {
     }
 }
 
+/// A placement sync that comes from this node itself (a cluster member entry
+/// whose address points back at this node, e.g. a loopback address) is
+/// refused. Applying it would replay a snapshot of our own resources taken
+/// before the request was sent, so a resource removed in between came back
+/// (HA resource deleted, then listed again), and the sender would count the
+/// answer as contact with a peer although it only reached itself.
+fn refuse_self_sync(from: &str, local: &str) -> Result<(), ApiError> {
+    if from == local {
+        return Err(ApiError::Conflict(format!(
+            "HA sync from {from} reached {local} itself: a cluster member entry points at this node"
+        )));
+    }
+    Ok(())
+}
+
 fn store(state: &AppState) -> ConfigStore {
     ConfigStore::new(&state.database)
 }
@@ -388,6 +403,8 @@ async fn peer_sync(
     Json(req): Json<SyncRequest>,
 ) -> Result<Json<SyncReply>, ApiError> {
     require_peer(&user)?;
+    let local = state.cluster_manager.get_local_node_name().await?;
+    refuse_self_sync(&req.from, &local)?;
     super::ha_fence_agent::note_peer_agent(
         &req.from,
         req.fence_agent_secs,
@@ -2135,6 +2152,16 @@ mod fence_agent_gate_tests {
 #[cfg(test)]
 mod sync_stall_tests {
     use super::*;
+
+    /// A sync addressed to this node by itself is refused (409), a real peer's is accepted.
+    #[test]
+    fn a_sync_from_this_node_itself_is_refused() {
+        match refuse_self_sync("n1", "n1") {
+            Err(ApiError::Conflict(m)) => assert!(m.contains("n1"), "{m}"),
+            other => panic!("expected a conflict, got {other:?}"),
+        }
+        assert!(refuse_self_sync("n2", "n1").is_ok());
+    }
 
     /// A peer that accepts the TCP connection and never answers (a SIGSTOPped manager) must not hold a
     /// placement sync for the supervisor client's 60 s: the tick has to reach its recovery step in seconds.
