@@ -1,4 +1,5 @@
 use crate::api::*;
+use crate::components::{StatusIcon, StatusKind};
 use leptos::*;
 use wasm_bindgen::JsCast;
 use web_sys::MouseEvent;
@@ -516,9 +517,9 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                     }
                                                 >
                                                     {move || if selected_resources.get().contains(&("vm".to_string(), vmid_str2.clone())) {
-                                                        "[OK] Selected"
+                                                        view! { <StatusIcon kind=StatusKind::Ok label="Selected"/>"Selected" }.into_view()
                                                     } else {
-                                                        "Select"
+                                                        "Select".into_view()
                                                     }}
                                                 </button>
                                             </div>
@@ -597,9 +598,9 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                     }
                                                 >
                                                     {move || if selected_resources.get().contains(&("container".to_string(), vmid_str2.clone())) {
-                                                        "[OK] Selected"
+                                                        view! { <StatusIcon kind=StatusKind::Ok label="Selected"/>"Selected" }.into_view()
                                                     } else {
-                                                        "Select"
+                                                        "Select".into_view()
                                                     }}
                                                 </button>
                                             </div>

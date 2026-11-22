@@ -1,4 +1,5 @@
 use crate::api::*;
+use crate::components::{StatusIcon, StatusKind};
 use leptos::*;
 
 #[component]
@@ -129,28 +130,28 @@ pub fn SmartMonitoringPage() -> impl IntoView {
             <div class="smart-overview">
                 <div class="overview-stats">
                     <a class="stat-card stat-link total" href="/storage/smart?status=all">
-                        <span class="stat-icon">"[D]"</span>
+                        <span class="stat-icon"><StatusIcon kind=StatusKind::Disk label="Disks"/></span>
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().0}</span>
                             <span class="stat-label">"Total Disks"</span>
                         </div>
                     </a>
                     <a class="stat-card stat-link healthy" href="/storage/smart?status=healthy">
-                        <span class="stat-icon">"[OK]"</span>
+                        <span class="stat-icon"><StatusIcon kind=StatusKind::Ok label="Healthy"/></span>
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().1}</span>
                             <span class="stat-label">"Healthy"</span>
                         </div>
                     </a>
                     <a class="stat-card stat-link warning" href="/storage/smart?status=warning" class:attention=move || { disk_counts().2 > 0 }>
-                        <span class="stat-icon">"[!]"</span>
+                        <span class="stat-icon"><StatusIcon kind=StatusKind::Warn label="Warning"/></span>
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().2}</span>
                             <span class="stat-label">"Warning"</span>
                         </div>
                     </a>
                     <a class="stat-card stat-link critical" href="/storage/smart?status=critical" class:attention=move || { disk_counts().3 > 0 }>
-                        <span class="stat-icon">"[X]"</span>
+                        <span class="stat-icon"><StatusIcon kind=StatusKind::Bad label="Critical"/></span>
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().3}</span>
                             <span class="stat-label">"Critical"</span>

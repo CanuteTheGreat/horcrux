@@ -4,6 +4,7 @@
 //! Provides token generation, usage tracking, and security monitoring.
 
 use crate::api;
+use crate::components::{StatusIcon, StatusKind};
 use leptos::*;
 use std::collections::HashMap;
 
@@ -230,7 +231,7 @@ pub fn ApiKeysPage() -> impl IntoView {
 
             {move || success_message.get().map(|msg| view! {
                 <div class="alert alert-success">
-                    <span class="alert-icon">"[OK]"</span>
+                    <span class="alert-icon"><StatusIcon kind=StatusKind::Ok label="Success"/></span>
                     <span class="alert-message">{msg}</span>
                     <button
                         class="alert-close"
@@ -559,7 +560,7 @@ where
                                 </div>
 
                                 <div class="security-warning">
-                                    <strong>"[!] Security Notice:"</strong>
+                                    <strong><StatusIcon kind=StatusKind::Warn label="Warning"/>"Security Notice:"</strong>
                                     " Please copy this token now. You won't be able to see it again for security reasons."
                                 </div>
                             </div>

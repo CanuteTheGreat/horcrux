@@ -5,6 +5,7 @@
 //! Provides visual permission matrix and role customization.
 
 use crate::api;
+use crate::components::{StatusIcon, StatusKind};
 use leptos::*;
 use std::collections::HashMap;
 
@@ -495,7 +496,7 @@ pub fn PermissionMatrix(roles: Vec<api::Role>) -> impl IntoView {
                                         view! {
                                             <td class="privilege-cell">
                                                 <span class={format!("privilege-indicator {}", if has_privilege { "granted" } else { "denied" })}>
-                                                    {if has_privilege { "[OK]" } else { "[X]" }}
+                                                    {if has_privilege { view! { <StatusIcon kind=StatusKind::Ok label="Granted"/> }.into_view() } else { view! { <StatusIcon kind=StatusKind::Bad label="Denied"/> }.into_view() }}
                                                 </span>
                                             </td>
                                         }

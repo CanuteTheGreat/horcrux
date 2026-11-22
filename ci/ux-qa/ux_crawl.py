@@ -7,6 +7,7 @@ One deterministic, no-LLM check for the classes of defect the owner kept finding
   blank             page body empty after load
   http-5xx          an API request answered 5xx while the page loaded
   not-found         the page itself says 404 / not found
+  ascii-icon        visible text matching [OK] / [X] / [!] / [D] / [WARN]: an ASCII placeholder used as a status icon (use components/status_icon.rs)
   bad-text          'undefined', 'NaN', '[object Object]', 'missing field', 'panicked' printed to the user (also raw Rust such as `.get() ||` leaked by a `>` inside an unbraced view! attribute)
   private-text      a private URL / private host / owner machine name visible in the UI
   internal-name     build-internal vocabulary shown to users (see forbidden_names in the config)
@@ -43,6 +44,10 @@ import sys
 import threading
 import time
 from urllib.parse import urlsplit
+
+
+# ASCII placeholders used as status icons ("[OK]", "[X]", "[!]", "[D]"): use a real SVG/CSS indicator.
+ASCII_ICON = re.compile(r"\[(OK|X|!|D|WARN)\]", re.I)
 
 
 def is_red(rgb):
@@ -359,6 +364,9 @@ def main():
                     m = bad_text.search(f["ownText"])
                     if m:
                         add("bad-text", "fail", route, vp, scheme, f"'{m.group(0)}' shown to the user")
+                    m = ASCII_ICON.search(f["ownText"])
+                    if m:
+                        add("ascii-icon", "fail", route, vp, scheme, f"ASCII placeholder '{m.group(0)}' shown as a status icon")
                     for rx in pfail:
                         m = rx.search(f["text"])
                         if m:

@@ -2,6 +2,7 @@
 //! its IOMMU group (bind to / release from vfio-pci) and mediated devices
 //! (vGPU profiles: create, delete). VMs get a device on their Hardware page.
 use crate::api::passthrough as pt;
+use crate::components::{ok_or_bad, StatusIcon};
 use leptos::*;
 use leptos_router::A;
 
@@ -119,7 +120,7 @@ pub fn GpuManagement() -> impl IntoView {
                 {move || match status.get() {
                     Some(s) => view! {
                         <div class={format!("iommu-status {}", if s.iommu_enabled { "enabled" } else { "disabled" })}>
-                            <span class="icon">{if s.iommu_enabled { "[OK]" } else { "[X]" }}</span>
+                            <span class="icon"><StatusIcon kind=ok_or_bad(s.iommu_enabled) label=if s.iommu_enabled { "IOMMU enabled" } else { "IOMMU not available" }/></span>
                             <span class="message">{s.message}</span>
                         </div>
                     }.into_view(),

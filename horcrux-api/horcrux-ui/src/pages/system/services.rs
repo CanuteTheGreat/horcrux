@@ -1,4 +1,5 @@
 use crate::api::*;
+use crate::components::{ok_or_bad, StatusIcon, StatusKind};
 use leptos::*;
 
 #[component]
@@ -94,10 +95,10 @@ pub fn ServicesPage() -> impl IntoView {
     };
 
     let get_status_icon = |status: &str| match status {
-        "active" => "🟢",
-        "inactive" => "⚫",
-        "failed" => "🔴",
-        _ => "🟡",
+        "active" => StatusKind::Ok,
+        "inactive" => StatusKind::Idle,
+        "failed" => StatusKind::Bad,
+        _ => StatusKind::Warn,
     };
 
     let format_memory = |bytes: Option<u64>| -> String {
@@ -261,7 +262,8 @@ pub fn ServicesPage() -> impl IntoView {
                                         let cpu = service.cpu_usage.map(|c| format!("{:.1}%", c)).unwrap_or_else(|| "-".to_string());
                                         let description = service.description.clone();
                                         let enabled_class = if enabled { "text-green-600" } else { "text-gray-500" };
-                                        let enabled_text = if enabled { "[OK] Yes" } else { "[X] No" };
+                                        let enabled_kind = ok_or_bad(enabled);
+                                        let enabled_text = if enabled { "Yes" } else { "No" };
 
                                         view! {
                                             <tr class="service-row">
@@ -270,12 +272,12 @@ pub fn ServicesPage() -> impl IntoView {
                                                 </td>
                                                 <td class="service-status">
                                                     <span class={format!("status-indicator {}", status_color)}>
-                                                        {status_icon}" "{status}
+                                                        <StatusIcon kind=status_icon label=status.clone()/>{status}
                                                     </span>
                                                 </td>
                                                 <td class="service-enabled">
                                                     <span class=enabled_class>
-                                                        {enabled_text}
+                                                        <StatusIcon kind=enabled_kind label=if enabled { "Enabled" } else { "Not enabled" }/>{enabled_text}
                                                     </span>
                                                 </td>
                                                 <td class="service-pid">

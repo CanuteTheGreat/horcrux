@@ -1279,3 +1279,13 @@ td .actions { flex-wrap: nowrap; }
 .time-controls label { font-weight: 600; color: var(--secondary); font-size: .9rem; }
 /* a label directly followed by its control, outside a stacked .form-group: keep a gap (jammed-label rule) */
 :where(main.container) :where(*:not(.form-group):not(.stack-form)) > label:not(.checkbox) + :is(select, input:not([type=checkbox]):not([type=radio]), textarea) { margin-inline-start: .5rem; }
+
+/* Status icons (components/status_icon.rs): inline SVG, shape + text name carry the state, colour is extra. */
+.status-icon { display: inline-block; flex: none; width: 1.1em; height: 1.1em; vertical-align: -0.2em; margin-right: .4em; }
+.status-icon-ok { color: var(--success); }
+.status-icon-bad { color: var(--danger); }
+.status-icon-warn { color: var(--warning-text); }
+.status-icon-neutral { color: var(--secondary); }
+.status-icon-idle { color: var(--secondary); }
+.stat-icon .status-icon { width: 1.6em; height: 1.6em; margin-right: 0; vertical-align: middle; }
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

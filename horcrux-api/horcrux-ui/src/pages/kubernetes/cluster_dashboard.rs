@@ -4,6 +4,7 @@
 //! health monitoring, and cluster operations.
 
 use crate::api;
+use crate::components::{ok_or_bad, StatusIcon};
 use leptos::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -514,19 +515,19 @@ where
                     <h4>"Component Health"</h4>
                     <div class="health-grid">
                         <div class={format!("health-item {}", if h.api_server_healthy { "healthy" } else { "unhealthy" })}>
-                            <span class="health-icon">{if h.api_server_healthy { "[OK]" } else { "[X]" }}</span>
+                            <span class="health-icon"><StatusIcon kind=ok_or_bad(h.api_server_healthy) label=if h.api_server_healthy { "API server healthy" } else { "API server unhealthy" }/></span>
                             <span>"API Server"</span>
                         </div>
                         <div class={format!("health-item {}", if h.etcd_healthy { "healthy" } else { "unhealthy" })}>
-                            <span class="health-icon">{if h.etcd_healthy { "[OK]" } else { "[X]" }}</span>
+                            <span class="health-icon"><StatusIcon kind=ok_or_bad(h.etcd_healthy) label=if h.etcd_healthy { "etcd healthy" } else { "etcd unhealthy" }/></span>
                             <span>"etcd"</span>
                         </div>
                         <div class={format!("health-item {}", if h.scheduler_healthy { "healthy" } else { "unhealthy" })}>
-                            <span class="health-icon">{if h.scheduler_healthy { "[OK]" } else { "[X]" }}</span>
+                            <span class="health-icon"><StatusIcon kind=ok_or_bad(h.scheduler_healthy) label=if h.scheduler_healthy { "Scheduler healthy" } else { "Scheduler unhealthy" }/></span>
                             <span>"Scheduler"</span>
                         </div>
                         <div class={format!("health-item {}", if h.controller_manager_healthy { "healthy" } else { "unhealthy" })}>
-                            <span class="health-icon">{if h.controller_manager_healthy { "[OK]" } else { "[X]" }}</span>
+                            <span class="health-icon"><StatusIcon kind=ok_or_bad(h.controller_manager_healthy) label=if h.controller_manager_healthy { "Controller manager healthy" } else { "Controller manager unhealthy" }/></span>
                             <span>"Controller"</span>
                         </div>
                     </div>

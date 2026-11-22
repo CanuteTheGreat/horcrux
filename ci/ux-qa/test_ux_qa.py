@@ -187,5 +187,15 @@ class UnstyledControls(unittest.TestCase):
         self.assertEqual(f["bareTables"], [], f)
 
 
+class AsciiIconTests(unittest.TestCase):
+    def test_placeholders_are_caught(self):
+        for t in ("[X]No IOMMU groups", "[OK] Yes", "a [!] b", "[D]", "[warn] x"):
+            self.assertTrue(uc.ASCII_ICON.search(t), t)
+
+    def test_clean_text_passes(self):
+        for t in ("OK", "Disk [1]", "array[0]", "No IOMMU groups", "[Optional]"):
+            self.assertFalse(uc.ASCII_ICON.search(t), t)
+
+
 if __name__ == "__main__":
     unittest.main()
