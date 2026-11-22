@@ -356,6 +356,7 @@ class InstallerSide(unittest.TestCase):
                 p = {"name": "horcrux", "hwlayer_dir": PROJECT_LAYERS}
                 c = {"machine_profile": MP.load(b), "machine_profile_dir": b, "hostname": "h", "t2_kernel": "skip"}
                 apple_fw_tar = None
+                hw_layers = [l for l in HL.load_all(PROJECT_LAYERS) if l["id"] == "apple-t2"]     # pinned: autodetection reads the runner's own CPU (intel-cpu)
 
                 def log(self, line):
                     pass
