@@ -358,7 +358,10 @@ pub fn qemu_args(display: &VmDisplay, arch: &VmArchitecture, rt: &DisplayRuntime
             "-object",
             &mem,
             "-device",
-            "ivshmem-plain,memdev=hxfbmem,id=hxframes",
+            // master=on: without it QEMU marks the device "peer mode" and
+            // refuses every live migration of the VM ("Migration is disabled
+            // when using feature 'peer mode' in device 'ivshmem'").
+            "ivshmem-plain,memdev=hxfbmem,id=hxframes,master=on",
         ]);
     }
 
@@ -605,6 +608,8 @@ mod tests {
             a.contains("-object memory-backend-file,id=hxfbmem,size=128M,mem-path=/dev/shm/horcrux-frames-vm1,share=on -device ivshmem-plain,memdev=hxfbmem,id=hxframes"),
             "{a}"
         );
+        // regression: a peer-mode ivshmem blocks live migration
+        assert!(a.contains("id=hxframes,master=on"), "{a}");
         assert!(a.contains("-audiodev dbus,id=snd0"), "{a}");
         // the display must name the audiodev, or QEMU exports no Audio object
         assert!(a.contains("-display dbus,p2p=yes,audiodev=snd0"), "{a}");
