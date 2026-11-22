@@ -1024,7 +1024,7 @@ Proven:
 
 Not proven yet:
 - The viewer window on a real Horcrux desktop session with a GPU (the CI
-  proof below uses a headless compositor with the pixman renderer).
+  proof above uses a headless compositor with the pixman renderer).
 - Guest-originated sound through D-Bus audio into a browser (needs a guest
   that plays audio in CI); the encoder half runs against real FFmpeg.
 - The Windows ring writer's write-combined mapping on AMD hardware, and
