@@ -12,8 +12,8 @@ RUN --mount=type=cache,id=binpkgs-${ARCH},target=/var/cache/binpkgs,sharing=lock
     emerge-webrsync -q ; getuto >/dev/null 2>&1; \
     emerge --oneshot sys-boot/grub sys-fs/squashfs-tools dev-libs/libisoburn sys-fs/mtools sys-fs/dosfstools app-arch/cpio && \
     ls /usr/lib/grub/
-COPY common/assemble-iso.sh /usr/local/bin/assemble-iso.sh
+COPY common/assemble-iso.sh common/normalize-portage-perms.sh /usr/local/bin/
 COPY common/arch/ /usr/local/share/live-arch/
 COPY common/boot/ /usr/local/share/live-boot/
 ENV ARCH=${ARCH}
-RUN chmod +x /usr/local/bin/assemble-iso.sh /usr/local/share/live-boot/*.sh
+RUN chmod +x /usr/local/bin/assemble-iso.sh /usr/local/bin/normalize-portage-perms.sh /usr/local/share/live-boot/*.sh

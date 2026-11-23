@@ -149,6 +149,8 @@ jobs:
       - run: python3 ci/gen-systemd-workflows.py --check   # live-iso-*-systemd-*.yml are generated from their OpenRC twins
       # Public overlay files (shipped to end users, mirrored to GitHub) must not name the private Forgejo host.
       - run: python3 gentoo/ci/check-no-forgejo.py
+      # /etc/portage config must stay readable for ordinary users whatever umask a packager or writer runs with.
+      - run: python3 gentoo/ci/check-portage-perms.py gentoo build
 
   ux-qa-static:
     name: UX QA (static checkers)

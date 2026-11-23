@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, initsys, luksroot, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
+from . import arch, hwprofile, initsys, luksroot, portageperms, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -819,7 +819,9 @@ class Installer:
 
     def write(self, rel, text, mode=0o644, append=False):
         p = os.path.join(self.target, rel.lstrip("/"))
-        os.makedirs(os.path.dirname(p), exist_ok=True)
+        # /etc/portage config stays readable for every user and its directories traversable, whatever umask the installer runs with
+        portageperms.ensure_dirs(os.path.dirname(p), self.target)
+        mode = portageperms.config_mode(rel, mode)
         with open(p, "a" if append else "w") as f:
             f.write(text)
         os.chmod(p, mode)

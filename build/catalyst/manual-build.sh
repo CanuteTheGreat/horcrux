@@ -104,6 +104,8 @@ configure_portage() {
     if [[ -d "$FILES_DIR/portage" ]]; then
         cp -a "$FILES_DIR/portage"/* "$CHROOT_DIR/etc/portage/" 2>/dev/null || true
     fi
+    # copied from a checkout: its modes are whatever the checkout's umask made them; /etc/portage must stay world-readable
+    sh "$SCRIPT_DIR/../live-iso/common/normalize-portage-perms.sh" "$CHROOT_DIR"
 
     # Set profile
     run_in_chroot "eselect profile set default/linux/amd64/23.0" || true

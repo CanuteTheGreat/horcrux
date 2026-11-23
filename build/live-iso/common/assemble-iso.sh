@@ -20,6 +20,9 @@ h=$(sed -n 's/^hostname="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$ROOT/etc/conf.d/hostn
 echo "${h:-$PROJ}" > "$ROOT/etc/hostname"
 if grep -qE '^[0-9.]+[[:space:]]+[0-9a-f]{12}$' "$ROOT/etc/hosts" 2>/dev/null; then printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost\n' > "$ROOT/etc/hosts"; fi
 
+# /etc/portage must stay readable for every user (administrators run emerge -p / equery / eix themselves): see the script
+/usr/local/bin/normalize-portage-perms.sh "$ROOT"
+
 echo "== squashfs"
 # Desktop image: 1 MiB blocks (xz sees 4x the context: ~4-6 % smaller) so it fits below the 2 GiB release-asset limit; slower random reads, fine for a live ISO
 SQFS_BLOCK=256K; grep -qx desktop "$ROOT/etc/live-iso-variant" 2>/dev/null && SQFS_BLOCK=1M

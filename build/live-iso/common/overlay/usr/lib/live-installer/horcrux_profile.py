@@ -65,6 +65,44 @@ ADMIN_GROUPS = ("wheel", "portage")
 SELF_ATOM = "sys-apps/horcrux-profile"
 
 
+# ------------------------------------------------------------------------------------------------ /etc/portage permissions
+# Everything under /etc/portage except gnupg/ stays readable and traversable by every user, whatever umask this program runs with
+# (an ssh login or agent shell with umask 077 used to leave 0600 files that `emerge -p` as an administrator could not read).
+# Same rule as liveinst/portageperms.py in the installer; test_portage_writers.py keeps both honest.
+PORTAGE_DIR = "/etc/portage"        # tests point it at a scratch directory
+
+
+def portage_config_path(path):
+    """True for PORTAGE_DIR itself and everything below it except its gnupg/ keyring directory"""
+    path, base = os.path.normpath(str(path)), os.path.normpath(PORTAGE_DIR)
+    if path != base and not path.startswith(base + "/"):
+        return False
+    return not (path == base + "/gnupg" or path.startswith(base + "/gnupg/"))
+
+
+def portage_config_mode(path, mode=0o644):
+    return (mode | 0o444) & ~0o022 if portage_config_path(path) else mode
+
+
+def ensure_dirs(directory, public=False):
+    """makedirs; directories it creates for portage config (or any, with public=True) are 0755 (os.makedirs' mode is filtered by the umask)"""
+    if not public and not portage_config_path(directory):
+        os.makedirs(directory, exist_ok=True)
+        return
+    missing, d = [], directory
+    while d and not os.path.isdir(d):
+        missing.append(d)
+        if os.path.dirname(d) == d:
+            break
+        d = os.path.dirname(d)
+    for d in reversed(missing):
+        try:
+            os.mkdir(d, 0o755)
+        except FileExistsError:
+            pass
+        os.chmod(d, 0o755)
+
+
 # ------------------------------------------------------------------------------------------------ loading / validation (pure)
 def load(path):
     import tomllib
@@ -393,7 +431,8 @@ class Sys:
         if self.dry:
             self.log(f"write {path}")
             return
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ensure_dirs(os.path.dirname(path))
+        mode = portage_config_mode(path, mode)
         tmp = path + ".hxp-new"
         with open(tmp, "w") as f:
             f.write(text)
@@ -641,6 +680,7 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
                 if os.path.isdir(dst) and not os.path.isdir(dst + "/.git"):
                     shutil.rmtree(dst)
                 if not os.path.isdir(dst):
+                    ensure_dirs(os.path.dirname(dst), public=True)
                     shutil.copytree(src, dst, symlinks=True)
                     # the bundle is root-only (0700/0600); a repository must be readable by Portage's unprivileged metadata/build user
                     for dp, dn, fn in os.walk(dst):

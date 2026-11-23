@@ -52,6 +52,10 @@ pkg_preinst() {
 }
 
 src_install() {
+	# /etc/portage config is world-readable and its directories traversable whatever umask the build runs with (administrators run
+	# emerge -p / equery as themselves): explicit modes, and gentoo/ci/check-portage-perms.py keeps later edits honest
+	diropts -m0755
+	insopts -m0644
 
 	insinto /etc/portage/package.use
 	newins - horcrux-test-machine <<-'EOF2'
@@ -158,7 +162,7 @@ pkg_postinst() {
 	for r in ctg-private local horcrux-desktop; do
 		r=${EROOT}/var/db/repos/${r}
 		if [[ -d ${r} && ! -e ${r}/metadata/layout.conf ]]; then
-			mkdir -p "${r}/metadata" && printf 'masters = gentoo\nthin-manifests = true\n' > "${r}/metadata/layout.conf"
+			install -d -m0755 "${r}/metadata" && printf 'masters = gentoo\nthin-manifests = true\n' > "${r}/metadata/layout.conf" && chmod 0644 "${r}/metadata/layout.conf"
 		fi
 	done
 	use gnome && has_version gnome-base/dconf && dconf update

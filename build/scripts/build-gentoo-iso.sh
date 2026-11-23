@@ -1413,6 +1413,9 @@ MOTD
 create_iso() {
     log_step "Creating bootable ISO..."
 
+    # /etc/portage stays readable for every user whatever umask this script ran under (administrators run emerge -p / equery themselves)
+    sh "$SCRIPT_DIR/../live-iso/common/normalize-portage-perms.sh" "$ROOTFS_DIR"
+
     # Create ISO directory structure
     rm -rf "$ISO_DIR"
     mkdir -p "$ISO_DIR"/{boot/grub,EFI/BOOT,isolinux}
