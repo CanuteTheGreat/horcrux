@@ -38,7 +38,17 @@ if [ "$mode" = stable ]; then tag=${GITHUB_REF_NAME:?}; suffix=$tag; else suffix
 
 echo "::group::host deps"
 export DEBIAN_FRONTEND=noninteractive
-(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools gdisk dosfstools mtools >/dev/null) || fail deps "apt install failed"
+# The runner image carries Launchpad PPAs (git-core) we never install from; a PPA that has not published the image's
+# series/arch (404 on .../dists/<series>/main/binary-arm64/Packages) makes `apt-get update` exit non-zero (job 145970).
+# Drop them before updating (APT_DROP_PPAS=0 keeps them) and retry the update+install once for transient mirror errors.
+if [ "${APT_DROP_PPAS:-1}" = 1 ]; then
+  rm -f /etc/apt/sources.list.d/*ppa* /etc/apt/sources.list.d/*launchpad* 2>/dev/null || true
+  grep -lE 'ppa\.launchpad(content)?\.net' /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null | while read -r f; do
+    case $f in *.sources) rm -f "$f" ;; *) sed -i -E '/ppa\.launchpad(content)?\.net/d' "$f" ;; esac
+  done
+fi
+host_deps() { apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools gdisk dosfstools mtools >/dev/null; }
+host_deps || { echo "host deps failed, retrying in 20 s" >&2; sleep 20; host_deps; } || fail deps "apt install failed"
 echo "::endgroup::"
 
 # stable gate: the repo's own CI must not be red on the tagged commit
