@@ -491,6 +491,22 @@ class Tests:
             self.finish(vm, False)
         os.unlink(disk)
 
+    def live_web_diag(self, vm):
+        """Why does the live session's web UI not answer? Listeners, addresses, the web process and its last log lines, from the guest shell.
+        Diagnostics must never mask the failure."""
+        try:
+            if not self.shell(vm, 60):
+                return " [live diag: no root shell on the console]"
+            rc, out = self.run(vm, "ip -br -4 addr | head -6; ss -ltn | grep -E ':(80|443|8443|8006) ' | head -6; "
+                                   "ps -eo comm | grep -E 'patronus|horcrux' | sort | uniq -c | head -6; "
+                                   "for p in 443 8006; do curl -sk -m6 -o /dev/null -w \"local-$p=%{http_code} \" https://127.0.0.1:$p/; done; echo; "
+                                   "tail -n 3 /var/log/patronus/*.log /var/log/horcrux/*.log 2>/dev/null | cut -c1-140", 60)
+            out = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out)
+            lines = [l.strip() for l in out.splitlines() if l.strip()][-14:]
+            return " [live diag: " + " // ".join(lines)[:900] + "]"
+        except Exception as e:
+            return f" [live diag failed: {e}]"
+
     def t_live(self):
         disk = self.disk_copy("live-disk")
         vm = self.boot("live", disks=[disk])
@@ -508,7 +524,11 @@ class Tests:
             # Patronus: the live system has no static LAN address, its WAN-side (DHCP) port is the one QEMU forwards
             lp = qt.FWD_WAN if self.a.project == "patronus" else qt.FWD_WEB
             code = self.web_code(pw.group(1) if pw else "x", port=lp, user=user)
-            self.step("web-ui-up-in-live-session", code == 200, f"full product served from RAM: login {user} -> {code}")
+            detail = f"full product served from RAM: login {user} -> {code}"
+            if code != 200:
+                # run 24315 (uefi, x86_64 and aarch64): `login -> 0` after the full wait with no cause visible. Ask the guest what it sees.
+                detail += self.live_web_diag(vm)
+            self.step("web-ui-up-in-live-session", code == 200, detail)
             self.step("default-passwords-refused", self.web_code(self.P["old_pw"], 5, port=lp, user=user) in (401, 403), f"the product's old default is not accepted for {user}")
             self.step("live-sshd-off", not qt.ssh_banner(qt.FWD_SSH).startswith("SSH-"), "no sshd in the live session")
             self.step("live-shell", self.shell(vm))
