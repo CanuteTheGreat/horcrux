@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -176,6 +177,98 @@ class SessionScoping(unittest.TestCase):
         for f in (G / "gnome-extra" / "horcrux-gnome-defaults" / "files" / "horcrux-session-env",):
             self.assertNotRegex(re.sub(r"(?m)^\s*#.*$", "", f.read_text()), r"pgrep[^\n]*-x xdg-desktop-portal")
         self.assertNotRegex((GSO / "files" / "0001-horcrux-session-scoped-user-services.patch").read_text(), r"pgrep[^\n]*-x xdg-desktop-portal")
+
+    def _patched_tree(self, d):
+        """data/ of the session package after 0001-0003, without the upstream tarball: the helper is a new file in 0001, 0003 patches it and
+        adds the Xwayland hook (the gsd-xsettings hunk needs the upstream file and is checked as text)."""
+        p1 = (GSO / "files" / "0001-horcrux-session-scoped-user-services.patch").read_text()
+        p3 = (GSO / "files" / "0003-xwayland-gsd-xsettings.patch").read_text()
+        lines, on = [], False
+        for line in p1.splitlines():
+            if line.startswith("+++ b/data/gnome-session-openrc-helper"):
+                on = True
+                continue
+            if on and line.startswith("diff --git"):
+                break
+            if on and line.startswith("+"):
+                lines.append(line[1:])
+        Path(d, "data", "Xwayland-session.d").mkdir(parents=True)
+        Path(d, "data", "gnome-session-openrc-helper").write_text("\n".join(lines) + "\n")
+        keep = [s for s in re.split(r"(?m)^(?=diff --git )", p3) if s.startswith("diff --git a/data/gnome-session-openrc-helper ")
+                or s.startswith("diff --git a/data/Xwayland-session.d/")]
+        self.assertEqual(len(keep), 2, "0003 must patch the helper and add the Xwayland-session.d hook")
+        r = subprocess.run(["patch", "-p1", "-s", "-d", d], input="".join(keep), capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return Path(d, "data")
+
+    def test_x11_apps_get_the_ui_scale_gsd_xsettings_starts_with_xwayland(self):
+        """owner-ws 2026-11-23: Steam, the Nextcloud client and terminator were tiny at 133 %. mutter 50 always scales Xwayland natively and
+        X11 apps learn the factor only from gsd-xsettings (Xft.dpi, Gdk/WindowScalingFactor), which nothing started on OpenRC."""
+        t = self.ebuild(GSO, "gnome-session-openrc-*.ebuild")
+        self.assertIn('"${FILESDIR}"/0003-xwayland-gsd-xsettings.patch', t)
+        p3 = (GSO / "files" / "0003-xwayland-gsd-xsettings.patch").read_text()
+        # the service: no hard-coded display, guarded like gnome-shell, display from the helper
+        svc = re.search(r"(?s)diff --git a/data/openrc/gsd-xsettings .*?(?=^diff --git |\Z)", p3, re.M).group(0)
+        self.assertIn("-DISPLAY=:2", svc)
+        self.assertNotRegex(svc, r"(?m)^\+\s*DISPLAY=:")
+        self.assertIn('+command_args="guard /usr/libexec/gsd-xsettings"', svc)
+        self.assertIn("+\td=$(/usr/libexec/gnome-session-openrc-helper x-display)", svc)
+        self.assertRegex(p3, r"install_dir: '/etc/xdg/Xwayland-session\.d'")
+        # per-app scale variables are not the fix (fixed at app start, double-scale on top of Xft.dpi)
+        for v in ("GDK_SCALE=", "QT_SCALE_FACTOR=", "STEAM_FORCE_DESKTOPUI_SCALING="):
+            self.assertNotRegex(p3, rf"(?m)^\+[^#\n]*\b{v}")
+        with tempfile.TemporaryDirectory() as d:
+            data = self._patched_tree(d)
+            hook = data / "Xwayland-session.d" / "20-gnome-session-openrc-xsettings"
+            helper = data / "gnome-session-openrc-helper"
+            self.assertIn("[ -d /run/systemd/system ] && exit 0", hook.read_text())
+            text = helper.read_text().replace("/usr/libexec/gnome-session-openrc-helper", str(helper))
+            helper.write_text("\n".join(l for l in text.splitlines() if not l.startswith("PATH=")) + "\n")
+            rt, bin_ = Path(d, "rt"), Path(d, "bin")
+            rt.mkdir(); bin_.mkdir()
+            fakes = {
+                "rc-service": f'#!/bin/sh\necho "$*" >> {d}/rc\n[ "$3" = status ] && exit 3\nexit 0\n',
+                "gdbus": "#!/bin/sh\necho \"(<uint32 2>,)\"\n",
+                "gsettings": "#!/bin/sh\necho 1.25\n",
+                "xrdb": f'#!/bin/sh\necho "DISPLAY=$DISPLAY" > {d}/xrdb.env\nprintf "Xft.antialias:\\t1\\nXft.dpi:\\t240\\n"\n',
+            }
+            for n, body in fakes.items():
+                (bin_ / n).write_text(body); (bin_ / n).chmod(0o755)
+            env = {"PATH": f"{bin_}:{os.environ['PATH']}", "XDG_RUNTIME_DIR": str(rt), "XDG_SESSION_CLASS": "user"}
+            # an X display lock of a live process of ours (what mutter writes for Xwayland's display)
+            n = 7000 + os.getpid() % 2000
+            lock = Path(f"/tmp/.X{n}-lock")
+            if lock.exists():
+                self.skipTest(f"{lock} exists")
+            lock.write_text(f"{os.getpid():>10}\n")
+            try:
+                # mutter runs the hook with DISPLAY set
+                r = subprocess.run(["sh", str(helper), "xsettings-start", f":{n}"], capture_output=True, text=True, env=env, timeout=30)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                for _ in range(50):
+                    if Path(d, "rc").exists() and "start" in Path(d, "rc").read_text().split():
+                        break
+                    time.sleep(0.1)
+                self.assertEqual((rt / "gnome-session-openrc-xwayland-display").read_text().strip(), f":{n}")
+                self.assertIn("-U gsd-xsettings start", Path(d, "rc").read_text())
+                r = subprocess.run(["sh", str(helper), "x-display"], capture_output=True, text=True, env=env, timeout=30)
+                self.assertEqual(r.stdout.strip(), f":{n}")
+                # the status check: Xft.dpi 240 = 96 x 2 x 1.25 passes, no gsd-xsettings process of ours fails
+                r = subprocess.run(["sh", str(helper), "x11-scale-status"], capture_output=True, text=True, env=env, timeout=30)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn(f"OK Xft.dpi=240 on :{n}", r.stdout)
+                self.assertIn(f"FAIL gsd-xsettings is not running for :{n}", r.stdout)
+                self.assertEqual(Path(d, "xrdb.env").read_text().strip(), f"DISPLAY=:{n}")
+                # not an X display / the login screen: nothing is started
+                Path(d, "rc").unlink()
+                for arg, cls in ((":0;rm -rf /", "user"), ("wayland-0", "user"), (f":{n}", "greeter")):
+                    r = subprocess.run(["sh", str(helper), "xsettings-start", arg], capture_output=True, text=True,
+                                       env=dict(env, XDG_SESSION_CLASS=cls), timeout=30)
+                    self.assertEqual(r.returncode, 0)
+                time.sleep(0.5)
+                self.assertFalse(Path(d, "rc").exists())
+            finally:
+                lock.unlink()
 
 
 if __name__ == "__main__":

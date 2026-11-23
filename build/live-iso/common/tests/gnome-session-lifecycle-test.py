@@ -34,12 +34,16 @@ Exit 0 = PASS (every check of every cycle), 1 = FAIL. A JSON summary goes to OUT
 import argparse
 import collections
 import json
+import math
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
 import time
+
+shq = shlex.quote
 
 LOGIN_PASSWORD = "Gsl-Login-Test-4711"  # test-only, never a real secret; differs from every other harness password
 _SHIFT = {c: k for c, k in zip('!@#$%^&*()_+{}|:"<>?~', "1234567890-=[]\\;',./`")}
@@ -318,6 +322,90 @@ class Run:
         cast = self.wait(lambda: self.screencast_types() or None, 40, step=4)
         self.check(n, "portal-screencast", bool(cast), f"org.freedesktop.portal.ScreenCast AvailableSourceTypes={cast or self.last_cast}")
         self.verify_autostart_env(n)
+        self.verify_x11_ui_scale(n)
+
+    # X11 apps under Xwayland at fractional scales (owner-ws 2026-11-23: Steam/Qt apps tiny at 133 %). mutter 50 always scales Xwayland
+    # natively (X screen = ceil(scale) x logical size); X11 clients render at the right size only when gsd-xsettings publishes that factor.
+    # For each target scale the monitor is set (persistently: the temporary method makes gnome-shell revert after its "keep changes?"
+    # countdown; the original scale is restored at the end) to the closest scale mutter supports for its mode, then X11 clients
+    # are checked: gsd-xsettings serves the display, Xft.dpi = 96 x UiScalingFactor, GTK3 on X11 reads the same factor from XSETTINGS, and
+    # the X screen is logical size x factor.
+    X11_SCALES = (1.25, 1.333, 1.5, 2.0)
+    SCALE_PROBE = r'''
+import json, math, sys, gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib
+want = float(sys.argv[1])
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+dc = Gio.DBusProxy.new_sync(bus, 0, None, "org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig", "org.gnome.Mutter.DisplayConfig")
+serial, monitors, logical, props = dc.call_sync("GetCurrentState", None, 0, 10000).unpack()
+mode_of, scales = {}, {}
+for (conn, vendor, product, ser), modes, mprops in monitors:
+    for mid, w, h, rate, pref, sup, mp in modes:
+        if mp.get("is-current"):
+            mode_of[conn] = (mid, w, h)
+            scales[conn] = sup
+lm_out, applied = [], []
+for x, y, scale, transform, primary, mons, lp in logical:
+    conn = mons[0][0]
+    sup = scales.get(conn) or [scale]
+    s = min(sup, key=lambda v: abs(v - want))
+    applied.append(s)
+    lm_out.append((x, y, s, transform, primary, [(c[0], mode_of[c[0]][0], {}) for c in mons]))
+dc.call_sync("ApplyMonitorsConfig", GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 2, lm_out, {})), 0, 10000)
+w, h = mode_of[logical[0][5][0][0]][1:]
+print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
+'''
+    GDK_PROBE = ('import gi; gi.require_version("Gdk", "3.0"); from gi.repository import Gdk; d = Gdk.Display.get_default(); '
+                 'print(d.get_monitor(0).get_scale_factor() if d else "no-display")')
+
+    def as_user(self, cmd, timeout=60):
+        a = self.a
+        env = f"XDG_RUNTIME_DIR=/run/user/{self.uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{self.uid}/bus"
+        return self.vm.out(f"su - {a.user} -c {shq(env + ' ' + cmd)} 2>&1", timeout=timeout)
+
+    def verify_x11_ui_scale(self, n):
+        vm = self.vm
+        hp = "/usr/libexec/gnome-session-openrc-helper"
+        disp = self.wait(lambda: self.as_user(f"{hp} x-display") or None, 40, step=3) or ""
+        if not self.check(n, "x11-xwayland-display", disp.startswith(":"), f"Xwayland display of the session: {disp!r}"):
+            return
+        auth = vm.out(f"tr '\\0' '\\n' </proc/$(pgrep -u {self.uid} -x Xwayland | head -n1)/cmdline | sed -n '/^-auth$/{{n;p;q}}'")
+        xenv = f"DISPLAY={disp} XAUTHORITY={auth}"
+        vm.sh(f"cat > /tmp/gsl-scale-probe.py; chmod 644 /tmp/gsl-scale-probe.py", inp=self.SCALE_PROBE)
+        orig = None
+        try:
+            for want in self.X11_SCALES:
+                o = self.as_user(f"python3 /tmp/gsl-scale-probe.py {want}")
+                try:
+                    st = json.loads(o.strip().splitlines()[-1])
+                except (ValueError, IndexError):
+                    self.check(n, f"x11-scale-{want}-apply", False, f"ApplyMonitorsConfig failed: {o[-300:]}")
+                    continue
+                if orig is None:
+                    orig = st["was"]
+                s = st["applied"][0]
+                f = math.ceil(s - 1e-6)
+                time.sleep(4)  # mutter -> UiScalingFactor -> gsd-xsettings -> XSETTINGS/xrdb
+                stat = self.wait(lambda: (lambda o: o if "FAIL" not in o and "OK Xft.dpi" in o else None)(
+                    self.as_user(f"{xenv} {hp} x11-scale-status")), 20, step=2) or self.as_user(f"{xenv} {hp} x11-scale-status")
+                self.check(n, f"x11-scale-{want}-xsettings", "FAIL" not in stat and "OK Xft.dpi" in stat and f"X11 UI scale {f}," in stat,
+                           f"monitor scale {s:.4f} (want {want}) -> {stat!r}")
+                gdk = self.as_user(f"{xenv} GDK_BACKEND=x11 python3 -c {shq(self.GDK_PROBE)}").strip().splitlines()
+                self.check(n, f"x11-scale-{want}-gtk3-x11-client", bool(gdk) and gdk[-1] == str(f),
+                           f"GTK3 X11 client scale factor {gdk[-1] if gdk else '?'} (expected {f})")
+                xr = self.as_user(f"{xenv} xrandr --current 2>/dev/null | sed -n 's/.* current \\([0-9]*\\) x \\([0-9]*\\),.*/\\1 \\2/p'")
+                lw, lh = (round(st["mode"][0] / s), round(st["mode"][1] / s))
+                try:
+                    xw, xh = (int(v) for v in xr.split()[-2:])
+                except ValueError:
+                    xw = xh = 0
+                self.check(n, f"x11-scale-{want}-x-screen", abs(xw - lw * f) <= f * 2 and abs(xh - lh * f) <= f * 2,
+                           f"X screen {xw}x{xh}, logical {lw}x{lh} x factor {f}")
+        finally:
+            # back to the scale the session started with
+            if orig is not None:
+                self.as_user(f"python3 /tmp/gsl-scale-probe.py {orig}")
 
     def verify_autostart_env(self, n):
         vm = self.vm

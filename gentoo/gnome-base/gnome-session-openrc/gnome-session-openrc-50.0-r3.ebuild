@@ -31,6 +31,14 @@ KEYWORDS="~alpha amd64 ~arm arm64 ~loong ~ppc ~ppc64 ~riscv ~sparc x86"
 #    GNOME_SHELL_SESSION_MODE=gdm; this OpenRC leader bypasses it, so gnome-shell came up as an empty desktop of gdm-greeter (no login
 #    dialog, nobody could log in). gnome-shell's start_pre now sets the mode for greeter-class sessions (0002).
 #    Upstream issue with this patch: https://github.com/swagtoy/gnome-session-openrc/issues/12
+#  - -r3: X11 apps were tiny on a fractionally scaled monitor (Steam, Qt apps such as the Nextcloud client, terminator). mutter 50 always
+#    runs Xwayland natively scaled (X screen = ceil(scale) x the logical size, X11 windows scaled down by the compositor), so an X11 app
+#    renders at the right size only when gsd-xsettings publishes the factor (XSETTINGS Gdk/WindowScalingFactor, Xft.dpi = 96 x factor).
+#    Under systemd gnome-session starts gsd-xsettings with Xwayland; upstream OpenRC never started it (commented out of
+#    gnome-settings-daemon, DISPLAY=:2 hard-coded). Now mutter's /etc/xdg/Xwayland-session.d hook records the display it started and
+#    starts gsd-xsettings for it (guarded like gnome-shell, torn down with the session); `gnome-session-openrc-helper x11-scale-status`
+#    checks it (0003). Per-app scale variables (GDK_SCALE, QT_SCALE_FACTOR, STEAM_FORCE_DESKTOPUI_SCALING) are deliberately NOT set:
+#    they are fixed at app start, ignore scale changes and double-scale on top of Xft.dpi.
 COMMON_DEPEND="
 	>=dev-libs/glib-2.82.0:2
 	>=sys-auth/elogind-242
@@ -49,10 +57,19 @@ BDEPEND="
 PATCHES=(
 	"${FILESDIR}"/0001-horcrux-session-scoped-user-services.patch
 	"${FILESDIR}"/0002-greeter-shell-session-mode.patch
+	"${FILESDIR}"/0003-xwayland-gsd-xsettings.patch
 )
 
 src_prepare() {
 	default
 	# the session-scoping helper must be in place (the image build gates and the QEMU lifecycle test look for it)
 	[[ -f data/gnome-session-openrc-helper ]] || die "session-scoping patch not applied"
+	[[ -f data/Xwayland-session.d/20-gnome-session-openrc-xsettings ]] || die "Xwayland gsd-xsettings patch not applied"
+	! grep -q '^DISPLAY=:' data/openrc/gsd-xsettings || die "gsd-xsettings still has a hard-coded DISPLAY"
+}
+
+pkg_postinst() {
+	# a running session started its Xwayland before this hook existed: X11 apps get the UI scale from the next login (or start
+	# gsd-xsettings in the session: rc-service -U gsd-xsettings start), then restart the X11 app
+	elog "X11 apps get the GNOME UI scale through gsd-xsettings from the next login on."
 }
