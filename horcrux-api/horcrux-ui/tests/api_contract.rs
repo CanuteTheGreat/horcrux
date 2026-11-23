@@ -4138,7 +4138,9 @@ async fn guest_power_routes_read_into_ui_types() {
     assert!(
         g.saved.is_none()
             && (g.can_save
-                || g.save_blocker.as_deref().is_some_and(|b| b.contains("encrypted"))),
+                || g.save_blocker
+                    .as_deref()
+                    .is_some_and(|b| b.contains("encrypted"))),
         "can_save={} blocker={:?}",
         g.can_save,
         g.save_blocker
