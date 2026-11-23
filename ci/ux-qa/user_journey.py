@@ -350,8 +350,11 @@ def main():
             n_range = page.locator("form input[type=range]").count()
             expect("j3-create-vm", "resource-sliders", n_range >= 3,
                    f"CPU/RAM/disk are plain number boxes ({n_range} sliders): no sliders, supported steps or presets with a custom override")
-            expect("j3-create-vm", "nic-by-default", page.locator(".vm-nic-row").count() >= 1,
-                   "a new VM form has no network card by default")
+            # a default NIC needs a bridge to attach to: on a host where none exists or can be made, the missing NIC is
+            # the fresh-host-no-bridge finding (plus the nic-path-untested warning), not a second, runner-dependent failure
+            if state["bridge"]:
+                expect("j3-create-vm", "nic-by-default", page.locator(".vm-nic-row").count() >= 1,
+                       "a new VM form has no network card by default")
             # container runtimes' own bridges (docker0, podman0, cni0, br-<hash>) are never offered to a VM
             nic_opts = [o["v"] for o in select_options(page, ".vm-nic-bridge")] if page.locator(".vm-nic-bridge").count() else []
             api_br = [b.get("name", "") for b in ((opts or {}).get("bridges") or []) if isinstance(b, dict)] if code == 200 and isinstance(opts, dict) else []
