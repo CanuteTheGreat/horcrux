@@ -2088,7 +2088,11 @@ class Runner:
     def web_login_code(self, pw, wait=0):
         end = time.time() + wait
         while True:
-            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": self.P.get("web_user", "admin"), "password": pw}, timeout=T(40))
+            # A probe that lands while the web service is restarting (the console-menu password reset restarts it) is accepted and then
+            # hangs until its own timeout. With a T(40) probe and a 20 s wait that single hang used up the whole wait and returned 0
+            # (run 2972, uefi-usb-auto-openconsole only: "new password -> 0, old password -> 401"). When a wait is given, probe in short
+            # slices so the retries fit inside it; the 200/401 assertion is unchanged.
+            sc, code, resp = http(FWD_WEB, "/api/auth/login", "POST", {"username": self.P.get("web_user", "admin"), "password": pw}, timeout=T(10) if wait else T(40))
             self.login_err = resp.decode(errors="replace")[:80] if code == 0 else ""      # why there was no HTTP answer (timeout / refused / TLS)
             if code == 200 or time.time() >= end:
                 return code
@@ -2150,7 +2154,7 @@ class Runner:
             t = self.opt(vm, "3", [("User name", self.P["web_user"]), ("New admin password", PW2), ("Confirm", PW2), ("same password for the root console", "n")])
         else:
             t = self.opt(vm, "3", [("New admin password", PW2), ("Confirm", PW2), ("same password for the root console", "n")])
-        c_new, c_old = self.web_login_code(PW2, 20), self.web_login_code(PW)
+        c_new, c_old = self.web_login_code(PW2, 60), self.web_login_code(PW)
         self.step("console-menu-reset-password", c_new == 200 and c_old != 200, f"new password -> {c_new}, old password -> {c_old}")
         # option 11 backup, 4 factory reset, 10 restore
         t = self.opt(vm, "11", [], done=r"Backup written: \S+")
