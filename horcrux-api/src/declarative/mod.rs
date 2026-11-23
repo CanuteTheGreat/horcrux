@@ -817,6 +817,36 @@ fn power_node_diff(
         &l.stop_margin_secs,
         &w.stop_margin_secs,
     );
+    diff(
+        out,
+        "guest_hibernate",
+        &l.guest_hibernate,
+        &w.guest_hibernate,
+    );
+    diff(
+        out,
+        "hibernate_timeout_secs",
+        &l.hibernate_timeout_secs,
+        &w.hibernate_timeout_secs,
+    );
+    diff(
+        out,
+        "hibernate_probe_secs",
+        &l.hibernate_probe_secs,
+        &w.hibernate_probe_secs,
+    );
+    diff(
+        out,
+        "guest_agent_path_linux",
+        &l.guest_agent_path_linux,
+        &w.guest_agent_path_linux,
+    );
+    diff(
+        out,
+        "guest_agent_path_windows",
+        &l.guest_agent_path_windows,
+        &w.guest_agent_path_windows,
+    );
 }
 
 /// Differences between a spec VM and the live one, limited to what the spec

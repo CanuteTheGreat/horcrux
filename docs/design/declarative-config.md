@@ -55,6 +55,8 @@ guest_power:          # what guests do when the HOST shuts down / restarts
     host_shutdown_action: save     # save (default) | shutdown | poweroff | none
     save_fallback: shutdown        # shutdown | poweroff, when a state cannot be saved
     save_encryption: require       # require (encrypted storage only) | allow_unencrypted
+    guest_hibernate: true          # passthrough VMs hibernate themselves (guest tools)
+    hibernate_timeout_secs: 300
     save_timeout_secs: 300
     shutdown_timeout_secs: 120
     max_parallel: 4

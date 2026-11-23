@@ -19,6 +19,7 @@
 pub mod agent;
 pub mod crypt;
 pub mod engine;
+pub mod hibernate;
 pub mod policy;
 
 use crate::error::ApiError;
@@ -49,6 +50,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/api/vms/:id/save-state", post(vm_save))
         .route("/api/vms/:id/resume-state", post(vm_resume))
+        .route("/api/vms/:id/hibernate", post(vm_hibernate))
+        .route("/api/vms/:id/hibernate-status", get(vm_hibernate_status))
         .route("/api/vms/:id/saved-state", get(vm_saved).delete(vm_discard))
         .route(
             "/api/containers/:id/power-policy",
@@ -170,6 +173,30 @@ async fn put_policy(
         engine::prepare_stateful(state, k, id).await;
     }
     get_policy(state, k, id).await
+}
+
+/// Hibernate the guest through its agent now; the VM stops once the guest
+/// has powered it off (start it to resume).
+async fn vm_hibernate(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    engine::require_guest(&s, GuestKind::Vm, &id).await?;
+    let method = engine::hibernate_guest(&s, GuestKind::Vm, &id).await?;
+    Ok(Json(
+        serde_json::json!({"hibernated": id, "method": method}),
+    ))
+}
+
+/// Can the guest hibernate itself right now (asks the guest agent)?
+async fn vm_hibernate_status(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<hibernate::Probe>, ApiError> {
+    engine::require_guest(&s, GuestKind::Vm, &id).await?;
+    let g = engine::find_guest(&s, GuestKind::Vm, &id).await?;
+    let eff = policy::effective(&s, GuestKind::Vm, &id).await;
+    Ok(Json(hibernate::probe(&s, &g, &eff, true).await))
 }
 
 #[derive(Debug, Default, Deserialize)]

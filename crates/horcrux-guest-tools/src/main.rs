@@ -16,6 +16,7 @@ mod audio;
 mod config;
 #[cfg(target_os = "linux")]
 mod linux;
+mod power;
 #[cfg(windows)]
 mod windows;
 
@@ -27,6 +28,9 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if let Some(a) = cfg.action {
+        std::process::exit(power::run(&cfg, a));
+    }
     if cfg.print_caps {
         let p = platform(&cfg);
         println!(

@@ -34,6 +34,7 @@ $v=Get-Volume -FileSystemLabel HXTOOLS | Select-Object -First 1; \
 if(-not $v -or -not $v.DriveLetter){throw 'the Horcrux guest tools CD (HXTOOLS) is not attached'}; \
 $m=Get-ChildItem ($v.DriveLetter + ':\\\\windows\\\\horcrux-guest-tools-*-x64.msi') | Sort-Object Name | Select-Object -Last 1; \
 $p=Start-Process msiexec.exe -ArgumentList @('/i',$m.FullName,'/qn','/norestart') -Wait -PassThru; \
+if($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010){try{$a=$env:ProgramFiles+'\\Horcrux\\Guest Tools\\horcrux-guest-agent.exe'; if(Test-Path $a){& $a --hibernate-setup | Out-Null}}catch{}}; \
 exit $p.ExitCode";
 
 /// POSIX sh run by the guest agent (as root) in a Linux guest. Exit codes:
@@ -81,6 +82,9 @@ if [ -d /run/systemd/system ]; then
 elif command -v rc-service >/dev/null 2>&1; then
   rc-update add horcrux-guest-agent default >/dev/null; rc-service horcrux-guest-agent restart || exit 6
 fi
+# Hibernation (passthrough VMs hibernate themselves at host shutdown): never fails the install.
+ag=$(command -v horcrux-guest-agent 2>/dev/null || echo /usr/bin/horcrux-guest-agent)
+if [ -x "$ag" ]; then "$ag" --hibernate-setup || echo "hibernation setup: see the line above; run horcrux-guest-agent --hibernate-status in the guest" >&2; fi
 echo installed
 "#;
 
@@ -383,6 +387,8 @@ mod tests {
         assert!(
             s.contains("FileSystemLabel HXTOOLS") && s.contains("msiexec.exe") && s.contains("/qn")
         );
+        // the install ends by preparing the guest for hibernation
+        assert!(s.contains("--hibernate-setup") && s.contains("Guest Tools"));
     }
 
     #[test]
@@ -401,6 +407,7 @@ mod tests {
                 "systemctl restart horcrux-guest-agent.service || exit 6",
                 "rc-update add horcrux-guest-agent default",
                 "LABEL=\"HXTOOLS\"",
+                "--hibernate-setup",
             ] {
                 assert!(s.contains(want), "{want}");
             }
