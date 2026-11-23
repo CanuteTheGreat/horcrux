@@ -104,17 +104,20 @@ class ConfigAndParsing(Base):
 
     def test_world_args_prefer_binpkgs_and_guard_prebuilt(self):
         a = self.m.world_args(self.conf())
-        for want in ("--getbinpkg", "--usepkg", "--update", "--deep", "--newuse", "--with-bdeps=n", "--keep-going", "@world", "--ask=n",
+        for want in ("--getbinpkg", "--usepkg", "--update", "--deep", "--newuse", "--changed-use", "--with-bdeps=n", "--keep-going", "@world", "--ask=n",
                      "--usepkg-exclude=app-emulation/horcrux-bin"):
             self.assertIn(want, a)
 
-    def test_with_bdeps_is_off_by_default_and_configurable(self):
+    def test_world_resolution_has_changed_use_and_bdeps_switches(self):
         c = self.conf()
         self.assertEqual(c["WITH_BDEPS"], "no")
+        self.assertEqual(c["CHANGED_USE"], "yes")
+        self.assertIn("--changed-use", self.m.world_args(c))
         self.assertNotIn("--with-bdeps=y", self.m.world_args(c))
         c["WITH_BDEPS"] = "yes"
+        c["CHANGED_USE"] = "no"
         self.assertIn("--with-bdeps=y", self.m.world_args(c))
-        self.assertNotIn("--with-bdeps=n", self.m.world_args(c))
+        self.assertNotIn("--changed-use", self.m.world_args(c))
 
     def test_atom_of(self):
         self.assertEqual(self.m.atom_of("sys-firmware/intel-microcode-20261110_p20261111-r1"), "sys-firmware/intel-microcode")
