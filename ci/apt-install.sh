@@ -12,6 +12,16 @@ APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::
 # The runner image carries Launchpad PPAs we never install from; their 404/503s
 # make `apt-get update` fail (Ubuntu 26.04 image, git-core PPA, 2026-11-17).
 sudo rm -f /etc/apt/sources.list.d/*ppa* 2>/dev/null || true
+# Point apt at the shared build-cache hub's /ubuntu proxy (it fails over between kernel.org, MIT and
+# archive.ubuntu.com, and caches). The helper is served by the hub, falls back to a direct mirror probe when the
+# hub is down, and never fails this script. RW_APT_OFF=1 skips it; RW_CACHE_HUB overrides the hub address.
+if [ -z "${RW_APT_OFF:-}" ]; then
+  rw_apt_helper=$(mktemp)
+  if curl -fsS -m 5 "http://${RW_CACHE_HUB:-10.1.10.103:8088}/ci/apt-mirror.sh" -o "$rw_apt_helper" 2>/dev/null; then
+    sh "$rw_apt_helper" || true
+  fi
+  rm -f "$rw_apt_helper"
+fi
 # archive.ubuntu.com itself can be degraded for hours (2026-11-23: connects/index fetches timing out
 # from the burst/arm64 runners while azure.archive.ubuntu.com was cut off too, mirrors.kernel.org (amd64+arm64) answered); from attempt 2 on,
 # point apt at a fallback mirror (override with APT_FALLBACK_MIRROR, empty = never switch).
