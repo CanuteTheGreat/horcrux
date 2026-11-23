@@ -910,8 +910,7 @@ async fn send_email(
     msg: &Message,
 ) -> Result<(), String> {
     use lettre::message::header::ContentType;
-    use lettre::transport::smtp::authentication::Credentials;
-    use lettre::{AsyncSmtpTransport, AsyncTransport, Message as Mail, Tokio1Executor};
+    use lettre::{AsyncTransport, Message as Mail};
 
     let host = hostname::get()
         .map(|h| h.to_string_lossy().to_string())
@@ -935,7 +934,71 @@ async fn send_email(
         .body(format!("{}\n\n--\nHorcrux on {}\n", msg.body, host))
         .map_err(|e| format!("could not build the e-mail: {}", e))?;
 
-    let mut transport = if use_tls {
+    let transport = smtp_transport(server, port, username, password, use_tls)?;
+    let result = transport
+        .send(mail)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("SMTP delivery via {}:{} failed: {}", server, port, e));
+    if result.is_err() {
+        // A failed send may mean the pooled connections are dead (server
+        // restart, idle timeout): drop the cached transport so the next
+        // notification starts from a fresh pool.
+        evict_smtp_transport(server, port, username, password, use_tls);
+    }
+    result
+}
+
+type SmtpPool = lettre::AsyncSmtpTransport<lettre::Tokio1Executor>;
+
+/// Pooled SMTP transports, one per (server, port, TLS mode, login). lettre's
+/// pool keeps connections open and reuses them, so a burst of alerts to the
+/// same relay shares a few connections instead of one TCP+TLS+AUTH handshake
+/// each. The password is part of the key (hashed) so editing a channel's
+/// credentials never reuses a transport that still holds the old login.
+fn smtp_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, SmtpPool>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, SmtpPool>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn smtp_cache_key(
+    server: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    use_tls: bool,
+) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    password.hash(&mut h);
+    format!("{server}|{port}|{use_tls}|{username}|{:x}", h.finish())
+}
+
+fn evict_smtp_transport(server: &str, port: u16, username: &str, password: &str, use_tls: bool) {
+    if let Ok(mut c) = smtp_cache().lock() {
+        c.remove(&smtp_cache_key(server, port, username, password, use_tls));
+    }
+}
+
+fn smtp_transport(
+    server: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    use_tls: bool,
+) -> Result<SmtpPool, String> {
+    use lettre::transport::smtp::authentication::Credentials;
+    use lettre::{AsyncSmtpTransport, Tokio1Executor};
+
+    let key = smtp_cache_key(server, port, username, password, use_tls);
+    if let Ok(c) = smtp_cache().lock() {
+        if let Some(t) = c.get(&key) {
+            return Ok(t.clone());
+        }
+    }
+    let mut builder = if use_tls {
         if port == 465 {
             AsyncSmtpTransport::<Tokio1Executor>::relay(server)
         } else {
@@ -948,20 +1011,36 @@ async fn send_email(
     .port(port)
     .timeout(Some(Duration::from_secs(20)));
     if !username.is_empty() {
-        transport =
-            transport.credentials(Credentials::new(username.to_string(), password.to_string()));
+        builder = builder.credentials(Credentials::new(username.to_string(), password.to_string()));
     }
-    transport
-        .build()
-        .send(mail)
-        .await
-        .map(|_| ())
-        .map_err(|e| format!("SMTP delivery via {}:{} failed: {}", server, port, e))
+    let transport = builder.build();
+    if let Ok(mut c) = smtp_cache().lock() {
+        if c.len() >= 32 {
+            c.clear(); // channels are few; this only bounds a pathological churn
+        }
+        c.insert(key, transport.clone());
+    }
+    Ok(transport)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smtp_transports_are_cached_per_login() {
+        let n = || smtp_cache().lock().unwrap().len();
+        let before = n();
+        smtp_transport("pool-test.invalid", 25, "u", "p1", false).unwrap();
+        assert_eq!(n(), before + 1);
+        smtp_transport("pool-test.invalid", 25, "u", "p1", false).unwrap();
+        assert_eq!(n(), before + 1, "same login reuses the pooled transport");
+        smtp_transport("pool-test.invalid", 25, "u", "p2", false).unwrap();
+        assert_eq!(n(), before + 2, "a changed password gets a fresh transport");
+        evict_smtp_transport("pool-test.invalid", 25, "u", "p1", false);
+        evict_smtp_transport("pool-test.invalid", 25, "u", "p2", false);
+        assert_eq!(n(), before);
+    }
 
     fn ui_json() -> &'static str {
         // Exactly what the web UI's create form posts.

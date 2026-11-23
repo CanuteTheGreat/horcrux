@@ -71,7 +71,7 @@ urlencoding = "2.1"
 async-trait = "0.1"
 rand = "0.8"
 tempfile = "3.8"
-lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder"] }
+lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "pool", "builder"] }
 regex = "1.10"
 url = "2.5"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid"] }
