@@ -437,9 +437,7 @@ mod tests {
             stderr: b"No space left on device".to_vec(),
         };
         let e = super::check_status("qemu-img", out).unwrap_err();
-        assert!(
-            matches!(e, horcrux_common::Error::Conflict(m) if m.contains("ran out of space"))
-        );
+        assert!(matches!(e, horcrux_common::Error::Conflict(m) if m.contains("ran out of space")));
     }
 
     use super::*;
