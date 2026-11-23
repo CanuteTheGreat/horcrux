@@ -79,7 +79,7 @@ class Kernels(T.Boot):
         self.assertIn("known good", [t for t, i in entries(cfg) if i == "be-horcrux"][0])
 
     def test_existing_install_migrates_running_kernel_is_good_and_old_loose_kernel_is_kept(self):
-        # HOGSMEADE state: BE holds nothing historic; /boot has the older pair next to the new one; the older kernel is running
+        # an install from before kernel history existed: the BE holds nothing historic; /boot has the older pair next to the new one; the older kernel is running
         os.makedirs(os.path.join(self.mods, "7.2.1"))
         for kv in ("7.2.1",):
             open(os.path.join(self.boot, f"vmlinuz-{kv}"), "wb").write(b"A" * 100000)
