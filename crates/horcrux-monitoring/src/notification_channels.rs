@@ -1027,8 +1027,8 @@ fn smtp_transport(
 mod tests {
     use super::*;
 
-    #[test]
-    fn smtp_transports_are_cached_per_login() {
+    #[tokio::test]
+    async fn smtp_transports_are_cached_per_login() {
         let n = || smtp_cache().lock().unwrap().len();
         let before = n();
         smtp_transport("pool-test.invalid", 25, "u", "p1", false).unwrap();
