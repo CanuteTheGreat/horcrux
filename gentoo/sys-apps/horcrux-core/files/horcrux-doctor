@@ -1,0 +1,434 @@
+#!/usr/bin/env python3
+"""horcrux-doctor: health checks for a Horcrux host.
+
+  horcrux-doctor                      run every check, print findings (exit 1 when any warning)
+  horcrux-doctor portage-config       only the Portage configuration access check
+  horcrux-doctor portage-config --fix apply the safe fix (see below)
+  options: --json  --root DIR  --record  --quiet  --probe
+
+portage-config
+  Administrators are members of the portage group (see horcrux-admin-groups) and run `emerge -p`, `equery`, `eix` as themselves.
+  Portage reads everything under /etc/portage with the caller's own rights, so one file or directory that a portage-group member
+  cannot reach stops the whole command ("Permission denied: '/etc/portage/package.use/<file>'"). The usual cause is a file written
+  under a restrictive umask (0600 root:root).
+
+  The check answers the question the kernel answers: could a member of the portage group, who owns nothing, open this file? For
+  that it walks the path component by component the way the kernel does (search permission on every directory from / down, symlinks
+  followed, their targets walked too) and picks the permission class like the kernel does: a file whose group IS portage is judged
+  by its GROUP bits only (0604 root:portage is NOT readable for the group, although "other" can read), every other file by its
+  OTHER bits (0640 root:root is NOT readable for the group, although the group bit is set). With --probe (root only) the answer is
+  confirmed by really opening the file with the portage group's credentials, which also covers ACLs and security modules.
+
+  Never examined, never changed, never reported by content: secrets. /etc/portage/gnupg (the Portage signing keyring), auth.conf
+  (sync credentials) and files named like keys, tokens, passwords or credentials are listed as "skipped" only.
+
+  --fix is safe by construction: only regular files and directories INSIDE /etc/portage that are owned by root, reached without
+  following a symlink; permission bits are only ever ADDED (group read/search when the group is portage, otherwise read/search for
+  group and other: the 0644/0755 convention), never removed; owner and group are never changed; symlinks, secrets, files outside
+  /etc/portage and ancestor directories above it are only reported. Without --fix nothing is modified.
+
+Exit status: 0 healthy, 1 warnings found (after --fix: warnings that remain), 2 usage/internal error.
+"""
+import argparse
+import errno
+import json
+import os
+import re
+import stat
+import sys
+import tempfile
+import time
+
+PORTAGE_GROUP = os.environ.get("HX_PORTAGE_GROUP", "portage")
+CONFIG_DIR = "/etc/portage"
+STATE_DIR = os.environ.get("HX_DOCTOR_STATE_DIR", "/var/lib/horcrux/doctor")
+MAX_SYMLINKS = 40
+# uid that owns the files --fix may touch (root; the unit tests, which cannot create root-owned files, set HX_DOCTOR_OWNER_UID)
+OWNER_UID = int(os.environ.get("HX_DOCTOR_OWNER_UID", "0"))
+
+# Names (relative to the config dir, or any path component) whose content is secret: never examined, never fixed.
+SECRET_DIRS = ("gnupg",)
+SECRET_NAME_RE = re.compile(
+    r"(^auth\.conf$|secret|passw(or)?d|token|credential|private|\.key$|\.pem$|\.p12$|\.pfx$|\.kdbx$|^id_[a-z0-9]+$|\.netrc$|\.htpasswd$)",
+    re.I)
+
+
+class Finding(dict):
+    pass
+
+
+# ---------------------------------------------------------------- permission model
+def may_access(st, gid, want, uid=None):
+    """Kernel-style discretionary check for a principal in group `gid` (and, when `uid` is given, that uid).
+    want: 'r' for files, 'x' for directories, or 'rx'. Returns (ok, why). Class selection: owner, else group, else other; the first
+    matching class decides alone."""
+    bits = {"r": 4, "w": 2, "x": 1}
+    need = 0
+    for c in want:
+        need |= bits[c]
+    if uid is not None and st.st_uid == uid:
+        cls, have = "owner", (st.st_mode >> 6) & 7
+    elif st.st_gid == gid:
+        cls, have = "group", (st.st_mode >> 3) & 7
+    else:
+        cls, have = "other", st.st_mode & 7
+    return (have & need) == need, cls
+
+
+def describe(st):
+    return "%04o %d:%d" % (stat.S_IMODE(st.st_mode), st.st_uid, st.st_gid)
+
+
+def group_id(root, name):
+    """gid of `name` from <root>/etc/group (None when the group does not exist)."""
+    try:
+        with open(os.path.join(root, "etc/group")) as f:
+            for line in f:
+                p = line.rstrip("\n").split(":")
+                if len(p) >= 3 and p[0] == name:
+                    return int(p[2])
+    except OSError:
+        pass
+    return None
+
+
+def is_secret(rel_parts):
+    if rel_parts and rel_parts[0] in SECRET_DIRS:
+        return True
+    return any(SECRET_NAME_RE.search(p) for p in rel_parts)
+
+
+# ---------------------------------------------------------------- path walking
+class Walker:
+    """Resolves a path inside `root` like the kernel, recording the first thing the principal cannot do."""
+
+    def __init__(self, root, gid, uid):
+        self.root, self.gid, self.uid = root, gid, uid
+
+    def real(self, vpath):
+        return os.path.join(self.root, vpath.lstrip("/")) if self.root != "/" else vpath
+
+    def check_path(self, vpath, want_leaf):
+        """Walk vpath (absolute, virtual). Returns (problem or None, final_virtual_path, final_stat or None, chain).
+        problem = dict(kind, path, st, need, cls) for the first blocker. Symlinks are followed (their target is walked under the same
+        rules); the symlink's own mode is irrelevant on Linux."""
+        todo = [c for c in vpath.split("/") if c]
+        cur = []  # resolved components
+        links = 0
+        chain = []  # (virtual path, lstat) of every directory/leaf examined
+        st = None
+        while todo:
+            comp = todo.pop(0)
+            if comp == ".":
+                continue
+            if comp == "..":
+                if cur:
+                    cur.pop()
+                continue
+            dpath = "/" + "/".join(cur)
+            # search permission on the directory we are looking into
+            dst = os.lstat(self.real(dpath))
+            ok, cls = may_access(dst, self.gid, "x", self.uid)
+            if not ok:
+                return dict(kind="traverse", path=dpath, st=dst, need="x", cls=cls), None, None, chain
+            chain.append((dpath, dst))
+            cand = (dpath.rstrip("/") + "/" + comp)
+            try:
+                st = os.lstat(self.real(cand))
+            except OSError as e:
+                return dict(kind="missing", path=cand, errno=e.errno), None, None, chain
+            if stat.S_ISLNK(st.st_mode):
+                links += 1
+                if links > MAX_SYMLINKS:
+                    return dict(kind="loop", path=cand), None, None, chain
+                try:
+                    tgt = os.readlink(self.real(cand))
+                except OSError as e:
+                    return dict(kind="missing", path=cand, errno=e.errno), None, None, chain
+                if tgt.startswith("/"):
+                    cur = []
+                todo = [c for c in tgt.split("/") if c] + todo
+                continue
+            cur.append(comp)
+        final = "/" + "/".join(cur)
+        st = os.lstat(self.real(final))
+        want = want_leaf if not stat.S_ISDIR(st.st_mode) else "rx"
+        if stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode):
+            ok, cls = may_access(st, self.gid, want, self.uid)
+            if not ok:
+                return dict(kind="leaf", path=final, st=st, need=want, cls=cls), final, st, chain
+        return None, final, st, chain
+
+
+def walk_tree(root, base):
+    """Every entry (virtual path) under base without following symlinks into directories; yields (vpath, is_dir, is_link)."""
+    rbase = os.path.join(root, base.lstrip("/")) if root != "/" else base
+    stack = [base]
+    while stack:
+        d = stack.pop()
+        rd = os.path.join(root, d.lstrip("/")) if root != "/" else d
+        yield d, True, False
+        try:
+            names = sorted(os.listdir(rd))
+        except OSError:
+            continue
+        for n in names:
+            vp = d.rstrip("/") + "/" + n
+            rp = os.path.join(root, vp.lstrip("/")) if root != "/" else vp
+            try:
+                st = os.lstat(rp)
+            except OSError:
+                continue
+            if stat.S_ISLNK(st.st_mode):
+                yield vp, False, True
+            elif stat.S_ISDIR(st.st_mode):
+                stack.append(vp)
+            else:
+                yield vp, False, False
+
+
+# ---------------------------------------------------------------- optional real-credential probe
+def probe_open(real_path, gid, uid, is_dir):
+    """Open real_path with the credentials of an unprivileged member of `gid` in a forked child (root only). True/False; None = could
+    not probe."""
+    if os.geteuid() != 0:
+        return None
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        code = 3
+        try:
+            os.close(r)
+            os.setgroups([gid])
+            os.setgid(gid)
+            os.setuid(uid)
+            try:
+                fd = os.open(real_path, os.O_RDONLY | (os.O_DIRECTORY if is_dir else 0))
+                os.close(fd)
+                code = 0
+            except OSError as e:
+                code = 1 if e.errno in (errno.EACCES, errno.EPERM) else 2
+        finally:
+            os._exit(code)
+    os.close(w)
+    _, status = os.waitpid(pid, 0)
+    os.close(r)
+    c = os.waitstatus_to_exitcode(status)
+    return {0: True, 1: False}.get(c)
+
+
+# ---------------------------------------------------------------- the check
+def check_portage_config(root="/", gid=None, uid=None, probe=False, config_dir=CONFIG_DIR):
+    """Returns (findings, skipped). Each finding: dict(path, problem, detail, fixable, fix)."""
+    findings, skipped = [], []
+    if gid is None:
+        gid = group_id(root, PORTAGE_GROUP)
+    if gid is None:
+        findings.append(Finding(path="/etc/group", problem="no-portage-group", detail="group %r does not exist" % PORTAGE_GROUP,
+                                fixable=False))
+        return findings, skipped
+    if uid is None:
+        uid = 2 ** 31 - 3  # a member who owns nothing: owner bits never apply
+    walker = Walker(root, gid, uid)
+    if not os.path.isdir(walker.real(config_dir)):
+        return findings, skipped
+    cfg_parts = [c for c in config_dir.split("/") if c]
+    seen_dirs = set()
+
+    def add(path, problem, detail, fixable=False, target=None):
+        findings.append(Finding(path=path, problem=problem, detail=detail, fixable=fixable, target=target))
+
+    def judge(vpath, via=None):
+        label = vpath if via is None else "%s (-> %s)" % (via, vpath)
+        try:
+            prob, final, st, chain = walker.check_path(vpath, "r")
+        except OSError as e:
+            add(vpath, "error", "%s" % e)
+            return
+        if prob is None:
+            if probe and final is not None and st is not None:
+                ok = probe_open(walker.real(final), gid, uid, stat.S_ISDIR(st.st_mode))
+                if ok is False:
+                    add(vpath, "probe-denied", "the portage group's credentials cannot open %s although the modes allow it "
+                        "(ACL or security module?)" % final)
+            return
+        k = prob["kind"]
+        if k == "missing":
+            if via is not None:
+                add(via, "dangling-symlink", "points to %s, which does not exist" % vpath)
+            return
+        if k == "loop":
+            add(via or vpath, "symlink-loop", "more than %d symlinks while resolving" % MAX_SYMLINKS)
+            return
+        p = prob["path"]
+        st = prob["st"]
+        what = "directory cannot be entered (search permission)" if prob["kind"] == "traverse" else (
+            "cannot be read" if not stat.S_ISDIR(st.st_mode) else "cannot be listed")
+        detail = "%s: %s; mode %s, judged by the %s bits" % (p, what, describe(st), prob["cls"])
+        under_cfg = p.split("/")[1:len(cfg_parts) + 1] == cfg_parts
+        rel = [c for c in p.split("/") if c][len(cfg_parts):] if under_cfg else None
+        direct = (via is None)  # reached without a symlink: the path IS the real path
+        fixable = bool(under_cfg and direct and st.st_uid == OWNER_UID and (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)) and
+                       not (rel and is_secret(rel)))
+        problem = "unreadable-file" if (k == "leaf" and not stat.S_ISDIR(st.st_mode)) else "unreachable-directory"
+        add(label if via else p, problem, detail, fixable, target=p)
+
+    for vpath, is_dir, is_link in walk_tree(root, config_dir):
+        rel = [c for c in vpath.split("/") if c][len(cfg_parts):]
+        if is_secret(rel):
+            if rel and rel not in [r for r in skipped]:
+                skipped.append(rel)
+            continue
+        if is_link:
+            try:
+                tgt = os.readlink(walker.real(vpath))
+            except OSError:
+                continue
+            # resolve relative to the link's directory; the walk handles chains
+            absn = tgt if tgt.startswith("/") else os.path.dirname(vpath) + "/" + tgt
+            absn = os.path.normpath(absn)
+            tparts = [c for c in absn.split("/") if c]
+            if absn.startswith(config_dir + "/") and is_secret(tparts[len(cfg_parts):]):
+                continue
+            # the link itself must be reachable (its directory chain) and its target must be readable
+            judge(absn, via=vpath)
+            continue
+        if is_dir:
+            seen_dirs.add(vpath)
+        judge(vpath)
+    # de-duplicate: one blocker directory hides its whole subtree; report each distinct blocker once
+    out, keys = [], set()
+    for f in findings:
+        key = (f["problem"], f.get("target") or f["path"], f["path"] if f["problem"] in ("dangling-symlink", "symlink-loop", "error")
+               or f["path"] != f.get("target") else "")
+        if key in keys:
+            continue
+        keys.add(key)
+        out.append(f)
+    return out, skipped
+
+
+# ---------------------------------------------------------------- the fix
+def want_bits(st, gid, is_dir):
+    """Bits to ADD: group only when the file's group is portage (the group class alone decides for members), else group+other."""
+    base = 0o050 if is_dir else 0o040
+    if st.st_gid == gid:
+        return base
+    return base | (0o005 if is_dir else 0o004)
+
+
+def apply_fix(root, gid, findings, config_dir=CONFIG_DIR, dry=False):
+    """chmod only ADDS bits, only on root-owned regular files/directories under config_dir reached without a symlink. Opens with
+    O_NOFOLLOW and re-checks the file descriptor (no swap between check and change). Returns [(path, old, new)]."""
+    changes = []
+    cfg = os.path.join(root, config_dir.lstrip("/")) if root != "/" else config_dir
+    for f in findings:
+        if not f.get("fixable"):
+            continue
+        real = os.path.join(root, f["target"].lstrip("/")) if root != "/" else f["target"]
+        # fixing a directory can make a deeper blocker visible: callers re-run the check until it converges
+        try:
+            is_dir = stat.S_ISDIR(os.lstat(real).st_mode)
+            fd = os.open(real, os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if is_dir else 0) | os.O_NONBLOCK)
+        except OSError:
+            continue
+        try:
+            st = os.fstat(fd)
+            if st.st_uid != OWNER_UID or not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+                continue
+            if not (os.path.realpath(real) + "/").startswith(os.path.realpath(cfg) + "/"):
+                continue
+            old = stat.S_IMODE(st.st_mode)
+            new = old | want_bits(st, gid, stat.S_ISDIR(st.st_mode))
+            if new != old:
+                if not dry:
+                    os.fchmod(fd, new)
+                changes.append((f["target"], old, new))
+        finally:
+            os.close(fd)
+    return changes
+
+
+# ---------------------------------------------------------------- driver
+def run_portage_config(a):
+    root = a.root.rstrip("/") or "/"
+    gid = group_id(root, PORTAGE_GROUP) if a.gid is None else a.gid
+    findings, skipped = check_portage_config(root, gid, a.uid, a.probe)
+    changes = []
+    if a.fix and gid is not None:
+        if os.geteuid() != 0 and not a.force_nonroot:
+            print("horcrux-doctor: --fix needs root", file=sys.stderr)
+            return None
+        for _ in range(8):  # an unlocked directory can reveal a deeper blocker
+            ch = apply_fix(root, gid, findings)
+            changes += ch
+            if not ch:
+                break
+            findings, skipped = check_portage_config(root, gid, a.uid, a.probe)
+    return dict(check="portage-config", ok=not findings, findings=findings, skipped=["/".join(["etc/portage"] + s) for s in skipped],
+                fixed=[dict(path=p, old="%04o" % o, new="%04o" % n) for p, o, n in changes], time=int(time.time()))
+
+
+def record(result):
+    try:
+        os.makedirs(STATE_DIR, mode=0o755, exist_ok=True)
+        os.chmod(STATE_DIR, 0o755)  # explicit: the process umask must not make the status unreadable
+        fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=".portage-config.")
+        with os.fdopen(fd, "w") as f:
+            json.dump(result, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, os.path.join(STATE_DIR, "portage-config.json"))
+    except OSError as e:
+        print("horcrux-doctor: cannot record status: %s" % e, file=sys.stderr)
+
+
+def render(res, quiet):
+    for c in res["fixed"]:
+        print("fixed   %s  %s -> %s" % (c["path"], c["old"], c["new"]))
+    if res["ok"]:
+        if not quiet:
+            print("portage-config: ok (every file under /etc/portage is reachable and readable for the %s group)" % PORTAGE_GROUP)
+    else:
+        n = len(res["findings"])
+        print("WARNING portage-config: %d item%s under /etc/portage cannot be read by members of the %s group;"
+              " emerge/equery/eix as an administrator fail with 'Permission denied'." % (n, "" if n == 1 else "s", PORTAGE_GROUP))
+        for f in res["findings"]:
+            print("  %-16s %s" % (f["problem"], f["path"]))
+            print("                   %s%s" % (f["detail"], "" if f["fixable"] else "  [report only: not fixable here]"))
+        if any(f["fixable"] for f in res["findings"]):
+            print("  safe fix (adds read/search bits only, never touches secrets or ownership): horcrux-doctor portage-config --fix")
+    if res["skipped"] and not quiet:
+        print("  skipped (secrets, never examined or changed): %s" % ", ".join(sorted(res["skipped"])))
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="horcrux-doctor", description=__doc__.split("\n")[0])
+    p.add_argument("check", nargs="?", default="all", choices=["all", "portage-config"])
+    p.add_argument("--fix", action="store_true", help="apply the safe fix")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--root", default=os.environ.get("ROOT", "/"), help="operate on another root")
+    p.add_argument("--record", action="store_true", help="write the result to %s" % STATE_DIR)
+    p.add_argument("--quiet", action="store_true", help="print nothing when healthy")
+    p.add_argument("--probe", action="store_true", help="also open each path with the portage group's credentials (root only)")
+    p.add_argument("--gid", type=int, help=argparse.SUPPRESS)
+    p.add_argument("--uid", type=int, help=argparse.SUPPRESS)
+    p.add_argument("--force-nonroot", action="store_true", help=argparse.SUPPRESS)
+    a = p.parse_args(argv)
+    res = run_portage_config(a)
+    if res is None:
+        return 2
+    if a.record:
+        record(res)
+    if a.json:
+        print(json.dumps(res, indent=2, sort_keys=True))
+    else:
+        render(res, a.quiet)
+    return 0 if res["ok"] else 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        sys.exit(0)

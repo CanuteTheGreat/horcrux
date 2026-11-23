@@ -1,0 +1,6 @@
+#!/bin/sh
+# sys-apps/horcrux-core: after every tree sync (daily through horcrux-autoupdate), record whether members of the portage group can read
+# everything under /etc/portage (status: /var/lib/horcrux/doctor/portage-config.json) and print a warning into the sync log when not.
+# Report only: the fix is `horcrux-doctor portage-config --fix`. Never fails the sync.
+[ -x /usr/sbin/horcrux-doctor ] && /usr/sbin/horcrux-doctor portage-config --record --quiet
+exit 0

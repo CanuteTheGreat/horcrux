@@ -50,6 +50,11 @@ KEYWORDS="amd64 arm64"
 #   (the diff `rc_sys=""` -> `#rc_sys=""` reads like a comment change). pkg_postinst also deletes a leftover container marker on a booted host.
 # /etc/kernel/postinst.d + postrm.d/91-horcrux-boot-entry (-r7): installs without boot environments (XFS/ext4/LVM) had no hook that refreshes grub.cfg
 #   (installkernel is built -grub because of the BE installs), so a kernel update was installed and never booted. BE installs keep 90-horcrux-be.
+# /usr/sbin/horcrux-doctor + /etc/portage/postsync.d/60-horcrux-doctor (-r8): `horcrux-doctor portage-config` warns when a file or directory under
+#   /etc/portage cannot be read by members of the portage group (a hand-placed package.use written under umask 077 made `emerge -p` fail for an
+#   administrator with "Permission denied"). It judges access the way the kernel does (every directory searchable, the file's own group class decides,
+#   symlinks followed), skips secrets (gnupg, auth.conf, key/token-like names), and `--fix` only adds read/search bits to root-owned entries inside
+#   /etc/portage. The sync hook records the result in /var/lib/horcrux/doctor/portage-config.json. Init-neutral (plain script, no service).
 RDEPEND="
 	acct-group/portage
 	app-portage/eix
@@ -87,8 +92,10 @@ src_install() {
 	insinto /usr/lib/udev/rules.d
 	doins "${FILESDIR}"/80-horcrux-udisks-hide.rules
 	dosbin "${FILESDIR}"/horcrux-admin-groups
+	dosbin "${FILESDIR}"/horcrux-doctor
 	exeinto /etc/portage/postsync.d
 	newexe "${FILESDIR}"/postsync-admin-groups 60-horcrux-admin-groups
+	newexe "${FILESDIR}"/postsync-doctor 60-horcrux-doctor
 	# marker: this is a Horcrux install (the installer, the QEMU gates and `horcrux-time-config` read it)
 	insinto /usr/share/horcrux
 	newins - core-release <<-EOF
