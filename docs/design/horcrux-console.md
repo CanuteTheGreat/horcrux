@@ -1258,12 +1258,20 @@ Not proven yet:
   its behaviour with a GPU-driven desktop (it ran on a QEMU std VGA guest;
   see the Windows row in section 6). The agent's virtio-serial path on
   Windows was not part of that run (no port was given to the VM).
-- The patched QEMU from the Horcrux binhost on a real install. The
-  host-encode desktop target itself is met with the same QEMU source and
-  patch: idle laptop median 43.4-47.3 ms, p90 48.7-50.0 ms; shared build
-  host median 41.6-45.7 ms, p90 51-61 ms (section 6 "Measured: settle
-  frame"). The binhost builds app-emulation/qemu from the Horcrux overlay
-  since 2026-11-22 (both arm64 lanes publish 11.1.3-r100); the amd64 lanes
-  had not rebuilt with it yet.
+- Proven (2026-11-22, lab laptop with an installed Horcrux amd64 OpenRC
+  node): the binhost's `app-emulation/qemu-11.1.3-r100` binary (both amd64
+  lanes publish it; USE has no `-dbus` switch, `-display help` lists `dbus`,
+  the installed binary carries the RefreshRate property, owned by the
+  package per `equery b`) installed with `--usepkgonly` from
+  ctg-binhost/amd64/openrc after a ZFS snapshot, no reboot. `hx_console_e2e`
+  against a node built from main and that QEMU, headless Chromium, 30
+  keystrokes into Alpine: QEMU injected -> display update median 18.9 ms
+  (11.1-24.5); keystroke to picture median 43.9 ms, p90 53.3, max 77.1, none
+  held in the browser. Same laptop and e2e with the stock QEMU 10.2.3 it ran
+  before: 26.6 ms (12.3-46.8) and 60.0 ms median, p90 81.9. The laptop was
+  idle apart from the test. The laptop was restored to its own QEMU after
+  the run. A desktop-USE host (gtk, sdl, opengl) does not match the lane's
+  binary (`use flag configuration mismatch`): servers built from the Horcrux
+  profile do; the test set the lane's USE for qemu on the laptop.
 - Needs real GPU hardware: 240 Hz capture of a GPU-rendered desktop into the
   ring, hardware encode in the guest and on the host.
