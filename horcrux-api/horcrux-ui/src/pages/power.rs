@@ -335,6 +335,35 @@ fn GuestPowerRow(
         } else if let Some(b) = &g.save_blocker {
             n.push(format!("State cannot be saved: {b}"));
         }
+        if let Some(d) = g
+            .device_save
+            .as_ref()
+            .filter(|d| d.verdict != "not_applicable")
+        {
+            let per: Vec<String> = d
+                .devices
+                .iter()
+                .map(|x| {
+                    format!(
+                        "{} ({}): {}",
+                        x.device,
+                        x.driver.clone().unwrap_or_else(|| x.kind.clone()),
+                        match x.migration.state.as_str() {
+                            "supported" => "state can be saved".to_string(),
+                            "unsupported" => format!(
+                                "state cannot be saved - {}",
+                                x.migration.reason.clone().unwrap_or_default()
+                            ),
+                            _ => format!(
+                                "not verified - {}",
+                                x.migration.reason.clone().unwrap_or_default()
+                            ),
+                        }
+                    )
+                })
+                .collect();
+            n.push(format!("Host devices: {}", per.join("; ")));
+        }
         if let Some(r) = &g.last_result {
             if let Some(m) = &r.message {
                 n.push(format!("Last {} ({}): {m}", r.phase, r.action));

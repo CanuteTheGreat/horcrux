@@ -6,6 +6,7 @@ pub mod devices;
 pub mod display;
 pub mod firmware;
 pub mod gaming;
+pub mod gpucap;
 pub mod handoff;
 pub mod hardware;
 pub mod hold;
