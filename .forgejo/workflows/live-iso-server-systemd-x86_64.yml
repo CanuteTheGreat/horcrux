@@ -26,12 +26,23 @@
 name: Live ISO (server-systemd-x86_64)
 
 on:
-  # systemd twin (init-parity phase 3): a nightly slot staggered against the other images, not every main push (one ISO at a time on the
-  # scarce KVM runners); skipped when the published systemd daily already is the current main commit. v* tags build the stable ISO.
-  schedule:
-    - cron: '17 9 * * *'
+  # Event-driven (2026-11-06): build + test + publish the daily when main changes anything the image is built from
+  # (app source, gentoo/, build/live-iso/); docs/site/branding-only pushes do not build. v* tags still build the stable ISO.
   push:
+    branches: [main]
     tags: ['v*']
+    paths:
+      - 'crates/**'
+      - 'horcrux-api/**'
+      - 'horcrux-common/**'
+      - 'horcrux-cli/**'
+      - 'horcrux-ui/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build/live-iso/**'
+      - 'gentoo/**'
+      - 'deploy/**'
+      - '.forgejo/workflows/live-iso-server-systemd-x86_64.yml'
   workflow_dispatch:
     inputs:
       mode:

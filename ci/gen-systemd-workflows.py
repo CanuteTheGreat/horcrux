@@ -21,7 +21,8 @@ SLOTS = {
 }
 # Twins that keep the OpenRC twin's own trigger block (event-driven: build + publish on image-input pushes to main) instead of the nightly slot.
 # gnome-light: a nightly-only systemd daily went stale whenever main had image-input commits (owner: nothing waits for a clock).
-EVENT_DRIVEN = {"gnome-light-openrc-x86_64"}
+# server-*: same reason (published systemd server daily was 43 h behind main's image inputs while only the nightly slot could build it).
+EVENT_DRIVEN = {"gnome-light-openrc-x86_64", "server-openrc-x86_64", "server-openrc-aarch64"}
 
 
 def render(src_text, img):
