@@ -565,6 +565,18 @@ def set_next_entry(c, boot, entry):
         return False
 
 
+def ensure_grubenv(c, boot=BOOT):
+    """the grub.cfg reads GRUB's environment block (load_env): make sure the file exists so GRUB never prints a 'file not found' error at the menu"""
+    env = grubenv_path(c, boot)
+    if os.path.exists(env) or not shutil.which("grub-editenv"):
+        return
+    try:
+        os.makedirs(os.path.dirname(env), exist_ok=True)
+        subprocess.run(["grub-editenv", env, "create"], check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError):
+        pass
+
+
 def good_service_enabled():
     """is the boot-time `horcrux-be mark-good` service enabled (OpenRC or systemd)? Without it a trial kernel would never be promoted"""
     try:
@@ -606,6 +618,7 @@ def grubcfg(c, boot=BOOT, uuid=None):
     text = render_grub(bes, act, pool, uuid or boot_uuid(boot), c.get("CMDLINE", ""), c.get("TIMEOUT", "5"), serial, kernels=kern,
                        previous=prev, default=default, good=goods)
     os.makedirs(os.path.join(boot, "grub"), exist_ok=True)
+    ensure_grubenv(c, boot)
     tmp = os.path.join(boot, "grub", "grub.cfg.new")
     open(tmp, "w").write(text)
     os.replace(tmp, os.path.join(boot, "grub", "grub.cfg"))

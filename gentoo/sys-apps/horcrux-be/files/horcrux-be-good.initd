@@ -9,8 +9,9 @@ depend() {
 start() {
 	[ -e /etc/horcrux/be.conf ] || return 0
 	ebegin "Scheduling the known-good kernel mark"
-	start-stop-daemon --start --background --quiet --exec /usr/bin/horcrux-be -- mark-good --wait
-	eend $?
+	# detached and untracked on purpose: a supervised daemon that exits after its one job would show up as "crashed" in rc-status
+	( setsid sh -c '/usr/bin/horcrux-be mark-good --wait 2>&1 | logger -t horcrux-be-good' </dev/null >/dev/null 2>&1 & )
+	eend 0
 }
 stop() {
 	return 0
