@@ -242,8 +242,11 @@ class SessionScoping(unittest.TestCase):
                 self.skipTest(f"{lock} exists")
             lock.write_text(f"{os.getpid():>10}\n")
             try:
-                # mutter runs the hook with DISPLAY set
-                r = subprocess.run(["sh", str(helper), "xsettings-start", f":{n}"], capture_output=True, text=True, env=env, timeout=30)
+                # mutter runs the hook with DISPLAY and XAUTHORITY set
+                xa = rt / ".mutter-Xwaylandauth.TEST"
+                xa.write_text("cookie")
+                r = subprocess.run(["sh", str(helper), "xsettings-start", f":{n}"], capture_output=True, text=True,
+                                   env=dict(env, XAUTHORITY=str(xa)), timeout=30)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 for _ in range(50):
                     if Path(d, "rc").exists() and "start" in Path(d, "rc").read_text().split():
@@ -253,6 +256,12 @@ class SessionScoping(unittest.TestCase):
                 self.assertIn("-U gsd-xsettings start", Path(d, "rc").read_text())
                 r = subprocess.run(["sh", str(helper), "x-display"], capture_output=True, text=True, env=env, timeout=30)
                 self.assertEqual(r.stdout.strip(), f":{n}")
+                # gsd-xsettings cannot open Xwayland's display without its cookie (it crashed in a respawn loop without it)
+                r = subprocess.run(["sh", str(helper), "x-authority"], capture_output=True, text=True, env=env, timeout=30)
+                self.assertEqual(r.stdout.strip(), str(xa))
+                svc = (GSO / "files" / "0003-xwayland-gsd-xsettings.patch").read_text()
+                self.assertIn("+\td=$(/usr/libexec/gnome-session-openrc-helper x-authority)", svc)
+                self.assertIn('+\texport XAUTHORITY="$d"', svc)
                 # the status check: Xft.dpi 240 = 96 x 2 x 1.25 passes, no gsd-xsettings process of ours fails
                 r = subprocess.run(["sh", str(helper), "x11-scale-status"], capture_output=True, text=True, env=env, timeout=30)
                 self.assertEqual(r.returncode, 1, r.stdout + r.stderr)

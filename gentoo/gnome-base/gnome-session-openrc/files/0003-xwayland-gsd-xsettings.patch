@@ -4,7 +4,6 @@ mutter 50 always runs Xwayland natively scaled; X11 apps only render at the righ
 the factor (XSETTINGS Gdk/WindowScalingFactor, Xft.dpi). gnome-session starts it under systemd; on OpenRC nothing did
 (gsd-xsettings is commented out of gnome-settings-daemon and had DISPLAY=:2 hard-coded). A Xwayland-session.d hook now
 records the display mutter started and starts the service for it.
-
 diff --git a/data/Xwayland-session.d/20-gnome-session-openrc-xsettings b/data/Xwayland-session.d/20-gnome-session-openrc-xsettings
 new file mode 100755
 index 0000000..a6ca566
@@ -19,7 +18,7 @@ index 0000000..a6ca566
 +[ -n "$XDG_RUNTIME_DIR" ] && [ -n "$DISPLAY" ] || exit 0
 +exec /usr/libexec/gnome-session-openrc-helper xsettings-start "$DISPLAY"
 diff --git a/data/gnome-session-openrc-helper b/data/gnome-session-openrc-helper
-index d04fcd3..34ef320 100755
+index d04fcd3..8aa88ac 100755
 --- a/data/gnome-session-openrc-helper
 +++ b/data/gnome-session-openrc-helper
 @@ -32,6 +32,11 @@
@@ -34,7 +33,7 @@ index d04fcd3..34ef320 100755
  # Everything works on the caller's own XDG_RUNTIME_DIR and uid; nothing here touches another user's or another session's
  # services.
  
-@@ -281,12 +286,105 @@ cmd_activation_env() {
+@@ -281,12 +286,124 @@ cmd_activation_env() {
  	exit 0
  }
  
@@ -43,6 +42,23 @@ index d04fcd3..34ef320 100755
 +# the right size when gsd-xsettings tells them the factor (XSETTINGS Gdk/WindowScalingFactor, Xft.dpi). Under systemd gnome-session starts
 +# it with Xwayland; here mutter's Xwayland-session.d hook calls xsettings-start.
 +xdisplay_file() { echo "${XDG_RUNTIME_DIR}/gnome-session-openrc-xwayland-display"; }
++xauth_file() { echo "${XDG_RUNTIME_DIR}/gnome-session-openrc-xwayland-xauthority"; }
++
++# the X authority file of this session's Xwayland: Xwayland refuses clients without its cookie (gsd-xsettings then cannot open the
++# display: "Could not initialize xsettings manager"). Recorded by xsettings-start (mutter hands it to the hook), else Xwayland's -auth.
++cmd_x_authority() {
++	local a p
++	a=$(cat "$(xauth_file)" 2>/dev/null)
++	if [ -z "$a" ] || [ ! -O "$a" ]; then
++		a=""
++		for p in $(pgrep -u "$(id -u)" -x Xwayland 2>/dev/null); do
++			a=$(tr '\0' '\n' <"/proc/$p/cmdline" 2>/dev/null | sed -n '/^-auth$/{n;p;q}')
++			[ -n "$a" ] && break
++		done
++	fi
++	[ -n "$a" ] && [ -O "$a" ] && echo "$a"
++	return 0
++}
 +
 +# $1 (":N" or ":N.S") is a display whose lock belongs to a live process of this user (mutter/Xwayland)
 +display_live() {
@@ -73,6 +89,10 @@ index d04fcd3..34ef320 100755
 +	[ "$(session_var XDG_SESSION_CLASS)" = greeter ] && exit 0
 +	f=$(xdisplay_file)
 +	printf '%s\n' "$d" >"$f.tmp" && mv -f "$f.tmp" "$f"
++	# the X authority mutter gave Xwayland (its own file, in our runtime dir)
++	case "$XAUTHORITY" in
++	"${XDG_RUNTIME_DIR}"/*) [ -O "$XAUTHORITY" ] && { printf '%s\n' "$XAUTHORITY" >"$(xauth_file).tmp" && mv -f "$(xauth_file).tmp" "$(xauth_file)"; } ;;
++	esac
 +	log "xsettings-start: Xwayland on $d, starting gsd-xsettings"
 +	# detached: mutter runs this hook while it brings Xwayland up. A started gsd-xsettings belongs to an earlier Xwayland (mutter only runs
 +	# the hook for a new X server): restart it onto the new display.
@@ -98,10 +118,7 @@ index d04fcd3..34ef320 100755
 +		exit 0
 +	fi
 +	if [ -z "$XAUTHORITY" ]; then
-+		for p in $(pgrep -u "$(id -u)" -x Xwayland 2>/dev/null); do
-+			auth=$(tr '\0' '\n' <"/proc/$p/cmdline" 2>/dev/null | sed -n '/^-auth$/{n;p;q}')
-+			[ -n "$auth" ] && break
-+		done
++		auth=$(cmd_x_authority)
 +		[ -n "$auth" ] && export XAUTHORITY="$auth"
 +	fi
 +	f=$(timeout 10 gdbus call --session -d org.gnome.Mutter.X11 -o /org/gnome/Mutter/X11 -m org.freedesktop.DBus.Properties.Get \
@@ -130,6 +147,7 @@ index d04fcd3..34ef320 100755
 +
  case "$1" in
 +	x-display) cmd_x_display ;;
++	x-authority) cmd_x_authority ;;
 +	xsettings-start) shift; cmd_xsettings_start "$@" ;;
 +	x11-scale-status) cmd_x11_scale_status ;;
  	teardown) shift; cmd_teardown "$@" ;;
@@ -157,10 +175,10 @@ index a093364..3c7ebe7 100644
 +  install_mode: 'rwxr-xr-x'
 +)
 diff --git a/data/openrc/gsd-xsettings b/data/openrc/gsd-xsettings
-index 939628a..790cf24 100755
+index 939628a..7448c89 100755
 --- a/data/openrc/gsd-xsettings
 +++ b/data/openrc/gsd-xsettings
-@@ -1,13 +1,50 @@
+@@ -1,13 +1,57 @@
  #!/sbin/openrc-run
  
 +# gsd-xsettings publishes the X11 desktop settings for X11 apps under Xwayland: the XSETTINGS manager (Gdk/WindowScalingFactor, Xft/DPI,
@@ -215,5 +233,12 @@ index 939628a..790cf24 100755
 +		return 1
 +	fi
 +	export DISPLAY="$d"
++	# Xwayland only lets clients with its cookie in
++	d=$(/usr/libexec/gnome-session-openrc-helper x-authority)
++	if [ -z "$d" ]; then
++		eerror "no X authority file of this session's Xwayland"
++		return 1
++	fi
++	export XAUTHORITY="$d"
 +	return 0
 +}
