@@ -288,7 +288,7 @@ latency runs).
 | Same host, raw frames (ivshmem) | < 8 ms frame-to-viewer | capture 1-2 ms, copy 1 ms, present up to 1 frame | **met**: median 2.0 ms, p95 4.0 ms at 120 fps; median 2.7-2.8 ms, p95 3.7 ms at 60 fps (1280x800, without window present) |
 | LAN, encoded | < 20 ms click-to-photon | input 1 ms, game frame 4 ms, capture 1 ms, encode 2-4 ms, network 1-2 ms, decode 2-4 ms, present 4 ms | guest half only: keystroke to encoded frame at the node median 16.5 ms (60 fps, software x264 in a 2-vCPU guest); full path needs GPU hardware |
 | WAN | LAN + RTT + jitter buffer | adaptive bitrate fits the uplink; FEC instead of retransmission when RTT is high | C3 |
-| Desktop profile, LAN | < 50 ms, text lossless within 500 ms of last change | | **met**: keystroke to picture in the browser median 41.6-45.7 ms in five runs, p90 51-61 ms, none of 150 keystrokes over 500 ms (was 64.6 / 66.0 ms before the QEMU display poll fix, and 7-20 % of keystrokes at ~1 s before the settle frame), QEMU display poll 120 Hz, frame bursts of 2, settle frame, host software encode, no tools, shared build host at load 3-7 (details: "Measured: QEMU display poll rate" and "Measured: settle frame") |
+| Desktop profile, LAN | < 50 ms, text lossless within 500 ms of last change | | **met**: keystroke to picture in the browser on an idle 4-core, 8-thread laptop (load ~1) median 43.4 / 47.3 / 47.2 ms in three runs, p90 48.7-50.0 ms, max 56 ms, none of 90 keystrokes held; on a shared build host (load 3-7) median 41.6-45.7 ms, p90 51-61 ms, none of 150 over 500 ms (was 64.6 / 66.0 ms before the QEMU display poll fix, and 7-20 % of keystrokes at ~1 s before the settle frame); QEMU display poll 120 Hz, frame bursts of 2, settle frame, host software encode, no tools (details: "Measured: QEMU display poll rate" and "Measured: settle frame") |
 
 Measured numbers per path go into this table and into the GeForce NOW
 comparison in docs/design/gaming-vm.md section 14 as phases land. Tests measure
@@ -641,6 +641,33 @@ only flatter the idle case. The first three settle runs repeated the
 picture only after bursts (frames closer than one interval); the released
 rule repeats it after every change, because a 60 fps strict-gap stream
 showed the same hold once in 30 keys before the fix.
+
+Idle rerun (2026-11-22): an otherwise idle 4-core, 8-thread laptop (load ~1 during
+the runs), same container image, binaries and settings, container capped
+at 6 CPUs:
+
+| Setup | Keystroke to picture, median | p90 | max | Samples > 500 ms |
+|---|---|---|---|---|
+| **Patched QEMU, settle frame (defaults, 3 runs)** | **43.4 / 47.3 / 47.2 ms** | **48.7-50.0 ms** | **51-56 ms** | **0 / 90** |
+| Patched QEMU, settle frame off (3 runs) | 47.6 / 47.3 / 47.2 ms | 50.7-51.0 ms | 53-65 ms | 0 / 90 |
+| Stock QEMU, settle frame (3 runs) | 53.5 / 53.4 / 50.2 ms | 65-66 ms | 69-82 ms | 0 / 90 |
+
+Per stage (median of the settle runs): node 28-30 ms (QEMU injected ->
+display update 19-20 ms, which is the guest's own reaction plus at most one
+8 ms poll, encode 4.8 ms, everything else < 1 ms each), network ~3 ms,
+decode 0.6 ms, frame callback 10-14 ms after presentation. No keystroke
+picture waited in the browser in any run, with the setting on or off: the
+hold needs the frame pacing a loaded host produces, so on an idle node the
+settle frame costs nothing and changes nothing. The stock QEMU adds its
+fixed 30 ms display poll (QEMU injected -> update 30-35 ms).
+
+The pre-OS series (ISOLINUX "boot:" prompt) used to report one median over
+letters and Backspace. Letters answer in 23-146 ms; Backspace takes
+1.04-1.19 s with QEMU 10.2.1 and 11.1.3 alike, and the node's frame trace
+shows QEMU's own display changing ~1 s after the key was injected, so it is
+the boot loader's redraw, not the console path (Backspace on the Alpine
+console answers like a letter). The e2e now reports the two apart
+(`preos_key_input_to_picture`, `preos_backspace_input_to_picture`).
 
 ## 7. Standalone machine
 
@@ -1231,11 +1258,12 @@ Not proven yet:
   its behaviour with a GPU-driven desktop (it ran on a QEMU std VGA guest;
   see the Windows row in section 6). The agent's virtio-serial path on
   Windows was not part of that run (no port was given to the VM).
-- Host-encode desktop target (< 50 ms) on an idle node and with the patched
-  QEMU from the Horcrux binhost on a real install: met at the median on a
-  shared build host (41.6-45.7 ms, p90 51-61 ms, section 6 "Measured:
-  settle frame"); no idle lab machine was free for the run, and the binhost
-  package (gentoo-binhost lists app-emulation/qemu since 2026-11-22) has not
-  yet run on an installed node.
+- The patched QEMU from the Horcrux binhost on a real install. The
+  host-encode desktop target itself is met with the same QEMU source and
+  patch: idle laptop median 43.4-47.3 ms, p90 48.7-50.0 ms; shared build
+  host median 41.6-45.7 ms, p90 51-61 ms (section 6 "Measured: settle
+  frame"). The binhost builds app-emulation/qemu from the Horcrux overlay
+  since 2026-11-22 (both arm64 lanes publish 11.1.3-r100); the amd64 lanes
+  had not rebuilt with it yet.
 - Needs real GPU hardware: 240 Hz capture of a GPU-rendered desktop into the
   ring, hardware encode in the guest and on the host.

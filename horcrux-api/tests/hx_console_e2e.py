@@ -339,7 +339,13 @@ with sync_playwright() as pw:
         time.sleep(0.3)
     got = [x for x in pre if x is not None]
     check(len(got) >= 6, f"keyboard input reaches the guest before any OS runs ({len(got)}/8 keystrokes changed the screen)")
-    latency_summary("preos_key_input_to_picture", pre)
+    # Letters and Backspace are reported apart: ISOLINUX itself redraws the
+    # line ~1 s after a Backspace (the node's frame trace shows QEMU's display
+    # changing that late, with QEMU 10.2 and 11.1 alike, while Backspace on
+    # the Alpine console below answers like any letter), so a median over
+    # both measured the boot loader, not the console path.
+    latency_summary("preos_key_input_to_picture", pre[0::2])
+    latency_summary("preos_backspace_input_to_picture", pre[1::2])
 
     # In-OS checks run on Alpine's root console: Tiny Core's X server ignores
     # QEMU's pointer devices (QMP input-send-event does not move it either),
