@@ -3,7 +3,9 @@
 
 EAPI=8
 
-DESCRIPTION="Horcrux GNOME desktop edition (on top of sys-apps/horcrux-core): AppIndicator tray icons, first-login Wi-Fi chooser, login keyring that really unlocks"
+inherit gnome2-utils
+
+DESCRIPTION="Horcrux GNOME desktop edition (on top of sys-apps/horcrux-core): AppIndicator tray icons, first-login Wi-Fi chooser, login keyring that really unlocks, network notifications that name the network"
 HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 S="${WORKDIR}"
 
@@ -14,6 +16,12 @@ KEYWORDS="amd64 arm64"
 # would be shadowed), so every default extension of the machine is listed here, in the one compiled db.
 IUSE="awcc systemd"
 
+# -r14: network-notify@horcrux.errant.solutions replaces GNOME Shell's generic "Connection failed / Activation of network connection failed"
+# notification, which fired for every NetworkManager device that entered FAILED: a Wi-Fi roam that failed once and reconnected a second later,
+# an access point restart, the Wi-Fi of a machine online through its cable. Now a failed device gets 30 s to come back, nothing is shown while
+# another connection carries the machine, and a real loss names the connection, interface and reason (settings: gsettings schema
+# org.gnome.shell.extensions.horcrux-network-notify). Enabled in the system db for new accounts and, once per account, by
+# horcrux-default-extensions at login for accounts that keep their own enabled-extensions list. Takes effect at the next login.
 # -r12: horcrux-keyring-pam also makes sure /etc/pam.d/passwd re-keys the login keyring (the systemd profile's passwd only includes system-auth).
 # -r11: GNOME on OpenRC comes from gnome-base/gnome-session-openrc-49.2-r2::horcrux (the gsd/PipeWire/user-bus fixes that were /etc/portage/patches in
 # the images, plus session-scoped user services: a GNOME logout stops the session's gnome-shell & co. even while an ssh login of the user keeps the OpenRC
@@ -69,7 +77,7 @@ src_install() {
 	insinto /etc/dconf/db/local.d
 	newins - 00-horcrux-extensions <<-'EOF'
 		[org/gnome/shell]
-		enabled-extensions=['appindicatorsupport@rgcjonas.gmail.com'@@AWCC@@]
+		enabled-extensions=['appindicatorsupport@rgcjonas.gmail.com', 'network-notify@horcrux.errant.solutions'@@AWCC@@]
 	EOF
 	if use awcc; then
 		sed -i "s|@@AWCC@@|, 'awcc@horcrux.errant.solutions'|" "${ED}/etc/dconf/db/local.d/00-horcrux-extensions" || die
@@ -87,6 +95,21 @@ src_install() {
 	dconf compile "${T}/local" "${ED}/etc/dconf/db/local.d" || die "dconf compile failed"
 	insinto /etc/dconf/db
 	doins "${T}/local"
+
+	# network notifications (see -r14 above): the extension, its settings schema, and the once-per-account enable at login
+	insinto /usr/share/gnome-shell/extensions/network-notify@horcrux.errant.solutions
+	doins "${FILESDIR}"/network-notify/{metadata.json,extension.js,policy.js}
+	insinto /usr/share/glib-2.0/schemas
+	doins "${FILESDIR}"/network-notify/schemas/org.gnome.shell.extensions.horcrux-network-notify.gschema.xml
+	insinto /usr/share/horcrux
+	newins - default-extensions <<-'EOF5'
+		# owned by gnome-extra/horcrux-gnome-defaults: extensions /usr/libexec/horcrux-default-extensions turns on once per account
+		network-notify@horcrux.errant.solutions
+	EOF5
+	exeinto /usr/libexec
+	doexe "${FILESDIR}"/horcrux-default-extensions
+	insinto /etc/xdg/autostart
+	doins "${FILESDIR}"/horcrux-default-extensions.desktop
 
 	exeinto /usr/libexec
 	doexe "${FILESDIR}"/horcrux-network-chooser
@@ -106,7 +129,12 @@ src_install() {
 	doins "${FILESDIR}"/horcrux-session-env.desktop
 }
 
+pkg_postrm() {
+	gnome2_schemas_update
+}
+
 pkg_postinst() {
+	gnome2_schemas_update
 	# pambase[gnome-keyring] + gdm-password start TWO pam_gnome_keyring daemons, the first before /run/user/UID exists: no persistent login keyring.
 	# Applied here so it holds for the image build, the installer's target world and every installed machine through @world. Takes effect at the
 	# NEXT login (no logout needed to install it); idempotent. A later pambase update leaves a pending ._cfg file: do NOT accept its keyring lines.

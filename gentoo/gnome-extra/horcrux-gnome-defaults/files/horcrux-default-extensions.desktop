@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Horcrux default extensions
+Comment=Turns on extensions Horcrux added to the desktop since this account last changed its extension list (once each)
+Exec=/usr/libexec/horcrux-default-extensions
+TryExec=/usr/libexec/horcrux-default-extensions
+NoDisplay=true
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-enabled=true

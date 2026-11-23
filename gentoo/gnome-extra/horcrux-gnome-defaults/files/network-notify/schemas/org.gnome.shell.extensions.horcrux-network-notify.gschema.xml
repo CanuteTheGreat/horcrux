@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.horcrux-network-notify" path="/org/gnome/shell/extensions/horcrux-network-notify/">
+    <key name="failure-grace-seconds" type="u">
+      <range min="1" max="3600"/>
+      <default>30</default>
+      <summary>Seconds a failed connection gets to come back before it is reported</summary>
+      <description>A Wi-Fi roam that fails once, an access point that restarts or a brief drop usually reconnects within seconds; nothing is shown when the device is connected again by then.</description>
+    </key>
+    <key name="notify-when-other-link-online" type="b">
+      <default>false</default>
+      <summary>Also report a lost connection while another connection keeps the computer online</summary>
+      <description>Off: the Wi-Fi of a computer that is online through its cable (or the other way round) can drop without a notification.</description>
+    </key>
+    <key name="repeat-interval-seconds" type="u">
+      <range min="0" max="86400"/>
+      <default>900</default>
+      <summary>Minimum seconds between two notifications for the same device</summary>
+      <description>A flapping link produces at most one notification per interval; the notification goes away by itself when the device is connected again.</description>
+    </key>
+  </schema>
+</schemalist>
