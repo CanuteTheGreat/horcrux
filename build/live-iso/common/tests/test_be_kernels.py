@@ -134,6 +134,12 @@ class Kernels(T.Boot):
         self.assertIn('set default="be-horcrux"', self.grub())
         self.assertNotIn("next_entry", self.z.env)
 
+    def test_resync_of_the_same_kernel_needs_no_room(self):
+        self.install("1", run="7.2.1")
+        with mock.patch.object(BE, "space_ok", lambda *a, **k: False), mock.patch.object(BE, "say") as say:
+            self.install("1")
+        self.assertFalse([c for c in say.call_args_list if "no room" in str(c)])
+
     def test_trial_can_be_switched_off(self):
         self.c["KERNEL_TRIAL"] = "no"
         self.install("1", run="7.2.1")

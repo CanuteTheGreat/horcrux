@@ -647,7 +647,13 @@ def cmd_sync(c, boot=BOOT):
         rotate_current(boot, be, k[0])
     except OSError as e:
         say(f"could not keep the current kernel as the previous one ({e})")
-    ok = save_kernel_safe(c, boot, be, k)
+    top = os.path.join(boot, "be", be)
+    try:  # a re-sync of the kernel the BE already holds needs no room and must not warn about a full /boot
+        same = (be_kernels(boot, be)[0] == k[0] and os.path.getsize(os.path.join(top, "vmlinuz")) == os.path.getsize(k[1])
+                and os.path.getsize(os.path.join(top, "initramfs.img")) == os.path.getsize(k[2]))
+    except OSError:
+        same = False
+    ok = True if same else save_kernel_safe(c, boot, be, k)
     try:
         retain_kernels(c, boot, be, seed_loose=True)
     except OSError as e:
