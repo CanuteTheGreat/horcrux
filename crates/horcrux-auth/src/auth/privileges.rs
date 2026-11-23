@@ -72,6 +72,8 @@ const POWER_ACTIONS: &[&str] = &[
     "suspend",
     "save-state",
     "resume-state",
+    // the guest hibernates itself (guest tools), like a save
+    "hibernate",
 ];
 
 /// Areas with an explicit rule below. Kept as a list so the route-coverage
@@ -631,6 +633,18 @@ mod tests {
             Requirement::Privilege { privilege, path } => (privilege, path),
             other => panic!("expected a privilege requirement, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn guest_hibernate_is_a_power_action() {
+        assert_eq!(
+            priv_of(requirement("POST", "/api/vms/g1/hibernate")),
+            (P::VmPowerMgmt, "/vms/g1".into())
+        );
+        assert_eq!(
+            priv_of(requirement("GET", "/api/vms/g1/hibernate-status")),
+            (P::VmAudit, "/vms/g1".into())
+        );
     }
 
     #[test]

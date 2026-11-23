@@ -143,7 +143,7 @@ that offers no hibernation (Secure-Boot lockdown), or whose agent does not answe
 shut down cleanly instead (the reason is shown up front and after the shutdown). A guest
 that does not power off within the timeout is shut down by the fallback while it may
 still be writing its image, so a timeout that is too short for the guest's RAM costs a
-clean shutdown, not data. Hibernation images live on the guest's own disk, so their
+clean shutdown, not data. A hibernation image the guest cannot use at boot is discarded by the guest, which then boots normally (the disk is always consistent). Hibernation images live on the guest's own disk, so their
 encryption is the guest's (an encrypted guest disk is the way to protect them); the
 host-side encrypted-storage rule applies to host-saved RAM only. Linux guests need
 GRUB or grubby for the automatic boot configuration (other boot loaders get the exact
