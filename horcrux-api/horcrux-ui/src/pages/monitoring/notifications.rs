@@ -40,6 +40,12 @@ pub fn NotificationsPage() -> impl IntoView {
     // Teams settings
     let (form_teams_webhook_url, set_form_teams_webhook_url) = create_signal(String::new());
 
+    // ntfy settings
+    let (form_ntfy_server, set_form_ntfy_server) = create_signal("https://ntfy.sh".to_string());
+    let (form_ntfy_topic, set_form_ntfy_topic) = create_signal(String::new());
+    let (form_ntfy_token, set_form_ntfy_token) = create_signal(String::new());
+    let (form_ntfy_priority, set_form_ntfy_priority) = create_signal(String::new());
+
     // Discord settings
     let (form_discord_webhook_url, set_form_discord_webhook_url) = create_signal(String::new());
     let (form_discord_username, set_form_discord_username) = create_signal(String::new());
@@ -70,6 +76,10 @@ pub fn NotificationsPage() -> impl IntoView {
         set_form_slack_username.set(String::new());
         set_form_slack_icon_emoji.set(String::new());
         set_form_teams_webhook_url.set(String::new());
+        set_form_ntfy_server.set("https://ntfy.sh".to_string());
+        set_form_ntfy_topic.set(String::new());
+        set_form_ntfy_token.set(String::new());
+        set_form_ntfy_priority.set(String::new());
         set_form_discord_webhook_url.set(String::new());
         set_form_discord_username.set(String::new());
         set_form_pagerduty_routing_key.set(String::new());
@@ -141,6 +151,12 @@ pub fn NotificationsPage() -> impl IntoView {
             },
             "teams" => NotificationChannelConfig::Teams {
                 webhook_url: form_teams_webhook_url.get(),
+            },
+            "ntfy" => NotificationChannelConfig::Ntfy {
+                server_url: form_ntfy_server.get(),
+                topic: form_ntfy_topic.get(),
+                token: form_ntfy_token.get(),
+                priority: Some(form_ntfy_priority.get()).filter(|s| !s.is_empty()),
             },
             "discord" => NotificationChannelConfig::Discord {
                 webhook_url: form_discord_webhook_url.get(),
@@ -220,6 +236,12 @@ pub fn NotificationsPage() -> impl IntoView {
                 },
                 "teams" => NotificationChannelConfig::Teams {
                     webhook_url: form_teams_webhook_url.get(),
+                },
+                "ntfy" => NotificationChannelConfig::Ntfy {
+                    server_url: form_ntfy_server.get(),
+                    topic: form_ntfy_topic.get(),
+                    token: form_ntfy_token.get(),
+                    priority: Some(form_ntfy_priority.get()).filter(|s| !s.is_empty()),
                 },
                 "discord" => NotificationChannelConfig::Discord {
                     webhook_url: form_discord_webhook_url.get(),
@@ -374,6 +396,17 @@ pub fn NotificationsPage() -> impl IntoView {
             NotificationChannelConfig::Teams { webhook_url } => {
                 set_form_teams_webhook_url.set(webhook_url.clone());
             }
+            NotificationChannelConfig::Ntfy {
+                server_url,
+                topic,
+                token,
+                priority,
+            } => {
+                set_form_ntfy_server.set(server_url.clone());
+                set_form_ntfy_topic.set(topic.clone());
+                set_form_ntfy_token.set(token.clone());
+                set_form_ntfy_priority.set(priority.clone().unwrap_or_default());
+            }
             NotificationChannelConfig::Discord {
                 webhook_url,
                 username,
@@ -424,6 +457,7 @@ pub fn NotificationsPage() -> impl IntoView {
         "email" => "📧",
         "slack" => "📢",
         "teams" => "👥",
+        "ntfy" => "🔔",
         "discord" => "💬",
         "pagerduty" => "🚨",
         "webhook" => "🔗",
@@ -488,6 +522,7 @@ pub fn NotificationsPage() -> impl IntoView {
                                         <option value="email">"📧 Email"</option>
                                         <option value="slack">"📢 Slack"</option>
                                         <option value="teams">"👥 Microsoft Teams"</option>
+                                        <option value="ntfy">"🔔 ntfy"</option>
                                         <option value="discord">"💬 Discord"</option>
                                         <option value="pagerduty">"🚨 PagerDuty"</option>
                                         <option value="webhook">"🔗 Custom Webhook"</option>
@@ -616,6 +651,52 @@ pub fn NotificationsPage() -> impl IntoView {
                                                     on:input=move |ev| set_form_teams_webhook_url.set(event_target_value(&ev))
                                                     placeholder="https://outlook.office.com/webhook/..."
                                                 />
+                                            </div>
+                                        </div>
+                                    }.into_view(),
+
+                                    "ntfy" => view! {
+                                        <div class="channel-config-section">
+                                            <h3>"ntfy Configuration"</h3>
+                                            <div class="form-group">
+                                                <label>"Server URL"</label>
+                                                <input
+                                                    type="url"
+                                                    prop:value=form_ntfy_server
+                                                    on:input=move |ev| set_form_ntfy_server.set(event_target_value(&ev))
+                                                    placeholder="https://ntfy.sh"
+                                                />
+                                            </div>
+                                            <div class="form-group">
+                                                <label>"Topic"</label>
+                                                <input
+                                                    type="text"
+                                                    prop:value=form_ntfy_topic
+                                                    on:input=move |ev| set_form_ntfy_topic.set(event_target_value(&ev))
+                                                    placeholder="my-alerts"
+                                                />
+                                            </div>
+                                            <div class="form-group">
+                                                <label>"Access token (optional)"</label>
+                                                <input
+                                                    type="password"
+                                                    prop:value=form_ntfy_token
+                                                    on:input=move |ev| set_form_ntfy_token.set(event_target_value(&ev))
+                                                />
+                                            </div>
+                                            <div class="form-group">
+                                                <label>"Priority"</label>
+                                                <select
+                                                    prop:value=form_ntfy_priority
+                                                    on:change=move |ev| set_form_ntfy_priority.set(event_target_value(&ev))
+                                                >
+                                                    <option value="">"Follow the alert severity"</option>
+                                                    <option value="min">"min"</option>
+                                                    <option value="low">"low"</option>
+                                                    <option value="default">"default"</option>
+                                                    <option value="high">"high"</option>
+                                                    <option value="urgent">"urgent"</option>
+                                                </select>
                                             </div>
                                         </div>
                                     }.into_view(),
@@ -922,6 +1003,14 @@ pub fn NotificationsPage() -> impl IntoView {
                                                                             <div class="config-row">
                                                                                 <span class="config-label">"Type:"</span>
                                                                                 <span class="config-value">"Microsoft Teams"</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    }.into_view(),
+                                                                    NotificationChannelConfig::Ntfy { server_url, topic, .. } => view! {
+                                                                        <div class="config-details">
+                                                                            <div class="config-row">
+                                                                                <span class="config-label">"Topic:"</span>
+                                                                                <span class="config-value">{server_url}{"/"}{topic}</span>
                                                                             </div>
                                                                         </div>
                                                                     }.into_view(),

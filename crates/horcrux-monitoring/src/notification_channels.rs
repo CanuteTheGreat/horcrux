@@ -31,6 +31,10 @@ pub enum WebhookAuth {
     ApiKey { key: String, header: String },
 }
 
+fn default_ntfy_server() -> String {
+    "https://ntfy.sh".to_string()
+}
+
 /// Per-type settings. The serde layout is the web UI's
 /// `NotificationChannelConfig` (internally tagged by variant name).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -56,6 +60,21 @@ pub enum ChannelConfig {
     },
     Teams {
         webhook_url: String,
+    },
+    /// ntfy (https://ntfy.sh or a self-hosted server): the message is POSTed
+    /// as plain text to `<server_url>/<topic>` (docs/ALERT-DELIVERY.md).
+    Ntfy {
+        /// Server base URL (default `https://ntfy.sh`)
+        #[serde(default = "default_ntfy_server")]
+        server_url: String,
+        topic: String,
+        /// Access token, sent as a bearer token (optional)
+        #[serde(default)]
+        token: String,
+        /// Fixed ntfy priority (min, low, default, high, urgent); empty =
+        /// follow the alert severity
+        #[serde(default)]
+        priority: Option<String>,
     },
     Discord {
         webhook_url: String,
@@ -83,6 +102,7 @@ impl ChannelConfig {
             ChannelConfig::Email { .. } => "email",
             ChannelConfig::Slack { .. } => "slack",
             ChannelConfig::Teams { .. } => "teams",
+            ChannelConfig::Ntfy { .. } => "ntfy",
             ChannelConfig::Discord { .. } => "discord",
             ChannelConfig::PagerDuty { .. } => "pagerduty",
             ChannelConfig::Webhook { .. } => "webhook",
@@ -103,6 +123,7 @@ impl ChannelConfig {
         let mut c = self.clone();
         match &mut c {
             ChannelConfig::Email { password, .. } => *password = mask(password),
+            ChannelConfig::Ntfy { token, .. } => *token = mask(token),
             ChannelConfig::Slack { webhook_url, .. }
             | ChannelConfig::Teams { webhook_url }
             | ChannelConfig::Discord { webhook_url, .. } => *webhook_url = mask_url(webhook_url),
@@ -228,6 +249,9 @@ impl ChannelConfig {
                     _ => {}
                 }
             }
+            (ChannelConfig::Ntfy { token, .. }, ChannelConfig::Ntfy { token: old, .. }) => {
+                keep(token, old)
+            }
             _ => {}
         }
     }
@@ -277,6 +301,28 @@ impl ChannelConfig {
             }
             ChannelConfig::Slack { webhook_url, .. } => http_url("Slack webhook URL", webhook_url),
             ChannelConfig::Teams { webhook_url } => http_url("Teams webhook URL", webhook_url),
+            ChannelConfig::Ntfy {
+                server_url,
+                topic,
+                token,
+                priority,
+            } => {
+                http_url("ntfy server URL", server_url)?;
+                not_masked("ntfy token", token)?;
+                let t = topic.trim();
+                if t.is_empty()
+                    || t.len() > 64
+                    || !t
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                {
+                    return Err("ntfy topic is required: 1-64 letters, digits, '-' or '_'".into());
+                }
+                if let Some(p) = priority.as_deref().filter(|p| !p.is_empty()) {
+                    ntfy_priority(p)?;
+                }
+                Ok(())
+            }
             ChannelConfig::Discord { webhook_url, .. } => {
                 http_url("Discord webhook URL", webhook_url)
             }
@@ -366,6 +412,20 @@ fn recipients(address: &str) -> Vec<&str> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+fn ntfy_priority(s: &str) -> Result<&'static str, String> {
+    match s.to_lowercase().as_str() {
+        "min" => Ok("min"),
+        "low" => Ok("low"),
+        "default" => Ok("default"),
+        "high" => Ok("high"),
+        "urgent" | "max" => Ok("urgent"),
+        other => Err(format!(
+            "ntfy priority must be min, low, default, high or urgent (got '{}')",
+            other
+        )),
+    }
 }
 
 fn pd_severity(s: &str) -> Result<&'static str, String> {
@@ -473,11 +533,66 @@ impl From<StoreError> for crate::error::ApiError {
     }
 }
 
+/// How a delivery is tried (`[notifications]` in config.toml, env
+/// `HORCRUX_NOTIFY_*`): total attempts, the wait before the second attempt
+/// (milliseconds) and the factor each further wait grows by, and the time
+/// limit of one attempt (HTTP request or SMTP session), in seconds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeliveryPolicy {
+    pub attempts: u32,
+    pub backoff_ms: u64,
+    pub backoff_factor: u64,
+    pub timeout_secs: u64,
+}
+
+impl Default for DeliveryPolicy {
+    fn default() -> Self {
+        Self {
+            attempts: 3,
+            backoff_ms: 1000,
+            backoff_factor: 2,
+            timeout_secs: 20,
+        }
+    }
+}
+
+impl DeliveryPolicy {
+    /// Wait before attempt number `attempt` (1-based; attempt 1 is immediate).
+    pub fn wait_before(&self, attempt: u32) -> Duration {
+        if attempt <= 1 {
+            return Duration::ZERO;
+        }
+        let mult = self.backoff_factor.saturating_pow(attempt - 2);
+        Duration::from_millis(self.backoff_ms.saturating_mul(mult))
+    }
+}
+
+/// One notification that could not be delivered after every attempt; handed
+/// to the audit hook ([`NotificationChannelStore::attach_audit`]).
+#[derive(Debug, Clone)]
+pub struct DeliveryFailure {
+    pub channel_id: String,
+    pub channel_name: String,
+    pub channel_type: String,
+    pub event: String,
+    pub title: String,
+    pub severity: String,
+    pub attempts: u32,
+    pub error: String,
+}
+
+type AuditHook = Arc<dyn Fn(DeliveryFailure) + Send + Sync>;
+
+/// SMTP session time limit (seconds), set from the delivery policy.
+static SMTP_TIMEOUT_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(20);
+
 /// Persistent channel registry.
 pub struct NotificationChannelStore {
     db: Arc<Database>,
     channels: RwLock<Vec<NotificationChannel>>,
     http: reqwest::Client,
+    policy: DeliveryPolicy,
+    audit: std::sync::OnceLock<AuditHook>,
 }
 
 fn db_err(e: sqlx::Error) -> StoreError {
@@ -485,8 +600,16 @@ fn db_err(e: sqlx::Error) -> StoreError {
 }
 
 impl NotificationChannelStore {
-    /// Load all channels from the database.
+    /// Load all channels from the database (default delivery policy).
     pub async fn load(db: Arc<Database>) -> Result<Self, StoreError> {
+        Self::load_with_policy(db, DeliveryPolicy::default()).await
+    }
+
+    /// Load all channels; deliveries follow `policy`.
+    pub async fn load_with_policy(
+        db: Arc<Database>,
+        policy: DeliveryPolicy,
+    ) -> Result<Self, StoreError> {
         let rows = sqlx::query(
             "SELECT id, name, description, enabled, config, created_at, last_used, success_count, failure_count FROM notification_channels ORDER BY created_at",
         )
@@ -524,13 +647,19 @@ impl NotificationChannelStore {
                 failure_count: r.get::<i64, _>("failure_count") as u32,
             });
         }
+        SMTP_TIMEOUT_SECS.store(
+            policy.timeout_secs.max(1),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         Ok(Self {
             db,
             channels: RwLock::new(channels),
             http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(20))
+                .timeout(Duration::from_secs(policy.timeout_secs.max(1)))
                 .build()
                 .expect("reqwest client"),
+            policy,
+            audit: std::sync::OnceLock::new(),
         })
     }
 
@@ -698,7 +827,9 @@ impl NotificationChannelStore {
         Ok(result)
     }
 
-    /// Deliver a fired alert to every enabled channel. Returns
+    /// Deliver a fired alert to every enabled channel (all channels at the
+    /// same time; each one retried with backoff under the delivery policy,
+    /// and a delivery that fails every attempt is audited). Returns
     /// (delivered, failed) channel counts.
     pub async fn dispatch(&self, msg: &Message) -> (usize, usize) {
         let channels: Vec<NotificationChannel> = self
@@ -709,9 +840,14 @@ impl NotificationChannelStore {
             .filter(|c| c.enabled)
             .cloned()
             .collect();
+        let results = futures::future::join_all(
+            channels
+                .iter()
+                .map(|c| async move { (c, self.deliver_retrying(c, msg).await) }),
+        )
+        .await;
         let (mut delivered, mut failed) = (0, 0);
-        for c in channels {
-            let result = deliver(&self.http, &c, msg).await;
+        for (c, result) in results {
             if let Err(e) = &result {
                 tracing::warn!("notification via '{}' ({}) failed: {}", c.name, c.id, e);
                 failed += 1;
@@ -721,6 +857,58 @@ impl NotificationChannelStore {
             self.record(&c.id, result.is_ok()).await;
         }
         (delivered, failed)
+    }
+
+    /// Install the hook that records a delivery that failed every attempt in
+    /// the audit log (set once).
+    pub fn attach_audit(&self, hook: impl Fn(DeliveryFailure) + Send + Sync + 'static) {
+        let _ = self.audit.set(Arc::new(hook));
+    }
+
+    /// The delivery policy in force.
+    pub fn policy(&self) -> &DeliveryPolicy {
+        &self.policy
+    }
+
+    async fn deliver_retrying(
+        &self,
+        channel: &NotificationChannel,
+        msg: &Message,
+    ) -> Result<(), String> {
+        let attempts = self.policy.attempts.max(1);
+        let mut last = String::new();
+        for attempt in 1..=attempts {
+            let wait = self.policy.wait_before(attempt);
+            if !wait.is_zero() {
+                tokio::time::sleep(wait).await;
+            }
+            match deliver(&self.http, channel, msg).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    tracing::warn!(
+                        "notification via '{}' failed (attempt {}/{}): {}",
+                        channel.name,
+                        attempt,
+                        attempts,
+                        e
+                    );
+                    last = e;
+                }
+            }
+        }
+        if let Some(hook) = self.audit.get() {
+            hook(DeliveryFailure {
+                channel_id: channel.id.clone(),
+                channel_name: channel.name.clone(),
+                channel_type: channel.config.type_name().to_string(),
+                event: msg.event.clone(),
+                title: msg.title.clone(),
+                severity: msg.severity.clone(),
+                attempts,
+                error: last.clone(),
+            });
+        }
+        Err(last)
     }
 }
 
@@ -806,6 +994,48 @@ pub async fn deliver(
                 "text": msg.body.replace('\n', "<br>"),
             });
             send_http(http.post(webhook_url.trim()).json(&body), "Teams").await
+        }
+        ChannelConfig::Ntfy {
+            server_url,
+            topic,
+            token,
+            priority,
+        } => {
+            let url = format!(
+                "{}/{}",
+                server_url.trim().trim_end_matches('/'),
+                topic.trim()
+            );
+            let prio = match priority.as_deref().filter(|p| !p.is_empty()) {
+                Some(p) => ntfy_priority(p)?,
+                None => match msg.severity.as_str() {
+                    "critical" => "urgent",
+                    "warning" => "high",
+                    _ => "default",
+                },
+            };
+            // Header values must be one line of visible ASCII.
+            let title: String = msg
+                .title
+                .chars()
+                .map(|c| {
+                    if c.is_ascii() && !c.is_control() {
+                        c
+                    } else {
+                        ' '
+                    }
+                })
+                .collect();
+            let mut req = http
+                .post(url)
+                .header("Title", title)
+                .header("Priority", prio)
+                .header("Tags", format!("{},{}", msg.event, msg.severity))
+                .body(text.clone());
+            if !token.is_empty() {
+                req = req.bearer_auth(token);
+            }
+            send_http(req, "ntfy").await
         }
         ChannelConfig::Discord {
             webhook_url,
@@ -1009,7 +1239,9 @@ fn smtp_transport(
         AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(server)
     }
     .port(port)
-    .timeout(Some(Duration::from_secs(20)));
+    .timeout(Some(Duration::from_secs(
+        SMTP_TIMEOUT_SECS.load(std::sync::atomic::Ordering::Relaxed),
+    )));
     if !username.is_empty() {
         builder = builder.credentials(Credentials::new(username.to_string(), password.to_string()));
     }
@@ -1047,6 +1279,64 @@ mod tests {
         r#"{"id":"channel-1","name":"ops","description":null,"channel_type":"email","enabled":true,
             "config":{"type":"Email","address":"ops@example.org","smtp_server":"mail.example.org","smtp_port":587,"username":"u","password":"secret","use_tls":true},
             "created_at":"2026-10-16T10:00:00Z","last_used":null,"success_count":0,"failure_count":0}"#
+    }
+
+    #[test]
+    fn delivery_policy_defaults_and_backoff_growth() {
+        let d = DeliveryPolicy::default();
+        assert_eq!(
+            (d.attempts, d.backoff_ms, d.backoff_factor, d.timeout_secs),
+            (3, 1000, 2, 20)
+        );
+        assert_eq!(d.wait_before(1), Duration::ZERO);
+        assert_eq!(d.wait_before(2), Duration::from_secs(1));
+        assert_eq!(d.wait_before(3), Duration::from_secs(2));
+        assert_eq!(d.wait_before(4), Duration::from_secs(4));
+        let p = DeliveryPolicy {
+            attempts: 4,
+            backoff_ms: 50,
+            backoff_factor: 3,
+            timeout_secs: 1,
+        };
+        assert_eq!(p.wait_before(3), Duration::from_millis(150));
+    }
+
+    fn ntfy(server: &str, topic: &str, token: &str, prio: Option<&str>) -> ChannelConfig {
+        ChannelConfig::Ntfy {
+            server_url: server.into(),
+            topic: topic.into(),
+            token: token.into(),
+            priority: prio.map(String::from),
+        }
+    }
+
+    #[test]
+    fn ntfy_channel_validates_masks_and_restores_its_token() {
+        ntfy("https://ntfy.example", "alerts_1", "", None)
+            .validate()
+            .unwrap();
+        ntfy("http://127.0.0.1:8080", "a-b", "tk", Some("urgent"))
+            .validate()
+            .unwrap();
+        for bad in [
+            ntfy("ftp://x", "t", "", None),
+            ntfy("https://n.example", "", "", None),
+            ntfy("https://n.example", "a/b", "", None),
+            ntfy("https://n.example", "t", "", Some("loud")),
+            ntfy("https://n.example", "t", SECRET_MASK, None),
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+        let c = ntfy("https://n.example", "t", "secret-token", None);
+        let masked = c.masked();
+        assert_eq!(masked, ntfy("https://n.example", "t", SECRET_MASK, None));
+        let mut back = masked;
+        back.unmask_from(&c);
+        assert_eq!(back, c);
+        // the server URL defaults when omitted
+        let v: ChannelConfig = serde_json::from_str(r#"{"type":"Ntfy","topic":"t"}"#).unwrap();
+        assert_eq!(v, ntfy("https://ntfy.sh", "t", "", None));
+        assert_eq!(v.type_name(), "ntfy");
     }
 
     #[test]

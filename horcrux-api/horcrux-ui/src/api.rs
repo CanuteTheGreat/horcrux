@@ -4184,7 +4184,7 @@ pub struct NotificationChannel {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
-    pub channel_type: String, // email, slack, teams, discord, pagerduty, webhook
+    pub channel_type: String, // email, slack, teams, ntfy, discord, pagerduty, webhook
     pub enabled: bool,
     pub config: NotificationChannelConfig,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -4212,6 +4212,15 @@ pub enum NotificationChannelConfig {
     },
     Teams {
         webhook_url: String,
+    },
+    Ntfy {
+        #[serde(default)]
+        server_url: String,
+        topic: String,
+        #[serde(default)]
+        token: String,
+        #[serde(default)]
+        priority: Option<String>,
     },
     Discord {
         webhook_url: String,

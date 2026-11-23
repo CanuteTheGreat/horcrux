@@ -11,6 +11,7 @@
 
 mod support;
 
+mod alert_delivery_tests;
 mod alert_silence_tests;
 mod alerts_tests;
 mod auth_e2e_tests;

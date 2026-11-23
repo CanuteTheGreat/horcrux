@@ -279,7 +279,24 @@ pub struct WebhookManager {
     client: reqwest::Client,
     /// Durable copy of the webhook configurations; `None` = in memory only.
     store: Option<crate::db::config_store::ConfigStore>,
+    /// Wait before the first retry, in milliseconds (doubles each retry;
+    /// `[notifications] backoff_ms`).
+    backoff_ms: Arc<std::sync::atomic::AtomicU64>,
+    /// Called once when a delivery failed every attempt (audit log).
+    audit: Arc<std::sync::OnceLock<WebhookAuditHook>>,
 }
+
+/// A webhook delivery that failed every attempt.
+#[derive(Debug, Clone)]
+pub struct WebhookFailure {
+    pub webhook_id: String,
+    pub webhook_name: String,
+    pub event_type: String,
+    pub attempts: u32,
+    pub error: String,
+}
+
+type WebhookAuditHook = Arc<dyn Fn(WebhookFailure) + Send + Sync>;
 
 impl Default for WebhookManager {
     fn default() -> Self {
@@ -299,7 +316,21 @@ impl WebhookManager {
                 .build()
                 .unwrap(),
             store: None,
+            backoff_ms: Arc::new(std::sync::atomic::AtomicU64::new(1000)),
+            audit: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Wait before the first retry (milliseconds; doubles per retry, capped).
+    pub fn set_backoff_ms(&self, ms: u64) {
+        self.backoff_ms
+            .store(ms, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Install the hook that records a delivery that failed every attempt in
+    /// the audit log (set once).
+    pub fn attach_audit(&self, hook: impl Fn(WebhookFailure) + Send + Sync + 'static) {
+        let _ = self.audit.set(Arc::new(hook));
     }
 
     /// Webhook manager backed by the database: loads the saved webhooks and
@@ -502,6 +533,8 @@ impl WebhookManager {
             breakers: self.breakers.clone(),
             client: self.client.clone(),
             store: None,
+            backoff_ms: self.backoff_ms.clone(),
+            audit: self.audit.clone(),
         }
     }
 
@@ -546,6 +579,13 @@ impl WebhookManager {
     fn backoff(retry: u32) -> std::time::Duration {
         let secs = 2_u64.saturating_pow(retry.saturating_sub(1));
         std::time::Duration::from_secs(secs.min(MAX_BACKOFF_SECS))
+    }
+
+    /// Wait before retry number `retry` (1-based), from the configured base.
+    fn backoff_for(&self, retry: u32) -> std::time::Duration {
+        let base = self.backoff_ms.load(std::sync::atomic::Ordering::Relaxed);
+        let ms = base.saturating_mul(2_u64.saturating_pow(retry.saturating_sub(1)));
+        std::time::Duration::from_millis(ms.min(MAX_BACKOFF_SECS * 1000))
     }
 
     /// Deliver webhook to endpoint: one attempt plus up to `retry_count`
@@ -597,18 +637,29 @@ impl WebhookManager {
                         webhook.name,
                         code
                     ),
-                    Err(e) => tracing::error!(
-                        "Webhook delivery failed after {} retries: {} -> {} ({})",
-                        retries,
-                        event.event_type,
-                        webhook.name,
-                        e
-                    ),
+                    Err(e) => {
+                        tracing::error!(
+                            "Webhook delivery failed after {} retries: {} -> {} ({})",
+                            retries,
+                            event.event_type,
+                            webhook.name,
+                            e
+                        );
+                        if let Some(hook) = self.audit.get() {
+                            hook(WebhookFailure {
+                                webhook_id: webhook.id.clone(),
+                                webhook_name: webhook.name.clone(),
+                                event_type: event.event_type.clone(),
+                                attempts: retries + 1,
+                                error: e.to_string(),
+                            });
+                        }
+                    }
                 }
                 return result.map(|_| ());
             }
             retries += 1;
-            tokio::time::sleep(Self::backoff(retries)).await;
+            tokio::time::sleep(self.backoff_for(retries)).await;
         }
     }
 

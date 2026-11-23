@@ -426,6 +426,7 @@ impl DatabaseAuditLogger {
             "ConsoleSessionEnded" => AuditEventType::ConsoleSessionEnded,
             "ConsoleAccessDenied" => AuditEventType::ConsoleAccessDenied,
             "GuestToolsInstall" => AuditEventType::GuestToolsInstall,
+            "NotificationDeliveryFailed" => AuditEventType::NotificationDeliveryFailed,
             _ => AuditEventType::SuspiciousActivity, // Default fallback
         }
     }

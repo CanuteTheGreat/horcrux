@@ -28,6 +28,9 @@ pub struct HorcruxConfig {
     /// Backup scheduler and LXC settings (`[backup]`)
     #[serde(default)]
     pub backup: BackupConfig,
+    /// Notification delivery: retries, backoff, time limit (`[notifications]`)
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
     /// Authentication settings
     #[serde(default)]
     pub auth: AuthConfig,
@@ -57,6 +60,33 @@ impl Default for BackupConfig {
         Self {
             scheduler_tick_secs: 15,
             lxc_path: PathBuf::from("/var/lib/lxc"),
+        }
+    }
+}
+
+/// Notification delivery settings (`[notifications]` in config.toml). Env
+/// overrides: `HORCRUX_NOTIFY_ATTEMPTS`, `HORCRUX_NOTIFY_BACKOFF_MS`,
+/// `HORCRUX_NOTIFY_BACKOFF_FACTOR`, `HORCRUX_NOTIFY_TIMEOUT_SECS`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct NotificationsConfig {
+    /// Total delivery attempts per channel and alert (>= 1).
+    pub attempts: u32,
+    /// Wait before the second attempt, in milliseconds.
+    pub backoff_ms: u64,
+    /// Each further wait is the previous one times this (>= 1).
+    pub backoff_factor: u64,
+    /// Time limit of one attempt (HTTP request or SMTP session), seconds (> 0).
+    pub timeout_secs: u64,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            attempts: 3,
+            backoff_ms: 1000,
+            backoff_factor: 2,
+            timeout_secs: 20,
         }
     }
 }
@@ -539,6 +569,25 @@ impl HorcruxConfig {
             self.backup.lxc_path = PathBuf::from(path);
         }
 
+        // Notification delivery
+        let num = |k: &str| {
+            std::env::var(k)
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+        };
+        if let Some(n) = num("HORCRUX_NOTIFY_ATTEMPTS").filter(|n| (1..=20).contains(n)) {
+            self.notifications.attempts = n as u32;
+        }
+        if let Some(n) = num("HORCRUX_NOTIFY_BACKOFF_MS") {
+            self.notifications.backoff_ms = n;
+        }
+        if let Some(n) = num("HORCRUX_NOTIFY_BACKOFF_FACTOR").filter(|n| *n >= 1) {
+            self.notifications.backoff_factor = n;
+        }
+        if let Some(n) = num("HORCRUX_NOTIFY_TIMEOUT_SECS").filter(|n| *n >= 1) {
+            self.notifications.timeout_secs = n;
+        }
+
         // CNI
         if let Ok(path) = std::env::var("HORCRUX_CNI_BIN_DIR") {
             self.cni.bin_dir = PathBuf::from(path);
@@ -704,5 +753,19 @@ mod tests {
         let c: BackupConfig = toml::from_str("scheduler_tick_secs = 60").unwrap();
         assert_eq!(c.scheduler_tick_secs, 60);
         assert_eq!(c.lxc_path, PathBuf::from("/var/lib/lxc"));
+    }
+
+    #[test]
+    fn notifications_section_parses_and_defaults() {
+        let d = NotificationsConfig::default();
+        assert_eq!(
+            (d.attempts, d.backoff_ms, d.backoff_factor, d.timeout_secs),
+            (3, 1000, 2, 20)
+        );
+        let c: NotificationsConfig = toml::from_str("attempts = 5\nbackoff_ms = 250").unwrap();
+        assert_eq!((c.attempts, c.backoff_ms), (5, 250));
+        assert_eq!((c.backoff_factor, c.timeout_secs), (2, 20));
+        let full: HorcruxConfig = toml::from_str(&HorcruxConfig::generate_sample()).unwrap();
+        assert_eq!(full.notifications, NotificationsConfig::default());
     }
 }

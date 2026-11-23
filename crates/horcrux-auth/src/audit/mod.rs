@@ -77,6 +77,9 @@ pub enum AuditEventType {
     FirewallRuleDeleted,
     SuspiciousActivity,
     BruteForceDetected,
+    /// A notification (webhook, e-mail, ntfy, ...) could not be delivered
+    /// after every retry.
+    NotificationDeliveryFailed,
 }
 
 /// Audit severity level
