@@ -58,6 +58,9 @@ def define(args):
         n.wait_for_unit("horcrux-api", 300)
         m.check("init-system", n.init.name in ("openrc", "systemd"), n.init.name)
 
+        # the first-boot job restarts services (sshd among them) while it runs: let it finish before touching the host
+        n.wait_until(lambda: n.execute("pgrep -f '[h]orcrux-firstboot'", timeout=30)[0] != 0, 900, 5, "first-boot job finished")
+        n.wait_for_ssh(300)
         m.phase("drop in the manager under test and the guest image")
         d = tempfile.mkdtemp(prefix="hxsrv-")
         for src, name in ((binary, "horcrux-api"), (image, "guest.qcow2"),
@@ -84,8 +87,12 @@ def define(args):
         finally:
             srv.terminate()
             shutil.rmtree(d, ignore_errors=True)
-        n.succeed("pkill -x horcrux-api || true; true")
         n.stop_unit("horcrux-api")
+        try:
+            n.execute("pkill -x horcrux-api; true", timeout=30)      # a leftover from the first-boot job; a dropped ssh here is harmless
+        except Exception:
+            pass
+        n.wait_for_ssh(120)
         n.succeed("install -m755 /tmp/horcrux-api.new /usr/bin/horcrux-api")
         n.succeed("if [ -d /run/systemd/system ]; then install -m644 /tmp/horcrux-guests.service /etc/systemd/system/horcrux-guests.service; "
                   "install -m644 /tmp/horcrux-api.service /etc/systemd/system/horcrux-api.service; "
