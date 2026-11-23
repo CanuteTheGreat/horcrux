@@ -236,8 +236,43 @@ pub struct WebhookSummary {
     pub stats: WebhookStats,
 }
 
+/// Consecutive failed deliveries (after all retries) that open a webhook's
+/// circuit breaker.
+const BREAKER_THRESHOLD: u32 = 5;
+/// How long an open breaker drops events before one probe delivery is let
+/// through again.
+const BREAKER_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Per-webhook circuit breaker: a dead endpoint no longer costs a spawned task
+/// plus a full retry/backoff cycle for every event.
+#[derive(Debug, Default, Clone)]
+struct Breaker {
+    failures: u32,
+    open_until: Option<std::time::Instant>,
+}
+
+impl Breaker {
+    /// May a delivery go out now? While open: no. After the cooldown: yes
+    /// (half-open probe); the next failure re-opens it at once.
+    fn allows(&self, now: std::time::Instant) -> bool {
+        self.open_until.is_none_or(|t| now >= t)
+    }
+
+    fn record(&mut self, ok: bool, now: std::time::Instant) {
+        if ok {
+            *self = Self::default();
+            return;
+        }
+        self.failures = self.failures.saturating_add(1);
+        if self.failures >= BREAKER_THRESHOLD {
+            self.open_until = Some(now + BREAKER_COOLDOWN);
+        }
+    }
+}
+
 /// Webhook manager
 pub struct WebhookManager {
+    breakers: Arc<std::sync::Mutex<HashMap<String, Breaker>>>,
     webhooks: Arc<RwLock<HashMap<String, WebhookConfig>>>,
     deliveries: Arc<RwLock<Vec<WebhookDelivery>>>,
     stats: Arc<RwLock<HashMap<String, WebhookStats>>>,
@@ -258,6 +293,7 @@ impl WebhookManager {
             webhooks: Arc::new(RwLock::new(HashMap::new())),
             deliveries: Arc::new(RwLock::new(Vec::new())),
             stats: Arc::new(RwLock::new(HashMap::new())),
+            breakers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
@@ -410,6 +446,10 @@ impl WebhookManager {
             }),
         };
         let result = self.send_webhook_request(&webhook, &event).await;
+        // A passing manual test closes the breaker; a failing one never opens it.
+        if result.is_ok() {
+            self.note_outcome(&webhook.id, true);
+        }
         let delivery = Self::delivery_record(&webhook, &event, &result, 0);
         self.record_delivery(delivery.clone()).await;
         Ok(delivery)
@@ -459,6 +499,7 @@ impl WebhookManager {
             webhooks: self.webhooks.clone(),
             deliveries: self.deliveries.clone(),
             stats: self.stats.clone(),
+            breakers: self.breakers.clone(),
             client: self.client.clone(),
             store: None,
         }
@@ -510,12 +551,43 @@ impl WebhookManager {
     /// Deliver webhook to endpoint: one attempt plus up to `retry_count`
     /// retries (a `retry_count` of 0 or 1 used to mean one attempt either
     /// way, and 3 meant three attempts in all).
+    fn note_outcome(&self, id: &str, ok: bool) {
+        let mut b = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
+        b.entry(id.to_string())
+            .or_default()
+            .record(ok, std::time::Instant::now());
+    }
+
+    fn breaker_allows(&self, id: &str) -> bool {
+        let b = self.breakers.lock().unwrap_or_else(|e| e.into_inner());
+        b.get(id)
+            .is_none_or(|x| x.allows(std::time::Instant::now()))
+    }
+
     async fn deliver_webhook(&self, webhook: &WebhookConfig, event: WebhookEvent) -> Result<()> {
+        if !self.breaker_allows(&webhook.id) {
+            // Logged for the delivery history, but not counted as a failure
+            // of its own: nothing was sent.
+            let err = horcrux_common::Error::System(format!(
+                "circuit open after {BREAKER_THRESHOLD} failed deliveries; event dropped"
+            ));
+            tracing::warn!("Webhook {} skipped: {}", webhook.name, err);
+            let mut d = Self::delivery_record(webhook, &event, &Err(err), 0);
+            d.status_code = None;
+            let mut deliveries = self.deliveries.write().await;
+            deliveries.push(d);
+            if deliveries.len() > MAX_DELIVERY_RECORDS {
+                let excess = deliveries.len() - MAX_DELIVERY_RECORDS;
+                deliveries.drain(0..excess);
+            }
+            return Ok(());
+        }
         let mut retries = 0;
 
         loop {
             let result = self.send_webhook_request(webhook, &event).await;
             if result.is_ok() || retries >= webhook.retry_count {
+                self.note_outcome(&webhook.id, result.is_ok());
                 let delivery = Self::delivery_record(webhook, &event, &result, retries);
                 self.record_delivery(delivery).await;
                 match &result {
@@ -935,6 +1007,48 @@ mod tests {
         assert_eq!(WebhookManager::backoff(4).as_secs(), 8);
         assert_eq!(WebhookManager::backoff(7).as_secs(), MAX_BACKOFF_SECS);
         assert_eq!(WebhookManager::backoff(40).as_secs(), MAX_BACKOFF_SECS);
+    }
+
+    #[test]
+    fn breaker_opens_after_threshold_probes_after_cooldown_and_closes_on_success() {
+        let t0 = std::time::Instant::now();
+        let mut b = Breaker::default();
+        for _ in 0..BREAKER_THRESHOLD - 1 {
+            b.record(false, t0);
+            assert!(b.allows(t0));
+        }
+        b.record(false, t0);
+        assert!(!b.allows(t0));
+        assert!(!b.allows(t0 + BREAKER_COOLDOWN - std::time::Duration::from_secs(1)));
+        let later = t0 + BREAKER_COOLDOWN;
+        assert!(b.allows(later));
+        // the probe fails: re-opened straight away
+        b.record(false, later);
+        assert!(!b.allows(later));
+        // the probe succeeds: fully closed
+        b.record(true, later + BREAKER_COOLDOWN);
+        assert!(b.allows(later) && b.failures == 0);
+    }
+
+    #[tokio::test]
+    async fn an_open_breaker_drops_events_without_counting_failures() {
+        let m = WebhookManager::new();
+        let mut c = hook("dead", &dead_url().await);
+        c.retry_count = 0;
+        let ev = WebhookEvent {
+            event_type: "vm.created".into(),
+            timestamp: chrono::Utc::now(),
+            source: "horcrux".into(),
+            data: serde_json::Value::Null,
+        };
+        for _ in 0..BREAKER_THRESHOLD {
+            assert!(m.deliver_webhook(&c, ev.clone()).await.is_err());
+        }
+        assert!(m.deliver_webhook(&c, ev).await.is_ok());
+        let d = m.get_deliveries(Some("dead"), 10).await;
+        assert!(d[0].error.as_deref().unwrap().contains("circuit open"));
+        let st = m.stats.read().await;
+        assert_eq!(st["dead"].failure_count, u64::from(BREAKER_THRESHOLD));
     }
 
     #[tokio::test]

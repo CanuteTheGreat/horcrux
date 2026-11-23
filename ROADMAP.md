@@ -294,8 +294,8 @@ completed 2026-10-06
 
 - [ ] **HTTP webhook optimization** (1 day)
   - Request batching
-  - Retry logic with exponential backoff
-  - Circuit breaker pattern
+  - [x] Retry logic with exponential backoff
+  - [x] Circuit breaker pattern (5 failed deliveries open it for 5 min; one probe after that)
 
 - [ ] **Snapshot tree caching** (2 days)
   - Cache tree structures
