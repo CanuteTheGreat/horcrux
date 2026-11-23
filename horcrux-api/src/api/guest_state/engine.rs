@@ -465,9 +465,14 @@ pub async fn save_guest(
     r
 }
 
-const PASSTHROUGH_NO_SAVE: &str =
-    "the VM has host PCI/mediated devices (passthrough): QEMU cannot \
-    save the state of a VM that owns hardware, remove the device or shut the VM down";
+/// Why a VM with host devices cannot be saved (the kernel's answer per
+/// device is in `reason`).
+fn device_blocker(reason: Option<&str>) -> String {
+    format!(
+        "the VM owns passthrough host devices whose state cannot be saved ({}): remove them or shut the VM down",
+        reason.unwrap_or("no reason reported")
+    )
+}
 
 async fn save_locked(
     state: &Arc<AppState>,
@@ -486,10 +491,16 @@ async fn save_locked(
     if !g.is_up() {
         return Err(Error::Conflict(format!("{} is not running", g.name)));
     }
-    if g.passthrough {
-        return Err(Error::Conflict(PASSTHROUGH_NO_SAVE.into()));
-    }
     let eff = policy::effective(state, k, id).await;
+    if g.passthrough && g.qemu {
+        let rep = state
+            .vm_manager
+            .device_save_report(id, eff.device_save)
+            .await?;
+        if !rep.may_save() {
+            return Err(Error::Conflict(device_blocker(rep.reason.as_deref())));
+        }
+    }
     let base = match dir_override.as_deref().filter(|d| !d.trim().is_empty()) {
         Some(d) => {
             if !d.starts_with('/')
@@ -833,9 +844,23 @@ async fn stop_one(state: &Arc<AppState>, g: GuestInfo, eff: Effective) -> GuestO
     }
     let guard = lock_guest(g.kind, &g.id);
     let mut fell_back = false;
-    // A VM that owns hardware QEMU cannot save: the guest hibernates itself
-    // (own timeout), else the save fallback below.
-    if eff.stop_action == StopAction::Save && g.passthrough && g.qemu && guard.is_ok() {
+    // A VM that owns hardware whose state cannot be saved (a whole GPU; host
+    // devices with kernel-reported migration ARE saved below): the guest
+    // hibernates itself (own timeout), else the save fallback below.
+    let device_blocker_now = if eff.stop_action == StopAction::Save && g.passthrough && g.qemu {
+        match state
+            .vm_manager
+            .device_save_report(&g.id, eff.device_save)
+            .await
+        {
+            Ok(r) if r.may_save() => None,
+            Ok(r) => Some(device_blocker(r.reason.as_deref())),
+            Err(_) => Some(device_blocker(Some("the devices could not be read"))),
+        }
+    } else {
+        None
+    };
+    if let (Some(no_save), true) = (&device_blocker_now, guard.is_ok()) {
         if eff.guest_hibernate {
             match hibernate::hibernate(state, &g, &eff).await {
                 Ok(method) => {
@@ -851,14 +876,14 @@ async fn stop_one(state: &Arc<AppState>, g: GuestInfo, eff: Effective) -> GuestO
                     warn!("vm {}: guest hibernate failed: {e}", g.id);
                     fell_back = true;
                     warning = Some(format!(
-                        "Guest hibernate was not possible ({e}). State could not be saved: {PASSTHROUGH_NO_SAVE}. The guest was shut down instead and will be started again."
+                        "Guest hibernate was not possible ({e}). State could not be saved: {no_save}. The guest was shut down instead and will be started again."
                     ));
                 }
             }
         } else {
             fell_back = true;
             warning = Some(format!(
-                "State could not be saved: {PASSTHROUGH_NO_SAVE}. Guest hibernate is off for this VM. The guest was shut down instead and will be started again."
+                "State could not be saved: {no_save}. Guest hibernate is off for this VM. The guest was shut down instead and will be started again."
             ));
         }
     }
@@ -1402,6 +1427,9 @@ pub struct GuestView {
     pub can_hibernate: Option<bool>,
     /// Why not (guest tools missing, no swap, ...), or how it will.
     pub hibernate_detail: Option<String>,
+    /// VMs with host devices only: what the kernel says about saving their
+    /// state (per device, with the reason when it cannot).
+    pub device_save: Option<horcrux_vm::vm::gpucap::DeviceSaveReport>,
     pub last_result: Option<GuestResult>,
 }
 
@@ -1505,8 +1533,24 @@ async fn view_of(
     results: &BTreeMap<String, GuestResult>,
     probes: &mut BTreeMap<PathBuf, crypt::Probe>,
 ) -> GuestView {
+    let eff = policy::effective(state, g.kind, &g.id).await;
+    let mut device_save = None;
+    if g.qemu && g.passthrough {
+        device_save = state
+            .vm_manager
+            .device_save_report(&g.id, eff.device_save)
+            .await
+            .ok();
+    }
     let (mut can_save, mut save_blocker) = match (&g.ct_runtime, g.qemu) {
-        (_, true) if g.passthrough => (false, Some(PASSTHROUGH_NO_SAVE.to_string())),
+        (_, true) if g.passthrough => match &device_save {
+            Some(r) if !r.may_save() => (false, Some(device_blocker(r.reason.as_deref()))),
+            Some(_) => (true, None),
+            None => (
+                false,
+                Some(device_blocker(Some("the devices could not be read"))),
+            ),
+        },
         (_, true) => (true, None),
         (Some(rt), _) => {
             let s = match sup.get(&g.runtime) {
@@ -1535,7 +1579,6 @@ async fn view_of(
             },
         ),
     };
-    let eff = policy::effective(state, g.kind, &g.id).await;
     if can_save && eff.save_encryption == SaveEncryption::Require {
         let target = save_target_dir(&g, &eff.save_dir);
         let p = match probes.get(&target) {
@@ -1554,7 +1597,9 @@ async fn view_of(
     let mut can_hibernate = None;
     let mut hibernate_detail = None;
     let mut hib = HibernatePlan::NotApplicable;
-    if g.passthrough && g.qemu && eff.stop_action == StopAction::Save {
+    // only a VM whose host devices cannot save their state hibernates itself
+    let devices_save = device_save.as_ref().is_some_and(|r| r.may_save());
+    if g.passthrough && g.qemu && eff.stop_action == StopAction::Save && !devices_save {
         if !eff.guest_hibernate {
             hibernate_detail = Some("guest hibernate is off for this VM".to_string());
         } else if g.status == "running" {
@@ -1603,6 +1648,7 @@ async fn view_of(
         status: g.status,
         can_save,
         save_blocker,
+        device_save,
     }
 }
 
