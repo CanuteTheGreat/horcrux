@@ -644,6 +644,8 @@ impl BackupManager {
             ))
         })?;
 
+        archive::ensure_free_space(&storage_dir, &storage_label)?;
+
         let backup_id = uuid::Uuid::new_v4().to_string();
         let started = chrono::Local::now();
         let filename = format!(

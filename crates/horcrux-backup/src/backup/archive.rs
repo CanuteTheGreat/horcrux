@@ -88,10 +88,40 @@ fn spawn_err(prog: &str, e: std::io::Error) -> Error {
     }
 }
 
+/// True when a helper's stderr says the target filesystem is full.
+pub fn is_out_of_space(stderr: &str) -> bool {
+    stderr.contains("No space left on device") || stderr.contains("Disk quota exceeded")
+}
+
+/// Refuse to start writing into a (nearly) full filesystem: a plain-words
+/// error instead of a helper dying half way with a raw ENOSPC.
+pub fn ensure_free_space(dir: &Path, label: &str) -> Result<()> {
+    const MIN_FREE: u64 = 64 * 1024 * 1024;
+    if let Ok(st) = nix::sys::statvfs::statvfs(dir) {
+        let free = (st.blocks_available() as u64).saturating_mul(st.fragment_size() as u64);
+        if free < MIN_FREE {
+            return Err(Error::Conflict(format!(
+                "backup storage '{label}' is full ({} MiB free); free up space or choose \
+                 another storage",
+                free / (1024 * 1024)
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn check_status(prog: &str, out: std::process::Output) -> Result<std::process::Output> {
     if out.status.success() {
         Ok(out)
     } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if is_out_of_space(&stderr) {
+            return Err(Error::Conflict(
+                "the backup storage ran out of space while writing the backup; free up space \
+                 or choose another storage and try again"
+                    .to_string(),
+            ));
+        }
         Err(Error::System(format!(
             "{prog} failed ({}): {}",
             out.status,
@@ -390,6 +420,28 @@ pub fn verify_extracted(dir: &Path, m: &Manifest) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn enospc_text_is_recognised() {
+        assert!(super::is_out_of_space(
+            "qemu-img: error while writing at byte 1048576: No space left on device"
+        ));
+        assert!(!super::is_out_of_space("permission denied"));
+    }
+
+    #[test]
+    fn check_status_maps_enospc_to_conflict() {
+        use std::os::unix::process::ExitStatusExt;
+        let out = std::process::Output {
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stdout: vec![],
+            stderr: b"No space left on device".to_vec(),
+        };
+        let e = super::check_status("qemu-img", out).unwrap_err();
+        assert!(
+            matches!(e, horcrux_common::Error::Conflict(m) if m.contains("ran out of space"))
+        );
+    }
+
     use super::*;
 
     fn tool_present(prog: &str) -> bool {
