@@ -333,7 +333,7 @@ const_format_proc_macros 0.2.34
 convert_case 0.6.0
     license: MIT
     source:  https://github.com/rutrum/convert-case
-cookie 0.18.2
+cookie 0.18.3
     license: MIT OR Apache-2.0
     source:  https://github.com/SergioBenitez/cookie-rs
 cookie_store 0.22.1
@@ -8256,7 +8256,7 @@ SOFTWARE.
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-[86] used by: cookie 0.18.2
+[86] used by: cookie 0.18.3
 
 Copyright (c) 2017 Sergio Benitez
 Copyright (c) 2014 Alex Crichton
@@ -8287,7 +8287,7 @@ DEALINGS IN THE SOFTWARE.
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-[87] used by: cookie 0.18.2
+[87] used by: cookie 0.18.3
 
 Apache License
                         Version 2.0, January 2004
