@@ -74,6 +74,16 @@ pub fn SmartMonitoringPage() -> impl IntoView {
         (all.len(), healthy, warning, critical)
     };
 
+    // Disks smartctl could not classify (virtual disks, USB bridges, no SMART)
+    // are counted and filterable rather than silently counted nowhere.
+    let unknown_count = move || {
+        disks
+            .get()
+            .iter()
+            .filter(|d| d.smart_status == SmartStatus::Unknown)
+            .count()
+    };
+
     let unacknowledged_alerts =
         move || alerts.get().into_iter().filter(|a| !a.acknowledged).count();
 
@@ -147,6 +157,13 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().2}</span>
                             <span class="stat-label">"Warning"</span>
+                        </div>
+                    </a>
+                    <a class="stat-card stat-link unknown" href="/storage/smart?status=unknown">
+                        <span class="stat-icon">"[?]"</span>
+                        <div class="stat-content">
+                            <span class="stat-value">{move || unknown_count()}</span>
+                            <span class="stat-label">"Unknown"</span>
                         </div>
                     </a>
                     <a class="stat-card stat-link critical" href="/storage/smart?status=critical" class:attention=move || { disk_counts().3 > 0 }>
@@ -230,6 +247,12 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                     >
                         Critical
                     </button>
+                    <button
+                        class={move || if filter_status.get() == "unknown" { "btn btn-primary" } else { "btn btn-secondary" }}
+                        on:click=move |_| set_filter_status.set("unknown".to_string())
+                    >
+                        Unknown
+                    </button>
                 </div>
             </div>
 
@@ -251,6 +274,15 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                 }.into_view()
             } else {
                 view! {
+                    {move || filtered_disks().is_empty().then(|| {
+                        let st = filter_status.get();
+                        let msg = if st == "all" {
+                            "No disks reported by this node.".to_string()
+                        } else {
+                            format!("No disks with {} SMART status.", st)
+                        };
+                        view! { <p class="empty-state" role="status">{msg}</p> }
+                    })}
                     <div class="disks-grid">
                         {filtered_disks().into_iter().map(|disk| {
                             let disk_clone = disk.clone();
