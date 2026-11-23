@@ -464,9 +464,14 @@ pub async fn save_guest(
     r
 }
 
-const PASSTHROUGH_NO_SAVE: &str =
-    "the VM has host PCI/mediated devices (passthrough): QEMU cannot \
-    save the state of a VM that owns hardware, remove the device or shut the VM down";
+/// Why a VM with host devices cannot be saved (the kernel's answer per
+/// device is in `reason`).
+fn device_blocker(reason: Option<&str>) -> String {
+    format!(
+        "the VM owns host devices whose state cannot be saved ({}): remove them or shut the VM down",
+        reason.unwrap_or("no reason reported")
+    )
+}
 
 async fn save_locked(
     state: &Arc<AppState>,
@@ -485,10 +490,16 @@ async fn save_locked(
     if !g.is_up() {
         return Err(Error::Conflict(format!("{} is not running", g.name)));
     }
-    if g.passthrough {
-        return Err(Error::Conflict(PASSTHROUGH_NO_SAVE.into()));
-    }
     let eff = policy::effective(state, k, id).await;
+    if g.passthrough && g.qemu {
+        let rep = state
+            .vm_manager
+            .device_save_report(id, eff.device_save)
+            .await?;
+        if !rep.may_save() {
+            return Err(Error::Conflict(device_blocker(rep.reason.as_deref())));
+        }
+    }
     let base = match dir_override.as_deref().filter(|d| !d.trim().is_empty()) {
         Some(d) => {
             if !d.starts_with('/')
@@ -1294,6 +1305,9 @@ pub struct GuestView {
     /// Why it is not the configured action (passthrough, unencrypted
     /// target, no CRIU, ...).
     pub host_stop_reason: Option<String>,
+    /// VMs with host devices only: what the kernel says about saving their
+    /// state (per device, with the reason when it cannot).
+    pub device_save: Option<horcrux_vm::vm::gpucap::DeviceSaveReport>,
     pub last_result: Option<GuestResult>,
 }
 
@@ -1353,8 +1367,24 @@ async fn view_of(
     results: &BTreeMap<String, GuestResult>,
     probes: &mut BTreeMap<PathBuf, crypt::Probe>,
 ) -> GuestView {
+    let eff = policy::effective(state, g.kind, &g.id).await;
+    let mut device_save = None;
+    if g.qemu && g.passthrough {
+        device_save = state
+            .vm_manager
+            .device_save_report(&g.id, eff.device_save)
+            .await
+            .ok();
+    }
     let (mut can_save, mut save_blocker) = match (&g.ct_runtime, g.qemu) {
-        (_, true) if g.passthrough => (false, Some(PASSTHROUGH_NO_SAVE.to_string())),
+        (_, true) if g.passthrough => match &device_save {
+            Some(r) if !r.may_save() => (false, Some(device_blocker(r.reason.as_deref()))),
+            Some(_) => (true, None),
+            None => (
+                false,
+                Some(device_blocker(Some("the devices could not be read"))),
+            ),
+        },
         (_, true) => (true, None),
         (Some(rt), _) => {
             let s = match sup.get(&g.runtime) {
@@ -1383,7 +1413,6 @@ async fn view_of(
             },
         ),
     };
-    let eff = policy::effective(state, g.kind, &g.id).await;
     if can_save && eff.save_encryption == SaveEncryption::Require {
         let target = save_target_dir(&g, &eff.save_dir);
         let p = match probes.get(&target) {
@@ -1421,6 +1450,7 @@ async fn view_of(
         status: g.status,
         can_save,
         save_blocker,
+        device_save,
     }
 }
 

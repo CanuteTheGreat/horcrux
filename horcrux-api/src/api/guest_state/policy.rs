@@ -4,6 +4,7 @@ use super::engine::GuestKind;
 use crate::db::config_store::ConfigStore;
 use crate::AppState;
 use horcrux_common::Result;
+pub use horcrux_vm::vm::gpucap::DeviceSaveMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -100,6 +101,9 @@ pub struct NodePolicy {
     /// Extra seconds added to the computed worst case before the init system
     /// may give up on the stop pass.
     pub stop_margin_secs: u64,
+    /// Whether a VM that owns host devices (SR-IOV functions, vGPU) is
+    /// saved when the kernel says their drivers can migrate state.
+    pub device_save: DeviceSaveMode,
 }
 
 impl Default for NodePolicy {
@@ -118,6 +122,7 @@ impl Default for NodePolicy {
             save_encryption: SaveEncryption::Require,
             resume_stagger_secs: 0,
             stop_margin_secs: 60,
+            device_save: DeviceSaveMode::Auto,
         }
     }
 }
@@ -216,6 +221,7 @@ pub struct Effective {
     pub shutdown_timeout_secs: u64,
     pub save_fallback: SaveFallback,
     pub save_encryption: SaveEncryption,
+    pub device_save: DeviceSaveMode,
 }
 
 /// Combine node default and override (pure, unit-tested).
@@ -237,6 +243,7 @@ pub fn combine(node: &NodePolicy, o: &GuestOverride, default_dir: PathBuf) -> Ef
         shutdown_timeout_secs: node.shutdown_timeout_secs,
         save_fallback: node.save_fallback,
         save_encryption: node.save_encryption,
+        device_save: node.device_save,
     }
 }
 

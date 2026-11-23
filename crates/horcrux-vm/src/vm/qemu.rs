@@ -1498,6 +1498,21 @@ impl QemuManager {
         for d in &vm.hardware.hostpci {
             super::mdev::check_device(std::path::Path::new("/sys"), d)?;
         }
+        // The devices are free right now: ask the kernel whether their
+        // drivers can save device state (a running QEMU holds them, so the
+        // answer is kept for the host-save decision).
+        {
+            let (disk, devs) = (vm.disk_path.clone(), vm.hardware.hostpci.clone());
+            let _ = tokio::task::spawn_blocking(move || {
+                let env = super::gpucap::Env {
+                    sys: std::path::Path::new("/sys"),
+                    dev: std::path::Path::new("/dev"),
+                    probe: &super::gpucap::KernelVfio,
+                };
+                super::gpucap::record_probe(&env, &disk, &devs);
+            })
+            .await;
+        }
         // Hookscript: a failing pre-start stops the start.
         super::advanced::run_hook(&vm.hardware.adv, &vm.id, "pre-start").await?;
         // UEFI: OVMF must be installed; the VM gets its variable store.
