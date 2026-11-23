@@ -93,6 +93,16 @@ pub fn need_swap_kb(ram_kb: u64, pct: u64) -> u64 {
     ram_kb * pct / 100
 }
 
+/// A swap area is big enough when it is within a page or two of the need: the
+/// kernel reports the usable size, which is a page short of a file made to the
+/// exact size (the swap header takes the first page).
+pub fn swap_enough(have_kb: u64, need_kb: u64) -> bool {
+    have_kb * 100 >= need_kb * SWAP_TOLERANCE_PCT
+}
+
+/// How close to the wanted size a swap area must be (percent).
+const SWAP_TOLERANCE_PCT: u64 = 99;
+
 /// First physical extent start of `filefrag -v` output (file-system blocks),
 /// converted to pages (the kernel's `resume_offset` unit).
 pub fn filefrag_resume_offset(text: &str, block_size: u64, page_size: u64) -> Option<u64> {
@@ -198,7 +208,7 @@ pub fn linux_blockers(f: &LinuxFacts) -> Vec<String> {
     }
     let swap: u64 = f.swaps.iter().map(|s| s.size_kb).sum();
     let need = need_swap_kb(f.ram_kb, f.swap_pct);
-    if swap < need {
+    if !swap_enough(swap, need) {
         why.push(format!(
             "swap is {} MB but {} MB is needed ({} % of RAM): run horcrux-guest-agent --hibernate-enable",
             swap / 1024,
@@ -352,7 +362,7 @@ fn enable_linux(cfg: &Config, done: &mut Vec<String>) -> Result<(), String> {
     let need = need_swap_kb(ram_kb, cfg.hibernate_swap_pct);
     let swaps = parse_swaps(&read("/proc/swaps"));
     // 1. a swap area that is big enough, or a new swap file
-    let mut target = swaps.iter().find(|s| s.size_kb >= need).cloned();
+    let mut target = swaps.iter().find(|s| swap_enough(s.size_kb, need)).cloned();
     if target.is_none() {
         let path = cfg.hibernate_swapfile.clone();
         let dir = Path::new(&path)
@@ -765,6 +775,15 @@ mod tests {
         // /sys/power/resume set at runtime counts
         f.sys_resume = "254:2";
         assert!(linux_blockers(&f).is_empty());
+    }
+
+    #[test]
+    fn a_swap_file_made_to_the_exact_size_counts_as_big_enough() {
+        // the kernel reports one page less than the file (715 MB -> 715 MB minus 4 KB)
+        assert!(swap_enough(732_156, 732_160));
+        assert!(swap_enough(2_000_000, 1_000_000));
+        assert!(!swap_enough(500_000, 1_000_000));
+        assert!(!swap_enough(0, 1));
     }
 
     #[test]
