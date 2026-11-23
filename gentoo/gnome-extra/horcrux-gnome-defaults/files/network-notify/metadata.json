@@ -1,0 +1,8 @@
+{
+  "uuid": "network-notify@horcrux.errant.solutions",
+  "name": "Horcrux network notifications",
+  "description": "Replaces GNOME's generic 'Connection failed' notification: brief drops, roams and the Wi-Fi of a computer that is still online through another connection stay silent; a real loss names the network, the interface and the reason.",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "settings-schema": "org.gnome.shell.extensions.horcrux-network-notify",
+  "url": "https://github.com/CanuteTheGreat/horcrux"
+}

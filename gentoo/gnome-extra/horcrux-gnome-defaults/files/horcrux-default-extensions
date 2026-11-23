@@ -1,0 +1,31 @@
+#!/bin/sh
+# Horcrux: turn on the desktop's default GNOME Shell extensions (/usr/share/horcrux/default-extensions, one UUID per line) for
+# accounts that already have their own enabled-extensions list. The system dconf db (/etc/dconf/db/local.d/00-horcrux-extensions)
+# only reaches accounts that never changed that list; anyone who once toggled an extension keeps a private copy and would never
+# get an extension added later. Each UUID is offered ONCE per account (marker file): an extension the user turns off stays off,
+# and one listed in disabled-extensions is never turned on. Runs from /etc/xdg/autostart at login; safe to run again.
+LIST=${HORCRUX_DEFAULT_EXTENSIONS:-/usr/share/horcrux/default-extensions}
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/horcrux"
+MARK="$STATE/default-extensions-offered"
+[ -r "$LIST" ] || exit 0
+mkdir -p "$STATE" && touch "$MARK" || exit 0
+grep -v '^[[:space:]]*\(#\|$\)' "$LIST" | while read -r uuid; do
+	grep -qxF "$uuid" "$MARK" && continue
+	enabled=$(gsettings get org.gnome.shell enabled-extensions 2>/dev/null) || continue
+	disabled=$(gsettings get org.gnome.shell disabled-extensions 2>/dev/null)
+	case "$disabled" in *"'$uuid'"*) echo "$uuid" >>"$MARK"; continue ;; esac
+	case "$enabled" in
+	*"'$uuid'"*) ;;
+	*)
+		if ! gnome-extensions enable "$uuid" 2>/dev/null; then
+			case "$enabled" in
+			"@as []" | "[]") new="['$uuid']" ;;
+			*) new="${enabled%]}, '$uuid']" ;;
+			esac
+			gsettings set org.gnome.shell enabled-extensions "$new" || continue
+		fi
+		;;
+	esac
+	echo "$uuid" >>"$MARK"
+done
+exit 0
