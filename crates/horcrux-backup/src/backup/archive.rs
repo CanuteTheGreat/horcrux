@@ -98,7 +98,7 @@ pub fn is_out_of_space(stderr: &str) -> bool {
 pub fn ensure_free_space(dir: &Path, label: &str) -> Result<()> {
     const MIN_FREE: u64 = 64 * 1024 * 1024;
     if let Ok(st) = nix::sys::statvfs::statvfs(dir) {
-        let free = (st.blocks_available() as u64).saturating_mul(st.fragment_size() as u64);
+        let free = u64::from(st.blocks_available()).saturating_mul(u64::from(st.fragment_size()));
         if free < MIN_FREE {
             return Err(Error::Conflict(format!(
                 "backup storage '{label}' is full ({} MiB free); free up space or choose \
