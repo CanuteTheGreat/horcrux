@@ -23,6 +23,7 @@ pub async fn routes(state: &Arc<AppState>) -> anyhow::Result<Router<Arc<AppState
         .await
         .map_err(|e| anyhow::anyhow!("loading notification channels: {:?}", e))?,
     );
+    state.alert_manager.attach_channel_store(channels.clone());
     // A notification that fails every attempt is an audit-log entry.
     {
         let logger = state.audit_logger.clone();
