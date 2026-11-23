@@ -11,7 +11,14 @@
 # releases), `apt-get update` exits 100 and the whole e2e step fails before it
 # tests anything, although the distro archive was fine.
 hx_sibling_apt_prep() {
-    local c
+    local c helper=""
+    # The build-cache hub serves one apt helper for every repo (Ubuntu sources -> its failover proxy, else a mirror
+    # that answers). Fetched once here (bare ubuntu images have no curl) and run inside each container; fail-open.
+    if [ -z "${RW_APT_OFF:-}" ]; then
+        helper=$(mktemp)
+        curl -fsS -m 5 "http://${RW_CACHE_HUB:-10.1.10.103:8088}/ci/apt-mirror.sh" -o "$helper" 2>/dev/null \
+            || { rm -f "$helper"; helper=""; }
+    fi
     for c in "$@"; do
         docker exec -i "$c" sh -c '
             set -e
@@ -24,5 +31,9 @@ hx_sibling_apt_prep() {
                     > /etc/apt/apt.conf.d/80hx-ci-retries
             fi
         ' || { echo "hx_sibling_apt_prep: could not prepare $c" >&2; return 1; }
+        if [ -n "$helper" ] && docker cp "$helper" "$c:/tmp/rw-apt-mirror.sh" 2>/dev/null; then
+            docker exec -e RW_CACHE_HUB="${RW_CACHE_HUB:-10.1.10.103:8088}" "$c" sh /tmp/rw-apt-mirror.sh || true
+        fi
     done
+    [ -z "$helper" ] || rm -f "$helper"
 }
