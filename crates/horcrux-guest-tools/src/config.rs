@@ -119,6 +119,38 @@ pub struct Config {
     /// Windows: print the frame ring writer's rate and per-frame capture and
     /// write times to stderr every this many seconds (0 = off).
     pub shm_stats_secs: u64,
+    /// One-shot action instead of the service loop (`--hibernate-status`,
+    /// `--hibernate-setup`, `--hibernate-enable`, `--hibernate`).
+    pub action: Option<HibernateAction>,
+    /// Does the install step (`--hibernate-setup`) prepare the guest for
+    /// hibernation (swap/hiberfil, resume device)?
+    pub hibernate_at_install: bool,
+    /// Linux: command that hibernates the guest (split on spaces); empty =
+    /// the first of systemctl / loginctl / pm-hibernate / s2disk found.
+    pub hibernate_command: String,
+    /// Wait between answering the host and starting the hibernate, so the
+    /// answer is delivered before the guest freezes.
+    pub hibernate_delay_ms: u64,
+    /// Swap (Linux) the guest must have, as a percentage of its RAM; also
+    /// the size of the swap file created by `--hibernate-enable`.
+    pub hibernate_swap_pct: u64,
+    /// Linux: swap file created when no active swap is big enough.
+    pub hibernate_swapfile: String,
+    /// Windows: hiberfil.sys size in percent of RAM (`powercfg /h /size`);
+    /// 0 = leave the Windows default.
+    pub hibernate_hiberfile_pct: u64,
+    /// Linux: marker left by `--hibernate-enable` until the guest has been
+    /// restarted with the new boot configuration.
+    pub hibernate_pending_file: String,
+}
+
+/// What a one-shot invocation does (see [`crate::power`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HibernateAction {
+    Status,
+    Setup,
+    Enable,
+    Hibernate,
 }
 
 impl Default for Config {
@@ -171,6 +203,14 @@ impl Default for Config {
             shm_device: String::new(),
             shm_write_combine: true,
             shm_stats_secs: 0,
+            action: None,
+            hibernate_at_install: true,
+            hibernate_command: String::new(),
+            hibernate_delay_ms: 3000,
+            hibernate_swap_pct: 100,
+            hibernate_swapfile: "/swap-horcrux.img".into(),
+            hibernate_hiberfile_pct: 0,
+            hibernate_pending_file: "/var/lib/horcrux/hibernate-pending".into(),
         }
     }
 }
@@ -208,7 +248,18 @@ impl Config {
             };
             let (k, v) = match k.split_once('=') {
                 Some((k, v)) => (k.to_string(), v.to_string()),
-                None if matches!(k, "once" | "print-caps" | "help" | "service") => {
+                None if matches!(
+                    k,
+                    "once"
+                        | "print-caps"
+                        | "help"
+                        | "service"
+                        | "hibernate"
+                        | "hibernate-status"
+                        | "hibernate-setup"
+                        | "hibernate-enable"
+                ) =>
+                {
                     (k.to_string(), "true".into())
                 }
                 None => {
@@ -298,6 +349,18 @@ impl Config {
             "shm_pci_dir" => self.shm_pci_dir = v.into(),
             "shm_device" => self.shm_device = v.into(),
             "shm_write_combine" => self.shm_write_combine = b(v),
+            "hibernate" if b(v) => self.action = Some(HibernateAction::Hibernate),
+            "hibernate_status" if b(v) => self.action = Some(HibernateAction::Status),
+            "hibernate_setup" if b(v) => self.action = Some(HibernateAction::Setup),
+            "hibernate_enable" if b(v) => self.action = Some(HibernateAction::Enable),
+            "hibernate" | "hibernate_status" | "hibernate_enable" | "hibernate_setup" => {}
+            "hibernate_at_install" => self.hibernate_at_install = b(v),
+            "hibernate_command" => self.hibernate_command = v.into(),
+            "hibernate_delay_ms" => self.hibernate_delay_ms = num(v)?.min(600_000),
+            "hibernate_swap_pct" => self.hibernate_swap_pct = num(v)?.clamp(10, 400),
+            "hibernate_swapfile" => self.hibernate_swapfile = v.into(),
+            "hibernate_pending_file" => self.hibernate_pending_file = v.into(),
+            "hibernate_hiberfile_pct" => self.hibernate_hiberfile_pct = num(v)?.min(100),
             "shm_stats_secs" => self.shm_stats_secs = num(v)?.min(3600),
             _ => return Err(format!("unknown setting {k}")),
         }
@@ -321,7 +384,8 @@ fn parse_file(text: &str) -> Vec<(String, String)> {
 
 const HELP: &str = "usage: horcrux-guest-agent [--config FILE] [--port PATH | --connect HOST:PORT] \
 [--capture auto|kmsgrab|x11grab|dxgi|idd] [--encoder auto|software|vaapi|nvenc|qsv|amf|mediafoundation] \
-[--ffmpeg PATH] [--once] [--print-caps]";
+[--ffmpeg PATH] [--once] [--print-caps] \
+[--hibernate-status | --hibernate-setup | --hibernate-enable | --hibernate]";
 
 #[cfg(test)]
 mod tests {

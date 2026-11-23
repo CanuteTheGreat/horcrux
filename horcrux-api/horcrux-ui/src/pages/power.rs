@@ -149,9 +149,9 @@ pub fn GuestPowerPage() -> impl IntoView {
                         <thead><tr><th>"Guest"</th><th>"Result"</th><th>"Why"</th></tr></thead>
                         <tbody>{rows.into_iter().map(|o| {
                             let action = o["action"].as_str().unwrap_or("?").to_string();
-                            view! { <tr class=if action == "saved" || action == "migrated" { "last-stop-ok" } else { "last-stop-fallback" }>
+                            view! { <tr class=if action == "saved" || action == "migrated" || action == "hibernated" { "last-stop-ok" } else { "last-stop-fallback" }>
                                 <td>{o["name"].as_str().unwrap_or("?").to_string()}</td>
-                                <td>{match action.as_str() { "saved" => "State saved".to_string(), "shutdown" => "Shut down cleanly".to_string(), "poweroff" => "Powered off".to_string(), "migrated" => "Moved to another node".to_string(), "left" => "Left alone".to_string(), other => other.to_string() }}</td>
+                                <td>{match action.as_str() { "saved" => "State saved".to_string(), "hibernated" => "Guest hibernated".to_string(), "shutdown" => "Shut down cleanly".to_string(), "poweroff" => "Powered off".to_string(), "migrated" => "Moved to another node".to_string(), "left" => "Left alone".to_string(), other => other.to_string() }}</td>
                                 <td>{o["message"].as_str().unwrap_or("").to_string()}</td>
                             </tr> }
                         }).collect_view()}</tbody>
@@ -208,6 +208,13 @@ pub fn GuestPowerPage() -> impl IntoView {
                     <label>"Shutdown timeout (s) "
                         <input id="power-shutdown-timeout" type="number" min="5" prop:value=n.shutdown_timeout_secs
                             on:input=move |ev| { let v = event_target_value(&ev).parse().unwrap_or(120); upd(Box::new(move |n| n.shutdown_timeout_secs = v)) }/></label>
+                    <label title="A VM that owns passthrough hardware cannot be saved. With this on, its guest hibernates itself through the Horcrux guest tools and resumes at boot; guests without the tools are shut down cleanly.">
+                        <input id="power-guest-hibernate" type="checkbox" prop:checked=n.guest_hibernate
+                            on:change=move |ev| { let v = event_target_checked(&ev); upd(Box::new(move |n| n.guest_hibernate = v)) }/>
+                        " Passthrough VMs hibernate themselves"</label>
+                    <label>"Hibernate timeout (s) "
+                        <input id="power-hibernate-timeout" type="number" min="5" max="86400" prop:value=n.hibernate_timeout_secs
+                            on:input=move |ev| { let v = event_target_value(&ev).parse().unwrap_or(300); upd(Box::new(move |n| n.hibernate_timeout_secs = v)) }/></label>
                     <label>"Guests at once "
                         <input id="power-parallel" type="number" min="1" max="64" prop:value=n.max_parallel
                             on:input=move |ev| { let v = event_target_value(&ev).parse().unwrap_or(4); upd(Box::new(move |n| n.max_parallel = v)) }/></label>
@@ -264,6 +271,8 @@ fn GuestPowerRow(
     let id = g.id.clone();
     let name = g.name.clone();
 
+    let keep_dir = g.overrides.save_dir.clone();
+    let keep_hib = g.overrides.guest_hibernate;
     let apply = {
         let (kind, id) = (kind.clone(), id.clone());
         move |_| {
@@ -272,7 +281,8 @@ fn GuestPowerRow(
                 start_action: Some(start.get()).filter(|s| !s.is_empty()),
                 start_delay_secs: delay.get().trim().parse().ok(),
                 start_order: order.get().trim().parse().ok(),
-                save_dir: None,
+                save_dir: keep_dir.clone(),
+                guest_hibernate: keep_hib,
             };
             let (kind, id) = (kind.clone(), id.clone());
             spawn_local(async move {
@@ -308,7 +318,12 @@ fn GuestPowerRow(
     let saved = g.saved.clone();
     let notes = {
         let mut n = Vec::new();
-        if g.host_stop_action != "save" && g.policy.stop_action == "save" {
+        if g.host_stop_action == "hibernate" {
+            n.push(format!(
+                "Will hibernate itself at host shutdown, not save: {}",
+                g.host_stop_reason.clone().unwrap_or_default()
+            ));
+        } else if g.host_stop_action != "save" && g.policy.stop_action == "save" {
             n.push(format!(
                 "Will {} at host shutdown, not save: {}",
                 match g.host_stop_action.as_str() {

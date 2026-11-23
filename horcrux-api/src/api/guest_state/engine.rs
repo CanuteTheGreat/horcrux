@@ -1,5 +1,6 @@
 //! Saving, resuming and the host shutdown / boot passes (see mod.rs).
 use super::crypt;
+use super::hibernate;
 use super::policy::{self, Effective, SaveEncryption, SaveFallback, StartAction, StopAction};
 use crate::container::savestate as ctsave;
 use crate::vm::savestate::VmSaveOutcome;
@@ -592,6 +593,57 @@ async fn save_locked(
     Ok(saved)
 }
 
+// -------------------------------------------------------- guest hibernate
+
+/// Hibernate a running QEMU VM through its guest agent now (the same step the
+/// host shutdown uses for passthrough VMs); the VM is stopped when the guest
+/// has written its image and powered off. Start it again to resume.
+pub async fn hibernate_guest(state: &Arc<AppState>, k: GuestKind, id: &str) -> Result<String> {
+    if k != GuestKind::Vm {
+        return Err(Error::Validation("only VMs can hibernate".into()));
+    }
+    let _g = lock_guest(k, id)?;
+    let g = find_guest(state, k, id).await?;
+    if !g.qemu {
+        return Err(Error::Validation(format!(
+            "{} VMs cannot hibernate through the guest agent",
+            g.runtime
+        )));
+    }
+    if g.status != "running" {
+        return Err(Error::Conflict(format!("{} is not running", g.name)));
+    }
+    let eff = policy::effective(state, k, id).await;
+    let r = hibernate::hibernate(state, &g, &eff).await;
+    match &r {
+        Ok(m) => {
+            record(
+                state,
+                k,
+                id,
+                "manual-hibernate",
+                "hibernated",
+                true,
+                Some(m.clone()),
+            )
+            .await
+        }
+        Err(e) => {
+            record(
+                state,
+                k,
+                id,
+                "manual-hibernate",
+                "failed",
+                false,
+                Some(e.to_string()),
+            )
+            .await
+        }
+    }
+    r
+}
+
 // ----------------------------------------------------------------- resume
 
 /// Resume a guest from its saved state. The state is deleted after the
@@ -781,7 +833,36 @@ async fn stop_one(state: &Arc<AppState>, g: GuestInfo, eff: Effective) -> GuestO
     }
     let guard = lock_guest(g.kind, &g.id);
     let mut fell_back = false;
-    if eff.stop_action == StopAction::Save {
+    // A VM that owns hardware QEMU cannot save: the guest hibernates itself
+    // (own timeout), else the save fallback below.
+    if eff.stop_action == StopAction::Save && g.passthrough && g.qemu && guard.is_ok() {
+        if eff.guest_hibernate {
+            match hibernate::hibernate(state, &g, &eff).await {
+                Ok(method) => {
+                    return out(
+                        "hibernated",
+                        true,
+                        Some(format!(
+                            "The guest hibernated itself ({method}); it resumes when the VM starts at boot."
+                        )),
+                    )
+                }
+                Err(e) => {
+                    warn!("vm {}: guest hibernate failed: {e}", g.id);
+                    fell_back = true;
+                    warning = Some(format!(
+                        "Guest hibernate was not possible ({e}). State could not be saved: {PASSTHROUGH_NO_SAVE}. The guest was shut down instead and will be started again."
+                    ));
+                }
+            }
+        } else {
+            fell_back = true;
+            warning = Some(format!(
+                "State could not be saved: {PASSTHROUGH_NO_SAVE}. Guest hibernate is off for this VM. The guest was shut down instead and will be started again."
+            ));
+        }
+    }
+    if eff.stop_action == StopAction::Save && !fell_back {
         match &guard {
             Ok(_) => match save_locked(state, g.kind, &g.id, None, None).await {
                 Ok(_) => return out("saved", true, None),
@@ -1038,7 +1119,22 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
             };
         }
     }
-    let was: Vec<ManifestGuest> = read_manifest(state).map(|m| m.guests).unwrap_or_default();
+    let manifest = read_manifest(state);
+    let was: Vec<ManifestGuest> = manifest
+        .as_ref()
+        .map(|m| m.guests.clone())
+        .unwrap_or_default();
+    // guests that put themselves to sleep at the last host shutdown
+    let hibernated: HashSet<String> = manifest
+        .as_ref()
+        .map(|m| {
+            m.outcomes
+                .iter()
+                .filter(|o| o.action == "hibernated")
+                .map(|o| format!("{}:{}", o.kind.prefix(), o.id))
+                .collect()
+        })
+        .unwrap_or_default();
     let guests = list_guests(state).await;
     let mut plan = Vec::new();
     for g in guests {
@@ -1106,6 +1202,13 @@ pub async fn boot_all(state: &Arc<AppState>, force: bool) -> Report {
                     }
                 } else {
                     match start_plain(state, &g).await {
+                        Ok(_) if hibernated.contains(&format!("{}:{}", g.kind.prefix(), g.id)) => {
+                            mk(
+                                "started",
+                                true,
+                                Some("Started: the guest resumes from its own hibernation.".into()),
+                            )
+                        }
                         Ok(_) => mk("started", true, None),
                         Err(e) => mk("failed", false, Some(e.to_string())),
                     }
@@ -1294,6 +1397,11 @@ pub struct GuestView {
     /// Why it is not the configured action (passthrough, unencrypted
     /// target, no CRIU, ...).
     pub host_stop_reason: Option<String>,
+    /// Can the guest hibernate itself (the method for passthrough VMs)?
+    /// `None` = not asked (not a running passthrough VM).
+    pub can_hibernate: Option<bool>,
+    /// Why not (guest tools missing, no swap, ...), or how it will.
+    pub hibernate_detail: Option<String>,
     pub last_result: Option<GuestResult>,
 }
 
@@ -1324,12 +1432,54 @@ pub async fn capabilities() -> Capabilities {
 
 /// What the host shutdown will do to a guest, given the configured action
 /// and whether its state can be saved (pure, unit-tested).
+/// What the guest-hibernate step can do for a VM whose state cannot be saved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HibernatePlan {
+    /// Not a passthrough VM (or hibernate is off): the plain save plan.
+    NotApplicable,
+    /// The guest can hibernate itself.
+    Ready(String),
+    /// It cannot (reason).
+    Blocked(String),
+}
+
 pub fn plan_host_stop(
     action: StopAction,
     fallback: SaveFallback,
     can_save: bool,
     blocker: Option<&str>,
+    hib: &HibernatePlan,
 ) -> (String, Option<String>) {
+    if action == StopAction::Save && !can_save {
+        match hib {
+            HibernatePlan::Ready(how) => {
+                return (
+                    "hibernate".into(),
+                    Some(format!(
+                        "{} The guest will hibernate itself ({how}) and resume at boot.",
+                        blocker.unwrap_or("its state cannot be saved.")
+                    )),
+                )
+            }
+            HibernatePlan::Blocked(why) => {
+                let (a, r) = plan_host_stop(
+                    action,
+                    fallback,
+                    can_save,
+                    blocker,
+                    &HibernatePlan::NotApplicable,
+                );
+                return (
+                    a,
+                    Some(format!(
+                        "{} Guest hibernate unavailable: {why}",
+                        r.unwrap_or_default()
+                    )),
+                );
+            }
+            HibernatePlan::NotApplicable => {}
+        }
+    }
     match action {
         StopAction::None => ("none".into(), None),
         StopAction::Poweroff => ("poweroff".into(), None),
@@ -1399,15 +1549,45 @@ async fn view_of(
             save_blocker = Some(why);
         }
     }
+    let mut can_hibernate = None;
+    let mut hibernate_detail = None;
+    let mut hib = HibernatePlan::NotApplicable;
+    if g.passthrough && g.qemu && eff.stop_action == StopAction::Save {
+        if !eff.guest_hibernate {
+            hibernate_detail = Some("guest hibernate is off for this VM".to_string());
+        } else if g.status == "running" {
+            let p = hibernate::probe(state, &g, &eff, false).await;
+            can_hibernate = Some(p.ready);
+            hib = if p.ready {
+                let how = p.method.clone().unwrap_or_else(|| "guest tools".into());
+                let note = if p.verified {
+                    how
+                } else {
+                    format!("{how}; the guest's setup cannot be checked without command execution")
+                };
+                hibernate_detail = Some(note.clone());
+                HibernatePlan::Ready(note)
+            } else {
+                let why = p.reason.clone().unwrap_or_default();
+                hibernate_detail = Some(why.clone());
+                HibernatePlan::Blocked(why)
+            };
+        } else {
+            hibernate_detail = Some("checked while the VM runs".to_string());
+        }
+    }
     let (host_stop_action, host_stop_reason) = plan_host_stop(
         eff.stop_action,
         eff.save_fallback,
         can_save,
         save_blocker.as_deref(),
+        &hib,
     );
     GuestView {
         host_stop_action,
         host_stop_reason,
+        can_hibernate,
+        hibernate_detail,
         policy: eff,
         overrides: policy::load_override(state, g.kind, &g.id).await,
         saved: load_saved(state, g.kind, &g.id),
@@ -1477,20 +1657,88 @@ mod tests {
     #[test]
     fn host_stop_plan_applies_the_fallback_and_names_the_reason() {
         use SaveFallback::*;
-        let (a, r) = plan_host_stop(StopAction::Save, Shutdown, true, None);
+        let (a, r) = plan_host_stop(
+            StopAction::Save,
+            Shutdown,
+            true,
+            None,
+            &HibernatePlan::NotApplicable,
+        );
         assert_eq!((a.as_str(), r), ("save", None));
-        let (a, r) = plan_host_stop(StopAction::Save, Shutdown, false, Some("passthrough"));
+        let (a, r) = plan_host_stop(
+            StopAction::Save,
+            Shutdown,
+            false,
+            Some("passthrough"),
+            &HibernatePlan::NotApplicable,
+        );
         assert_eq!(a, "shutdown");
         assert_eq!(r.as_deref(), Some("passthrough"));
-        let (a, _) = plan_host_stop(StopAction::Save, Poweroff, false, None);
+        let (a, _) = plan_host_stop(
+            StopAction::Save,
+            Poweroff,
+            false,
+            None,
+            &HibernatePlan::NotApplicable,
+        );
         assert_eq!(a, "poweroff");
         assert_eq!(
-            plan_host_stop(StopAction::None, Shutdown, false, None).0,
+            plan_host_stop(
+                StopAction::None,
+                Shutdown,
+                false,
+                None,
+                &HibernatePlan::NotApplicable
+            )
+            .0,
             "none"
         );
         assert_eq!(
-            plan_host_stop(StopAction::Shutdown, Shutdown, false, Some("x")).1,
+            plan_host_stop(
+                StopAction::Shutdown,
+                Shutdown,
+                false,
+                Some("x"),
+                &HibernatePlan::NotApplicable
+            )
+            .1,
             None
+        );
+    }
+
+    #[test]
+    fn a_passthrough_vm_hibernates_itself_before_any_fallback() {
+        use SaveFallback::*;
+        let why = "owns passthrough hardware.";
+        let ready = HibernatePlan::Ready("systemctl hibernate".into());
+        let (a, r) = plan_host_stop(StopAction::Save, Shutdown, false, Some(why), &ready);
+        assert_eq!(a, "hibernate");
+        let r = r.unwrap();
+        assert!(
+            r.contains("passthrough") && r.contains("systemctl hibernate"),
+            "{r}"
+        );
+        // blocked: the fallback applies and both reasons are shown
+        let blocked = HibernatePlan::Blocked("swap is 0 MB".into());
+        let (a, r) = plan_host_stop(StopAction::Save, Poweroff, false, Some(why), &blocked);
+        assert_eq!(a, "poweroff");
+        let r = r.unwrap();
+        assert!(
+            r.contains("passthrough") && r.contains("swap is 0 MB"),
+            "{r}"
+        );
+        // a VM whose state CAN be saved is saved; other actions ignore hibernate
+        assert_eq!(
+            plan_host_stop(StopAction::Save, Shutdown, true, None, &ready).0,
+            "save"
+        );
+        assert_eq!(
+            plan_host_stop(StopAction::Shutdown, Shutdown, false, Some(why), &ready).0,
+            "shutdown"
+        );
+        assert_eq!(
+            plan_host_stop(StopAction::Poweroff, Shutdown, false, None, &ready).0,
+            "poweroff"
         );
     }
 

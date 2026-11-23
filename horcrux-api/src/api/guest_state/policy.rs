@@ -100,6 +100,20 @@ pub struct NodePolicy {
     /// Extra seconds added to the computed worst case before the init system
     /// may give up on the stop pass.
     pub stop_margin_secs: u64,
+    /// A VM that owns hardware QEMU cannot save (passthrough GPU) hibernates
+    /// itself through the Horcrux guest agent when the host shuts down
+    /// (guest tools installed and hibernation enabled in the guest), instead
+    /// of being shut down. Off = such VMs follow the save fallback.
+    pub guest_hibernate: bool,
+    /// Per-guest limit for the guest to write its hibernation image and power
+    /// the VM off (then the save fallback applies).
+    pub hibernate_timeout_secs: u64,
+    /// Limit for one question to the guest agent (readiness check, request).
+    pub hibernate_probe_secs: u64,
+    /// Where the Horcrux guest agent lives in a Linux guest.
+    pub guest_agent_path_linux: String,
+    /// Where the Horcrux guest agent lives in a Windows guest.
+    pub guest_agent_path_windows: String,
 }
 
 impl Default for NodePolicy {
@@ -118,6 +132,12 @@ impl Default for NodePolicy {
             save_encryption: SaveEncryption::Require,
             resume_stagger_secs: 0,
             stop_margin_secs: 60,
+            guest_hibernate: true,
+            hibernate_timeout_secs: 300,
+            hibernate_probe_secs: 15,
+            guest_agent_path_linux: "/usr/bin/horcrux-guest-agent".into(),
+            guest_agent_path_windows:
+                r"C:\Program Files\Horcrux\Guest Tools\horcrux-guest-agent.exe".into(),
         }
     }
 }
@@ -145,6 +165,20 @@ impl NodePolicy {
         if self.stop_margin_secs > 86400 {
             return Err("stop_margin_secs must be at most 86400".into());
         }
+        if !(5..=86400).contains(&self.hibernate_timeout_secs) {
+            return Err("hibernate_timeout_secs must be 5-86400".into());
+        }
+        if !(2..=300).contains(&self.hibernate_probe_secs) {
+            return Err("hibernate_probe_secs must be 2-300".into());
+        }
+        for (k, v) in [
+            ("guest_agent_path_linux", &self.guest_agent_path_linux),
+            ("guest_agent_path_windows", &self.guest_agent_path_windows),
+        ] {
+            if v.trim().is_empty() || v.contains('\0') || v.contains('\n') {
+                return Err(format!("{k} must be a path"));
+            }
+        }
         check_dir(self.save_dir.as_deref())
     }
 
@@ -156,7 +190,14 @@ impl NodePolicy {
     pub fn stop_budget_secs(&self, guests: usize) -> u64 {
         let par = self.max_parallel.max(1);
         let waves = guests.div_ceil(par).max(1) as u64;
-        let per_wave = self.save_timeout_secs
+        // a guest is saved OR hibernates by itself (never both), then the
+        // fallback shutdown if that failed
+        let first = if self.guest_hibernate {
+            self.save_timeout_secs.max(self.hibernate_timeout_secs)
+        } else {
+            self.save_timeout_secs
+        };
+        let per_wave = first
             + self.shutdown_timeout_secs
             + if self.drain_on_shutdown {
                 self.drain_timeout_secs
@@ -193,6 +234,9 @@ pub struct GuestOverride {
     /// Lower starts first (default 1000).
     pub start_order: Option<i32>,
     pub save_dir: Option<String>,
+    /// Hibernate through the guest agent when state cannot be saved
+    /// (passthrough hardware); `None` = the node default.
+    pub guest_hibernate: Option<bool>,
 }
 
 impl GuestOverride {
@@ -216,6 +260,11 @@ pub struct Effective {
     pub shutdown_timeout_secs: u64,
     pub save_fallback: SaveFallback,
     pub save_encryption: SaveEncryption,
+    pub guest_hibernate: bool,
+    pub hibernate_timeout_secs: u64,
+    pub hibernate_probe_secs: u64,
+    pub guest_agent_path_linux: String,
+    pub guest_agent_path_windows: String,
 }
 
 /// Combine node default and override (pure, unit-tested).
@@ -237,6 +286,11 @@ pub fn combine(node: &NodePolicy, o: &GuestOverride, default_dir: PathBuf) -> Ef
         shutdown_timeout_secs: node.shutdown_timeout_secs,
         save_fallback: node.save_fallback,
         save_encryption: node.save_encryption,
+        guest_hibernate: o.guest_hibernate.unwrap_or(node.guest_hibernate),
+        hibernate_timeout_secs: node.hibernate_timeout_secs,
+        hibernate_probe_secs: node.hibernate_probe_secs,
+        guest_agent_path_linux: node.guest_agent_path_linux.clone(),
+        guest_agent_path_windows: node.guest_agent_path_windows.clone(),
     }
 }
 
@@ -328,12 +382,14 @@ mod tests {
             start_delay_secs: Some(30),
             start_order: Some(1),
             save_dir: Some("/mnt/slow".into()),
+            guest_hibernate: Some(false),
         };
         let e = combine(&node, &o, "/d".into());
         assert_eq!(e.stop_action, StopAction::Poweroff);
         assert_eq!(e.start_action, StartAction::Nothing);
         assert_eq!((e.start_delay_secs, e.start_order), (30, 1));
         assert_eq!(e.save_dir, PathBuf::from("/mnt/slow"));
+        assert!(!e.guest_hibernate && none.guest_hibernate);
         let dflt = combine(
             &NodePolicy::default(),
             &GuestOverride::default(),
@@ -391,6 +447,7 @@ mod tests {
             shutdown_timeout_secs: 50,
             drain_on_shutdown: false,
             stop_margin_secs: 10,
+            guest_hibernate: false,
             ..Default::default()
         };
         assert_eq!(n.stop_budget_secs(0), 160);
@@ -402,6 +459,40 @@ mod tests {
             ..n
         };
         assert_eq!(d.stop_budget_secs(2), 190);
+    }
+
+    #[test]
+    fn hibernate_defaults_on_and_is_bounded_by_the_budget() {
+        let n = NodePolicy::default();
+        assert!(n.guest_hibernate);
+        n.validate().unwrap();
+        // hibernate replaces the save (the longer of the two counts), the
+        // fallback shutdown still follows
+        let b = NodePolicy {
+            max_parallel: 1,
+            save_timeout_secs: 100,
+            shutdown_timeout_secs: 50,
+            hibernate_timeout_secs: 400,
+            drain_on_shutdown: false,
+            stop_margin_secs: 0,
+            ..Default::default()
+        };
+        assert_eq!(b.stop_budget_secs(1), 450);
+        let off = NodePolicy {
+            guest_hibernate: false,
+            ..b
+        };
+        assert_eq!(off.stop_budget_secs(1), 150);
+        let bad = NodePolicy {
+            hibernate_timeout_secs: 1,
+            ..Default::default()
+        };
+        assert!(bad.validate().is_err());
+        let bad = NodePolicy {
+            guest_agent_path_linux: " ".into(),
+            ..Default::default()
+        };
+        assert!(bad.validate().is_err());
     }
 
     #[test]
