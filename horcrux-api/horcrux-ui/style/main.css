@@ -716,8 +716,9 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
     .trend-grid,
     .dashboard-grid { grid-template-columns: 1fr; }
     .page-header { flex-wrap: wrap; gap: 0.5rem; }
-    /* .vm-table is the table class most pages use (DHCP, audit log, power, bridges, SDN, tasks...): it needs the same phone rule */
-    .data-table, .vm-table { display: block; overflow-x: auto; }
+    /* Every table, whatever its class (vm-table, data-table, table, container-table, utility classes...): a wide table scrolls
+       inside its own box on a phone instead of pushing the whole page sideways. A per-class list missed pages (the tasks page uses .table). */
+    table { display: block; max-width: 100%; overflow-x: auto; }
 }
 
 @media (max-width: 1100px) {

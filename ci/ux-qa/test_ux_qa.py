@@ -187,25 +187,68 @@ class UnstyledControls(unittest.TestCase):
         self.assertEqual(f["bareTables"], [], f)
 
 
-    def test_wide_vm_table_scrolls_inside_its_box_on_a_phone(self):
-        """2026-11-22 (lab real-browser journey): 9 pages (DHCP, audit, power, bridges, SDN, tasks...) scrolled the whole page sideways at 390 px because
-        the phone rule covered .data-table but those pages use .vm-table."""
+    UI_SRC = os.path.join(HERE, "..", "..", "horcrux-api", "horcrux-ui", "src")
+
+    def table_classes(self):
+        """every class attribute a <table> carries anywhere in the UI source, plus a table without one"""
+        import re
+        seen = {""}
+        for root, _d, files in os.walk(self.UI_SRC):
+            for fn in files:
+                if fn.endswith(".rs"):
+                    with open(os.path.join(root, fn), encoding="utf-8") as fh:
+                        for m in re.finditer(r'<table[^>]*?class="([^"]*)"', fh.read()):
+                            seen.add(m.group(1))
+        return sorted(seen)
+
+    def test_phone_rule_covers_every_table_without_a_class_list(self):
+        """2026-11-22 (lab real-browser journey): 9 pages scrolled the whole page sideways at 390 px. The phone rule named .data-table, then
+        .vm-table, and the tasks page (.table) still overflowed: the rule must match a bare `table`, so no class can be missed. Pure python."""
+        import re
+        css = open(self.CSS).read()
+        ok = False
+        for m in re.finditer(r"@media\s*\(max-width:\s*(\d+)px\)\s*\{", css):
+            if int(m.group(1)) < 500:
+                continue
+            depth, i = 1, m.end()
+            while depth and i < len(css):
+                depth += {"{": 1, "}": -1}.get(css[i], 0)
+                i += 1
+            body = re.sub(r"/\*.*?\*/", "", css[m.end():i - 1], flags=re.S)
+            for rule in re.finditer(r"([^{}]+)\{([^}]*)\}", body):
+                sels = [x.strip() for x in rule.group(1).split(",")]
+                decl = rule.group(2)
+                if "table" in sels and re.search(r"overflow-x:\s*auto", decl) and re.search(r"display:\s*block", decl):
+                    ok = True
+        self.assertTrue(ok, "no phone media rule `table { display: block; overflow-x: auto }`: a wide table pushes the page sideways")
+
+    def test_every_table_class_scrolls_inside_its_box_on_a_phone(self):
+        """browser proof of the rule above for every table class the UI uses (red with a per-class rule that misses one)"""
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
             self.skipTest("playwright not installed")
-        wide = "<main class=\"container\"><table class=\"vm-table\"><thead><tr>" + "".join(f"<th>Configuration{i}</th>" for i in range(8)) + "</tr></thead><tbody><tr>" + "<td>192.168.100.200</td>" * 8 + "</tr></tbody></table></main>"
+        classes = self.table_classes()
+        self.assertGreater(len(classes), 5, classes)
+        css = open(self.CSS).read()
+        bad = []
         with sync_playwright() as p:
             try:
                 b = p.firefox.launch()
             except Exception as e:  # noqa: BLE001
                 self.skipTest(f"no firefox: {e}")
             pg = b.new_page(viewport={"width": 390, "height": 800})
-            pg.set_content(f"<style>{open(self.CSS).read()}</style>{wide}")
-            # the shared stylesheet hides body overflow, so measure the table box itself: it must fit the phone and scroll inside
-            over = pg.evaluate("() => Math.round(document.querySelector('table').getBoundingClientRect().right - document.documentElement.clientWidth)")
+            for c in classes:
+                attr = f' class="{c}"' if c else ""
+                wide = (f'<main class="container"><table{attr}><thead><tr>' + "".join(f"<th>Configuration{i}</th>" for i in range(8))
+                        + "</tr></thead><tbody><tr>" + "<td>192.168.100.200</td>" * 8 + "</tr></tbody></table></main>")
+                pg.set_content(f"<style>{css}</style>{wide}")
+                # the shared stylesheet hides body overflow, so measure the table box itself: it must fit the phone and scroll inside
+                over = pg.evaluate("() => Math.round(document.querySelector('table').getBoundingClientRect().right - document.documentElement.clientWidth)")
+                if over > 1:
+                    bad.append((c or "(no class)", over))
             b.close()
-        self.assertLessEqual(over, 1, f"a wide .vm-table sticks out {over}px past a 390 px phone (it must scroll inside its own box)")
+        self.assertEqual(bad, [], "tables that stick out past a 390 px phone instead of scrolling inside their own box")
 
 
 if __name__ == "__main__":
