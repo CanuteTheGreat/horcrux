@@ -215,7 +215,17 @@ pub async fn probe(state: &Arc<AppState>, g: &GuestInfo, eff: &Effective, fresh:
             }
         }
     }
-    let p = probe_uncached(state, g, eff).await;
+    // A hung guest must not hold up the page that lists the guests: the views
+    // give the whole check one question's time, the stop pass twice that.
+    let cap = Duration::from_secs(eff.hibernate_probe_secs * if fresh { 2 } else { 1 });
+    let p = tokio::time::timeout(cap, probe_uncached(state, g, eff))
+        .await
+        .unwrap_or_else(|_| {
+            Probe::no(format!(
+                "the guest did not answer within {} s: its guest agent is not running, or the guest is hung",
+                cap.as_secs()
+            ))
+        });
     cache()
         .lock()
         .unwrap()
