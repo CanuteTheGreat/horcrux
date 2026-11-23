@@ -28,8 +28,8 @@ HOMEPAGE="https://github.com/CanuteTheGreat/horcrux"
 # installed. The plain 0.1.0 stays as the fallback for a tree without a stamped ebuild (image builds from a local tarball).
 # The two HORCRUX_MANAGER_SHA256_* values are filled in by the bump script (empty here): a tarball FETCHED by URL must match the build
 # this version was cut for (a replaced daily asset fails loudly instead of installing under the wrong version).
-HORCRUX_MANAGER_SHA256_x86_64="2f3e0f39e73fa0dd3aebf0747cf3699b423542059eeb0a60ca5dfdfae2f7c3eb"
-HORCRUX_MANAGER_SHA256_aarch64="09a644645cd7a5ca157dff69dd601e946adb6b81f963979a8a388b60fb2a9c3f"
+HORCRUX_MANAGER_SHA256_x86_64="40851270a6e7a933bdd4d19c3971e28640406048fed419b223ace33fe0dc8b39"
+HORCRUX_MANAGER_SHA256_aarch64="887bddcee7645ec807ceef8c9a8508f8acacf28f2ed83324ddab270489556777"
 RESTRICT="network-sandbox mirror strip"    # tarball fetch at src_unpack; the binaries are already stripped/cross built
 LICENSE="GPL-2"
 SLOT="0"
