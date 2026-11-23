@@ -220,6 +220,18 @@ if [ "$result" = pass ]; then
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
   fi
+  if [ "$IMG_DE" != server ] && [ "$ARCH" = x86_64 ] && [ "$ARCH" = "$HOST_ARCH" ] && [ -e /dev/kvm ]; then
+    # GNOME desktop VM gate: ONE unattended install of this ISO, then the attach-mode GNOME tests on the booted system through the real GDM greeter
+    # (QMP keys) and the real NetworkManager: gnome-vm-gate.py --tests (network-notify-vm-test.py: horcrux-gnome-defaults' network notifications name the
+    # network and ignore transient drops; tests/*-vm-test.py list). Runs on every desktop ISO, OpenRC and systemd (INIT from the image name).
+    name=gnome-vm-gate
+    echo "::group::QEMU test $name"
+    with_deadline $DL_QEMU python3 -u "$HERE/gnome-vm-gate.py" --iso "$ISO" --project "$PROJECT" --init "$INIT" --tests "${GNOME_VM_TESTS:-network-notify}" --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+    rc=${PIPESTATUS[0]}
+    echo "::endgroup::"
+    rm -f "$EVI/$name"/install/target*.qcow2 "$EVI/$name"/install/answers.img
+    if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -aE '^\[FAIL\]|^RESULT gnome-vm-gate' "$EVI/test-$name.log" | head -1)"; fi
+  fi
   if [ "$IMG_DE" = server ] && [ "$PROJECT" = horcrux ]; then
     # HEADLESS SERVER GATE (server-first, both architectures): encrypted-ZFS answer-file install, then a REBOOT into the installed system on the SERIAL console only
     # (no VGA, no USB keyboard) with the NIC link down at boot (late network), months-off RTC on every boot, and the same regression gates as the desktop:

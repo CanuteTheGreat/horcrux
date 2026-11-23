@@ -12,6 +12,7 @@
 // Settings: org.gnome.shell.extensions.horcrux-network-notify (gsettings / dconf; system defaults in /etc/dconf/db/local.d).
 
 import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
 import NM from 'gi://NM';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -86,7 +87,7 @@ export default class HorcruxNetworkNotify extends Extension {
         for (const d of [...this._devices.keys()])
             this._unwatch(d);
         if (this._client)
-            this._clientIds.forEach(id => this._client.disconnect(id));
+            this._clientIds.forEach(id => GObject.signal_handler_disconnect(this._client, id));
         this._client = null;
         for (const n of this._shown.values())
             n.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
@@ -124,7 +125,9 @@ export default class HorcruxNetworkNotify extends Extension {
     _unwatch(d) {
         const id = this._devices.get(d);
         if (id)
-            d.disconnect(id);
+            // NOT d.disconnect(id): NM.Device has its own disconnect(cancellable, callback) method (disconnect the device), which shadows
+            // GObject's and throws "Expected an object of type GCancellable" here, aborting disable() and every device-removed signal
+            GObject.signal_handler_disconnect(d, id);
         this._devices.delete(d);
         this._cancel(d.get_path());
     }

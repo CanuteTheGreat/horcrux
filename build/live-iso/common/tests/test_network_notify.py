@@ -57,6 +57,15 @@ class Package(unittest.TestCase):
             self.assertIn(f"'{key}'", js)
         self.assertIn("NM.DeviceStateReason.NO_SECRETS", js)                 # as stock: a cancelled password dialog is not a failure
 
+    def test_signals_are_disconnected_through_gobject(self):
+        # NM.Device has its own disconnect(cancellable, callback) (disconnect the device): `device.disconnect(handlerId)` throws "Expected an object of
+        # type GCancellable ... got type number", which aborted disable() and every device-removed signal (found on a real VM)
+        js = open(os.path.join(EXT, "extension.js")).read()
+        code = re.sub(r"//[^\n]*", "", js)                       # the explanatory comment names the wrong call
+        self.assertNotRegex(code, r"\bd\.disconnect\(|\bdev\.disconnect\(")
+        self.assertIn("GObject.signal_handler_disconnect(d, id)", js)
+        self.assertIn("import GObject from 'gi://GObject'", js)
+
     def test_schema_compiles(self):
         if not shutil.which("glib-compile-schemas"):
             self.skipTest("no glib-compile-schemas")
