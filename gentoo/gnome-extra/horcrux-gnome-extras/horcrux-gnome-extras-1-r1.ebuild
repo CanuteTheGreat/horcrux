@@ -61,3 +61,12 @@ RDEPEND="
 	games-puzzle/swell-foop
 	games-board/tali
 "
+
+# The package.use line that goes with this package is package-owned, so installed systems get it (and an old hand-placed copy is replaced
+# by the owned one). Mode is explicit: the portage group's tools (equery/eix/emerge -p) read /etc/portage as the admin user, so a file
+# made under a restrictive umask must never end up unreadable. files/horcrux-gnome is byte-identical to the image variant's copy (unit test).
+src_install() {
+	insopts -m0644
+	insinto /etc/portage/package.use
+	doins "${FILESDIR}"/horcrux-gnome
+}

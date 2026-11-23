@@ -31,7 +31,7 @@ def rdepend(path):
 
 @unittest.skipUnless(HAVE, "needs the Horcrux repo tree")
 class FullGnome(unittest.TestCase):
-    EXTRAS = os.path.join(GENTOO, "gnome-extra", "horcrux-gnome-extras", "horcrux-gnome-extras-1.ebuild")
+    EXTRAS = os.path.join(GENTOO, "gnome-extra", "horcrux-gnome-extras", "horcrux-gnome-extras-1-r1.ebuild")
 
     def test_gnome_edition_is_full_and_sits_on_gnome_light(self):
         self.assertEqual(atoms(os.path.join(VAR, "gnome", "packages.txt")), ["gnome-base/gnome", "gnome-extra/horcrux-gnome-extras"])
@@ -53,6 +53,13 @@ class FullGnome(unittest.TestCase):
         allow = read(GENTOO, "app-misc", "horcrux-test-machine", "files", "world.allowlist").splitlines()
         self.assertIn("gnome-base/gnome", allow)
         self.assertIn("gnome-extra/horcrux-*", allow)
+
+    def test_package_use_is_package_owned_and_world_readable(self):
+        d = os.path.dirname(self.EXTRAS)
+        self.assertEqual(read(d, "files", "horcrux-gnome"), read(VAR, "gnome", "portage", "package.use", "horcrux-gnome"))
+        eb = read(self.EXTRAS)
+        self.assertRegex(eb, r"insopts -m0644\s+insinto /etc/portage/package\.use\s+doins \"\$\{FILESDIR\}\"/horcrux-gnome")
+        self.assertEqual([f for f in os.listdir(d) if f.endswith(".ebuild")], ["horcrux-gnome-extras-1-r1.ebuild"])
 
     def test_extras_leave_out_epiphany_and_systemd_only_apps(self):
         dep = "\n".join(rdepend(self.EXTRAS))
