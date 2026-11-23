@@ -1456,8 +1456,10 @@ pub fn plan_host_stop(
                 return (
                     "hibernate".into(),
                     Some(format!(
-                        "{} The guest will hibernate itself ({how}) and resume at boot.",
-                        blocker.unwrap_or("its state cannot be saved.")
+                        "{}. The guest will hibernate itself ({how}) and resume at boot.",
+                        blocker
+                            .unwrap_or("its state cannot be saved")
+                            .trim_end_matches('.')
                     )),
                 )
             }
@@ -1472,8 +1474,8 @@ pub fn plan_host_stop(
                 return (
                     a,
                     Some(format!(
-                        "{} Guest hibernate unavailable: {why}",
-                        r.unwrap_or_default()
+                        "{}. Guest hibernate unavailable: {why}",
+                        r.unwrap_or_default().trim_end_matches('.')
                     )),
                 );
             }

@@ -160,7 +160,10 @@ def define(args):
         m.check("hibernate-enable-ok", code == 0 and en.get("ok") is True, json.dumps(en)[:600])
         _, st = agent("--hibernate-status")
         m.check("restart-needed-after-enable", st.get("ready") is False and "restart" in (st.get("reason") or ""), json.dumps(st))
-        gexec("sync; systemctl poweroff", 60)
+        try:
+            gexec("sync; systemctl poweroff", 60)
+        except Exception:      # noqa: BLE001  the guest may go down before it reports the exit of its own poweroff
+            pass
         wait_status("stopped", 300)
         hx("POST", f"/vms/{VM}/start")
         wait_status("running")
@@ -173,7 +176,17 @@ def define(args):
         gexec(f"echo {marker} > /dev/shm/m; nohup sh -c 'i=0; while :; do i=$((i+1)); echo $i > /dev/shm/cnt; sleep 1; done' >/dev/null 2>&1 & echo $! > /dev/shm/pid")
 
         def probe():
-            _, o = gexec("cat /dev/shm/m /dev/shm/pid /dev/shm/cnt; cut -d' ' -f1 /proc/uptime; test -d /proc/$(cat /dev/shm/pid) && echo alive")
+            # read-only, so it may be asked again: the guest agent can stall for a while right after a resume
+            o, last = "", None
+            for _ in range(8):
+                try:
+                    _, o = gexec("cat /dev/shm/m /dev/shm/pid /dev/shm/cnt; cut -d' ' -f1 /proc/uptime; test -d /proc/$(cat /dev/shm/pid) && echo alive", 60)
+                    break
+                except Exception as e:      # noqa: BLE001
+                    last = e
+                    time.sleep(10)
+            else:
+                raise AssertionError(f"guest did not answer after a resume: {last}")
             f = o.split()
             return {"marker": f[0], "pid": f[1], "cnt": int(f[2]), "up": float(f[3]), "alive": f[-1] == "alive"}
         time.sleep(15)
@@ -226,8 +239,12 @@ def define(args):
         wait_status("stopped", 60)
         set_hostpci(False)
         n.succeed("sync")
-        n.reboot()
-        n.ssh_ok = False
+        try:
+            n.execute("reboot", timeout=15)          # the init system's own reboot; ssh answers again once the host is back
+        except Exception:
+            pass
+        n.shell_ready = n.ssh_ok = False
+        time.sleep(10)
         n.wait_for_ssh(900)
         n.wait_for_unit("horcrux-api", 300)
         n.wait_until(lambda: n.http("web", "/api/health")[0] == 200, 300, 3, "api health after restart")
