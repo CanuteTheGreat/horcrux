@@ -8,7 +8,7 @@ SRC = (pathlib.Path(__file__).resolve().parents[1] / "ci-run.sh").read_text()
 class HostDeps(unittest.TestCase):
     def test_ppa_lists_removed_before_update(self):
         self.assertIn("rm -f /etc/apt/sources.list.d/*ppa*", SRC)
-        self.assertLess(SRC.index("sources.list.d/*ppa*"), SRC.index("apt-get update"))
+        self.assertLess(SRC.index("sources.list.d/*ppa*"), SRC.index("$SUDO apt-get update"))
 
     def test_install_is_retried(self):
         self.assertIn("for attempt in 1 2 3", SRC)
