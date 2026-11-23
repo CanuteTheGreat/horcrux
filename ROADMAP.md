@@ -288,8 +288,8 @@ completed 2026-10-06
   - Async query batching
 
 - [ ] **SMTP connection pooling** (1 day)
-  - Reuse SMTP connections
-  - Connection pool for high-volume alerts
+  - [x] Reuse SMTP connections (notification channels and alert emails share a pooled transport per relay login; a failed send drops the pool)
+  - [x] Connection pool for high-volume alerts
   - Async batch sending
 
 - [ ] **HTTP webhook optimization** (1 day)

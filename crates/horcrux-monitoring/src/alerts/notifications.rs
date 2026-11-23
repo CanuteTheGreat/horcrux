@@ -100,6 +100,72 @@ pub async fn send_notification(channel: &NotificationChannel, alert: &Alert) -> 
     }
 }
 
+type SmtpPool = SmtpTransport;
+
+fn smtp_pool_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, SmtpPool>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, SmtpPool>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// One cache entry per (server, port, TLS mode, login); the password is hashed
+/// into the key so editing a channel's credentials never reuses an old login.
+fn smtp_pool_key(config: &EmailConfig) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    config.password.hash(&mut h);
+    format!(
+        "{}|{}|{}|{}|{:x}",
+        config.smtp_server,
+        config.smtp_port,
+        config.use_tls,
+        config.username.as_deref().unwrap_or(""),
+        h.finish()
+    )
+}
+
+fn evict_smtp_pool(config: &EmailConfig) {
+    if let Ok(mut c) = smtp_pool_cache().lock() {
+        c.remove(&smtp_pool_key(config));
+    }
+}
+
+fn smtp_pool(config: &EmailConfig) -> Result<SmtpPool> {
+    let key = smtp_pool_key(config);
+    if let Ok(c) = smtp_pool_cache().lock() {
+        if let Some(t) = c.get(&key) {
+            return Ok(t.clone());
+        }
+    }
+    let mut builder = if config.use_tls {
+        // 465 = implicit TLS; any other port negotiates STARTTLS.
+        if config.smtp_port == 465 {
+            SmtpTransport::relay(&config.smtp_server)
+        } else {
+            SmtpTransport::starttls_relay(&config.smtp_server)
+        }
+        .map_err(|e| {
+            horcrux_common::Error::System(format!("Failed to connect to SMTP server: {}", e))
+        })?
+    } else {
+        SmtpTransport::builder_dangerous(&config.smtp_server)
+    }
+    .port(config.smtp_port)
+    .timeout(Some(std::time::Duration::from_secs(20)));
+    if let (Some(username), Some(password)) = (&config.username, &config.password) {
+        builder = builder.credentials(Credentials::new(username.clone(), password.clone()));
+    }
+    let transport = builder.build();
+    if let Ok(mut c) = smtp_pool_cache().lock() {
+        if c.len() >= 32 {
+            c.clear();
+        }
+        c.insert(key, transport.clone());
+    }
+    Ok(transport)
+}
+
 /// Send email notification using SMTP
 async fn send_email(config: &EmailConfig, alert: &Alert) -> Result<()> {
     let subject = format!(
@@ -140,34 +206,10 @@ Horcrux Alert System
             .unwrap_or_else(|| "Unknown".to_string())
     );
 
-    // One transport per notification: lettre pools connections, so every
-    // recipient reuses one TCP/TLS/auth session instead of opening a new one.
-    let mailer = if config.use_tls {
-        // Use TLS connection
-        let mut transport = SmtpTransport::relay(&config.smtp_server)
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to connect to SMTP server: {}", e))
-            })?
-            .port(config.smtp_port);
-
-        // Add authentication if provided
-        if let (Some(username), Some(password)) = (&config.username, &config.password) {
-            transport = transport.credentials(Credentials::new(username.clone(), password.clone()));
-        }
-
-        transport.build()
-    } else {
-        // Use plain SMTP (no TLS)
-        let mut transport =
-            SmtpTransport::builder_dangerous(&config.smtp_server).port(config.smtp_port);
-
-        // Add authentication if provided
-        if let (Some(username), Some(password)) = (&config.username, &config.password) {
-            transport = transport.credentials(Credentials::new(username.clone(), password.clone()));
-        }
-
-        transport.build()
-    };
+    // Pooled transport shared by every alert to this relay/login: lettre keeps
+    // the TCP/TLS/auth sessions open, so an alert burst does not pay a new
+    // handshake per notification.
+    let mailer = smtp_pool(config)?;
 
     // Build email for each recipient
     for to_address in &config.to_addresses {
@@ -188,18 +230,21 @@ Horcrux Alert System
             .map_err(|e| horcrux_common::Error::System(format!("Failed to build email: {}", e)))?;
 
         // Send email
-        let mailer = mailer.clone();
-        tokio::task::spawn_blocking(move || mailer.send(&email))
+        let m = mailer.clone();
+        let sent = tokio::task::spawn_blocking(move || m.send(&email))
             .await
             .map_err(|e| {
                 horcrux_common::Error::System(format!("Failed to spawn blocking task: {}", e))
-            })?
-            .map_err(|e| {
-                horcrux_common::Error::System(format!(
-                    "Failed to send email to {}: {}",
-                    to_address, e
-                ))
             })?;
+        if let Err(e) = sent {
+            // A stale pooled session (relay restart, idle timeout) would keep
+            // failing: drop it so the next alert starts a fresh pool.
+            evict_smtp_pool(config);
+            return Err(horcrux_common::Error::System(format!(
+                "Failed to send email to {}: {}",
+                to_address, e
+            )));
+        }
 
         tracing::info!(
             "Sent email notification to {} for alert: {}",
@@ -378,6 +423,29 @@ async fn send_syslog(alert: &Alert) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smtp_pool_is_reused_per_login() {
+        let cfg = |pw: &str| EmailConfig {
+            smtp_server: "pool-test.invalid".into(),
+            smtp_port: 25,
+            username: Some("u".into()),
+            password: Some(pw.into()),
+            from_address: "a@example.com".into(),
+            to_addresses: vec![],
+            use_tls: false,
+        };
+        let n = || smtp_pool_cache().lock().unwrap().len();
+        let before = n();
+        smtp_pool(&cfg("p1")).unwrap();
+        smtp_pool(&cfg("p1")).unwrap();
+        assert_eq!(n(), before + 1, "same login reuses one pool");
+        smtp_pool(&cfg("p2")).unwrap();
+        assert_eq!(n(), before + 2, "changed password gets a fresh pool");
+        evict_smtp_pool(&cfg("p1"));
+        evict_smtp_pool(&cfg("p2"));
+        assert_eq!(n(), before);
+    }
 
     #[test]
     fn webhook_retries_only_transient_statuses() {
