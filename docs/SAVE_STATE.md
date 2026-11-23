@@ -84,18 +84,19 @@ the first byte is written, and everything is deleted after a successful resume.
    shutdown*); what cannot move continues below.
 2. Guests are handled in the reverse of their start order, `max_parallel` at a
    time.
-3. **Save**: the guest is saved if it can be. It cannot when it owns passthrough
-   devices (PCI/GPU/mediated; QEMU cannot save device state of real hardware),
-   when the target is not encrypted, when there is no room, when CRIU is
-   missing (containers) or when the save exceeds `save_timeout_secs` (the
-   guest keeps running meanwhile and is then handled by the fallback).
-   A VM that owns passthrough devices is not saved by the host: its **guest
-   hibernates itself** (next section) and only if that is not possible the
-   fallback applies.
+3. **Save**: the guest is saved if it can be. It cannot when it owns a host
+   device whose driver cannot save device state (a whole GPU or other PCI
+   device handed over as it is; see *Host devices* below), when the target is
+   not encrypted, when there is no room, when CRIU is missing (containers) or
+   when the save exceeds `save_timeout_secs` (the guest keeps running
+   meanwhile and is then handled by the fallback).
+   A VM whose host devices cannot save their state is not saved by the host:
+   its **guest hibernates itself** (next section) and only if that is not
+   possible the fallback applies.
 4. **Fallback** (`save_fallback`): clean shutdown (ACPI + guest agent) with its
    own timeout, then power off. The reason is logged, stored per guest, shown in
-   the UI and printed by `horcrux-api guests stop`. Passthrough VMs are flagged
-   in the UI up front.
+   the UI and printed by `horcrux-api guests stop`. VMs with host devices are flagged
+   in the UI up front, with the kernel's answer per device.
 5. At boot the guest is resumed (or started, if it had been shut down) in start
    order, after storage and network are up (the unit orders it).
 
@@ -406,3 +407,43 @@ CLI: `horcrux power status|save|resume|hibernate|discard|policy|node-default`.
   placement planner and `recovery_targets` (`cluster/drain.rs`), QEMU save
   helpers, CRIU probing, the container bundle/manifest and image id rewrite
   (`container/transfer.rs`).
+
+## Host devices (SR-IOV functions, vGPU / mediated devices)
+
+A VM whose only host devices are VFIO devices with **VFIO device migration
+v2** (`VFIO_DEVICE_FEATURE_MIGRATION`) is saved and resumed like any other VM:
+QEMU streams the device state into the same file. Which devices can do that is
+read from the kernel, never guessed from vendor or model:
+
+1. The device's `vfio-dev` node in sysfs names its character device.
+2. The migration feature is requested from it with the VFIO ioctls (iommufd
+   device interface, or the legacy group interface on older kernels). `ENOTTY`
+   means the driver has no migration support; `STOP_COPY` in the flags means it
+   has. P2P and PRE_COPY are reported as extra flags.
+3. A device a running QEMU holds cannot be asked again: the answer taken just
+   before the VM started is used (stored next to the disk). With no such
+   answer the verdict is `unverified` and QEMU decides when the save is tried
+   (it refuses a save it cannot do and the guest keeps running; the fallback
+   then applies).
+
+The guest-power guest list (`device_save` in each VM's entry) and the power page
+show `verdict` (`possible`, `unverified`, `impossible`, `not_applicable`), a
+stable `code` (`no_migration_support`, `not_vfio_bound`, `device_missing`,
+`in_use`, `no_vfio_interface`, `probe_failed`, `disabled_by_policy`) and the
+reason per device. One device that cannot be saved (a whole GPU, or its audio
+function) makes the VM unsaveable; it then follows the save fallback (the
+guest-cooperative hibernate step is a separate feature).
+
+The node setting `device_save` (`auto`, the default, or `never`) is part of
+the guest-power node policy, so it is in the declarative config, the API and
+the UI like the other power settings.
+
+After a host reboot the mediated devices and SR-IOV virtual functions a saved
+VM used no longer exist. The save records how to make them again (mediated
+device parent + type + UUID; physical function + VF count + driver) and the
+resume re-creates them before QEMU starts. A physical function that already
+has fewer virtual functions than the VM needs is not resized (other VMs may
+use them): the resume is refused with that reason and the state is kept.
+
+Not covered here: live migration between nodes of a VM with host devices
+(unchanged), and whole-GPU passthrough, which stays unsaveable.

@@ -64,6 +64,10 @@ pub struct VmSaveOutcome {
     pub stamps: Vec<FileStamp>,
     /// `kvm` or `tcg`.
     pub accel: String,
+    /// How to make the VM's mediated devices / SR-IOV functions again after
+    /// a host reboot (see `gpucap`); empty for a VM without host devices.
+    #[serde(default)]
+    pub devices: Vec<super::gpucap::DeviceRecipe>,
 }
 
 /// Free space needed to save a guest with `memory_mb` of RAM: all of it
@@ -257,6 +261,9 @@ impl VmManager {
             .map_err(|e| Error::System(format!("cannot create {}: {e}", dir.display())))?;
         check_free_space(dir, vm.memory)?;
 
+        // The devices exist now; after a host reboot they do not.
+        let recipes = super::gpucap::recipes_of(Path::new("/sys"), &vm.hardware.hostpci);
+
         let sock = DisplayRuntime::qmp_socket(&vm.disk_path);
         let tmp = dest.with_extension("tmp");
         let uri = format!("exec:cat > '{}'", shell_safe(&tmp)?);
@@ -393,7 +400,32 @@ impl VmManager {
                 "tcg"
             }
             .into(),
+            devices: recipes,
         })
+    }
+
+    /// Can the state of VM `id` be saved given the host devices it owns?
+    /// (The node setting `mode` and the kernel's VFIO migration answer; see
+    /// `gpucap`.) A VM without host devices is `NotApplicable`.
+    pub async fn device_save_report(
+        &self,
+        id: &str,
+        mode: super::gpucap::DeviceSaveMode,
+    ) -> Result<super::gpucap::DeviceSaveReport> {
+        let vm = self.qemu_vm(id).await?;
+        let devices = vm.hardware.hostpci.clone();
+        let disk = vm.disk_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let cache = super::gpucap::load_cache(&disk);
+            let env = super::gpucap::Env {
+                sys: Path::new("/sys"),
+                dev: Path::new("/dev"),
+                probe: &super::gpucap::KernelVfio,
+            };
+            super::gpucap::vm_device_save(&env, &devices, mode, &cache)
+        })
+        .await
+        .map_err(|e| Error::System(format!("device probe failed: {e}")))
     }
 
     /// Why a saved state of `id` can no longer be resumed, if so (hardware
@@ -450,6 +482,10 @@ impl VmManager {
             return Err(Error::Conflict(format!("VM {id} is already running")));
         }
         vm.status = VmStatus::Stopped;
+        // Mediated devices and SR-IOV functions are gone after a reboot.
+        for what in super::gpucap::restore_devices(Path::new("/sys"), &saved.devices).await? {
+            tracing::info!("VM {id}: {what}");
+        }
         self.qemu.start_vm_incoming(&vm).await?;
         let sock = DisplayRuntime::qmp_socket(&vm.disk_path);
         let uri = format!("exec:cat '{}'", shell_safe(file)?);
