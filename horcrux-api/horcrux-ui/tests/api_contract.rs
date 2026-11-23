@@ -4134,7 +4134,15 @@ async fn guest_power_routes_read_into_ui_types() {
         .find(|g| g.id == vm)
         .expect("VM in the power overview");
     assert_eq!(g.kind, "vm");
-    assert!(g.saved.is_none() && g.can_save);
+    // Saved memory may only go to encrypted storage: a test host without it reports why, never silently saves.
+    assert!(
+        g.saved.is_none()
+            && (g.can_save
+                || g.save_blocker.as_deref().is_some_and(|b| b.contains("encrypted"))),
+        "can_save={} blocker={:?}",
+        g.can_save,
+        g.save_blocker
+    );
     assert!(["save", "shutdown", "poweroff"].contains(&ov.node.stop_action.as_str()));
 
     // Node default round-trips.
