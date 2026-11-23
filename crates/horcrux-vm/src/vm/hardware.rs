@@ -197,6 +197,36 @@ impl VmManager {
         Ok(vm.clone())
     }
 
+    /// The VM's guest-agent socket (`<disk>.qga.sock`), or `None` when the VM
+    /// has no guest agent channel (QEMU VMs only).
+    pub async fn guest_agent_socket(&self, id: &str) -> Result<Option<std::path::PathBuf>> {
+        let vm = self.qemu_vm(id).await?;
+        Ok(vm
+            .hardware
+            .guest_agent
+            .then(|| DisplayRuntime::qga_socket(&vm.disk_path)))
+    }
+
+    /// Wait up to `timeout` for the guest to power the VM off by itself
+    /// (hibernate, or any guest-initiated shutdown). `Ok(true)` once QEMU has
+    /// exited and the VM is recorded as stopped; `Ok(false)` when it is still
+    /// running at the deadline.
+    pub async fn wait_guest_poweroff(&self, id: &str, timeout: Duration) -> Result<bool> {
+        let vm = self.qemu_vm(id).await?;
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if !QemuManager::process_running(&vm.id) {
+                qemu::cleanup_after_exit(&vm).await;
+                self.record_status(id, VmStatus::Stopped).await?;
+                return Ok(true);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
     pub async fn record_status(&self, id: &str, status: VmStatus) -> Result<VmConfig> {
         let mut vms = self.vms.write().await;
         let vm = vms

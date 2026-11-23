@@ -22,6 +22,7 @@ pub fn VmDetailPage() -> impl IntoView {
     let (notice, set_notice) = create_signal(None::<String>);
     let (power, set_power) = create_signal(None::<api::GuestPolicyView>);
     let stop_sel = create_rw_signal(String::new());
+    let hib_sel = create_rw_signal(String::new());
 
     let load = move || {
         let vid = id();
@@ -39,6 +40,11 @@ pub fn VmDetailPage() -> impl IntoView {
             }
             if let Ok(p) = api::guest_power_policy("vm", &vid).await {
                 stop_sel.set(p.overrides.stop_action.clone().unwrap_or_default());
+                hib_sel.set(match p.overrides.guest_hibernate {
+                    Some(true) => "on".to_string(),
+                    Some(false) => "off".to_string(),
+                    None => String::new(),
+                });
                 set_power.set(Some(p));
             }
             if let Ok(r) = api::search_resources(&vid, "vm", "", "").await {
@@ -73,10 +79,32 @@ pub fn VmDetailPage() -> impl IntoView {
         });
     };
 
+    let hibernate_now = move |_| {
+        let vid = id();
+        set_notice.set(Some("Asking the guest to hibernate...".into()));
+        spawn_local(async move {
+            match api::hibernate_vm(&vid).await {
+                Ok(_) => {
+                    set_notice.set(Some(
+                        "The guest hibernated; start the VM to resume it".into(),
+                    ));
+                    set_error.set(None);
+                }
+                Err(e) => set_error.set(Some(format!("Hibernate failed: {}", e.message))),
+            }
+            load();
+        });
+    };
+
     let save_power = move |_| {
         let vid = id();
         let o = api::GuestPowerOverride {
             stop_action: Some(stop_sel.get_untracked()).filter(|s| !s.is_empty()),
+            guest_hibernate: match hib_sel.get_untracked().as_str() {
+                "on" => Some(true),
+                "off" => Some(false),
+                _ => None,
+            },
             ..power
                 .get_untracked()
                 .map(|p| p.overrides)
@@ -127,12 +155,24 @@ pub fn VmDetailPage() -> impl IntoView {
                     <option value="none">"Do nothing (guest ends with the host)"</option>
                 </select>
                 <button id="vmd-stop-save" class="btn btn-primary" on:click=save_power>"Save"</button>
+                <select id="vmd-hibernate-sel" title="Passthrough VMs: let the guest hibernate itself at host shutdown" prop:value=hib_sel
+                    on:change=move |ev| hib_sel.set(event_target_value(&ev))>
+                    <option value="">"Guest hibernate: node default"</option>
+                    <option value="on">"Guest hibernate: on"</option>
+                    <option value="off">"Guest hibernate: off"</option>
+                </select>
+                <button id="vmd-hibernate-now" class="btn btn-secondary" on:click=hibernate_now
+                    title="Ask the guest to hibernate now; start the VM to resume">"Hibernate now"</button>
                 <a class="btn btn-secondary" href="/system/power">"Host power settings"</a>
             </div>
             {move || power.get().map(|p| {
                 let a = p.host_stop_action.clone();
                 let text = match (p.effective.stop_action.as_str(), a.as_str()) {
                     ("save", "save") => "At host shutdown this VM's memory is saved to encrypted disk and it resumes exactly where it was at the next boot.".to_string(),
+                    ("save", "hibernate") => format!(
+                        "This VM owns passthrough hardware, so its memory cannot be saved by the host. At host shutdown its guest will hibernate itself and resume at the next boot. {}",
+                        p.host_stop_reason.clone().unwrap_or_default()
+                    ),
                     ("save", other) => format!(
                         "This VM will {} at host shutdown, not save: {}",
                         if other == "poweroff" { "be powered off" } else { "be shut down cleanly" },
@@ -144,7 +184,7 @@ pub fn VmDetailPage() -> impl IntoView {
                         _ => "be left alone and end with the host",
                     }),
                 };
-                let cls = if p.effective.stop_action == "save" && a != "save" { "alert alert-warning" } else { "form-help" };
+                let cls = if p.effective.stop_action == "save" && a != "save" && a != "hibernate" { "alert alert-warning" } else { "form-help" };
                 view! { <div class=cls id="vmd-stop-plan">{text}</div> }
             })}
             <h3>"Tags"</h3>

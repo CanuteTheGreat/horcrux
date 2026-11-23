@@ -187,6 +187,8 @@ pub enum PowerCommands {
     },
     /// Resume a guest from its saved state
     Resume { kind: String, id: String },
+    /// Ask a VM's guest to hibernate itself now (start the VM to resume)
+    Hibernate { id: String },
     /// Delete a guest's saved state (it then starts normally)
     Discard { kind: String, id: String },
     /// Set a guest's automatic stop/start action (overrides the node default)
@@ -205,6 +207,9 @@ pub enum PowerCommands {
         /// Start order (lower first)
         #[arg(long)]
         order: Option<i32>,
+        /// Passthrough VMs hibernate themselves at host shutdown: true | false
+        #[arg(long)]
+        guest_hibernate: Option<bool>,
         /// Remove all overrides (follow the node default)
         #[arg(long)]
         clear: bool,
@@ -226,6 +231,12 @@ pub enum PowerCommands {
         /// Where saved memory may go: require (encrypted storage only) | allow_unencrypted
         #[arg(long)]
         encryption: Option<String>,
+        /// Passthrough VMs hibernate themselves at host shutdown: true | false
+        #[arg(long)]
+        guest_hibernate: Option<bool>,
+        /// Seconds a guest may take to hibernate before the fallback applies
+        #[arg(long)]
+        hibernate_timeout: Option<u64>,
     },
 }
 

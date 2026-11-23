@@ -7492,6 +7492,30 @@ pub struct NodePower {
     pub resume_stagger_secs: u32,
     #[serde(default = "default_stop_margin")]
     pub stop_margin_secs: u64,
+    /// A passthrough VM hibernates itself through the guest tools.
+    #[serde(default = "default_true")]
+    pub guest_hibernate: bool,
+    #[serde(default = "default_hibernate_timeout")]
+    pub hibernate_timeout_secs: u64,
+    #[serde(default = "default_hibernate_probe")]
+    pub hibernate_probe_secs: u64,
+    #[serde(default = "default_agent_linux")]
+    pub guest_agent_path_linux: String,
+    #[serde(default = "default_agent_windows")]
+    pub guest_agent_path_windows: String,
+}
+
+fn default_hibernate_timeout() -> u64 {
+    300
+}
+fn default_hibernate_probe() -> u64 {
+    15
+}
+fn default_agent_linux() -> String {
+    "/usr/bin/horcrux-guest-agent".into()
+}
+fn default_agent_windows() -> String {
+    r"C:\Program Files\Horcrux\Guest Tools\horcrux-guest-agent.exe".into()
 }
 
 fn default_save_fallback() -> String {
@@ -7535,6 +7559,10 @@ pub struct GuestPowerOverride {
     pub start_delay_secs: Option<u32>,
     pub start_order: Option<i32>,
     pub save_dir: Option<String>,
+    /// Hibernate through the guest tools when state cannot be saved
+    /// (passthrough hardware); None = node default.
+    #[serde(default)]
+    pub guest_hibernate: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -7587,6 +7615,11 @@ pub struct PowerGuest {
     pub host_stop_action: String,
     #[serde(default)]
     pub host_stop_reason: Option<String>,
+    /// Can the guest hibernate itself (passthrough VMs only; None = not asked).
+    #[serde(default)]
+    pub can_hibernate: Option<bool>,
+    #[serde(default)]
+    pub hibernate_detail: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -7667,6 +7700,10 @@ pub async fn resume_guest_state(kind: &str, id: &str) -> Result<PowerGuest, ApiE
 
 pub async fn discard_guest_state(kind: &str, id: &str) -> Result<(), ApiError> {
     delete_json(&format!("/{}/{}/saved-state", guest_base(kind), id)).await
+}
+
+pub async fn hibernate_vm(id: &str) -> Result<serde_json::Value, ApiError> {
+    post_json(&format!("/vms/{id}/hibernate"), &serde_json::json!({})).await
 }
 
 pub async fn boot_saved_guests() -> Result<serde_json::Value, ApiError> {

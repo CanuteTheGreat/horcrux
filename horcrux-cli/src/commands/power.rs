@@ -112,6 +112,15 @@ pub async fn handle_power_command(
             .await?;
             output::print_success(&format!("{kind} {id} resumed"));
         }
+        PowerCommands::Hibernate { id } => {
+            let v: Value = api
+                .post(&format!("/api/vms/{}/hibernate", enc(&id)), &json!({}))
+                .await?;
+            output::print_success(&format!(
+                "vm {id} hibernated ({})",
+                v["method"].as_str().unwrap_or("guest tools")
+            ));
+        }
         PowerCommands::Discard { kind, id } => {
             api.delete(&format!("/api/{}/{}/saved-state", base(&kind)?, enc(&id)))
                 .await?;
@@ -124,6 +133,7 @@ pub async fn handle_power_command(
             start,
             delay,
             order,
+            guest_hibernate,
             clear,
         } => {
             let path = format!("/api/{}/{}/power-policy", base(&kind)?, enc(&id));
@@ -145,6 +155,9 @@ pub async fn handle_power_command(
                 if let Some(d) = order {
                     o["start_order"] = json!(d);
                 }
+                if let Some(h) = guest_hibernate {
+                    o["guest_hibernate"] = json!(h);
+                }
                 o
             };
             let v: Value = api.put(&path, &body).await?;
@@ -157,6 +170,8 @@ pub async fn handle_power_command(
             dir,
             fallback,
             encryption,
+            guest_hibernate,
+            hibernate_timeout,
         } => {
             let cur: Value = api.get("/api/nodes/guest-power").await?;
             let mut n = cur["node"].clone();
@@ -177,6 +192,12 @@ pub async fn handle_power_command(
             }
             if let Some(e) = encryption {
                 n["save_encryption"] = json!(e);
+            }
+            if let Some(h) = guest_hibernate {
+                n["guest_hibernate"] = json!(h);
+            }
+            if let Some(t) = hibernate_timeout {
+                n["hibernate_timeout_secs"] = json!(t);
             }
             let v: Value = api.put("/api/nodes/guest-power", &n).await?;
             output::print_single(&v, OutputFormat::from_str(output_format))?;

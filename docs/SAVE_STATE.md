@@ -39,6 +39,10 @@ and the declarative `guest_power.node` section; nothing is built in):
 | `save_dir` | `<data dir>/saved-state/data` |
 | `drain_on_shutdown` (clusters) and `drain_timeout_secs` | on / 900 |
 | `stop_margin_secs` added to the computed shutdown wait | 60 |
+| `guest_hibernate` passthrough VMs hibernate themselves (per-VM override too) | on |
+| `hibernate_timeout_secs` per guest (then the save fallback) | 300 |
+| `hibernate_probe_secs` per question to the guest agent | 15 |
+| `guest_agent_path_linux` / `guest_agent_path_windows` of the Horcrux guest agent | `/usr/bin/horcrux-guest-agent` / `C:\Program Files\Horcrux\Guest Tools\horcrux-guest-agent.exe` |
 
 * **Save state** falls back to *Shut down* when the state cannot be saved, and
   *Shut down* falls back to *Power off* after the shutdown timeout. The reason
@@ -85,12 +89,66 @@ the first byte is written, and everything is deleted after a successful resume.
    when the target is not encrypted, when there is no room, when CRIU is
    missing (containers) or when the save exceeds `save_timeout_secs` (the
    guest keeps running meanwhile and is then handled by the fallback).
+   A VM that owns passthrough devices is not saved by the host: its **guest
+   hibernates itself** (next section) and only if that is not possible the
+   fallback applies.
 4. **Fallback** (`save_fallback`): clean shutdown (ACPI + guest agent) with its
    own timeout, then power off. The reason is logged, stored per guest, shown in
    the UI and printed by `horcrux-api guests stop`. Passthrough VMs are flagged
    in the UI up front.
 5. At boot the guest is resumed (or started, if it had been shut down) in start
    order, after storage and network are up (the unit orders it).
+
+## Guests that own hardware: guest-cooperative hibernate
+
+Order of methods for a VM the host cannot save: **host save** (a partitioned or
+mediated GPU that QEMU can migrate; not available for whole-device passthrough)
+> **guest hibernate** through the Horcrux guest tools > **clean shutdown**
+(the save fallback). The Guest Power page, the VM page and
+`GET /api/nodes/guest-power` (`guests[].host_stop_action` = `hibernate`,
+`host_stop_reason`, `can_hibernate`, `hibernate_detail`) say which one each VM
+gets and why.
+
+How it works. At host shutdown the node asks the guest agent
+(`horcrux-guest-agent --hibernate-status`, then `--hibernate`) over the
+hypervisor's guest-agent channel, which exists whether or not a console viewer is
+open. The agent checks that the guest can hibernate, answers, and a moment later
+(`hibernate_delay_ms`) starts the guest's own hibernate. The guest writes its
+memory to its own disk and powers the VM off; the node waits up to
+`hibernate_timeout_secs` for that. At the next host boot the VM is started like
+any running guest and the guest **resumes by itself** with its processes and
+memory (the boot pass records "Started: the guest resumes from its own
+hibernation"). If the channel does not allow running commands but offers
+`guest-suspend-disk`, that is used instead; the guest's swap/resume setup then
+cannot be checked from outside, and the plan says so.
+
+| Guest | Hibernate by | Prepared by the install step |
+|---|---|---|
+| Linux, systemd | `systemctl hibernate` | swap (a partition, or a swap file of `hibernate_swap_pct` % of RAM at `hibernate_swapfile`), `resume=` (+ `resume_offset=`) in the boot configuration (grubby or GRUB), resume support in the initramfs (initramfs-tools, dracut or mkinitcpio) |
+| Linux, OpenRC/elogind | `loginctl hibernate`, `pm-hibernate` or `s2disk` (or `hibernate_command`) | the same |
+| Windows | `shutdown /h` | `powercfg /h on` (`hibernate_hiberfile_pct` sets the size) |
+
+The Horcrux install step (Guest tools > Install, which runs the installer from the
+tools CD) ends with `horcrux-guest-agent --hibernate-setup`; `hibernate_at_install =
+false` in the guest's `guest-tools.conf` turns that off, and `--hibernate-enable`
+does the same by hand. A Linux guest needs **one restart** after the setup before it
+can resume (the new boot configuration); until then the readiness check says "restart
+the guest once to finish enabling it". `horcrux-guest-agent --hibernate-status` prints
+the guest's own readiness report. Manual: `horcrux power hibernate <vm>` /
+`POST /api/vms/:id/hibernate` hibernates a running VM now (start it to resume);
+`GET /api/vms/:id/hibernate-status` asks the guest.
+
+Honest limits: a guest **without the guest tools**, without swap/hiberfil, with a kernel
+that offers no hibernation (Secure-Boot lockdown), or whose agent does not answer is
+shut down cleanly instead (the reason is shown up front and after the shutdown). A guest
+that does not power off within the timeout is shut down by the fallback while it may
+still be writing its image, so a timeout that is too short for the guest's RAM costs a
+clean shutdown, not data. Hibernation images live on the guest's own disk, so their
+encryption is the guest's (an encrypted guest disk is the way to protect them); the
+host-side encrypted-storage rule applies to host-saved RAM only. Linux guests need
+GRUB or grubby for the automatic boot configuration (other boot loaders get the exact
+`resume=` argument to add); swap files on ZFS, tmpfs or overlay file systems cannot hold
+a hibernation image. Containers cannot hibernate this way.
 
 ## How state is saved
 
@@ -289,11 +347,12 @@ whatever was running (as a normal start - there is nothing to resume).
 | `POST /api/{vms,containers}/:id/resume-state` | resume |
 | `GET/DELETE /api/{vms,containers}/:id/saved-state` | inspect / discard |
 | `POST /api/nodes/guest-power/boot-guests` | run the boot pass now |
+| `POST /api/vms/:id/hibernate`, `GET /api/vms/:id/hibernate-status` | guest hibernate now / ask the guest whether it can |
 | `GET/POST /api/nodes/maintenance`, `GET .../plan` | maintenance / drain |
 | `GET/PUT /api/cluster/rebalance`, `POST .../run`, `GET /api/cluster/moves` | rebalance, history |
 | `GET/PUT /api/vms/:id/placement` | pin / affinity / anti-affinity / never migrate |
 
-CLI: `horcrux power status|save|resume|discard|policy|node-default`.
+CLI: `horcrux power status|save|resume|hibernate|discard|policy|node-default`.
 
 ## Limits
 
@@ -308,6 +367,15 @@ CLI: `horcrux power status|save|resume|discard|policy|node-default`.
   the instance (size not shown).
 
 ## Tests
+
+* Guest hibernate: unit tests (`api/guest_state/hibernate.rs`, `policy.rs`, the plan
+  in `engine.rs`, the agent's planners in `crates/horcrux-guest-tools/src/power.rs`) and
+  the vmtest scenario `tools/vmtest/scenarios/host_shutdown_hibernate.py`
+  (OpenRC and systemd hosts): a Debian guest with a fake passthrough device
+  prepares itself with `--hibernate-enable`, restarts, the host stop pass makes it
+  hibernate by itself (VM stopped, plan and outcome say `hibernate`/`hibernated`),
+  a real host restart follows, and the guest's memory marker and counter are
+  continuous across it.
 
 * `horcrux-api/tests/guest_state_e2e.sh` (CI, guest-power workflow):
   real QEMU + CirrOS - save/resume keeps a RAM marker, a process PID and the
