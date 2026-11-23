@@ -13,9 +13,9 @@ APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::
 # make `apt-get update` fail (Ubuntu 26.04 image, git-core PPA, 2026-11-17).
 sudo rm -f /etc/apt/sources.list.d/*ppa* 2>/dev/null || true
 # archive.ubuntu.com itself can be degraded for hours (2026-11-23: connects/index fetches timing out
-# from the burst/arm64 runners while azure.archive.ubuntu.com answered in 0.3 s); from attempt 2 on,
+# from the burst/arm64 runners while azure.archive.ubuntu.com was cut off too, mirrors.kernel.org (amd64+arm64) answered); from attempt 2 on,
 # point apt at a fallback mirror (override with APT_FALLBACK_MIRROR, empty = never switch).
-FALLBACK="${APT_FALLBACK_MIRROR-http://azure.archive.ubuntu.com/ubuntu}"
+FALLBACK="${APT_FALLBACK_MIRROR-http://mirrors.kernel.org/ubuntu}"
 for attempt in 1 2 3 4 5; do
   if [ "$attempt" -ge 2 ] && [ -n "$FALLBACK" ]; then
     sudo sed -i -E "s#https?://(archive|security)\.ubuntu\.com/ubuntu/?#${FALLBACK}#g" \
