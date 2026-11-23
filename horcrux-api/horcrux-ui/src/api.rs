@@ -7620,6 +7620,37 @@ pub struct PowerGuest {
     pub can_hibernate: Option<bool>,
     #[serde(default)]
     pub hibernate_detail: Option<String>,
+    /// VMs with host devices: what the kernel says about saving their state.
+    #[serde(default)]
+    pub device_save: Option<DeviceSaveInfo>,
+}
+
+/// `possible | unverified | impossible | not_applicable`, per device.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DeviceSaveInfo {
+    pub verdict: String,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub devices: Vec<DeviceSaveDevice>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DeviceSaveDevice {
+    pub device: String,
+    pub kind: String,
+    #[serde(default)]
+    pub driver: Option<String>,
+    pub migration: DeviceMigration,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DeviceMigration {
+    pub state: String,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
