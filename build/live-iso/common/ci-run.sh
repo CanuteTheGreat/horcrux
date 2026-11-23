@@ -38,7 +38,18 @@ if [ "$mode" = stable ]; then tag=${GITHUB_REF_NAME:?}; suffix=$tag; else suffix
 
 echo "::group::host deps"
 export DEBIAN_FRONTEND=noninteractive
-(apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools gdisk dosfstools mtools >/dev/null) || fail deps "apt install failed"
+# The runner image carries Launchpad PPAs (git-core) whose 404s make `apt-get update` exit 100 and failed this step
+# (run 25118, 2026-11-23); we install nothing from them. Retry for a flaky mirror too.
+SUDO=; [ "$(id -u)" = 0 ] || SUDO=sudo
+$SUDO rm -f /etc/apt/sources.list.d/*ppa* 2>/dev/null || true
+host_deps_ok=
+for attempt in 1 2 3; do
+  if $SUDO apt-get update -qq -o Acquire::Retries=3 >/dev/null 2>&1 || apt-cache policy xorriso | grep -q 'Candidate: [^(]'; then
+    if $SUDO apt-get install -y -qq -o Acquire::Retries=3 --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools gdisk dosfstools mtools >/dev/null; then host_deps_ok=1; break; fi
+  fi
+  sleep $((attempt * 10))
+done
+[ -n "$host_deps_ok" ] || fail deps "apt install failed"
 echo "::endgroup::"
 
 # stable gate: the repo's own CI must not be red on the tagged commit
