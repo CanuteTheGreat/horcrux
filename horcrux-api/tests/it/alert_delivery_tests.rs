@@ -339,9 +339,7 @@ async fn real_alert_reaches_webhook_ntfy_and_mail_sinks_with_the_documented_payl
     // --- ntfy: plain text, Title / Priority / Tags, bearer token ---
     let h = &ntfy.wait(1).await[0];
     assert!(h.head.starts_with("POST /horcrux-alerts "), "{}", h.head);
-    assert!(h
-        .header("content-type")
-        .map_or(true, |c| !c.contains("json")));
+    assert!(h.header("content-type").is_none_or(|c| !c.contains("json")));
     assert!(h.header("title").unwrap().contains("any vm"), "{}", h.head);
     assert_eq!(
         h.header("priority").as_deref(),
