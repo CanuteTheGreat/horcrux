@@ -48,6 +48,7 @@ KEYWORDS="amd64 arm64"
 #   made OpenRC report "docker" and skip devfs, udev, udev-trigger, root (rw remount), localmount, fsck, hostname, modules: read-only root, no NIC driver,
 #   only `lo`. The images wrote rc_sys="" into /etc/rc.conf, which sys-apps/openrc owns; accepting the ._cfg0000_rc.conf of an OpenRC update dropped it
 #   (the diff `rc_sys=""` -> `#rc_sys=""` reads like a comment change). pkg_postinst also deletes a leftover container marker on a booted host.
+# sys-apps/horcrux-be (-r8): the boot-environment tool is its own updatable package: every boot environment keeps its previous kernel in the menu, new kernels boot once as a trial.
 # /etc/kernel/postinst.d + postrm.d/91-horcrux-boot-entry (-r7): installs without boot environments (XFS/ext4/LVM) had no hook that refreshes grub.cfg
 #   (installkernel is built -grub because of the BE installs), so a kernel update was installed and never booted. BE installs keep 90-horcrux-be.
 # /usr/sbin/horcrux-doctor + /etc/portage/postsync.d/60-horcrux-doctor (-r8): `horcrux-doctor portage-config` warns when a file or directory under
@@ -73,6 +74,7 @@ RDEPEND="
 	dev-util/pahole
 	sys-apps/horcrux-release
 	sys-apps/horcrux-autoupdate
+	sys-apps/horcrux-be
 "
 
 src_install() {

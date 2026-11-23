@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+# sys-apps/horcrux-be: once the machine has booted (ZFS pool healthy, GOOD_DELAY seconds up), the running kernel becomes the known-good kernel
+# and the default boot entry. A new kernel is booted ONCE as a trial; if it never gets here, the next boot is the last known-good kernel.
+description="mark the running kernel known-good after a successful boot (horcrux-be)"
+depend() {
+	need localmount
+	after *
+}
+start() {
+	[ -e /etc/horcrux/be.conf ] || return 0
+	ebegin "Scheduling the known-good kernel mark"
+	start-stop-daemon --start --background --quiet --exec /usr/bin/horcrux-be -- mark-good --wait
+	eend $?
+}
+stop() {
+	return 0
+}

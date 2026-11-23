@@ -25,6 +25,7 @@ RDEPEND="
 	${PYTHON_DEPS}
 	sys-fs/zfs
 	sys-boot/grub
+	sys-apps/horcrux-be
 "
 BDEPEND="app-arch/zstd"
 
@@ -39,6 +40,9 @@ src_unpack() {
 src_install() {
 	exeinto /usr/bin
 	doexe usr/bin/*
+	# /usr/bin/horcrux-be belongs to sys-apps/horcrux-be (a package an installed machine can update; this one is a tarball of the image build). The installer's
+	# own copy of the program stays in usr/lib/live-installer/liveinst/be.py.
+	rm -f "${ED}"/usr/bin/horcrux-be || die
 	exeinto /usr/libexec
 	doexe usr/libexec/*
 	insinto /usr/lib

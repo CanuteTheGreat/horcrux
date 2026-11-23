@@ -1,0 +1,12 @@
+[Unit]
+Description=Mark the running kernel known-good after a successful boot (horcrux-be)
+ConditionPathExists=/etc/horcrux/be.conf
+After=multi-user.target zfs.target
+# a trial kernel that never reaches this point is not promoted: the next boot is the previous known-good kernel again
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/horcrux-be mark-good --wait
+
+[Install]
+WantedBy=multi-user.target

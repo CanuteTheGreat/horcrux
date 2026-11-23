@@ -29,6 +29,27 @@ never fatal, throttle stamp in `/run`). Because the hook lives in Portage itself
 per-caller code to keep in sync. Retention: the newest `KEEP` (default 5) automatic snapshots; snapshots a BE was cloned
 from and **pinned** ones (ZFS user property `horcrux:pin=yes`) are never pruned; manual snapshots are never pruned.
 
+### Kernel safety: the previous kernel always stays bootable
+Every boot environment keeps `KERNELS_KEEP` kernels (default 2: the newest plus the previous one; `/etc/horcrux/be.conf`) in
+`/boot/be/<be>/` (newest) and `/boot/be/<be>/kernels/<kver>/` (older ones, hard links into the content store, so a kept kernel costs only its own
+files). `horcrux-be sync` (kernel-install hook) rotates the current kernel into `kernels/` before saving the new one, seeds the previous kernel from the
+`vmlinuz-*` pair installkernel left in `/boot` on a machine that never kept history (only when its `/lib/modules/<kver>` exists), and never prunes the
+known-good kernel. `grub.cfg` gets one entry per kept kernel: `Horcrux - <be> ... [kernel X]` (id `be-<be>`) and `Horcrux - <be>, previous kernel ...
+[kernel Y]` (id `be-<be>-k-<kver>`), then every other boot environment the same way.
+
+Trial boot with automatic fallback (`KERNEL_TRIAL=yes`, default): a kernel that has not yet booted successfully is tried ONCE. `sync` sets GRUB's
+`next_entry` (grubenv) to the new kernel while the default stays the last known-good kernel; GRUB clears `next_entry` before booting, so a kernel that
+panics or hangs is not tried twice and the next boot is the known-good one without any key press. The boot-time service `horcrux-be-good` (OpenRC script
+and systemd unit, both shipped by `sys-apps/horcrux-be`; the installer enables it) runs `horcrux-be mark-good --wait`: after `GOOD_DELAY` seconds, with the
+pool ONLINE, the running kernel is recorded in `/boot/be/<be>/good` and becomes the default (grub.cfg regenerated). Without that service enabled the
+newest kernel is simply the default (no trial), so a missing service can never pin the machine to an old kernel. An existing install that has no `good`
+record yet treats the kernel it is running at the first `sync` as known-good. `horcrux-be boot-previous` boots the previous kernel on the next boot only;
+`horcrux-be kernels [--json]` lists what is kept. Nothing here reboots the machine. Non-ZFS installs use grub-mkconfig (`horcrux-boot-entry`), which lists
+every kernel in `/boot`.
+
+ZFSBootMenu (phase 3, `BOOT_LOADER=zfsbootmenu`) is not shipped yet: it reads kernels from each boot environment itself and lists every kernel it finds,
+so only the retention above applies; trial boots use GRUB's `next_entry` and are skipped for any other loader.
+
 ### Bootloader: GRUB (static grub.cfg), ZFSBootMenu later
 ZFSBootMenu is the natural fit for BE menus (reads BEs and kernels straight from the pool, including encrypted ones) and
 stays the phase 3 candidate. Phase 1 keeps GRUB because the whole installer (BIOS and EFI, T2 Macs, aarch64, LUKS swap/

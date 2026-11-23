@@ -27,10 +27,28 @@ class FakeZfs:
         self.n = 0
         self.calls = []
         self.pins = set()  # 'be@snap' / 'be' carrying horcrux:pin=yes
+        self.env = {}  # GRUB environment block (grub-editenv)
+        self.good_service = True  # boot-time mark-good service enabled?
+        self.pool_health = "ONLINE"
 
     def run(self, cmd, **kw):
         self.calls.append(cmd)
         ok = types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        if cmd[0] == "grub-editenv":
+            if cmd[2] in ("set", "create"):
+                open(cmd[1], "a").close()
+            if cmd[2] == "set":
+                k, _, v = cmd[3].partition("=")
+                self.env[k] = v
+            elif cmd[2] == "unset":
+                self.env.pop(cmd[3], None)
+            return ok
+        if cmd[0] == "systemctl" or (isinstance(cmd, str) and "rc-update" in cmd):
+            ok.returncode = 0 if self.good_service else 1
+            return ok
+        if cmd[:3] == ["zpool", "list", "-H"]:
+            ok.stdout = self.pool_health + "\n"
+            return ok
         if cmd[:2] == ["zfs", "get"]:
             ok.stdout = "".join(f"rpool/ROOT/{n}\tyes\n" for n in sorted(self.pins))
             return ok
@@ -78,7 +96,13 @@ class Boot(unittest.TestCase):
         self.c["BOOT_MIN_FREE_MB"] = "0"  # the test /boot is only 40 MB
         os.makedirs(os.path.join(self.boot, "be", "horcrux"))
         self.stack = [mock.patch.object(BE.subprocess, "run", self.z.run), mock.patch.object(BE, "running_be", lambda: "horcrux"),
-                      mock.patch.object(BE, "active_be", lambda pool: "horcrux"), mock.patch.object(BE, "boot_space", self.space)]
+                      mock.patch.object(BE, "active_be", lambda pool: "horcrux"), mock.patch.object(BE, "boot_space", self.space),
+                      mock.patch.object(BE.shutil, "which", lambda n: "/usr/bin/" + n if n == "grub-editenv" else None),
+                      mock.patch.object(BE, "running_kernel", lambda: self.running),
+                      mock.patch.object(BE, "good_service_enabled", lambda: self.z.good_service)]
+        self.running = "7.2.0"
+        self.mods = os.path.join(self.tmp.name, "modules-dir")  # outside /boot (the space accounting walks /boot)
+        self.c["MODULES_DIR"] = self.mods
         for p in self.stack:
             p.start()
 
@@ -104,6 +128,7 @@ class Boot(unittest.TestCase):
     def kernel(self, tag, mb=4):
         """install a 'new kernel' as the running BE's kernel (what `horcrux-be sync` does)"""
         kv = f"7.2.{tag}"
+        os.makedirs(os.path.join(self.mods, kv), exist_ok=True)
         k, i = os.path.join(self.boot, f"vmlinuz-{kv}"), os.path.join(self.boot, f"initramfs-{kv}.img")
         for p, n in ((k, mb * MB), (i, mb * MB // 2)):
             with open(p, "wb") as f:
@@ -177,6 +202,7 @@ class Dedupe(Boot):
 
 class Lifecycle(Boot):
     def test_destroying_a_snapshot_removes_its_boot_copy_and_unshared_objects(self):
+        self.c["KERNELS_KEEP"] = "1"  # no previous-kernel history: the old kernel is then used by the snapshot only
         with mock.patch.object(BE, "grubcfg"):
             self.kernel("1")
             self.snap("pre-upgrade-20261105-100000")

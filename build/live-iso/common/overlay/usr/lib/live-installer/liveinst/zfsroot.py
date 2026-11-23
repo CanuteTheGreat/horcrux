@@ -161,6 +161,11 @@ AUTO_SNAPSHOT="yes"
 TIMEOUT="5"
 CMDLINE="{cmdline}"
 KERNEL_GLOB="{kglob}"
+# kernels kept bootable per boot environment (one boot-menu entry each); a new kernel boots once as a trial and becomes the default only
+# after horcrux-be-good marked it known-good (KERNEL_TRIAL=no: the newest kernel is the default at once); GOOD_DELAY = seconds into a boot
+KERNELS_KEEP="2"
+KERNEL_TRIAL="yes"
+GOOD_DELAY="60"
 """
 
 PORTAGE_BASHRC = """# Horcrux: snapshot the boot environment before the first package operation of an emerge run
@@ -195,6 +200,8 @@ def configure(inst, cmdline_extra="", kernel_glob="*"):
     # dracut already mounted /
     for svc in ("zfs-import", "zfs-mount", "zfs-zed"):
         initsys.enable(inst, svc, "boot" if svc != "zfs-zed" else "default")
+    # the end-of-boot step that makes a trial kernel the known-good default (OpenRC script / systemd unit of sys-apps/horcrux-be)
+    initsys.enable(inst, "horcrux-be-good", "default")
     if inst.c.get("zfs_encrypt") and inst.c.get("zfs_keymode") == "tpm":
         tpm_seal(inst)
     # /boot is its own ext4 partition: fstab (the installer wrote none)
