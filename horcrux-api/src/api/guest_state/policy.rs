@@ -4,6 +4,7 @@ use super::engine::GuestKind;
 use crate::db::config_store::ConfigStore;
 use crate::AppState;
 use horcrux_common::Result;
+pub use horcrux_vm::vm::gpucap::DeviceSaveMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -114,6 +115,9 @@ pub struct NodePolicy {
     pub guest_agent_path_linux: String,
     /// Where the Horcrux guest agent lives in a Windows guest.
     pub guest_agent_path_windows: String,
+    /// Whether a VM that owns host devices (SR-IOV functions, vGPU) is
+    /// saved when the kernel says their drivers can migrate state.
+    pub device_save: DeviceSaveMode,
 }
 
 impl Default for NodePolicy {
@@ -138,6 +142,7 @@ impl Default for NodePolicy {
             guest_agent_path_linux: "/usr/bin/horcrux-guest-agent".into(),
             guest_agent_path_windows:
                 r"C:\Program Files\Horcrux\Guest Tools\horcrux-guest-agent.exe".into(),
+            device_save: DeviceSaveMode::Auto,
         }
     }
 }
@@ -265,6 +270,7 @@ pub struct Effective {
     pub hibernate_probe_secs: u64,
     pub guest_agent_path_linux: String,
     pub guest_agent_path_windows: String,
+    pub device_save: DeviceSaveMode,
 }
 
 /// Combine node default and override (pure, unit-tested).
@@ -291,6 +297,7 @@ pub fn combine(node: &NodePolicy, o: &GuestOverride, default_dir: PathBuf) -> Ef
         hibernate_probe_secs: node.hibernate_probe_secs,
         guest_agent_path_linux: node.guest_agent_path_linux.clone(),
         guest_agent_path_windows: node.guest_agent_path_windows.clone(),
+        device_save: node.device_save,
     }
 }
 
