@@ -570,7 +570,7 @@ class ZRun(qt.Runner):
     # x11-libs/x11-misc because Portage categorises them there: libpciaccess + pixman are qemu/libvirt dependencies, shared-mime-info is data)
     DISPLAY_RE = (r"^(gui-libs|gui-wm|x11-base|x11-libs|x11-misc|x11-apps|x11-drivers|x11-themes|x11-terms|gnome-base|gnome-extra|kde-[a-z]+|xfce-[a-z]+|dev-qt|"
                   r"media-libs/(mesa|libglvnd|libepoxy)|x11-wm|www-client|media-video/(pipewire|wireplumber)|sys-auth/(seatd|elogind)|net-misc/networkmanager)/")
-    DISPLAY_ALLOW = ("x11-libs/libpciaccess", "x11-libs/pixman", "x11-misc/shared-mime-info", "x11-apps/bdftopcf")   # bdftopcf: font compiler, build dependency of media-fonts/terminus-font (the console font)
+    DISPLAY_ALLOW = ("x11-libs/libpciaccess", "x11-libs/pixman", "x11-misc/shared-mime-info", "x11-apps/bdftopcf", "x11-base/xorg-proto")   # bdftopcf: font compiler, build dependency of media-fonts/terminus-font (the console font); xorg-proto: header-only build dependency (no server, no library) that the default --with-bdeps=y world update installs
     CORE_PKGS = ("sys-apps/horcrux-core", "net-misc/horcrux-time", "net-misc/horcrux-chrony-nm", "sys-apps/horcrux-firstboot", "sys-apps/horcrux-backup", "net-misc/chrony")
 
     def public_image_checks(self):
