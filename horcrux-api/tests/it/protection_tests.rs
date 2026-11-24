@@ -66,6 +66,9 @@ async fn advanced_protection_setting_refuses_delete() {
         )
         .await;
     assert!(s == 200 || s == 201, "{v}");
-    assert_eq!(api.delete("/vms/keep2").await, 409);
+    let (st, body) = api.call(reqwest::Method::DELETE, "/vms/keep2", None).await;
+    assert_eq!(st, 409, "{body}");
+    // the refusal names the flag (vm_advanced_e2e.py and the UI match on "protection")
+    assert!(body.to_string().contains("protection flag"), "{body}");
     assert_eq!(api.get("/vms/keep2").await.0, 200, "VM must still exist");
 }

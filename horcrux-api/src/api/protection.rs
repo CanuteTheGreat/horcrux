@@ -80,7 +80,7 @@ pub async fn ensure_vm_config_unprotected(
     if let Ok(vm) = state.vm_manager.get_vm(id).await {
         if vm.hardware.adv.protection {
             return Err(ApiError::Conflict(format!(
-                "VM {id} is protected: clear Protection in its Hardware > Advanced settings before {action}"
+                "VM {id} has the protection flag: clear Protection in its Hardware > Advanced settings before {action}"
             )));
         }
     }
