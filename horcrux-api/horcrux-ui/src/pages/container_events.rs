@@ -131,7 +131,7 @@ pub fn ContainerEventsPage() -> impl IntoView {
                         <option value="docker">"Docker"</option>
                     </select>
                     <button class="btn btn-primary" on:click=connect>"Connect"</button>
-                    <span>{move || if connected.get() { "● live" } else { "○ disconnected" }}</span>
+                    <span>{move || if connected.get() { "● live" } else { "○ Not connected - choose a runtime and press Connect" }}</span>
                 </div>
             </div>
 
