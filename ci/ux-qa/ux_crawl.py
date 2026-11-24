@@ -189,8 +189,20 @@ FACTS_JS = r"""() => {
     const sameRow = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 4;
     if (sameRow && b.left >= a.right - 1 && b.left - a.right < 4) jammedLabels.push('"' + l.innerText.trim().slice(0, 30) + '" touches ' + desc(c));
   }
+  // html/body overflow-x:hidden (phone CSS) hides sideways scroll, so overflowX stays 0 while a control runs off the right
+  // edge, cut off and unreachable: look at the controls themselves (skip ones inside a scroll container).
+  const clippedRight = [];
+  for (const el of mainEl.querySelectorAll('input, select, textarea, button, a.btn')) {
+    if (!vis(el)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.right <= window.innerWidth + 1) continue;
+    let p = el.parentElement, scroller = false;
+    while (p && p !== document.body) { const o = getComputedStyle(p).overflowX; if (o === 'auto' || o === 'scroll') { scroller = true; break; } p = p.parentElement; }
+    if (!scroller) clippedRight.push(desc(el) + ' ends ' + Math.round(r.right - window.innerWidth) + 'px past the right edge');
+  }
   const root = document.documentElement;
   return {
+    clippedRight: clippedRight.slice(0, 4),
     bareControls: bareControls.slice(0, 4), bareTables: bareTables.slice(0, 3), jammedLabels: jammedLabels.slice(0, 4), placeholderOnly: placeholderOnly.slice(0, 4), truncPlaceholder: truncPlaceholder.slice(0, 4),
     textLen: text.trim().length, text: text.slice(0, 60000), ownText: ownText.slice(0, 60000), title: document.title,
     overflowX: root.scrollWidth - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), zeroRed, navProblems, empty: empty.slice(0, 3),
@@ -371,6 +383,8 @@ def main():
                         m = rx.search(f["text"])
                         if m:
                             add("internal-name", "fail", route, vp, scheme, f"internal name '{m.group(0)}' visible")
+                    for c in f.get("clippedRight", []):
+                        add("overflow", "fail", route, vp, scheme, "control clipped off the right edge: " + c)
                     if f["overflowX"] > 1:
                         add("overflow", "fail", route, vp, scheme, f"scrolls sideways by {f['overflowX']}px")
                     for o in f["overlays"]:

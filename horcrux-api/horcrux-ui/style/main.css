@@ -1142,6 +1142,10 @@ label.checkbox { display: flex; align-items: center; gap: .5rem; font-weight: no
 .inline-form .btn { flex: 0 0 auto; }
 .form-row .form-group { margin-bottom: 1rem; }
 .form-row > :where(input, select, button, .btn, label) { flex: 0 1 auto; align-self: center; }
+/* a control never runs past the container (phone width): shrink it instead of being clipped by html{overflow-x:hidden} */
+.form-row > :where(input, select, textarea) { max-width: 100%; min-width: 0; }
+/* a fieldset sizes to its widest child by default (min-width:auto), which pushed a long <select> past the phone viewport */
+fieldset { min-width: 0; }
 .form-group .hint, .form-group .form-help { margin-top: .3rem; }
 
 /* tables without a class, .table and the page-specific tables share one look */

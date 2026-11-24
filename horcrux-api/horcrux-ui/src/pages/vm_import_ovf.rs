@@ -79,7 +79,7 @@ pub fn VmImportOvfPage() -> impl IntoView {
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="ovf-error">{e}</div> })}
             <div class="form-row">
                 <label for="ovf-source">"Source"</label>
-                <input id="ovf-source" type="text" style="min-width:32em"
+                <input id="ovf-source" type="text" style="min-width:min(32em,100%);max-width:100%"
                     placeholder="/var/lib/horcrux/images/vm.ova or https://host/vm.ova"
                     prop:value=source on:input=move |ev| source.set(event_target_value(&ev))/>
                 <button class="btn" id="ovf-preview" disabled=busy on:click=do_preview>"Preview"</button>
