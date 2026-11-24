@@ -197,8 +197,18 @@ def assemble(img, w, uuid, d):
 MK_NEW, MK_PREV = "6.99.2-hxtest", "6.99.1-hxtest"     # kernel versions staged for the grub-mkconfig cases (same kernel binary)
 MK_ROOT_UUID = "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"  # what the probe shim reports for / (only used in root= and the entry ids)
 MK_MARK = "Horcrux GNU/Linux"
-GRUBD_SCRIPT = "11_horcrux_unattended"
+GRUBD_SCRIPTS = ("11_horcrux_unattended", "11_patronus_unattended")   # sys-apps/horcrux-core (Horcrux images), net-firewall/patronus (Patronus images)
+GRUBD_SCRIPT = GRUBD_SCRIPTS[0]       # the name this image uses: picked from the image's /etc/grub.d by pick_grubd_script()
 GRUBD_KEEP = ("00_header", "10_linux", GRUBD_SCRIPT, "40_custom", "41_custom")   # not os-prober/xen/uefi-firmware: they read the host
+
+
+def pick_grubd_script(root):
+    """The image's own unattended-menu script name (Horcrux and Patronus ship the same script under their own package's name)."""
+    global GRUBD_SCRIPT, GRUBD_KEEP
+    have = [n for n in GRUBD_SCRIPTS if os.path.isfile(os.path.join(root, "etc/grub.d", n))]
+    GRUBD_SCRIPT = have[0] if have else GRUBD_SCRIPTS[0]
+    GRUBD_KEEP = ("00_header", "10_linux", GRUBD_SCRIPT, "40_custom", "41_custom")
+    return GRUBD_SCRIPT
 
 
 def mk_entry_id(kver, kind="advanced"):
@@ -223,7 +233,7 @@ def mkconfig(img, case, w, boot_uuid, d, grubd_script=None):
     if case.get("stock"):
         scripts.pop(GRUBD_SCRIPT, None)
     elif GRUBD_SCRIPT not in scripts:
-        raise SystemExit(f"the image has no /etc/grub.d/{GRUBD_SCRIPT} (sys-apps/horcrux-core) and no --grubd-script was given")
+        raise SystemExit(f"the image has no /etc/grub.d/{GRUBD_SCRIPT} (sys-apps/horcrux-core / net-firewall/patronus) and no --grubd-script was given")
     for n, f in scripts.items():
         t = open(f).read()
         # kernel/font search globs: /boot of the staged tree, not the host's
@@ -409,6 +419,7 @@ def run_be_cases(img, a, slack, only):
 
 
 def run_mk_cases(img, a, slack, only):
+    log(f"unattended-menu script of this image: /etc/grub.d/{pick_grubd_script(img.root)}")
     NEW, PRV = f"/vmlinuz-{MK_NEW}", f"/vmlinuz-{MK_PREV}"
     cases = [
         dict(name="mk-normal", env={}, broken="", want=NEW, fails=0),
@@ -427,9 +438,9 @@ def run_mk_cases(img, a, slack, only):
         os.makedirs(d, exist_ok=True)
         disk, start, cfg = build_disk_mk(img, c, d, a.grubd_script)
         if not c.get("stock"):
-            m = re.search(r'set fallback="\$\{hx_fallback\}(\d+)"', cfg)
+            m = re.search(r'set fallback="\$\{[hp]x_fallback\}(\d+)"', cfg)
             top = [l for l in cfg.splitlines() if re.match(r"(menuentry|submenu) ", l)]
-            retry = [i for i, l in enumerate(top) if "'horcrux-retry'" in l]
+            retry = [i for i, l in enumerate(top) if "'horcrux-retry'" in l or "'patronus-retry'" in l]
             step(f"{c['name']}: grub-mkconfig wrote a fallback chain ending in the retry entry (by number)",
                  m is not None and retry == [int(m.group(1))],
                  m.group(0) if m else "no `set fallback` in the generated grub.cfg")

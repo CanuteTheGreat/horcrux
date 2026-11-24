@@ -210,7 +210,9 @@ if [ "$result" = pass ]; then
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
   done
-  if [ "$PROJECT" = horcrux ]; then
+  if [ "$PROJECT" = horcrux ] || { [ "$PROJECT" = patronus ] && [ "$ARCH" = x86_64 ]; }; then
+    # (both products boot an installed system with GRUB: Horcrux ships the menu scripts in sys-apps/horcrux-core, Patronus in net-firewall/patronus;
+    # Patronus aarch64 runs under TCG with no time left in the job)
     # UNATTENDED BOOT: the installed system's boot-environment menu (horcrux-be grubcfg) booted by the image's OWN GRUB + kernel under UEFI with
     # no key ever pressed: normal, no grubenv, one-shot next_entry, read-only env block, broken default (fallback), broken trial kernel, every
     # kernel broken (retry then restart), plus a control that must hang without `fallback`. A menu waiting for a key fails the run.
