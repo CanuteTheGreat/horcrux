@@ -262,6 +262,12 @@ class Unattended(unittest.TestCase):
     def test_gate_is_wired_into_ci(self):
         ci = open(os.path.join(T.HERE, "..", "ci-run.sh")).read()
         self.assertIn("grub-autoboot-test.py", ci)
+        # both menus: horcrux-be (boot environments) and grub-mkconfig (installs without them)
+        self.assertRegex(ci, r"grub-autoboot-test\.py[^\n]*--mode all")
+        gate = open(os.path.join(T.HERE, "..", "grub-autoboot-test.py")).read()
+        for case in ("mk-normal", "mk-broken-default", "mk-saved-broken", "mk-next-entry", "mk-all-broken", "mk-submenu-all-broken",
+                     "mk-control-stock"):
+            self.assertIn(f'name="{case}"', gate)
 
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", ".."))

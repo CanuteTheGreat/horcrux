@@ -56,6 +56,14 @@ KEYWORDS="amd64 arm64"
 #   administrator with "Permission denied"). It judges access the way the kernel does (every directory searchable, the file's own group class decides,
 #   symlinks followed), skips secrets (gnupg, auth.conf, key/token-like names), and `--fix` only adds read/search bits to root-owned entries inside
 #   /etc/portage. The sync hook records the result in /var/lib/horcrux/doctor/portage-config.json. Init-neutral (plain script, no service).
+# /etc/grub.d/11_horcrux_unattended (-r9): installs without boot environments boot unattended when a kernel fails to load. GRUB turns its countdown
+#   off for good once an automatic boot attempt comes back to the menu, and stock grub-mkconfig output has no `fallback`: one unloadable default
+#   kernel left the machine at a menu with no timer until someone pressed a key. The script adds `fallback` (entry NUMBERS of the other kernels,
+#   newest first, recovery entries skipped, the default left out at boot time so GRUB_DEFAULT=saved and next_entry keep working) and a retry entry
+#   that reloads the menu and restarts the machine after RETRY_ROUNDS rounds. Older kernels are top-level entries only with GRUB_DISABLE_SUBMENU=y:
+#   the installer writes it, and pkg_postinst adds it to /etc/default/grub when that file does not set it either way (an explicit choice is kept),
+#   then refreshes /boot/grub/grub.cfg through 91-horcrux-boot-entry (never a reboot). Settings: /etc/conf.d/horcrux-boot-entry. QEMU gate:
+#   build/live-iso/common/grub-autoboot-test.py --mode mkconfig (the image's own grub-mkconfig + scripts, booted with no key pressed).
 RDEPEND="
 	acct-group/portage
 	app-portage/eix
@@ -91,6 +99,8 @@ src_install() {
 	newexe "${FILESDIR}"/horcrux-boot-entry 91-horcrux-boot-entry
 	insinto /etc/conf.d
 	newins "${FILESDIR}"/horcrux-boot-entry.confd horcrux-boot-entry
+	exeinto /etc/grub.d
+	newexe "${FILESDIR}"/grub-unattended 11_horcrux_unattended
 	insinto /usr/lib/udev/rules.d
 	doins "${FILESDIR}"/80-horcrux-udisks-hide.rules
 	dosbin "${FILESDIR}"/horcrux-admin-groups
@@ -133,6 +143,15 @@ pkg_postinst() {
 	while IFS= read -r line; do
 		[[ -n ${line} ]] && elog "horcrux-admin-groups: ${line}"
 	done < <(ROOT="${EROOT}" "${EROOT%/}"/usr/sbin/horcrux-admin-groups 2>&1)
+	# boot menu without boot environments (grub-mkconfig): every kernel a top-level entry so GRUB can fall back to the previous one, then a fresh
+	# grub.cfg with the fallback chain. Boot-environment installs (horcrux-be owns a static menu) and image builds (ROOT set) are left alone.
+	if [[ -z ${ROOT} && ! -e /etc/horcrux/be.conf && ! -e /etc/kernel/postinst.d/90-horcrux-be && -f /etc/default/grub ]]; then
+		if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?GRUB_DISABLE_SUBMENU=' /etc/default/grub; then
+			printf '\n# sys-apps/horcrux-core: every kernel is a top-level boot menu entry, so GRUB falls back to the previous kernel on its own\nGRUB_DISABLE_SUBMENU=y\n' \
+				>> /etc/default/grub && elog "/etc/default/grub: GRUB_DISABLE_SUBMENU=y (older kernels are automatic fallbacks)"
+		fi
+		"${EROOT%/}"/etc/kernel/postinst.d/91-horcrux-boot-entry refresh
+	fi
 	# eix answers only from its cache: build it once so `eix` works right away (eix's own post-sync hook keeps it current). Only on a booted install
 	# (firstboot done), never during an image build, whose tree is not shipped
 	if [[ -z ${ROOT} ]] && [[ -e /var/lib/horcrux/firstboot-done ]] && [[ ! -s /var/cache/eix/portage.eix ]] && command -v eix-update >/dev/null 2>&1; then

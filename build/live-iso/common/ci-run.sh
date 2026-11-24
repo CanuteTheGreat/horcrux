@@ -214,9 +214,12 @@ if [ "$result" = pass ]; then
     # UNATTENDED BOOT: the installed system's boot-environment menu (horcrux-be grubcfg) booted by the image's OWN GRUB + kernel under UEFI with
     # no key ever pressed: normal, no grubenv, one-shot next_entry, read-only env block, broken default (fallback), broken trial kernel, every
     # kernel broken (retry then restart), plus a control that must hang without `fallback`. A menu waiting for a key fails the run.
+    # Same for installs WITHOUT boot environments (mk-* cases): the image's own grub-mkconfig + /etc/grub.d (sys-apps/horcrux-core's
+    # 11_horcrux_unattended) on a staged /boot: broken newest kernel -> previous, saved/next_entry defaults, all broken -> restart,
+    # submenu menus, and a stock-scripts control that must hang. --mode all (default) runs both menus.
     name=grub-autoboot
     echo "::group::QEMU test $name"
-    with_deadline 2400 python3 -u "$HERE/grub-autoboot-test.py" --iso "$ISO" --arch "$ARCH" --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+    with_deadline 4200 python3 -u "$HERE/grub-autoboot-test.py" --iso "$ISO" --arch "$ARCH" --mode all --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi

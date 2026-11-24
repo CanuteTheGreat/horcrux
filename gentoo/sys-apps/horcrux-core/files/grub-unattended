@@ -1,0 +1,104 @@
+#!/bin/sh
+# sys-apps/horcrux-core: /etc/grub.d/11_horcrux_unattended (run by grub-mkconfig right after 10_linux).
+# A machine must never sit at the boot menu waiting for a key. GRUB turns its countdown off for good once an automatic boot attempt
+# comes back to the menu (a kernel or initrd that fails to load, an EFI stub that returns): stock grub-mkconfig output has no
+# `fallback`, so one unloadable default kernel leaves the machine at a menu with no timer until someone presses Enter.
+# This script adds, after the kernel entries:
+#   - `set fallback=` = the other kernel entries (newest first, recovery entries skipped, the entry GRUB boots by default left out at
+#     boot time, so GRUB_DEFAULT=<n>|<id>|saved and a one-shot next_entry keep working), then the retry entry. GRUB's fallback takes
+#     menu entry NUMBERS only (an id there silently ends the chain), so the numbers are counted from the output of the scripts before
+#     this one;
+#   - a retry entry that reloads the menu (re-arms the countdown) and restarts the machine after RETRY_ROUNDS rounds.
+# Older kernels are top-level entries only with GRUB_DISABLE_SUBMENU=y (Horcrux installs set it); with submenus, only the retry and
+# restart part applies (GRUB cannot fall back into a submenu without stopping at it).
+# Settings: /etc/conf.d/horcrux-boot-entry (UNATTENDED=auto|off, RETRY_ROUNDS, RETRY_CONFIG). Never fails grub-mkconfig.
+UNATTENDED=auto
+RETRY_ROUNDS=3
+RETRY_CONFIG='${prefix}/grub.cfg'
+CONF=${HORCRUX_BOOT_ENTRY_CONF:-/etc/conf.d/horcrux-boot-entry}
+[ -r "$CONF" ] && . "$CONF"
+[ "$UNATTENDED" = off ] && exit 0
+case "$RETRY_ROUNDS" in ''|*[!0-9]*|0) RETRY_ROUNDS=3 ;; esac
+warn() { echo "horcrux-unattended: $*" >&2; }
+
+self=$(basename "$0")
+dir=$(dirname "$0")
+# the menu entries of every script grub-mkconfig ran before this one (same selection rules as grub-mkconfig: executable, no backups)
+entries=$(
+	for i in "$dir"/*; do
+		b=$(basename "$i")
+		[ "$b" = "$self" ] && continue
+		case "$b" in *~|\#*\#|*.dpkg-*|*.rpmsave|*.rpmnew|README) continue ;; esac
+		[ -f "$i" ] && [ -x "$i" ] || continue
+		# lexical order: only the scripts before this one
+		[ "$(printf '%s\n%s\n' "$b" "$self" | LC_ALL=C sort | head -n1)" = "$b" ] || continue
+		"$i" 2>/dev/null
+	done | awk '
+		function unq(s) { sub(/^'\''/, "", s); sub(/'\''$/, "", s); return s }
+		{
+			line = $0
+			sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line)
+			if (depth == 0 && line ~ /^(menuentry|submenu)[ \t]/) {
+				kind = (line ~ /^submenu/) ? "S" : "M"
+				id = ""
+				if (match(line, /(\$menuentry_id_option|--id)[ \t]+'\''[^'\'']*'\''/)) {
+					id = substr(line, RSTART, RLENGTH); sub(/^[^'\'']*/, "", id); id = unq(id)
+				}
+				title = ""
+				if (match(line, /^[a-z]+[ \t]+'\''[^'\'']*'\''[ \t]/)) {
+					title = substr(line, RSTART, RLENGTH); sub(/^[a-z]+[ \t]+/, "", title); sub(/[ \t]+$/, "", title); title = unq(title)
+				}
+				printf "%d\t%s\t%s\t%s\n", n, kind, id, title
+				n++
+			}
+			if (line ~ /\{$/) depth++
+			else if (line == "}" && depth > 0) depth--
+		}
+		END { printf "COUNT\t%d\n", n }'
+) || { warn "could not read the menu entries: no automatic fallback added"; exit 0; }
+
+count=$(printf '%s\n' "$entries" | awk -F '\t' '$1 == "COUNT" { print $2 }')
+# kernel entries GRUB may fall back to: top-level Linux entries, never a recovery (single-user) entry, which would stop at a prompt
+kernels=$(printf '%s\n' "$entries" | awk -F '\t' '$1 != "COUNT" && $2 == "M" && $3 ~ /^gnulinux-/ && $3 !~ /-recovery-/')
+[ -n "$count" ] || exit 0
+if [ -z "$kernels" ]; then
+	exit 0                                   # no kernel entry (yet): nothing to fall back between
+fi
+if printf '%s\n' "$entries" | awk -F '\t' '$2 == "S" && $3 ~ /^gnulinux-advanced-/ { f = 1 } END { exit !f }'; then
+	warn "older kernels are in a submenu (set GRUB_DISABLE_SUBMENU=y): only retry and restart are automatic"
+fi
+retry=$count
+tries=$(awk -v n="$RETRY_ROUNDS" 'BEGIN { s = ""; for (i = 0; i < n; i++) s = s "x"; print s }')
+gq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+cat <<'EOF'
+# Never wait at this menu for a key (sys-apps/horcrux-core): an automatic boot that comes back to GRUB turns its countdown off, so
+# a kernel that fails to load falls back to the other kernels (entry numbers), then to a retry that reloads the menu and finally
+# restarts the machine. Settings: /etc/conf.d/horcrux-boot-entry.
+function hx_fallback_add {
+  if [ "x${hx_default}" = "x$1" ] ; then return ; fi
+  if [ "x${hx_default}" = "x$2" ] ; then return ; fi
+  if [ "x${hx_default}" = "x$3" ] ; then return ; fi
+  set hx_fallback="${hx_fallback}$1 "
+}
+set hx_default="${default}"
+if [ -z "${hx_default}" ] ; then set hx_default=0 ; fi
+set hx_fallback=
+EOF
+printf '%s\n' "$kernels" | while IFS='	' read -r num kind id title; do
+	echo "hx_fallback_add $num $(gq "$id") $(gq "$title")"
+done
+cat <<EOF
+set fallback="\${hx_fallback}$retry"
+menuentry 'Start the boot menu again (automatic retry)' \$menuentry_id_option 'horcrux-retry' {
+	if [ "\${hx_tries}" = "$tries" ] ; then
+		echo "No kernel could be started: restarting the machine in 5 seconds."
+		sleep 5
+		reboot
+	fi
+	set hx_tries="x\${hx_tries}"
+	export hx_tries
+	configfile "$RETRY_CONFIG"
+}
+EOF
+exit 0

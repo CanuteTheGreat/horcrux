@@ -709,6 +709,9 @@ install_bootloader() {
         # and a login prompt on it
         echo 'rc-update add live-serial default' | chroot "$TARGET" sh >/dev/null 2>&1 || true
     fi
+    # every kernel a top-level menu entry, so GRUB's fallback (sys-apps/horcrux-core /etc/grub.d/11_horcrux_unattended) reaches the previous kernel
+    mkdir -p "$TARGET/etc/default"
+    grep -q '^GRUB_DISABLE_SUBMENU=' "$TARGET/etc/default/grub" 2>/dev/null || echo 'GRUB_DISABLE_SUBMENU=y' >> "$TARGET/etc/default/grub"
     # Generate GRUB config (let udev publish the new partitions' UUID links first, so
     # grub-mkconfig writes root=UUID=... instead of a device name that can change)
     udevadm trigger --subsystem-match=block --action=change >/dev/null 2>&1 || true

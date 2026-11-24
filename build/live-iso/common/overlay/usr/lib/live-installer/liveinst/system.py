@@ -1361,6 +1361,8 @@ class Installer:
         self.write("/etc/default/grub", "\n".join([
             f'GRUB_DISTRIBUTOR="{p["title"]}"', 'GRUB_TIMEOUT=3', f'GRUB_CMDLINE_LINUX="{extra}"',
             'GRUB_DISABLE_OS_PROBER=true', 'GRUB_GFXPAYLOAD_LINUX=keep',
+            # every kernel a top-level entry: GRUB's `fallback` (entry numbers, /etc/grub.d/11_horcrux_unattended) cannot reach into a submenu
+            'GRUB_DISABLE_SUBMENU=y',
         ] + (['GRUB_TERMINAL="console serial"', f'GRUB_SERIAL_COMMAND="{arch.grub_serial_lines()}"'] if arch.grub_serial_lines() and serial_ok else [])) + "\n")
         for dev in L.values():
             self.run(f"blkid -s UUID -o value {dev}", check=False)

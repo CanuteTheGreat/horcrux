@@ -4,6 +4,8 @@
 # (90-horcrux-be -> `horcrux-be sync`) owns grub.cfg, which is static there, and this hook does nothing. Every other install
 # (XFS/ext4, LVM, plain partitions) has no other hook: sys-kernel/installkernel is built without USE=grub (that flag would rewrite the
 # static BE grub.cfg), so a kernel update put vmlinuz/initramfs into /boot and the machine kept booting the old kernel forever.
+# Called with a kernel version by installkernel, or with `refresh` (sys-apps/horcrux-core pkg_postinst) to rewrite the menu after a menu-script change.
+# The menu itself never waits for a key: /etc/grub.d/11_horcrux_unattended (same package) adds the fallback chain and the retry/restart entry.
 # Settings: /etc/conf.d/horcrux-boot-entry (BOOT_ENTRY=auto|off, GRUB_CFG, GRUB_MKCONFIG). Never fails the kernel install.
 [ -n "$1" ] || exit 0
 BOOT_ENTRY=auto
@@ -26,7 +28,8 @@ if [ ! -e "$GRUB_CFG" ]; then
 	exit 0
 fi
 if "$GRUB_MKCONFIG" -o "$GRUB_CFG.new" >/dev/null 2>&1 && [ -s "$GRUB_CFG.new" ]; then
-	mv -f "$GRUB_CFG.new" "$GRUB_CFG" && log "boot menu refreshed for kernel $1 ($GRUB_CFG)"
+	if [ "$1" = refresh ]; then what="boot menu refreshed"; else what="boot menu refreshed for kernel $1"; fi
+	mv -f "$GRUB_CFG.new" "$GRUB_CFG" && log "$what ($GRUB_CFG)"
 else
 	rm -f "$GRUB_CFG.new"
 	log "$GRUB_MKCONFIG failed: $GRUB_CFG left unchanged"

@@ -5,3 +5,11 @@
 # the menu file grub-mkconfig writes (atomically: GRUB_CFG.new, then renamed)
 #GRUB_CFG=/boot/grub/grub.cfg
 #GRUB_MKCONFIG=grub-mkconfig
+# /etc/grub.d/11_horcrux_unattended (read by grub-mkconfig): the boot menu never waits for a key when a kernel fails to load.
+# auto: fall back to the other kernels (GRUB_DISABLE_SUBMENU=y keeps them top-level entries), then reload the menu, then restart
+# off:  stock grub-mkconfig menu (a failed automatic boot leaves the machine at the menu with no countdown)
+#UNATTENDED=auto
+# menu reloads before the machine restarts when no kernel could be started
+#RETRY_ROUNDS=3
+# the file the retry entry reloads (GRUB syntax; ${prefix} is GRUB's own directory, where grub.cfg lives)
+#RETRY_CONFIG='${prefix}/grub.cfg'
