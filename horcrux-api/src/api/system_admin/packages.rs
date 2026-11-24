@@ -718,7 +718,13 @@ mod tests {
         }
         let w = emerge_args(&WORLD_UPDATE_ARGS, &[]);
         assert!(w.contains(&"--usepkg-exclude=app-emulation/horcrux-bin".to_string()));
-        for want in ["--update", "--changed-use", "--newuse", "--deep", "--with-bdeps=y"] {
+        for want in [
+            "--update",
+            "--changed-use",
+            "--newuse",
+            "--deep",
+            "--with-bdeps=y",
+        ] {
             assert!(w.contains(&want.to_string()), "{want} missing in {w:?}");
         }
         // the exclusion comes before the atoms, and removal installs nothing
