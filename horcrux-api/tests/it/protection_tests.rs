@@ -46,3 +46,26 @@ async fn protected_vm_cannot_be_deleted() {
     assert!(st == 200 || st == 204, "delete after unprotect: {st}");
     assert_eq!(api.get("/vms/keep1").await.0, 404);
 }
+
+/// The Hardware > Advanced "Protection" checkbox (`hardware.adv.protection`)
+/// used to be stored but never enforced.
+#[tokio::test]
+async fn advanced_protection_setting_refuses_delete() {
+    let dir = scratch("protection-adv");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+
+    let (s, v) = api
+        .post(
+            "/vms",
+            json!({"id": "keep2", "name": "Keep2", "hypervisor": "qemu", "architecture": "x86_64",
+                   "cpus": 1, "memory": 256, "disk_size": 1, "status": "stopped",
+                   "hardware": {"adv": {"protection": true}}}),
+        )
+        .await;
+    assert!(s == 200 || s == 201, "{v}");
+    assert_eq!(api.delete("/vms/keep2").await, 409);
+    assert_eq!(api.get("/vms/keep2").await.0, 200, "VM must still exist");
+}

@@ -66,6 +66,24 @@ pub async fn ensure_vm_unprotected(state: &AppState, id: &str) -> Result<(), Api
     if is_protected(state, &vm_key(id)).await {
         return Err(ApiError::Conflict(refusal("VM", id)));
     }
+    ensure_vm_config_unprotected(state, id, "deleting it").await
+}
+
+/// The VM's own `Protection` setting (VM Hardware > Advanced checkbox,
+/// `hardware.adv.protection`) said "refuse delete / disk removal" but nothing
+/// enforced it: err(409) when it is set. `action` completes "...before <action>".
+pub async fn ensure_vm_config_unprotected(
+    state: &AppState,
+    id: &str,
+    action: &str,
+) -> Result<(), ApiError> {
+    if let Ok(vm) = state.vm_manager.get_vm(id).await {
+        if vm.hardware.adv.protection {
+            return Err(ApiError::Conflict(format!(
+                "VM {id} is protected: clear Protection in its Hardware > Advanced settings before {action}"
+            )));
+        }
+    }
     Ok(())
 }
 
