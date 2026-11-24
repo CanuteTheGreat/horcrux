@@ -482,6 +482,16 @@ fn prebuilt_binpkg_guard(extra: &[&str]) -> Vec<String> {
         .collect()
 }
 
+/// The world update, the owner's `emerge -uUND --with-bdeps=y @world`: `--update --changed-use --newuse --deep --with-bdeps=y`.
+const WORLD_UPDATE_ARGS: [&str; 6] = [
+    "--update",
+    "--changed-use",
+    "--newuse",
+    "--deep",
+    "--with-bdeps=y",
+    "@world",
+];
+
 fn emerge_args(extra: &[&str], atoms: &[String]) -> Vec<String> {
     let mut a: Vec<String> = ["--ask=n", "--color=n", "--nospinner"]
         .iter()
@@ -645,7 +655,7 @@ async fn upgrade_all(u: AuthExt) -> Res<TaskRef> {
         "package-upgrade",
         "all",
         &user_of(&u),
-        emerge_args(&["--update", "--deep", "--newuse", "@world"], &[]),
+        emerge_args(&WORLD_UPDATE_ARGS, &[]),
         ("upgrade", apt_args(&[], &[])),
     )
     .await?;
@@ -665,7 +675,7 @@ async fn update_db(u: AuthExt) -> Res<TaskRef> {
             let out = pending_file();
             let script = format!(
                 "emerge --sync --quiet && echo '--- checking @world for updates' && \
-                 emerge --pretend --update --deep --newuse --color=n --nospinner --quiet @world | tee '{}'",
+                 emerge --pretend --update --changed-use --newuse --deep --with-bdeps=y --color=n --nospinner --quiet @world | tee '{}'",
                 out.display()
             );
             tasks::spawn_command(
@@ -706,8 +716,11 @@ mod tests {
                 "{a:?}"
             );
         }
-        let w = emerge_args(&["--update", "--deep", "--newuse", "@world"], &[]);
+        let w = emerge_args(&WORLD_UPDATE_ARGS, &[]);
         assert!(w.contains(&"--usepkg-exclude=app-emulation/horcrux-bin".to_string()));
+        for want in ["--update", "--changed-use", "--newuse", "--deep", "--with-bdeps=y"] {
+            assert!(w.contains(&want.to_string()), "{want} missing in {w:?}");
+        }
         // the exclusion comes before the atoms, and removal installs nothing
         let u = emerge_args(&["--update", "--oneshot"], &id);
         let pos = |x: &str| u.iter().position(|a| a == x).unwrap();
