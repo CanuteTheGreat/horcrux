@@ -230,7 +230,7 @@ pub fn ApiKeysPage() -> impl IntoView {
 
             {move || success_message.get().map(|msg| view! {
                 <div class="alert alert-success">
-                    <span class="alert-icon">"[OK]"</span>
+                    <span class="alert-icon">"✓"</span>
                     <span class="alert-message">{msg}</span>
                     <button
                         class="alert-close"

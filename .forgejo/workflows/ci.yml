@@ -162,6 +162,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s ci/ux-qa -p 'test_*.py'
+      - run: python3 ci/ux-qa/check_ascii_icons.py
       - run: python3 ci/ux-qa/check_owner_findings.py
       - name: live-installer common/ matches TREE.sha256 (a common/ edit without --write-hash fails every live-iso variant hours later)
         run: build/live-iso/sync-common.sh --check

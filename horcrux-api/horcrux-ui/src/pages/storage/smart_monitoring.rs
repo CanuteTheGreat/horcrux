@@ -146,7 +146,7 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                         </div>
                     </a>
                     <a class="stat-card stat-link healthy" href="/storage/smart?status=healthy">
-                        <span class="stat-icon">"[OK]"</span>
+                        <span class="stat-icon">"✓"</span>
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().1}</span>
                             <span class="stat-label">"Healthy"</span>
@@ -167,7 +167,7 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                         </div>
                     </a>
                     <a class="stat-card stat-link critical" href="/storage/smart?status=critical" class:attention=move || { disk_counts().3 > 0 }>
-                        <span class="stat-icon">"[X]"</span>
+                        <span class="stat-icon">"✗"</span>
                         <div class="stat-content">
                             <span class="stat-value">{move || disk_counts().3}</span>
                             <span class="stat-label">"Critical"</span>

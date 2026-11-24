@@ -261,7 +261,7 @@ pub fn ServicesPage() -> impl IntoView {
                                         let cpu = service.cpu_usage.map(|c| format!("{:.1}%", c)).unwrap_or_else(|| "-".to_string());
                                         let description = service.description.clone();
                                         let enabled_class = if enabled { "text-green-600" } else { "text-gray-500" };
-                                        let enabled_text = if enabled { "[OK] Yes" } else { "[X] No" };
+                                        let enabled_text = if enabled { "✓ Yes" } else { "✗ No" };
 
                                         view! {
                                             <tr class="service-row">
