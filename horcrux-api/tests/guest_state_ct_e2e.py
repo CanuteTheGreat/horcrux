@@ -148,6 +148,9 @@ pid, c0 = counter_start("gsct")
 log(f"counter pid {pid} at {c0}")
 
 log("=== A. without CRIU: graceful fallback with a reason")
+# a CI node has no encrypted storage: allow plain saves so the CRIU reason is the one reported
+_g, _ov = guest("gsct")
+req("PUT", "/nodes/guest-power", {**_ov["node"], "save_encryption": "allow_unencrypted"})
 g, ov = guest("gsct")
 check(not ov["capabilities"]["criu"]["available"], "node reports CRIU unavailable")
 check(g["can_save"] is False and "CRIU" in (g["save_blocker"] or ""), f"guest shows why state can't be saved: {g['save_blocker']}")
