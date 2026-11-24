@@ -756,8 +756,23 @@ def main():
         page.select_option("#disp-protocol", "spice")
         page.select_option("#disp-video", "qxl")
         page.select_option("#disp-sound", "ich9-intel-hda")
+        vm_posts = []
+        page.on("request", lambda r: r.method == "POST" and "/api/vms" in r.url
+                and vm_posts.append(f"{r.method} {r.url}"))
+        page.on("response", lambda r: r.request.method == "POST" and "/api/vms" in r.url
+                and vm_posts.append(f"-> {r.status} {r.url}"))
         page.locator("button[type=submit]").click()
-        page.wait_for_url(f"{BASE}/vms", timeout=120000)
+        try:
+            page.wait_for_url(f"{BASE}/vms", timeout=120000)
+        except Exception:
+            # Say WHY the form did not navigate (error banner, disabled button, requests seen).
+            err = page.locator("p.error")
+            banner = err.first.inner_text() if err.count() else "(no error banner)"
+            btn = page.locator("button[type=submit]").first
+            raise AssertionError(
+                f"Create VM did not navigate to /vms from {page.url}: banner={banner!r}; "
+                f"submit disabled={btn.is_disabled()}; text={btn.inner_text()!r}; "
+                f"POST /api/vms seen: {vm_posts or 'none'}") from None
         dvm = next(v for v in api_get("/api/vms", token()) if v["name"] == DISP_VM)
         vid = dvm["id"]
         assert dvm["display"] == {"protocol": "spice", "video": "qxl", "sound": "ich9-intel-hda"}, dvm
