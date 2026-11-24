@@ -141,7 +141,11 @@ def portage_group_script(user):
             "out=$(run 'eix -e -c --nocolor portage' 2>&1); echo \"EIX-RC=$?\"; echo \"$out\" | head -8 | sed 's/^/EIX /'; "
             # effective access (access(2) as that user, so group ownership, the directories above and ACLs all count), never mode bits:
             # every file and directory of /etc/portage except the gnupg keyring must be readable, and directories traversable
-            "bad=$(run 'find /etc/portage -path /etc/portage/gnupg -prune -o \\( -type d ! -executable -o ! -readable \\) -print 2>&1' | head -5); "
+            "bad=$(run 'find /etc/portage -path /etc/portage/gnupg -prune -o -xtype l -prune -o \\( -type d ! -executable -o ! -readable \\) -print 2>&1' | head -5); "
+            # a symlink whose target does not exist (make.profile into the not-yet-synced /var/db/repos tree) is not an access failure:
+            # find's -readable follows links, so it used to be reported as unreadable. Reported apart; the verdict allows it only while the tree is empty
+            "dang=$(run 'find /etc/portage -path /etc/portage/gnupg -prune -o -xtype l -print 2>&1' | head -5); "
+            "echo \"CFG-DANGLING $(printf %s \"$dang\" | grep -c .)\"; printf '%s\\n' \"$dang\" | sed 's/^/CFG-DANGLING-LINK /'; "
             "echo \"CFG-BAD $(printf %s \"$bad\" | grep -c .)\"; printf '%s\\n' \"$bad\" | sed 's/^/CFG-UNREADABLE /'; "
             "[ -s /var/db/repos/gentoo/profiles/repo_name ] && echo TREE-SYNCED || echo TREE-EMPTY; "
             "ls -l /var/cache/eix/portage.eix 2>&1 | sed 's/^/EIX-CACHE /'; "
@@ -163,6 +167,9 @@ def portage_group_verdict(o):
     eix_ok = bool(eix_rc) and not denied and (eix_found if synced else eix_rc.group(1) in ("0", "1"))
     cfg = re.search(r"(?m)^CFG-BAD (\d+)", o)
     cfg_ok = bool(cfg) and cfg.group(1) == "0"      # a run without the marker proves nothing
+    dang = re.search(r"(?m)^CFG-DANGLING (\d+)", o)
+    if dang and int(dang.group(1)) and synced:
+        cfg_ok = False        # a link to nowhere once the tree is synced is a real defect; before that it is the expected first-boot state
     ok = "PG-DONE" in o and "portage" in groups and eq_ok and eix_ok and cfg_ok
     info = f"groups={' '.join(groups)} equery={'ok' if eq_ok else 'FAIL'} eix={'ok' if eix_ok else 'FAIL'} etc-portage-readable={'ok' if cfg_ok else 'FAIL'} tree={'synced' if synced else 'empty'}"
     return ok, (info + " | " + re.sub(r"\s+", " ", o.strip())[-240:])[:420]
