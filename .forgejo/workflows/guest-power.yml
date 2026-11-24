@@ -30,6 +30,7 @@ on:
       - 'horcrux-api/src/api/migration_peer.rs'
       - 'crates/horcrux-vm/src/vm/savestate.rs'
       - 'crates/horcrux-vm/src/vm/qemu.rs'
+      - 'crates/horcrux-vm/src/vm/display.rs'
       - 'crates/horcrux-cluster/src/cluster/drain.rs'
       - 'crates/horcrux-container/src/container/savestate.rs'
       - 'crates/horcrux-container/src/container/transfer.rs'
