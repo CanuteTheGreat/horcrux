@@ -812,8 +812,7 @@ async fn remove_disk(
     Path((id, index)): Path<(String, usize)>,
     axum::extract::Query(q): axum::extract::Query<RemoveDiskQuery>,
 ) -> Result<Json<VmConfig>, ApiError> {
-    crate::api::protection::ensure_vm_config_unprotected(&state, &id, "removing a disk")
-        .await?;
+    crate::api::protection::ensure_vm_config_unprotected(&state, &id, "removing a disk").await?;
     Ok(Json(
         state
             .vm_manager
