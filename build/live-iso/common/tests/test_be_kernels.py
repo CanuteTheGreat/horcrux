@@ -12,8 +12,13 @@ import test_be_boot_space as T  # noqa: E402
 BE = T.BE
 
 
-def entries(text):
+def all_entries(text):
     return re.findall(r'menuentry "([^"]+)" --id (\S+)', text)
+
+
+def entries(text):
+    """the kernel entries (without the trailing automatic-retry entry)"""
+    return [e for e in all_entries(text) if e[1] != BE.RETRY_ID]
 
 
 class Kernels(T.Boot):
@@ -63,7 +68,7 @@ class Kernels(T.Boot):
         self.assertIn('set default="be-horcrux-k-7.2.1"', cfg)
         self.assertEqual(self.z.env.get("next_entry"), "be-horcrux")
         self.assertIn("load_env", cfg)
-        self.assertIn("save_env next_entry", cfg)
+        self.assertIn("if save_env -f /grub/grubenv next_entry ; then", cfg)
         # a crash of the trial boot: GRUB cleared next_entry itself, the next boot is the known-good kernel again
         self.assertEqual(open(self.be_dir("good")).read().strip(), "7.2.1")
 
@@ -182,6 +187,83 @@ class Kernels(T.Boot):
         self.assertEqual([i for _t, i in entries(text)], ["be-horcrux", "be-horcrux-k-7.2.0", "be-old"])
 
 
+class Unattended(unittest.TestCase):
+    """the menu must boot with no key pressed whatever happens (a machine once sat at it with no countdown after a failed
+    automatic attempt: GRUB unsets `timeout` once an entry returns). The QEMU proof is grub-autoboot-test.py; these pin the config."""
+
+    def cfg(self, **kw):
+        a = dict(kernels={"horcrux": "7.2.1", "old": "7.1.9"}, previous={"horcrux": ["7.2.0", "7.1.5"]}, good={"horcrux": "7.2.1"})
+        a.update(kw)
+        return BE.render_grub(["horcrux", "old"], "horcrux", "rpool", "1111-2222", **a)
+
+    def test_countdown_always_positive(self):
+        for t in ("0", "-1", "", "x", None, 0, -5):
+            self.assertIn("set timeout=5\n", self.cfg(timeout=t), t)
+        self.assertIn("set timeout=12\n", self.cfg(timeout="12"))
+        self.assertIn("set timeout_style=menu", self.cfg())
+
+    def test_fallback_lists_other_kernels_of_the_active_be_then_retry(self):
+        t = self.cfg()
+        # entry NUMBERS (GRUB ignores ids there): 0 be-horcrux, 1 k-7.2.0, 2 k-7.1.5, 3 be-old, 4 hx-retry
+        self.assertIn('set fallback="1 2 4"', t)   # never be-old (3): no silent rollback of the system
+
+    def test_known_good_is_the_first_fallback_while_newest_is_on_trial(self):
+        t = self.cfg(default="be-horcrux-k-7.2.0", good={"horcrux": "7.2.0"})
+        self.assertIn('set fallback="0 2 4"', t)
+        self.assertIn('set fallback="1 0 2 4"', t)   # a trial (next_entry) cleared by GRUB: the known-good default is tried first
+        t = self.cfg(default="be-horcrux", good={"horcrux": "7.1.5"})
+        self.assertIn('set fallback="2 1 4"', t)
+
+    def test_fallback_is_numbers_of_existing_entries(self):
+        for kw in ({}, dict(default="be-horcrux-k-7.2.0", good={"horcrux": "7.2.0"})):
+            t = self.cfg(**kw)
+            n = len(all_entries(t))
+            for m in re.finditer(r'set fallback="([^"]*)"', t):
+                for i in m.group(1).split():
+                    self.assertTrue(i.isdigit() and int(i) < n, f"fallback item {i!r} is not an entry number < {n}")
+
+    def test_retry_entry_reloads_then_restarts(self):
+        t = self.cfg()
+        body = t[t.index("--id hx-retry"):]
+        self.assertIn("configfile /grub/grub.cfg", body)   # not ${config_file}: GRUB has restored it (empty) by the time this entry runs
+        self.assertIn("export hx_tries", body)
+        self.assertIn('= "' + "x" * BE.RETRY_ROUNDS + '"', body)
+        self.assertIn("reboot", body)
+        self.assertEqual(all_entries(t)[-1][1], "hx-retry", "the retry entry is last, never the default")
+
+    def test_environment_block_is_guarded_and_trial_needs_a_successful_clear(self):
+        t = self.cfg()
+        head = t[:t.index("menuentry")]
+        self.assertNotRegex(head, r"(?m)^load_env\s*$", "unguarded load_env (reads $prefix, errors when missing)")
+        self.assertIn("if [ -s /grub/grubenv ] ; then", head)
+        self.assertIn("load_env -f /grub/grubenv next_entry", head)
+        # default switches to the trial ONLY inside the `if save_env` branch
+        branch = head[head.index("if save_env"):]
+        self.assertIn('set default="${hx_trial}"', branch)
+        self.assertEqual(head.count('set default="${'), 1)
+
+    def test_no_entry_without_order_means_no_dangling_fallback(self):
+        t = BE.render_grub([], None, "rpool", "1111-2222")
+        self.assertNotIn("set fallback", t)
+        self.assertNotIn("set default", t)
+
+    def test_grub_script_check_accepts_it(self):
+        import shutil
+        import subprocess
+        import tempfile
+        if not shutil.which("grub-script-check"):
+            self.skipTest("grub-script-check not installed")
+        with tempfile.NamedTemporaryFile("w", suffix=".cfg") as f:
+            f.write(self.cfg(serial_lines="serial --unit=0 --speed=115200"))
+            f.flush()
+            r = subprocess.run(["grub-script-check", f.name], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_gate_is_wired_into_ci(self):
+        ci = open(os.path.join(T.HERE, "..", "ci-run.sh")).read()
+        self.assertIn("grub-autoboot-test.py", ci)
+
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", ".."))
 PKG = os.path.join(REPO, "gentoo", "sys-apps", "horcrux-be")
 
@@ -196,7 +278,7 @@ class Packaging(unittest.TestCase):
         self.assertEqual(a, b, "gentoo/sys-apps/horcrux-be/files/be.py must be byte-identical to liveinst/be.py")
 
     def test_both_inits_ship_the_known_good_service(self):
-        e = open(os.path.join(PKG, "horcrux-be-1.ebuild")).read()
+        e = open(os.path.join(PKG, sorted(f for f in os.listdir(PKG) if f.endswith(".ebuild"))[-1])).read()
         self.assertIn('newinitd "${FILESDIR}"/horcrux-be-good.initd horcrux-be-good', e)
         self.assertIn('systemd_dounit "${FILESDIR}"/horcrux-be-good.service', e)
         self.assertIn("openrc-run", open(os.path.join(PKG, "files", "horcrux-be-good.initd")).read())

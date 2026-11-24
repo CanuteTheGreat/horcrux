@@ -47,7 +47,7 @@ if [ "${APT_DROP_PPAS:-1}" = 1 ]; then
     case $f in *.sources) rm -f "$f" ;; *) sed -i -E '/ppa\.launchpad(content)?\.net/d' "$f" ;; esac
   done
 fi
-host_deps() { apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools gdisk dosfstools mtools >/dev/null; }
+host_deps() { apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools gdisk dosfstools mtools binutils >/dev/null; }
 host_deps || { echo "host deps failed, retrying in 20 s" >&2; sleep 20; host_deps; } || fail deps "apt install failed"
 echo "::endgroup::"
 
@@ -210,6 +210,17 @@ if [ "$result" = pass ]; then
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
   done
+  if [ "$PROJECT" = horcrux ]; then
+    # UNATTENDED BOOT: the installed system's boot-environment menu (horcrux-be grubcfg) booted by the image's OWN GRUB + kernel under UEFI with
+    # no key ever pressed: normal, no grubenv, one-shot next_entry, read-only env block, broken default (fallback), broken trial kernel, every
+    # kernel broken (retry then restart), plus a control that must hang without `fallback`. A menu waiting for a key fails the run.
+    name=grub-autoboot
+    echo "::group::QEMU test $name"
+    with_deadline 2400 python3 -u "$HERE/grub-autoboot-test.py" --iso "$ISO" --arch "$ARCH" --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+    rc=${PIPESTATUS[0]}
+    echo "::endgroup::"
+    if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
+  fi
   if [ "$IMG_DE" != server ] && [ "$ARCH" = x86_64 ]; then
     # encrypted ZFS desktop: passphrase on a USB keyboard at the VGA prompt, GDM greeter ASSERTED on the VGA console, boot-environment
     # rollback, then the portable hibernate flow (one passphrase, hibernate, power off, boot, resume: marker + process survive, scrub clean)

@@ -50,6 +50,24 @@ every kernel in `/boot`.
 ZFSBootMenu (phase 3, `BOOT_LOADER=zfsbootmenu`) is not shipped yet: it reads kernels from each boot environment itself and lists every kernel it finds,
 so only the retention above applies; trial boots use GRUB's `next_entry` and are skipped for any other loader.
 
+### The menu always boots unattended
+
+A machine must never wait at the boot menu for a key. GRUB switches its countdown off for good as soon as an automatic boot
+attempt comes back to the menu (`grub_menu_execute_entry` unsets `timeout`): a kernel or initrd that fails to load, or an EFI
+stub that returns, leaves a menu with no timer. The generated grub.cfg therefore never relies on the first attempt:
+
+- `fallback` lists the active boot environment's other kernels (known-good first) and then a retry entry, as entry
+  **numbers** (GRUB ignores menu ids in `fallback` and silently ends the chain);
+- the retry entry reloads the config (the countdown is armed again) and after three rounds restarts the machine;
+- the environment block is read only when it exists, from the /boot file system (`load_env -f /grub/grubenv next_entry`);
+- a one-shot trial kernel (`next_entry`) is booted only when GRUB could clear it first (`if save_env ...`), so a loader that
+  cannot write the block never retries a hanging trial forever;
+- the countdown is always positive, whatever `TIMEOUT` says.
+
+`build/live-iso/common/grub-autoboot-test.py` boots the generated menu with each image's own GRUB and kernel under UEFI,
+never pressing a key: normal, no environment block, one-shot `next_entry`, read-only disk, broken default, broken trial
+kernel, every kernel broken (retry then restart), and a control without `fallback` that must hang.
+
 ### Bootloader: GRUB (static grub.cfg), ZFSBootMenu later
 ZFSBootMenu is the natural fit for BE menus (reads BEs and kernels straight from the pool, including encrypted ones) and
 stays the phase 3 candidate. Phase 1 keeps GRUB because the whole installer (BIOS and EFI, T2 Macs, aarch64, LUKS swap/

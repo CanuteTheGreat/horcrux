@@ -62,4 +62,10 @@ pkg_postinst() {
 		fi
 	fi
 	elog "Previous kernels stay bootable from the menu (horcrux-be kernels); a new kernel boots once as a trial. horcrux-be boot-previous = previous kernel next boot."
+	# a fixed menu generator only helps once the menu is rewritten: regenerate /boot/grub/grub.cfg on the live system (never on a ROOT= image
+	# build, never a reboot). -r1: the menu always boots unattended (entry-number fallback chain, retry + restart entry, guarded environment block).
+	if [[ -z ${ROOT} && -e /etc/horcrux/be.conf && -d /boot/be ]] && mountpoint -q /boot 2>/dev/null; then
+		"${EPREFIX}"/usr/bin/horcrux-be grubcfg >/dev/null && einfo "boot menu regenerated (/boot/grub/grub.cfg)" \
+			|| ewarn "horcrux-be grubcfg failed: run it by hand"
+	fi
 }
