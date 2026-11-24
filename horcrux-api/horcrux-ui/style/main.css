@@ -1281,3 +1281,8 @@ td .actions { flex-wrap: nowrap; }
 .time-controls label { font-weight: 600; color: var(--secondary); font-size: .9rem; }
 /* a label directly followed by its control, outside a stacked .form-group: keep a gap (jammed-label rule) */
 :where(main.container) :where(*:not(.form-group):not(.stack-form)) > label:not(.checkbox) + :is(select, input:not([type=checkbox]):not([type=radio]), textarea) { margin-inline-start: .5rem; }
+
+/* status glyphs (✓ ✗ ⚠) replace ASCII [OK]/[X] markers; keep them apart from the text */
+.iommu-status .icon, .health-icon, .stat-icon { margin-right: .5rem; font-weight: 700; }
+.iommu-status.enabled .icon { color: var(--success, #2e7d32); }
+.iommu-status.disabled .icon { color: var(--danger, #c62828); }

@@ -119,7 +119,7 @@ pub fn GpuManagement() -> impl IntoView {
                 {move || match status.get() {
                     Some(s) => view! {
                         <div class={format!("iommu-status {}", if s.iommu_enabled { "enabled" } else { "disabled" })}>
-                            <span class="icon">{if s.iommu_enabled { "[OK]" } else { "[X]" }}</span>
+                            <span class="icon">{if s.iommu_enabled { "✓" } else { "✗" }}</span>
                             <span class="message">{s.message}</span>
                         </div>
                     }.into_view(),
