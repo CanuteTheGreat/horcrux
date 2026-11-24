@@ -187,6 +187,23 @@ pub fn frame_ring_path(dir: &str, vm_id: &str) -> PathBuf {
     Path::new(dir).join(format!("horcrux-frames-{safe}"))
 }
 
+/// Whether `dir`'s filesystem has room for a `len`-byte ring.
+fn ring_fits(dir: &str, len: u64) -> std::io::Result<()> {
+    let st = nix::sys::statvfs::statvfs(Path::new(dir)).map_err(std::io::Error::from)?;
+    let avail = (st.blocks_available() as u64).saturating_mul(st.fragment_size() as u64);
+    if avail < len {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::StorageFull,
+            format!(
+                "{dir} has {} MiB free, the frame ring needs {} MiB",
+                avail >> 20,
+                len >> 20
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Create (or reset) a VM's frame ring before QEMU starts: a root-only
 /// file of `mib` MiB under `dir` (tmpfs or hugetlbfs) whose header the
 /// guest tools and the viewer attach to. Pages are only used as frames are
@@ -211,6 +228,15 @@ pub fn create_frame_ring(
         .create_new(true)
         .mode(0o600)
         .open(&path)?;
+    // QEMU maps the ring as guest RAM (shared) and reads all of it when the
+    // VM is saved or live-migrated; a page the filesystem cannot back (a
+    // ring larger than a small tmpfs such as docker's 64 MiB /dev/shm) is a
+    // SIGBUS that kills QEMU mid-migration. So refuse a ring the directory
+    // cannot hold; the caller then starts the VM without one.
+    if let Err(e) = ring_fits(dir, len as u64) {
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
+    }
     f.set_len(len as u64)?;
     // SAFETY: shared mapping of the file just sized; unmapped below.
     let p = unsafe {
@@ -585,6 +611,17 @@ mod tests {
             "too many slots"
         );
         assert!(!dir.path().join("horcrux-frames-vm_1").exists());
+    }
+
+    #[test]
+    fn frame_ring_larger_than_the_filesystem_is_refused() {
+        // A ring the tmpfs cannot back would SIGBUS QEMU when the VM is saved
+        // or migrated (docker's 64 MiB /dev/shm vs the 128 MiB default).
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().to_str().unwrap();
+        let e = create_frame_ring(d, "vm/2", u32::MAX, 3, 60).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::StorageFull, "{e}");
+        assert!(!dir.path().join("horcrux-frames-vm_2").exists());
     }
 
     #[test]
