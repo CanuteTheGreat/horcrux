@@ -5,14 +5,16 @@
 //! * `GET  /api/ceph/status`                health, monitors, mgr, OSD and PG counts, capacity
 //! * `GET  /api/ceph/monitors`, `/api/ceph/osds`, `/api/ceph/pools`, `/api/ceph/crush-rules`
 //! * `POST /api/ceph/osds/:id/:action`      `in` | `out`
+//! * `POST /api/ceph/osds`                  `{device, confirm}` create an OSD on a blank whole disk of THIS node
 //! * `POST /api/ceph/pools`                 `{name, pg_num, size, application}`
 //! * `DELETE /api/ceph/pools/:name?confirm=:name`
 //! * `GET  /api/ceph/flags`, `POST /api/ceph/flags/:flag` `{set: bool}` (noout, norebalance, ...)
 //!
 //! Where `ceph` is not installed or no cluster answers, the read routes say
-//! so (`available` / `error`) instead of failing. Creating/destroying OSDs
-//! and monitors (disk wiping, daemon deployment) is deliberately not done
-//! here.
+//! so (`available` / `error`) instead of failing. Creating an OSD only takes
+//! a blank whole disk (no partitions, signature, LVM or mount: nothing is
+//! ever wiped) on a node whose role allows OSDs; destroying OSDs and
+//! deploying monitors is not done here.
 use crate::api::system_admin::{run_secs, which};
 use crate::api::tasks;
 use crate::error::ApiError;
@@ -31,7 +33,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/ceph/status", get(status))
         .route("/api/ceph/monitors", get(monitors))
-        .route("/api/ceph/osds", get(osds))
+        .route("/api/ceph/osds", get(osds).post(create_osd))
         .route("/api/ceph/osds/:id/:action", post(osd_action))
         .route("/api/ceph/pools", get(pools).post(create_pool))
         .route("/api/ceph/pools/:name", axum::routing::delete(delete_pool))
@@ -489,6 +491,141 @@ async fn osd_action(
     Ok(Json(serde_json::json!({"osd": osd, "action": action})))
 }
 
+// ------------------------------------------------------------ OSD create
+
+#[derive(Debug, Deserialize)]
+struct NewOsd {
+    /// Whole-disk device of this node, e.g. /dev/nvme1n1.
+    device: String,
+    /// Must repeat `device`: the disk becomes an OSD.
+    confirm: Option<String>,
+}
+
+/// A device path we are willing to hand to ceph-volume: /dev/<name>, plain
+/// characters only (no `..`, no option-looking or shell-ish input).
+pub fn validate_osd_device_path(dev: &str) -> Result<(), String> {
+    let rest = dev.strip_prefix("/dev/").unwrap_or("");
+    let ok = !rest.is_empty()
+        && !rest.contains("..")
+        && !rest.starts_with('/')
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'));
+    if ok {
+        Ok(())
+    } else {
+        Err("device must be a path like /dev/nvme1n1".into())
+    }
+}
+
+fn lsblk_busy(node: &Value) -> Option<String> {
+    let name = node["name"].as_str().unwrap_or("?");
+    let mounted = |v: &Value| match v {
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => a.iter().any(|m| m.as_str().is_some_and(|s| !s.is_empty())),
+        _ => false,
+    };
+    if mounted(&node["mountpoint"]) || mounted(&node["mountpoints"]) {
+        return Some(format!("{name} is mounted"));
+    }
+    if let Some(kids) = node["children"].as_array() {
+        if !kids.is_empty() {
+            for k in kids {
+                if let Some(b) = lsblk_busy(k) {
+                    return Some(b);
+                }
+            }
+            return Some(format!("{name} has partitions or volumes on it"));
+        }
+    }
+    None
+}
+
+/// Decide from `lsblk -J -p -o NAME,TYPE,FSTYPE,MOUNTPOINT,RO <dev>` whether
+/// `dev` is a blank whole disk. Anything that already holds something is
+/// refused: Horcrux never wipes a disk on its own.
+pub fn check_osd_disk(dev: &str, lsblk: &Value) -> Result<(), String> {
+    let d = lsblk["blockdevices"]
+        .as_array()
+        .and_then(|a| a.first())
+        .ok_or_else(|| format!("{dev} is not a block device of this node"))?;
+    if d["type"].as_str() != Some("disk") {
+        return Err(format!(
+            "{dev} is a {} - an OSD takes a whole disk",
+            d["type"].as_str().unwrap_or("non-disk")
+        ));
+    }
+    let ro = &d["ro"];
+    if ro == &Value::Bool(true) || ro.as_str() == Some("1") || ro.as_u64() == Some(1) {
+        return Err(format!("{dev} is read-only"));
+    }
+    if let Some(b) = lsblk_busy(d) {
+        return Err(format!("{dev} is in use: {b}"));
+    }
+    if let Some(fs) = d["fstype"].as_str().filter(|f| !f.is_empty()) {
+        return Err(format!(
+            "{dev} already carries a {fs} signature; wipe it yourself (wipefs/ceph-volume lvm zap) if it is really free"
+        ));
+    }
+    Ok(())
+}
+
+/// `POST /api/ceph/osds` -- `ceph-volume lvm create --data <device>` on this
+/// node. Gated by the node's role/uplink (same rule as /api/ceph/placement),
+/// by an explicit `confirm`, and by the disk being blank.
+async fn create_osd(
+    State(state): State<Arc<AppState>>,
+    u: AuthExt,
+    Json(b): Json<NewOsd>,
+) -> Res<serde_json::Value> {
+    validate_osd_device_path(&b.device).map_err(ApiError::ValidationError)?;
+    if b.confirm.as_deref() != Some(b.device.as_str()) {
+        return Err(ApiError::BadRequest(
+            "this turns the disk into an OSD: repeat the device as \"confirm\"".into(),
+        ));
+    }
+    let local_up = crate::cluster::nic::best_speed_mbps(&crate::cluster::nic::scan_nics(
+        std::path::Path::new("/sys"),
+    ))
+    .unwrap_or(0);
+    let nodes = state.cluster_manager.list_nodes_with_local().await;
+    if let Some(me) = nodes.iter().find(|n| n.is_local) {
+        crate::cluster::roles::osd_allowed(&me.caps.clone().unwrap_or_default(), local_up, 10_000)
+            .map_err(|e| {
+                ApiError::Conflict(format!(
+                    "this node may not host OSDs ({e}); set its role to storage with PUT /api/cluster/nodes/:name/caps"
+                ))
+            })?;
+    }
+    let out = run_secs(
+        "lsblk",
+        &[
+            "-J",
+            "-p",
+            "-o",
+            "NAME,TYPE,FSTYPE,MOUNTPOINT,RO",
+            &b.device,
+        ],
+        15,
+    )
+    .await
+    .map_err(|_| ApiError::NotFound(format!("{} is not a block device of this node", b.device)))?;
+    let j: Value = serde_json::from_str(&out)
+        .map_err(|e| ApiError::Internal(format!("lsblk: unreadable JSON: {e}")))?;
+    check_osd_disk(&b.device, &j).map_err(ApiError::Conflict)?;
+    let r = run_secs("ceph-volume", &["lvm", "create", "--data", &b.device], 600).await;
+    tasks::record_done(
+        "ceph-osd",
+        &format!("create:{}", b.device),
+        &super::system_admin::user_of(&u),
+        &r.as_ref()
+            .map(|_| "OSD created".to_string())
+            .map_err(|e| e.clone()),
+    );
+    r.map_err(ApiError::Conflict)?;
+    Ok(Json(serde_json::json!({"created": b.device})))
+}
+
 // ----------------------------------------------------------------- pools
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -779,6 +916,66 @@ async fn set_flag(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn osd_device_path_rules() {
+        assert!(validate_osd_device_path("/dev/nvme1n1").is_ok());
+        assert!(validate_osd_device_path("/dev/disk/by-id/nvme-X_1").is_ok());
+        for bad in [
+            "nvme1n1",
+            "/dev/",
+            "/dev/../etc/passwd",
+            "/dev/sda; rm",
+            "-x",
+            "/etc/passwd",
+        ] {
+            assert!(validate_osd_device_path(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn osd_disk_only_when_blank() {
+        let lsblk = |t: &str| serde_json::from_str::<Value>(t).unwrap();
+        let blank = lsblk(
+            r#"{"blockdevices":[{"name":"/dev/nvme1n1","type":"disk","fstype":null,"mountpoint":null,"ro":false}]}"#,
+        );
+        assert!(check_osd_disk("/dev/nvme1n1", &blank).is_ok());
+        let part = lsblk(
+            r#"{"blockdevices":[{"name":"/dev/sda","type":"disk","fstype":null,"mountpoint":null,"ro":false,"children":[{"name":"/dev/sda1","type":"part","fstype":"ext4","mountpoint":"/boot"}]}]}"#,
+        );
+        assert!(check_osd_disk("/dev/sda", &part)
+            .unwrap_err()
+            .contains("mounted"));
+        let unmounted = lsblk(
+            r#"{"blockdevices":[{"name":"/dev/sdb","type":"disk","fstype":null,"mountpoint":null,"ro":false,"children":[{"name":"/dev/sdb1","type":"part","fstype":"xfs","mountpoint":null}]}]}"#,
+        );
+        assert!(check_osd_disk("/dev/sdb", &unmounted)
+            .unwrap_err()
+            .contains("partitions"));
+        let sig = lsblk(
+            r#"{"blockdevices":[{"name":"/dev/sdc","type":"disk","fstype":"LVM2_member","mountpoint":null,"ro":false}]}"#,
+        );
+        assert!(check_osd_disk("/dev/sdc", &sig)
+            .unwrap_err()
+            .contains("LVM2_member"));
+        let partdev = lsblk(
+            r#"{"blockdevices":[{"name":"/dev/sdb1","type":"part","fstype":null,"mountpoint":null,"ro":false}]}"#,
+        );
+        assert!(check_osd_disk("/dev/sdb1", &partdev)
+            .unwrap_err()
+            .contains("whole disk"));
+        let ro = lsblk(
+            r#"{"blockdevices":[{"name":"/dev/sr0","type":"disk","fstype":null,"mountpoint":null,"ro":true}]}"#,
+        );
+        assert!(check_osd_disk("/dev/sr0", &ro)
+            .unwrap_err()
+            .contains("read-only"));
+        let mps = lsblk(
+            r#"{"blockdevices":[{"name":"/dev/sdd","type":"disk","fstype":null,"mountpoints":["/data"],"ro":false}]}"#,
+        );
+        assert!(check_osd_disk("/dev/sdd", &mps).is_err());
+        assert!(check_osd_disk("/dev/x", &lsblk(r#"{"blockdevices":[]}"#)).is_err());
+    }
 
     #[test]
     fn recovery_tuning_cmds_scale_with_link() {

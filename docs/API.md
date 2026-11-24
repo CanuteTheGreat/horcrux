@@ -3239,3 +3239,7 @@ POST /api/vms/import/esxi           {..., "datastore": "datastore1", "folder": "
 `list` answers `[{name, vms: [{folder, vmx}]}]`; `preview` and `import` answer like the OVF import
 (`{plan, id}` / 201 `{vm, plan, warnings}`). 400 for a wrong password or unusable VM, 409 for a powered-on
 VM or one with snapshots, 403 for loopback/link-local hosts. See [OVF_IMPORT.md](OVF_IMPORT.md).
+
+## Ceph: create an OSD
+
+`POST /api/ceph/osds` with `{"device": "/dev/nvme1n1", "confirm": "/dev/nvme1n1"}` runs `ceph-volume lvm create --data <device>` on the node that serves the request. It is refused (409) unless this node's role is `storage` with a 10 GbE or faster uplink (the same rule as `GET /api/ceph/placement`), and unless the device is a blank whole disk: a partition, a mounted or read-only disk, or any disk with a partition table, filesystem, LVM or Ceph signature is refused, because Horcrux never wipes a disk. `confirm` must repeat `device` (400 otherwise). The result is recorded in Tasks.
