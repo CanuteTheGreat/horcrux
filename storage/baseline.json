@@ -1,7 +1,7 @@
 {
  "id": "storage",
  "last_full": "2026-11-14",
- "sha": "dbf544acfddc50a149655e2ed494691a24a8eaa2",
+ "sha": "ab59237a9d058a776f66811bd33bd4e341ddbcb9",
  "survivors": [
   "crates/horcrux-storage/src/storage/mod.rs: replace += with *= in StorageManager::create_volume",
   "crates/horcrux-storage/src/storage/mod.rs: replace += with -= in StorageManager::create_volume"
