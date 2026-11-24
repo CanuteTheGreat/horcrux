@@ -92,11 +92,17 @@ async fn manual_lock_refuses_lifecycle_until_cleared() {
         )
         .await;
     assert!(s == 200 || s == 201, "{v}");
-    let (st, body) = api.call(reqwest::Method::POST, "/vms/lock1/start", None).await;
+    let (st, body) = api
+        .call(reqwest::Method::POST, "/vms/lock1/start", None)
+        .await;
     assert_eq!(st, 409, "{body}");
     assert!(body.to_string().contains("locked"), "{body}");
     let (st, body) = api
-        .call(reqwest::Method::PUT, "/vms/lock1/config", Some(json!({"name": "Renamed"})))
+        .call(
+            reqwest::Method::PUT,
+            "/vms/lock1/config",
+            Some(json!({"name": "Renamed"})),
+        )
         .await;
     assert_eq!(st, 409, "{body}");
     assert_eq!(api.delete("/vms/lock1").await, 409);
