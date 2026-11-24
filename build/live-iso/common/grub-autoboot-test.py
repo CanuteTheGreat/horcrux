@@ -428,11 +428,13 @@ def run_mk_cases(img, a, slack, only):
         disk, start, cfg = build_disk_mk(img, c, d, a.grubd_script)
         if not c.get("stock"):
             m = re.search(r'set fallback="\$\{hx_fallback\}(\d+)"', cfg)
-            n = sum(1 for l in cfg.splitlines() if re.match(r"(menuentry|submenu) ", l))
-            step(f"{c['name']}: grub-mkconfig wrote a fallback chain ending in the retry entry", bool(m) and m and
-                 re.search(rf"(?m)^menuentry 'Start the boot menu again", cfg) is not None and int(m.group(1)) < n,
+            top = [l for l in cfg.splitlines() if re.match(r"(menuentry|submenu) ", l)]
+            retry = [i for i, l in enumerate(top) if "'horcrux-retry'" in l]
+            step(f"{c['name']}: grub-mkconfig wrote a fallback chain ending in the retry entry (by number)",
+                 m is not None and retry == [int(m.group(1))],
                  m.group(0) if m else "no `set fallback` in the generated grub.cfg")
-        restart_budget = (BE.RETRY_ROUNDS + 1) * (TIMEOUT + c["fails"] * ERR_PAUSE) + 30 + slack
+        # per round: the countdown, one error pause per kernel tried, and loading/redrawing time (one more pause's worth)
+        restart_budget = (BE.RETRY_ROUNDS + 1) * (TIMEOUT + (c["fails"] + 1) * ERR_PAUSE) + 30 + slack
         judge(img, c, d, disk, start, slack, MK_MARK, restart_budget)
 
 
