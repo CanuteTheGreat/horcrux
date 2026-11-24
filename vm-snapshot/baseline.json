@@ -1,7 +1,7 @@
 {
  "id": "vm-snapshot",
  "last_full": "2026-11-23",
- "sha": "9bd4fdae1661e20bb954b57e10f4aa6d174f3a6e",
+ "sha": "f72725f27af1099b31165832d84d279f3dcc6e5e",
  "survivors": [
   "crates/horcrux-vm/src/vm/snapshot.rs: replace != with == in VmSnapshotManager::create_live_snapshot",
   "crates/horcrux-vm/src/vm/snapshot.rs: replace VmSnapshotManager::get_disk_size -> Result<u64> with Ok(0)",
