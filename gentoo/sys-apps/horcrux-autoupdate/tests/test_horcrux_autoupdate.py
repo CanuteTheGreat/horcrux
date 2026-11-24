@@ -104,20 +104,24 @@ class ConfigAndParsing(Base):
 
     def test_world_args_prefer_binpkgs_and_guard_prebuilt(self):
         a = self.m.world_args(self.conf())
-        for want in ("--getbinpkg", "--usepkg", "--update", "--deep", "--newuse", "--changed-use", "--with-bdeps=n", "--keep-going", "@world", "--ask=n",
+        for want in ("--getbinpkg", "--usepkg", "--update", "--deep", "--newuse", "--changed-use", "--with-bdeps=y", "--keep-going", "@world", "--ask=n",
                      "--usepkg-exclude=app-emulation/horcrux-bin"):
             self.assertIn(want, a)
 
     def test_world_resolution_has_changed_use_and_bdeps_switches(self):
         c = self.conf()
-        self.assertEqual(c["WITH_BDEPS"], "no")
+        self.assertEqual(c["WITH_BDEPS"], "yes")
         self.assertEqual(c["CHANGED_USE"], "yes")
-        self.assertIn("--changed-use", self.m.world_args(c))
-        self.assertNotIn("--with-bdeps=y", self.m.world_args(c))
-        c["WITH_BDEPS"] = "yes"
+        a = self.m.world_args(c)
+        for want in ("--update", "--changed-use", "--newuse", "--deep", "--with-bdeps=y"):
+            self.assertIn(want, a)
+        self.assertNotIn("--with-bdeps=n", a)
+        self.assertEqual(self.m.bdeps_opt(c), "--with-bdeps=y")
+        c["WITH_BDEPS"] = "no"
         c["CHANGED_USE"] = "no"
-        self.assertIn("--with-bdeps=y", self.m.world_args(c))
+        self.assertIn("--with-bdeps=n", self.m.world_args(c))
         self.assertNotIn("--changed-use", self.m.world_args(c))
+        self.assertNotIn("--with-bdeps=y", self.m.world_args(c))
 
     def test_atom_of(self):
         self.assertEqual(self.m.atom_of("sys-firmware/intel-microcode-20261110_p20261111-r1"), "sys-firmware/intel-microcode")
@@ -188,6 +192,9 @@ class Runs(Base):
         self.assertEqual(st["pending"], 2)
         self.assertEqual(st["steps"]["depclean"], "removed 2")
         self.assertEqual([c for c in self.calls if "--depclean" in c and "--pretend" not in c][0][-2:], ["dev-libs/foo", "app-misc/bar"])
+        for c in self.calls:
+            if "--depclean" in c:
+                self.assertIn("--with-bdeps=y", c)
 
     def test_sync_failure_is_a_failure_but_update_still_runs(self):
         self.rc = {"emaint": 1}

@@ -7,7 +7,7 @@
   horcrux-autoupdate check    exit 0 ok / 1 warning / 2 critical, one line of text: for health checks and monitoring agents
   horcrux-autoupdate pending  list the world updates still pending
 
-One run: lock, `emaint sync -a`, boot-environment snapshot (ZFS root), `emerge --update --changed-use --newuse --deep @world` (--with-bdeps=y with WITH_BDEPS=yes; CHANGED_USE=no drops --changed-use) (binary packages from the
+One run: lock, `emaint sync -a`, boot-environment snapshot (ZFS root), `emerge --update --changed-use --newuse --deep @world` (--with-bdeps=y, the default; WITH_BDEPS=no selects --with-bdeps=n; CHANGED_USE=no drops --changed-use) (binary packages from the
 binhost preferred, source build as the fallback), a guarded `emerge --depclean`, `@preserved-rebuild`, `etc-update --preen`. Low CPU and I/O priority.
 Results land in STATE_DIR (status.json, failed, reboot-required) and LOG_DIR (one log per run). A new kernel, microcode or other package that
 needs a reboot is recorded in `reboot-required` (also /run/reboot-required); nothing is rebooted and nothing pops up.
@@ -50,9 +50,10 @@ DEFAULTS = {
     "SNAPSHOT": "yes",            # boot-environment / ZFS snapshot before the update (ZFS root only)
     "DEPCLEAN": "safe",           # safe | no. safe = only when `--pretend` shows no protected package and no more than DEPCLEAN_MAX removals
     "DEPCLEAN_MAX": "20",
-    "WITH_BDEPS": "no",           # yes: also update/install the BUILD dependencies of installed packages (--with-bdeps=y). Off by default: with binary
-                                  # packages they are never used, and on a server they pull ~80 compilers/headers/X11 libraries that depclean then refuses to remove.
-                                  # A desktop that wants exactly `emerge -uUND --with-bdeps=y @world` sets WITH_BDEPS=yes in its autoupdate.conf
+    "WITH_BDEPS": "yes",          # yes (default): exactly `emerge -uUND --with-bdeps=y @world` on every Horcrux install, desktop and server: build dependencies of
+                                  # installed packages are kept updated too. A host that must not carry them sets WITH_BDEPS=no itself (never changed for it here).
+                                  # On a headless server the first run therefore also merges build-only packages (compilers, headers, X11 libraries);
+                                  # depclean uses the same switch, so it never offers them for removal while WITH_BDEPS=yes.
     "CHANGED_USE": "yes",         # yes (default): --changed-use, so a USE change on an installed package is picked up (the -U of `-uUND`)
     "DEPCLEAN_KEEP": "sys-kernel/* sys-fs/zfs-kmod sys-fs/zfs sys-boot/* x11-drivers/nvidia-drivers sys-firmware/* app-emulation/horcrux* sys-apps/horcrux*",
     "PRESERVED_REBUILD": "yes",
@@ -216,7 +217,7 @@ def emerge_opts(conf):
 
 
 def bdeps_opt(conf):
-    return "--with-bdeps=y" if yes(conf.get("WITH_BDEPS", "no")) else "--with-bdeps=n"
+    return "--with-bdeps=y" if yes(conf.get("WITH_BDEPS", "yes")) else "--with-bdeps=n"
 
 
 def resolve_opts(conf):
@@ -546,7 +547,7 @@ def do_run(conf, reason="manual", runner=sh):
             if rc != 0:
                 fail("update", "emerge @world failed: " + " | ".join(tail[-4:]))
             elif conf["DEPCLEAN"] == "safe":
-                rc, lines = runner(prio(["emerge", "--ask=n", "--color=n", "--nospinner", "--depclean", "--pretend"]), log, full=True)
+                rc, lines = runner(prio(["emerge", "--ask=n", "--color=n", "--nospinner", "--depclean", "--pretend", bdeps_opt(conf)]), log, full=True)
                 if rc != 0:
                     st["steps"]["depclean"] = "skipped: pretend run failed"
                 else:
@@ -558,7 +559,7 @@ def do_run(conf, reason="manual", runner=sh):
                     elif not remove:
                         st["steps"]["depclean"] = "nothing to remove" + kept_note
                     else:
-                        rc, tail = runner(prio(["emerge", "--ask=n", "--color=n", "--nospinner", "--depclean"] + remove), log)
+                        rc, tail = runner(prio(["emerge", "--ask=n", "--color=n", "--nospinner", "--depclean", bdeps_opt(conf)] + remove), log)
                         st["steps"]["depclean"] = f"removed {len(remove)}{kept_note}" if rc == 0 else rc
                         if rc != 0:
                             fail("depclean", "emerge --depclean failed: " + " | ".join(tail[-3:]))
