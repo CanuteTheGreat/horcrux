@@ -826,6 +826,15 @@ async fn update_config(
     Path(id): Path<String>,
     Json(upd): Json<VmConfigUpdate>,
 ) -> Result<Json<VmConfig>, ApiError> {
+    // A locked VM takes no config change except one that clears the lock.
+    let clears_lock = upd
+        .hardware
+        .as_ref()
+        .is_some_and(|hw| hw.adv.lock.as_deref() != Some("manual"));
+    if !clears_lock {
+        crate::api::protection::ensure_vm_unlocked(&state, &id, "changing its configuration")
+            .await?;
+    }
     if let Some(hw) = &upd.hardware {
         check_host_hardware(&state, hw).await?;
     }
@@ -1011,6 +1020,7 @@ async fn shutdown(
     Path(id): Path<String>,
     body: Option<Json<ShutdownRequest>>,
 ) -> Result<Json<VmConfig>, ApiError> {
+    crate::api::protection::ensure_vm_unlocked(&state, &id, "shutting it down").await?;
     let req = body.map(|Json(b)| b).unwrap_or_default();
     let vm = state
         .vm_manager

@@ -87,6 +87,19 @@ pub async fn ensure_vm_config_unprotected(
     Ok(())
 }
 
+/// `hardware.adv.lock = "manual"`: refuse start/stop/delete/config changes
+/// until the lock is cleared. `action` completes "...before <action>".
+pub async fn ensure_vm_unlocked(state: &AppState, id: &str, action: &str) -> Result<(), ApiError> {
+    if let Ok(vm) = state.vm_manager.get_vm(id).await {
+        if vm.hardware.adv.lock.as_deref() == Some("manual") {
+            return Err(ApiError::Conflict(format!(
+                "VM {id} is locked (lock=manual): clear Lock in its Hardware > Advanced settings before {action}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Err(409) when the container is protected.
 pub async fn ensure_ct_unprotected(state: &AppState, id: &str) -> Result<(), ApiError> {
     if is_protected(state, &ct_key(id)).await {

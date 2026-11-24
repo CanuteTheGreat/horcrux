@@ -1903,6 +1903,7 @@ async fn start_vm(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<VmConfig>, ApiError> {
+    api::protection::ensure_vm_unlocked(&state, &id, "starting it").await?;
     Ok(Json(start_vm_by_id(&state, &id).await?))
 }
 
@@ -1952,6 +1953,7 @@ async fn stop_vm(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<VmConfig>, ApiError> {
+    api::protection::ensure_vm_unlocked(&state, &id, "stopping it").await?;
     let old_status = state
         .vm_manager
         .get_vm(&id)
@@ -1991,6 +1993,7 @@ async fn delete_vm(
     auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    api::protection::ensure_vm_unlocked(&state, &id, "deleting it").await?;
     api::protection::ensure_vm_unprotected(&state, &id).await?;
     // Get VM name before deletion
     let vm_name = state

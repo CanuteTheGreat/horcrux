@@ -543,7 +543,7 @@ firewall must let UDP 67 and UDP/TCP 53 reach the server address.
 
 ### Protection flag
 
-`GET|PUT /api/vms/{id}/protection` and `GET|PUT /api/containers/{id}/protection`, body `{"protected": true}`. While set, `DELETE` of that guest answers `409` and names the way out; clear the flag (`{"protected": false}`) to delete. The flag is dropped when the guest is deleted. Needs VM.Audit to read, VM.Config to change. A VM whose Hardware > Advanced **Protection** setting (`hardware.adv.protection`) is on is refused the same way for `DELETE /api/vms/{id}` and for removing a disk (409).
+`GET|PUT /api/vms/{id}/protection` and `GET|PUT /api/containers/{id}/protection`, body `{"protected": true}`. While set, `DELETE` of that guest answers `409` and names the way out; clear the flag (`{"protected": false}`) to delete. The flag is dropped when the guest is deleted. Needs VM.Audit to read, VM.Config to change. A VM whose Hardware > Advanced **Protection** setting (`hardware.adv.protection`) is on is refused the same way for `DELETE /api/vms/{id}` and for removing a disk (409). A VM with Hardware > Advanced **Lock** = `manual` (`hardware.adv.lock`) answers 409 to start, stop, shutdown, delete and any `PUT /api/vms/{id}/config` except one whose `hardware.adv.lock` is no longer `manual` (that unlocks it).
 
 ## Snapshots
 

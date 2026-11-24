@@ -72,3 +72,43 @@ async fn advanced_protection_setting_refuses_delete() {
     assert!(body.to_string().contains("protection flag"), "{body}");
     assert_eq!(api.get("/vms/keep2").await.0, 200, "VM must still exist");
 }
+
+/// `hardware.adv.lock = "manual"` refuses start, config changes and delete
+/// until a config update clears the lock.
+#[tokio::test]
+async fn manual_lock_refuses_lifecycle_until_cleared() {
+    let dir = scratch("lock-adv");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+
+    let (s, v) = api
+        .post(
+            "/vms",
+            json!({"id": "lock1", "name": "Lock1", "hypervisor": "qemu", "architecture": "x86_64",
+                   "cpus": 1, "memory": 256, "disk_size": 1, "status": "stopped",
+                   "hardware": {"adv": {"lock": "manual"}}}),
+        )
+        .await;
+    assert!(s == 200 || s == 201, "{v}");
+    let (st, body) = api.call(reqwest::Method::POST, "/vms/lock1/start", None).await;
+    assert_eq!(st, 409, "{body}");
+    assert!(body.to_string().contains("locked"), "{body}");
+    let (st, body) = api
+        .call(reqwest::Method::PUT, "/vms/lock1/config", Some(json!({"name": "Renamed"})))
+        .await;
+    assert_eq!(st, 409, "{body}");
+    assert_eq!(api.delete("/vms/lock1").await, 409);
+
+    let (st, body) = api
+        .call(
+            reqwest::Method::PUT,
+            "/vms/lock1/config",
+            Some(json!({"hardware": {"adv": {}}})),
+        )
+        .await;
+    assert_eq!(st, 200, "unlock must be accepted: {body}");
+    let st = api.delete("/vms/lock1").await;
+    assert!(st == 200 || st == 204, "delete after unlock: {st}");
+}
