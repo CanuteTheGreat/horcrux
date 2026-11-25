@@ -1,0 +1,34 @@
+# Horcrux game scaling (games-util/horcrux-game-scale). Per-user overrides: ~/.config/horcrux/game-scale.toml (same keys).
+# Why: on a scaled GNOME desktop mutter draws X11 games at 1/ceil(scale) of the desktop's size; the wrapper runs them in a
+# nested gamescope that covers the monitor. Every value below is the built-in default; delete a line to keep the default.
+
+[wrapper]
+# auto = wrap when the monitor is scaled, gamescope = always (on Wayland), off = never
+mode = "auto"
+gamescope = "gamescope"
+backend = "wayland"
+# true: gamescope covers the whole monitor; false: a window of the monitor's size
+fullscreen = true
+# game resolution: "native" (the monitor's mode), "WxH", or a factor of native such as "0.75" (then pick an upscale filter)
+render = "native"
+# "" (gamescope default), linear, nearest, fsr, nis, pixel
+filter = ""
+grab_cursor = false
+# auto = the GPU the game is PRIME-offloaded to; default = gamescope's choice; or "VENDOR:DEVICE" (lspci -nn ids)
+vk_device = "auto"
+# primary, or a connector name (eDP-1, DP-2, ...)
+monitor = "primary"
+extra_args = []
+# Steam app ids that always run without gamescope (a single game: launch option "HORCRUX_GAME_SCALE=0 %command%" works too)
+exclude_appids = []
+fallback_seconds = 10
+log = "horcrux/game-scale.log"
+log_max_bytes = 262144
+
+[launch_options]
+# false: horcrux-steam-launch-options leaves Steam's launch options alone (run `horcrux-steam-launch-options remove` to undo)
+manage = true
+wrapper = "horcrux-game-scale"
+exclude_appids = []
+interval_seconds = 15
+steam_dirs = [".local/share/Steam", ".steam/steam", ".var/app/com.valvesoftware.Steam/.local/share/Steam"]

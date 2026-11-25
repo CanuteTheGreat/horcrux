@@ -9,3 +9,6 @@ app-emulation/horcrux ~amd64 ~arm64
 app-containers/container-libs ~amd64 ~arm64
 app-containers/netavark ~amd64 ~arm64
 app-containers/aardvark-dns ~amd64 ~arm64
+
+# games-util/horcrux-game-scale: the nested compositor it runs games in (::gentoo keywords gamescope ~amd64 only)
+gui-wm/gamescope ~amd64

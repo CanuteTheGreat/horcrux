@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Horcrux Steam game scaling
+Comment=Keeps horcrux-game-scale in front of every Steam game's launch options (only while Steam is closed)
+Exec=/usr/bin/horcrux-steam-launch-options watch
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-AutoRestart=true

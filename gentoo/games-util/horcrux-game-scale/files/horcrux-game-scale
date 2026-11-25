@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""horcrux-game-scale: run a game at the right size on a scaled GNOME Wayland desktop.
+
+    horcrux-game-scale %command%                 (Steam launch option; horcrux-steam-launch-options sets it for every game)
+    horcrux-game-scale [--] GAME ARGS...         (any other launcher)
+    horcrux-game-scale --explain [--] GAME ...   print the decision as JSON and exit (nothing is started)
+
+Why: mutter >= 50 always presents X11 (Xwayland) surfaces at buffer scale ceil(monitor scale), so the X screen is larger than the
+panel (2560x1600 at 133 % -> 3840x2400) and a game that draws a fixed-size window shows at 1/ceil(scale) of the size the desktop
+uses (a windowed 1280x720 game covers 853x480 panel pixels at 133 %). X11 desktop apps learn the factor from XSETTINGS; games
+draw their own surface and never do. The fix runs the game inside a nested gamescope: gamescope is a Wayland client of mutter, sized
+by mutter to the whole monitor (fullscreen), renders the game in its own Xwayland at the panel's native resolution and scales the
+game's window to fill it. A Proton game and a native Linux game are treated the same: the wrapper sits outside the whole Steam
+command (Steam Linux Runtime + Proton + game), on the host.
+
+Nothing is fixed in the code: the monitor size, refresh rate and scale come from mutter (org.gnome.Mutter.DisplayConfig) at
+launch time; every behaviour is a key in /etc/horcrux/game-scale.toml (system) and ~/.config/horcrux/game-scale.toml (user).
+The wrapper runs the game directly (no gamescope) when nothing needs fixing: monitor scale 1, an X11 session, already inside
+gamescope (Steam Deck-style session or a launch option that already uses gamescope), mode = "off", HORCRUX_GAME_SCALE=0, an
+excluded app id, gamescope not installed, or the compositor is not mutter. Every decision is logged to
+$XDG_STATE_HOME/horcrux/game-scale.log.
+"""
+import json
+import math
+import os
+import shlex
+import shutil
+import sys
+import time
+
+try:
+    import tomllib
+except ImportError:  # Python < 3.11
+    tomllib = None
+
+VERSION = "1"
+SYSTEM_CONF = os.environ.get("HORCRUX_GAME_SCALE_SYSCONF", "/etc/horcrux/game-scale.toml")
+
+DEFAULTS = {
+    # auto: wrap in gamescope when the monitor is scaled; gamescope: always wrap (on a Wayland session); off: never wrap
+    "mode": "auto",
+    # the gamescope binary (name on PATH or absolute path)
+    "gamescope": "gamescope",
+    # gamescope backend for the nested compositor (gamescope --backend)
+    "backend": "wayland",
+    # fullscreen gamescope (true) covers the monitor mutter puts it on; false = a window of the monitor's size
+    "fullscreen": True,
+    # game (nested) resolution: "native" = the monitor's mode, "WxH", or a factor of the native size such as "0.75"
+    "render": "native",
+    # gamescope upscale filter for render < native ("" = gamescope's default; linear, nearest, fsr, nis, pixel)
+    "filter": "",
+    # pass --force-grab-cursor (some games need it for mouse look inside nested gamescope)
+    "grab_cursor": False,
+    # Vulkan device for gamescope's compositing: "auto" (the GPU the game is offloaded to, when the environment says so), "default"
+    # (gamescope's choice) or "VENDOR:DEVICE" hex ids as in lspci -nn
+    "vk_device": "auto",
+    # which monitor's size to use: "primary" or a connector name (eDP-1, DP-2, ...)
+    "monitor": "primary",
+    # extra gamescope arguments, inserted before "--"
+    "extra_args": [],
+    # Steam app ids that run unwrapped (also settable per run: HORCRUX_GAME_SCALE=0 in the launch option)
+    "exclude_appids": [],
+    # gamescope exiting non-zero within this many seconds (it could not start here) runs the game directly; 0 = never
+    "fallback_seconds": 10,
+    # the decision log ("" = none); relative paths are under $XDG_STATE_HOME (default ~/.local/state)
+    "log": "horcrux/game-scale.log",
+    # rotate the log above this many bytes
+    "log_max_bytes": 262144,
+}
+
+
+def load_config(user_conf=None):
+    cfg = dict(DEFAULTS)
+    errors = []
+    home = os.path.expanduser("~")
+    user_conf = user_conf or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config"), "horcrux", "game-scale.toml")
+    for path in (SYSTEM_CONF, user_conf):
+        if not os.path.exists(path):
+            continue
+        if tomllib is None:
+            errors.append(f"{path}: no tomllib (Python < 3.11), file ignored")
+            continue
+        try:
+            with open(path, "rb") as f:
+                data = tomllib.load(f)
+        except (OSError, ValueError) as e:
+            errors.append(f"{path}: {e}")
+            continue
+        sec = data.get("wrapper", data)
+        for k, v in sec.items():
+            if k not in DEFAULTS:
+                errors.append(f"{path}: unknown key {k!r}")
+            elif type(v) is not type(DEFAULTS[k]) and not (isinstance(DEFAULTS[k], int) and isinstance(v, int)):
+                errors.append(f"{path}: {k} must be {type(DEFAULTS[k]).__name__}")
+            else:
+                cfg[k] = v
+    return cfg, errors
+
+
+# ------------------------------------------------------------------ monitor state from mutter
+def mutter_monitors():
+    """[{connector, width, height, refresh, scale, primary, transform}] of the active logical monitors (physical mode size)."""
+    import gi
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    res = bus.call_sync("org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig", "org.gnome.Mutter.DisplayConfig",
+                        "GetCurrentState", None, None, 0, 5000, None).unpack()
+    _serial, monitors, logical, _props = res
+    modes = {}
+    for (conn, _vendor, _product, _ser), mlist, _mprops in monitors:
+        for _mid, w, h, rate, _pref, _sup, mp in mlist:
+            if mp.get("is-current"):
+                modes[conn] = (w, h, rate)
+    out = []
+    for x, y, scale, transform, primary, mons, _lp in logical:
+        conn = mons[0][0]
+        if conn not in modes:
+            continue
+        w, h, rate = modes[conn]
+        if transform in (1, 3, 5, 7):  # 90/270 degrees: the logical monitor is portrait
+            w, h = h, w
+        out.append({"connector": conn, "width": w, "height": h, "refresh": rate, "scale": scale, "primary": bool(primary),
+                    "transform": transform, "x": x, "y": y})
+    return out
+
+
+def pick_monitor(mons, want):
+    if not mons:
+        return None
+    if want and want != "primary":
+        for m in mons:
+            if m["connector"] == want:
+                return m
+    for m in mons:
+        if m["primary"]:
+            return m
+    return mons[0]
+
+
+def render_size(cfg, mon):
+    r = str(cfg["render"]).strip().lower()
+    w, h = mon["width"], mon["height"]
+    if r in ("", "native"):
+        return w, h
+    if "x" in r:
+        a, b = r.split("x", 1)
+        return int(a), int(b)
+    f = float(r)
+    if not 0 < f <= 4:
+        raise ValueError(f"render factor {f} out of range")
+    return max(1, round(w * f)), max(1, round(h * f))
+
+
+def nvidia_offload_device():
+    """VENDOR:DEVICE of the NVIDIA GPU when the game is PRIME-offloaded to it, else None."""
+    if os.environ.get("__NV_PRIME_RENDER_OFFLOAD") != "1":
+        return None
+    base = "/sys/bus/pci/devices"
+    try:
+        for d in sorted(os.listdir(base)):
+            p = os.path.join(base, d)
+            try:
+                cls = open(os.path.join(p, "class")).read().strip()
+                ven = open(os.path.join(p, "vendor")).read().strip()
+                dev = open(os.path.join(p, "device")).read().strip()
+            except OSError:
+                continue
+            if cls.startswith("0x03") and ven == "0x10de":
+                return f"10de:{dev[2:]}"
+    except OSError:
+        pass
+    return None
+
+
+# ------------------------------------------------------------------ decision
+def decide(cmd, env=None, cfg=None, monitors=None, which=shutil.which):
+    """(wrap: bool, argv: list, reason: str, info: dict). monitors=None queries mutter."""
+    env = os.environ if env is None else env
+    cfg = cfg or load_config()[0]
+    info = {"cmd": cmd[:1], "appid": env.get("SteamAppId") or env.get("SteamGameId") or ""}
+    direct = lambda reason: (False, list(cmd), reason, info)  # noqa: E731
+    if not cmd:
+        return False, [], "no command given", info
+    if env.get("HORCRUX_GAME_SCALE", "").lower() in ("0", "off", "no", "false"):
+        return direct("HORCRUX_GAME_SCALE=0 in the environment")
+    mode = cfg["mode"]
+    if mode == "off":
+        return direct("mode = off")
+    if info["appid"] and info["appid"] in [str(a) for a in cfg["exclude_appids"]]:
+        return direct(f"app id {info['appid']} is in exclude_appids")
+    if env.get("GAMESCOPE_WAYLAND_DISPLAY") or "gamescope" in env.get("XDG_CURRENT_DESKTOP", "").lower():
+        return direct("already running inside gamescope")
+    if any(os.path.basename(a) == "gamescope" for a in cmd):
+        return direct("the command already runs gamescope")
+    if not env.get("WAYLAND_DISPLAY") or env.get("XDG_SESSION_TYPE", "wayland") == "x11":
+        return direct("not a Wayland session: X11 games are not rescaled by an X server")
+    gs = which(cfg["gamescope"]) if not os.path.isabs(cfg["gamescope"]) else (cfg["gamescope"] if os.access(cfg["gamescope"], os.X_OK) else None)
+    if not gs:
+        return direct(f"{cfg['gamescope']} is not installed")
+    if monitors is None:
+        try:
+            monitors = mutter_monitors()
+        except Exception as e:  # noqa: BLE001 - no mutter (another compositor) or no session bus: run the game as is
+            return direct(f"no monitor state from mutter ({type(e).__name__}: {str(e)[:120]})")
+    mon = pick_monitor(monitors, cfg["monitor"])
+    if not mon:
+        return direct("mutter reports no active monitor")
+    info["monitor"] = mon
+    if mode == "auto" and abs(mon["scale"] - 1.0) < 1e-3:
+        return direct(f"monitor {mon['connector']} is not scaled (scale 1)")
+    try:
+        rw, rh = render_size(cfg, mon)
+    except (ValueError, TypeError) as e:
+        return direct(f"bad render setting {cfg['render']!r}: {e}")
+    argv = [gs, "--backend", cfg["backend"], "-W", str(mon["width"]), "-H", str(mon["height"]), "-w", str(rw), "-h", str(rh)]
+    if mon.get("refresh"):
+        argv += ["-r", str(max(1, int(round(mon["refresh"]))))]
+    if cfg["fullscreen"]:
+        argv.append("-f")
+    if cfg["filter"]:
+        argv += ["-F", cfg["filter"]]
+    if cfg["grab_cursor"]:
+        argv.append("--force-grab-cursor")
+    vk = cfg["vk_device"]
+    if vk == "auto":
+        vk = nvidia_offload_device()
+    elif vk == "default":
+        vk = None
+    if vk:
+        argv += ["--prefer-vk-device", vk]
+    argv += [str(a) for a in cfg["extra_args"]]
+    argv += ["--"] + list(cmd)
+    info["render"] = [rw, rh]
+    return True, argv, (f"monitor {mon['connector']} {mon['width']}x{mon['height']} at scale {mon['scale']:.4g}: "
+                        f"X11 games would show at 1/{math.ceil(mon['scale'] - 1e-6)} size, running them in gamescope"), info
+
+
+def log(cfg, line):
+    rel = cfg.get("log") or ""
+    if not rel:
+        return
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    path = rel if os.path.isabs(rel) else os.path.join(base, rel)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path) and os.path.getsize(path) > int(cfg.get("log_max_bytes") or 0) > 0:
+            os.replace(path, path + ".1")
+        with open(path, "a") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%S ") + line + "\n")
+    except OSError:
+        pass
+
+
+def main(argv):
+    explain = False
+    args = argv[1:]
+    if args[:1] == ["--version"]:
+        print(f"horcrux-game-scale {VERSION}")
+        return 0
+    if args[:1] in (["--help"], ["-h"]):
+        print(__doc__)
+        return 0
+    if args[:1] == ["--explain"]:
+        explain, args = True, args[1:]
+    if args[:1] == ["--"]:
+        args = args[1:]
+    cfg, errors = load_config()
+    wrap, run, reason, info = decide(args, cfg=cfg)
+    for e in errors:
+        print(f"horcrux-game-scale: config: {e}", file=sys.stderr)
+    if explain:
+        print(json.dumps({"wrap": wrap, "reason": reason, "argv": run, "info": info, "config_errors": errors}, indent=1))
+        return 0
+    log(cfg, f"appid={info.get('appid') or '-'} wrap={'yes' if wrap else 'no'} reason={reason!r} argv={shlex.join(run[:12])}")
+    if not run:
+        print("usage: horcrux-game-scale GAME [ARGS...]   (Steam: horcrux-game-scale %command%)", file=sys.stderr)
+        return 2
+    if not wrap:
+        os.execvp(run[0], run)
+    # gamescope runs as a child so that a gamescope that cannot start on this GPU/compositor never leaves the user without the
+    # game: a non-zero exit within fallback_seconds runs the game directly (logged).
+    import signal
+    import subprocess
+    t0 = time.monotonic()
+    try:
+        p = subprocess.Popen(run)
+    except OSError as e:
+        log(cfg, f"gamescope could not be started ({e}); running the game directly")
+        os.execvp(args[0], args)
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(s, lambda n, _f: p.send_signal(n))
+    rc = p.wait()
+    if rc != 0 and time.monotonic() - t0 < float(cfg["fallback_seconds"]):
+        log(cfg, f"gamescope exited {rc} after {time.monotonic() - t0:.1f} s; running the game directly")
+        os.execvp(args[0], args)
+    return rc if rc >= 0 else 128 - rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

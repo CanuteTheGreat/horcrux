@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="project">
+		<name>Horcrux</name>
+	</maintainer>
+	<longdescription>
+		On GNOME (mutter 50 and newer) every X11 window is drawn at the next whole scale factor, so on a desktop scaled to
+		125-175 % a game's window appears at half or less of the size the desktop uses. horcrux-game-scale runs the game in a
+		nested gamescope that mutter sizes to the monitor; horcrux-steam-launch-options puts it in front of every Steam game's
+		launch options. Monitor size, refresh rate and scale come from mutter at launch; settings in /etc/horcrux/game-scale.toml.
+	</longdescription>
+</pkgmetadata>

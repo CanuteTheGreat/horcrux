@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""horcrux-steam-launch-options: put `horcrux-game-scale %command%` in front of every Steam game's launch options.
+
+    horcrux-steam-launch-options status            what is set, per Steam account and game (read-only)
+    horcrux-steam-launch-options apply [--force]   add the wrapper to every installed/known game (only while Steam is not running)
+    horcrux-steam-launch-options remove [--force]  restore every launch option this tool changed
+    horcrux-steam-launch-options watch             apply whenever Steam is not running and its config or library changed
+                                                   (started at login by /etc/xdg/autostart/horcrux-steam-launch-options.desktop)
+
+Steam has no global launch option (ValveSoftware/steam-for-linux#6443) and a compatibility tool cannot wrap the Steam Linux Runtime +
+Proton from the outside (a tool's required tool is the OUTER command), so the per-game LaunchOptions in
+userdata/<account>/config/localconfig.vdf are the one place where a host-side wrapper reaches Proton AND native Linux games alike.
+Steam reads that file at start and rewrites it at exit, so it is only edited while Steam is not running (a backup is kept next to
+it). Existing options are kept: "-vulkan" becomes "horcrux-game-scale %command% -vulkan", "FOO=1 %command%" becomes
+"FOO=1 horcrux-game-scale %command%"; an option that already runs gamescope is left alone. `remove` restores exactly what each
+option was before (state: $XDG_STATE_HOME/horcrux/steam-launch-options.json).
+
+Settings: [launch_options] in /etc/horcrux/game-scale.toml and ~/.config/horcrux/game-scale.toml (manage, wrapper,
+exclude_appids, interval_seconds, steam_dirs).
+"""
+import glob
+import json
+import os
+import re
+import shutil
+import sys
+import time
+
+try:
+    import tomllib
+except ImportError:
+    tomllib = None
+
+SYSTEM_CONF = os.environ.get("HORCRUX_GAME_SCALE_SYSCONF", "/etc/horcrux/game-scale.toml")
+DEFAULTS = {
+    "manage": True,                      # false: apply/watch do nothing (remove still works)
+    "wrapper": "horcrux-game-scale",     # the command put in front of %command%
+    "exclude_appids": [],                # Steam app ids left untouched
+    "interval_seconds": 15,              # watch: how often to look at Steam
+    # Steam installations (relative to $HOME unless absolute); the first that exists per real path is used
+    "steam_dirs": [".local/share/Steam", ".steam/steam", ".var/app/com.valvesoftware.Steam/.local/share/Steam"],
+}
+
+
+def load_config():
+    cfg = dict(DEFAULTS)
+    errors = []
+    home = os.path.expanduser("~")
+    user = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config"), "horcrux", "game-scale.toml")
+    for path in (SYSTEM_CONF, user):
+        if not os.path.exists(path) or tomllib is None:
+            continue
+        try:
+            with open(path, "rb") as f:
+                sec = tomllib.load(f).get("launch_options", {})
+        except (OSError, ValueError) as e:
+            errors.append(f"{path}: {e}")
+            continue
+        for k, v in sec.items():
+            if k in DEFAULTS and type(v) is type(DEFAULTS[k]):
+                cfg[k] = v
+            else:
+                errors.append(f"{path}: [launch_options] {k}: unknown key or wrong type")
+    return cfg, errors
+
+
+# ------------------------------------------------------------------ Valve KeyValues (text VDF)
+class VdfError(ValueError):
+    pass
+
+
+_TOK = re.compile(r'\s+|//[^\n]*|"((?:[^"\\]|\\.)*)"|([{}])|([^\s{}"]+)', re.S)
+_UNESC = {"n": "\n", "t": "\t", "\\": "\\", '"': '"'}
+
+
+def _unescape(s):
+    return re.sub(r"\\(.)", lambda m: _UNESC.get(m.group(1), "\\" + m.group(1)), s)
+
+
+def _escape(s):
+    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\t", "\\t")
+
+
+def read(path, errors="strict"):
+    with open(path, encoding="utf-8", errors=errors) as f:
+        return f.read()
+
+
+def vdf_loads(text):
+    """Parse to nested lists of [key, value] pairs (value = str or list), order and duplicates preserved."""
+    toks = []
+    pos = 0
+    while pos < len(text):
+        m = _TOK.match(text, pos)
+        if not m:
+            raise VdfError(f"unexpected character at offset {pos}")
+        pos = m.end()
+        if m.group(1) is not None:
+            toks.append(("s", _unescape(m.group(1))))
+        elif m.group(2):
+            toks.append((m.group(2), None))
+        elif m.group(3):
+            toks.append(("s", m.group(3)))
+    i = 0
+
+    def block(top):
+        nonlocal i
+        items = []
+        while i < len(toks):
+            kind, val = toks[i]
+            if kind == "}":
+                if top:
+                    raise VdfError("unbalanced }")
+                i += 1
+                return items
+            if kind != "s":
+                raise VdfError("expected a key")
+            i += 1
+            if i >= len(toks):
+                raise VdfError(f"key {val!r} without value")
+            k2, v2 = toks[i]
+            if k2 == "{":
+                i += 1
+                items.append([val, block(False)])
+            elif k2 == "s":
+                i += 1
+                items.append([val, v2])
+            else:
+                raise VdfError(f"key {val!r}: unexpected }}")
+        if not top:
+            raise VdfError("missing }")
+        return items
+
+    return block(True)
+
+
+def vdf_dumps(items, depth=0):
+    out = []
+    ind = "\t" * depth
+    for k, v in items:
+        if isinstance(v, list):
+            out.append(f'{ind}"{_escape(k)}"\n{ind}{{\n{vdf_dumps(v, depth + 1)}{ind}}}\n')
+        else:
+            out.append(f'{ind}"{_escape(k)}"\t\t"{_escape(v)}"\n')
+    return "".join(out)
+
+
+def child(items, key, create=False):
+    for kv in items:
+        if kv[0].lower() == key.lower() and isinstance(kv[1], list):
+            return kv[1]
+    if create:
+        new = []
+        items.append([key, new])
+        return new
+    return None
+
+
+def get(items, key):
+    for kv in items:
+        if kv[0].lower() == key.lower() and isinstance(kv[1], str):
+            return kv[1]
+    return None
+
+
+def put(items, key, value):
+    for kv in items:
+        if kv[0].lower() == key.lower() and isinstance(kv[1], str):
+            kv[1] = value
+            return
+    items.append([key, value])
+
+
+# ------------------------------------------------------------------ Steam layout
+def steam_roots(cfg):
+    home = os.path.expanduser("~")
+    seen, roots = set(), []
+    for d in cfg["steam_dirs"]:
+        p = d if os.path.isabs(d) else os.path.join(home, d)
+        if os.path.isdir(p):
+            rp = os.path.realpath(p)
+            if rp not in seen:
+                seen.add(rp)
+                roots.append(rp)
+    return roots
+
+
+def library_dirs(root):
+    libs = [root]
+    f = os.path.join(root, "steamapps", "libraryfolders.vdf")
+    try:
+        lf = child(vdf_loads(read(f, "replace")), "libraryfolders") or []
+        for _k, v in lf:
+            path = get(v, "path") if isinstance(v, list) else v
+            if path and os.path.isdir(path) and os.path.realpath(path) not in [os.path.realpath(x) for x in libs]:
+                libs.append(path)
+    except (OSError, VdfError):
+        pass
+    return libs
+
+
+def installed_games(root):
+    """{appid: name} of installed apps that are games (tools such as Proton / Steam Linux Runtime carry a toolmanifest.vdf)."""
+    games = {}
+    for lib in library_dirs(root):
+        for acf in glob.glob(os.path.join(lib, "steamapps", "appmanifest_*.acf")):
+            try:
+                st = child(vdf_loads(read(acf, "replace")), "AppState") or []
+            except (OSError, VdfError):
+                continue
+            appid, name, inst = get(st, "appid"), get(st, "name") or "", get(st, "installdir") or ""
+            if not appid or not inst:
+                continue
+            if os.path.exists(os.path.join(lib, "steamapps", "common", inst, "toolmanifest.vdf")):
+                continue
+            games[appid] = name
+    return games
+
+
+def steam_running(roots):
+    uid = os.getuid()
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            if os.stat(f"/proc/{pid}").st_uid != uid:
+                continue
+            with open(f"/proc/{pid}/comm") as f:
+                comm = f.read().strip()
+        except OSError:
+            continue
+        if comm in ("steam", "steamwebhelper"):
+            return True
+    return False
+
+
+def localconfigs(root):
+    return sorted(glob.glob(os.path.join(root, "userdata", "*", "config", "localconfig.vdf")))
+
+
+def state_path():
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(base, "horcrux", "steam-launch-options.json")
+
+
+def load_state():
+    try:
+        with open(state_path()) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(st):
+    p = state_path()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f, indent=1, sort_keys=True)
+    os.replace(tmp, p)
+
+
+def wrapped(opt, wrapper):
+    return re.search(r"(^|[\s/])" + re.escape(os.path.basename(wrapper)) + r"(\s|$)", opt or "") is not None
+
+
+def new_option(opt, wrapper):
+    """The launch option with the wrapper in front of %command%, or None when it must stay as it is."""
+    opt = opt or ""
+    if wrapped(opt, wrapper) or re.search(r"(^|[\s/])gamescope(\s|$)", opt):
+        return None
+    if "%command%" in opt:
+        return opt.replace("%command%", f"{wrapper} %command%", 1)
+    if not opt.strip():
+        return f"{wrapper} %command%"
+    return f"{wrapper} %command% {opt.strip()}"
+
+
+def apps_section(tree):
+    store = child(tree, "UserLocalConfigStore", create=True)
+    sw = child(store, "Software", create=True)
+    valve = child(sw, "Valve", create=True)
+    steam = child(valve, "Steam", create=True)
+    for k in ("apps", "Apps"):
+        a = child(steam, k)
+        if a is not None:
+            return a
+    return child(steam, "apps", create=True)
+
+
+def edit(cfg, mode, force=False, out=print):
+    """mode apply|remove|status. Returns the number of launch options changed (status: that would change)."""
+    roots = steam_roots(cfg)
+    if not roots:
+        out("no Steam installation found")
+        return 0
+    if mode != "status" and steam_running(roots) and not force:
+        out("Steam is running: it rewrites localconfig.vdf when it exits, so nothing is changed now (the watcher retries)")
+        return -1
+    st = load_state()
+    excl = {str(a) for a in cfg["exclude_appids"]}
+    changed = 0
+    for root in roots:
+        games = installed_games(root)
+        for lc in localconfigs(root):
+            account = lc.split(os.sep)[-3]
+            try:
+                raw = read(lc)
+                tree = vdf_loads(raw)
+            except (OSError, UnicodeDecodeError, VdfError) as e:
+                out(f"{lc}: cannot parse ({e}); left untouched")
+                continue
+            apps = apps_section(tree)
+            known = {kv[0] for kv in apps if isinstance(kv[1], list)}
+            mine = st.setdefault(lc, {})
+            n = 0
+            if mode == "remove":
+                for kv in apps:
+                    if kv[0] in mine and isinstance(kv[1], list):
+                        cur = get(kv[1], "LaunchOptions") or ""
+                        if wrapped(cur, cfg["wrapper"]):
+                            put(kv[1], "LaunchOptions", mine[kv[0]])
+                            n += 1
+                mine.clear()
+            else:
+                ids = sorted(known | set(games), key=lambda x: int(x) if x.isdigit() else 0)
+                for appid in ids:
+                    if not appid.isdigit() or appid in excl:
+                        continue
+                    if appid not in games:
+                        # Steam keeps entries for tools (Proton, runtimes), DLC and uninstalled games: only installed games are wrapped
+                        continue
+                    app = child(apps, appid, create=True)
+                    cur = get(app, "LaunchOptions")
+                    new = new_option(cur, cfg["wrapper"])
+                    label = f"{account} {appid} {games.get(appid, '')!r}"
+                    if mode == "status":
+                        out(f"{label}: {cur!r}" + (f" -> {new!r}" if new is not None else ""))
+                        n += new is not None
+                        continue
+                    if new is None:
+                        continue
+                    if appid not in mine:
+                        mine[appid] = cur or ""
+                    put(app, "LaunchOptions", new)
+                    n += 1
+            if n and mode != "status":
+                bak = f"{lc}.horcrux-{time.strftime('%Y%m%d%H%M%S')}.bak"
+                shutil.copy2(lc, bak)
+                for old in sorted(glob.glob(lc + ".horcrux-*.bak"))[:-5]:  # keep the last 5 backups
+                    os.remove(old)
+                tmp = lc + ".horcrux-tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(vdf_dumps(tree))
+                vdf_loads(read(tmp))  # the written file must parse back
+                shutil.copymode(lc, tmp)
+                os.replace(tmp, lc)
+                out(f"{lc}: {mode} changed {n} launch option(s); backup {bak}")
+            changed += n
+    if mode != "status":
+        save_state(st)
+    return changed
+
+
+def signature(cfg):
+    sig = []
+    for root in steam_roots(cfg):
+        for p in localconfigs(root) + [os.path.join(lib, "steamapps") for lib in library_dirs(root)]:
+            try:
+                sig.append((p, os.stat(p).st_mtime_ns))
+            except OSError:
+                pass
+    return sig
+
+
+def watch(cfg, out=print, once=False):
+    last = None
+    while True:
+        c, _ = load_config()
+        if c["manage"]:
+            sig = signature(c)
+            if sig != last and not steam_running(steam_roots(c)):
+                if edit(c, "apply", out=out) >= 0:
+                    last = signature(c)
+        if once:
+            return 0
+        time.sleep(max(2, int(c["interval_seconds"])))
+
+
+def main(argv):
+    cfg, errors = load_config()
+    for e in errors:
+        print(f"horcrux-steam-launch-options: config: {e}", file=sys.stderr)
+    cmd = argv[1] if len(argv) > 1 else "status"
+    force = "--force" in argv[2:]
+    if cmd == "status":
+        n = edit(cfg, "status")
+        print(f"{n} launch option(s) would change")
+        return 0
+    if cmd == "apply":
+        if not cfg["manage"]:
+            print("[launch_options] manage = false: nothing to do")
+            return 0
+        return 0 if edit(cfg, "apply", force) >= 0 else 75
+    if cmd == "remove":
+        return 0 if edit(cfg, "remove", force) >= 0 else 75
+    if cmd == "watch":
+        return watch(cfg, once="--once" in argv[2:])
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
