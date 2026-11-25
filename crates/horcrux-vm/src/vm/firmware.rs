@@ -159,7 +159,7 @@ pub fn tpm_state_dir(disk0: &Path) -> PathBuf {
 
 /// swtpm's control socket (QEMU's `-chardev socket`).
 pub fn tpm_socket(disk0: &Path) -> PathBuf {
-    disk0.with_extension("tpm.sock")
+    super::runtime_files::socket_path(disk0, "tpm.sock")
 }
 
 fn tpm_pidfile(disk0: &Path) -> PathBuf {

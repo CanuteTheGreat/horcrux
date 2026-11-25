@@ -65,6 +65,10 @@ pub struct Spec {
     /// defaults to saving state to encrypted storage).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_power: Option<GuestPowerSpec>,
+    /// Storage plugin node settings (plugin directory, per-operation
+    /// timeouts; docs/storage-plugins.md). Absent = unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_plugins: Option<horcrux_common::storage_plugins::StoragePluginSettings>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
@@ -94,11 +98,19 @@ pub struct NetworksSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PoolSpec {
     pub name: String,
+    /// Built-in type (`directory`, `nfs`, ...) or `plugin:<id>`.
     #[serde(rename = "type", alias = "storage_type")]
     pub storage_type: String,
+    /// Built-in pools: path / target (required). Plugin pools: none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Plugin pools: the plugin's settings (validated against its schema at
+    /// apply). Secret fields are never exported: add them to the spec by
+    /// hand where a pool is created.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub config: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -207,7 +219,7 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
     }
     if let Some(k) = spec.extra.keys().next() {
         return Err(format!(
-            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms and guest_power)"
+            "section {k:?} is not supported yet (phase 1 manages storage_pools, storage_plugins, networks, vms and guest_power)"
         ));
     }
     if let Some(gp) = &spec.guest_power {
@@ -222,10 +234,31 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
     if let Some(pools) = &spec.storage_pools {
         dup("storage pool", pools.iter().map(|p| p.name.as_str()))?;
         for p in pools {
-            if p.name.trim().is_empty() || p.path.trim().is_empty() {
-                return Err("storage pool: name and path are required".into());
+            let t = pool_type(&p.storage_type)?;
+            if p.name.trim().is_empty() {
+                return Err("storage pool: name is required".into());
             }
-            pool_type(&p.storage_type)?;
+            match t {
+                crate::storage::StorageType::Plugin(_) => {
+                    if !p.path.trim().is_empty() {
+                        return Err(format!(
+                            "storage pool {}: plugin pools take config, not a path",
+                            p.name
+                        ));
+                    }
+                }
+                _ => {
+                    if p.path.trim().is_empty() {
+                        return Err(format!("storage pool {}: path is required", p.name));
+                    }
+                    if !p.config.is_empty() {
+                        return Err(format!(
+                            "storage pool {}: config is only for plugin pools",
+                            p.name
+                        ));
+                    }
+                }
+            }
         }
     }
     if let Some(n) = &spec.networks {
@@ -287,28 +320,11 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
 }
 
 pub fn pool_type(s: &str) -> Result<crate::storage::StorageType, String> {
-    use crate::storage::StorageType as T;
-    Ok(match s.to_lowercase().as_str() {
-        "zfs" => T::Zfs,
-        "ceph" => T::Ceph,
-        "lvm" => T::Lvm,
-        "iscsi" => T::Iscsi,
-        "directory" | "dir" => T::Directory,
-        "cifs" => T::Cifs,
-        "nfs" => T::Nfs,
-        "glusterfs" => T::GlusterFs,
-        "cephfs" => T::CephFs,
-        "btrfs" => T::BtrFs,
-        "s3" => T::S3,
-        _ => return Err(format!("unknown storage type {s:?}")),
-    })
+    crate::storage::StorageType::from_name(s).ok_or_else(|| format!("unknown storage type {s:?}"))
 }
 
 pub fn pool_type_name(t: &crate::storage::StorageType) -> String {
-    serde_json::to_value(t)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default()
+    t.name()
 }
 
 pub fn to_disk(d: &DiskSpec, pool_id: Option<String>) -> VmDisk {
@@ -339,6 +355,7 @@ pub struct Live {
     pub power_node: crate::api::guest_state::NodePolicy,
     /// Per-VM power overrides by VM name (only VMs that have one).
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
+    pub storage_plugins: horcrux_common::storage_plugins::StoragePluginSettings,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -413,7 +430,15 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
                 "storage_pool",
                 &w.name,
                 Action::Create,
-                vec![format!("{} at {}", w.storage_type, w.path)],
+                vec![if w.config.is_empty() {
+                    format!("{} at {}", w.storage_type, w.path)
+                } else {
+                    format!(
+                        "{} with {}",
+                        w.storage_type,
+                        w.config.keys().cloned().collect::<Vec<_>>().join(", ")
+                    )
+                }],
             )),
             Some(l) => {
                 let mut d = Vec::new();
@@ -423,7 +448,28 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
                     &pool_type_name(&l.storage_type),
                     &pool_type_name(&pool_type(&w.storage_type).unwrap_or(l.storage_type.clone())),
                 );
-                diff(&mut d, "path", &l.path, &w.path);
+                if l.storage_type.plugin_id().is_some() {
+                    // the live record holds the validated config (defaults
+                    // filled in): compare only the keys the spec sets, and
+                    // never secrets (they are not in the live record)
+                    let live_cfg = l.plugin_config.clone().unwrap_or_default();
+                    for (k, v) in &w.config {
+                        if let Some(lv) = live_cfg.get(k) {
+                            let want = match (lv, v) {
+                                // a spec may write a number as a string
+                                (serde_json::Value::Number(_), serde_json::Value::String(s)) => {
+                                    serde_json::from_str(s).unwrap_or(v.clone())
+                                }
+                                _ => v.clone(),
+                            };
+                            if *lv != want {
+                                d.push(format!("config.{k}: {lv} -> {v}"));
+                            }
+                        }
+                    }
+                } else {
+                    diff(&mut d, "path", &l.path, &w.path);
+                }
                 diff(&mut d, "enabled", &l.enabled, &w.enabled);
                 if !d.is_empty() {
                     d.push("pools can't be edited in place yet: remove and re-add it".into());
@@ -704,12 +750,26 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // Storage plugin settings: one node-wide object.
+    if let Some(w) = &spec.storage_plugins {
+        if let Err(e) = w.validate() {
+            p.errors.push(format!("storage_plugins: {e}"));
+        } else if *w != live.storage_plugins {
+            let a = serde_json::to_value(&live.storage_plugins).unwrap_or_default();
+            let b = serde_json::to_value(w).unwrap_or_default();
+            let mut d = Vec::new();
+            flat_diff(&mut d, "", &a, &b);
+            creates.push(ch("storage_plugins", "settings", Action::Update, d));
+        }
+    }
+
     // Creates/updates run dependency-first (pools, zones, vnets, subnets,
     // VMs, guest power); deletes run in the opposite order (VMs first, pools last).
     let rank = |k: &str| {
         [
             "console",
             "remote_play",
+            "storage_plugins",
             "storage_pool",
             "zone",
             "vnet",
@@ -726,6 +786,27 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
     p.changes = creates;
     p.changes.extend(deletes);
     p
+}
+
+/// `key.sub: old -> new` for every leaf that differs between two JSON objects.
+fn flat_diff(d: &mut Vec<String>, prefix: &str, a: &serde_json::Value, b: &serde_json::Value) {
+    match (a.as_object(), b.as_object()) {
+        (Some(ao), Some(bo)) => {
+            for (k, bv) in bo {
+                let key = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                flat_diff(d, &key, ao.get(k).unwrap_or(&serde_json::Value::Null), bv);
+            }
+        }
+        _ => {
+            if a != b {
+                d.push(format!("{prefix}: {a} -> {b}"));
+            }
+        }
+    }
 }
 
 /// Changed console settings, key by key (`desktop.max_fps: 30 -> 60`).
@@ -935,11 +1016,20 @@ pub fn export(live: &Live) -> Spec {
     let mut pools: Vec<PoolSpec> = live
         .pools
         .iter()
-        .map(|p| PoolSpec {
-            name: p.name.clone(),
-            storage_type: pool_type_name(&p.storage_type),
-            path: p.path.clone(),
-            enabled: p.enabled,
+        .map(|p| {
+            let plugin = p.storage_type.plugin_id().is_some();
+            PoolSpec {
+                name: p.name.clone(),
+                storage_type: pool_type_name(&p.storage_type),
+                // a plugin pool's path is its activated mount, not a setting
+                path: if plugin {
+                    String::new()
+                } else {
+                    p.path.clone()
+                },
+                enabled: p.enabled,
+                config: p.plugin_config.clone().unwrap_or_default(),
+            }
         })
         .collect();
     pools.sort_by(|a, b| a.name.cmp(&b.name));
@@ -987,6 +1077,7 @@ pub fn export(live: &Live) -> Spec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),
         }),
+        storage_plugins: Some(live.storage_plugins.clone()),
         extra: BTreeMap::new(),
     }
 }

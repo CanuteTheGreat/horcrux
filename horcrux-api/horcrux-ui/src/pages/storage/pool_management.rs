@@ -1,9 +1,11 @@
 //! Storage Pool Management Page
 
+use super::plugin_form::{self, PluginConfigForm, PluginValues, StoragePluginsPanel};
 use crate::api::{self, delete_json, fetch_json, post_json, PoolVolume};
 use leptos::*;
 use leptos_router::use_query_map;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 /// Storage pool (adapter over the API's `storage::StoragePool`).
 pub use crate::api::StoragePoolInfo as StoragePool;
@@ -13,6 +15,9 @@ struct AddStoragePoolReq {
     name: String,
     storage_type: String,
     path: String,
+    /// Plugin pools: the generated form's values.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    config: BTreeMap<String, serde_json::Value>,
 }
 
 /// Storage Management Page Component
@@ -30,6 +35,46 @@ pub fn StorageManagement() -> impl IntoView {
     let name_ref: NodeRef<html::Input> = create_node_ref();
     let type_ref: NodeRef<html::Select> = create_node_ref();
     let path_ref: NodeRef<html::Input> = create_node_ref();
+    let plugin_form_ref: NodeRef<html::Form> = create_node_ref();
+    // Installed storage plugins: their types join the Type list, and the
+    // pool form of a plugin type is generated from its declared schema.
+    let (plugins, set_plugins) = create_signal(None::<Result<api::StoragePluginList, String>>);
+    spawn_local(async move {
+        set_plugins.set(Some(
+            api::list_storage_plugins().await.map_err(|e| e.message),
+        ));
+    });
+    let selected_type = create_rw_signal("Directory".to_string());
+    let plugin_values = create_rw_signal(PluginValues::new());
+    let plugin_errors = create_rw_signal(BTreeMap::<String, String>::new());
+    let selected_plugin = create_memo(move |_| {
+        let t = selected_type.get();
+        let id = t.strip_prefix("plugin:")?.to_string();
+        plugins.with(|p| {
+            p.as_ref()?
+                .as_ref()
+                .ok()?
+                .plugins
+                .iter()
+                .find(|x| x.id == id && x.usable)
+                .and_then(|x| x.description.clone())
+        })
+    });
+    let choose_type = move |t: String| {
+        if let Some(id) = t.strip_prefix("plugin:") {
+            let desc = plugins.with_untracked(|p| {
+                p.as_ref()
+                    .and_then(|r| r.as_ref().ok())
+                    .and_then(|l| l.plugins.iter().find(|x| x.id == id))
+                    .and_then(|x| x.description.clone())
+            });
+            if let Some(d) = desc {
+                plugin_values.set(plugin_form::default_values(&d));
+            }
+        }
+        plugin_errors.set(BTreeMap::new());
+        selected_type.set(t);
+    };
 
     // Fetch storage pools on mount
     create_effect(move |_| {
@@ -101,16 +146,36 @@ pub fn StorageManagement() -> impl IntoView {
             .get()
             .map(|el| el.value())
             .unwrap_or_else(|| "Directory".to_string());
-        let path = path_ref.get().map(|el| el.value()).unwrap_or_default();
-        if path.is_empty() {
-            set_error.set(Some("Path / Pool name is required".to_string()));
-            return;
+        let mut config = BTreeMap::new();
+        let mut path = String::new();
+        if let Some(desc) = selected_plugin.get_untracked() {
+            // the same checks the server runs, shown under each field
+            let errs = plugin_form::validate(&desc, &plugin_values.get_untracked());
+            if !errs.is_empty() {
+                plugin_errors.set(errs);
+                set_error.set(Some(format!("Check the {} settings below", desc.name)));
+                return;
+            }
+            // what the SDK does not check in the browser (patterns)
+            if let Some(f) = plugin_form_ref.get() {
+                if !f.report_validity() {
+                    return;
+                }
+            }
+            config = plugin_form::to_config(&plugin_values.get_untracked());
+        } else {
+            path = path_ref.get().map(|el| el.value()).unwrap_or_default();
+            if path.is_empty() {
+                set_error.set(Some("Path / Pool name is required".to_string()));
+                return;
+            }
         }
 
         let req = AddStoragePoolReq {
             name,
             storage_type,
             path,
+            config,
         };
 
         spawn_local(async move {
@@ -301,7 +366,9 @@ pub fn StorageManagement() -> impl IntoView {
                             </div>
                             <div class="form-group">
                                 <label>"Type"</label>
-                                <select node_ref=type_ref class="form-control">
+                                <select node_ref=type_ref class="form-control pool-type-select"
+                                    prop:value=move || selected_type.get()
+                                    on:change=move |ev| choose_type(event_target_value(&ev))>
                                     <option value="Directory">"Directory"</option>
                                     <option value="Zfs">"ZFS"</option>
                                     <option value="Lvm">"LVM"</option>
@@ -313,12 +380,30 @@ pub fn StorageManagement() -> impl IntoView {
                                     <option value="GlusterFs">"GlusterFS"</option>
                                     <option value="BtrFs">"BtrFS"</option>
                                     <option value="S3">"S3 (backups)"</option>
+                                    {move || plugins.get().and_then(|r| r.ok()).map(|l| {
+                                        l.plugins.into_iter().filter_map(|p| {
+                                            let d = p.description.filter(|_| p.usable)?;
+                                            Some(view! {
+                                                <option value=format!("plugin:{}", d.id)>{format!("{} (plugin)", d.name)}</option>
+                                            })
+                                        }).collect_view()
+                                    })}
                                 </select>
                             </div>
-                            <div class="form-group">
-                                <label>"Path / Pool Name"</label>
-                                <input node_ref=path_ref type="text" class="form-control" placeholder="/var/lib/horcrux/images"/>
-                            </div>
+                            {move || match selected_plugin.get() {
+                                Some(desc) => view! {
+                                    <form class="plugin-pool-form" node_ref=plugin_form_ref
+                                        on:submit=|ev| ev.prevent_default()>
+                                        <PluginConfigForm desc=desc values=plugin_values errors=plugin_errors/>
+                                    </form>
+                                }.into_view(),
+                                None => view! {
+                                    <div class="form-group">
+                                        <label>"Path / Pool Name"</label>
+                                        <input node_ref=path_ref type="text" class="form-control" placeholder="/var/lib/horcrux/images"/>
+                                    </div>
+                                }.into_view(),
+                            }}
                         </div>
                         <div class="modal-footer">
                             <button class="btn btn-secondary" on:click=move |_| set_show_create_modal.set(false)>
@@ -331,6 +416,8 @@ pub fn StorageManagement() -> impl IntoView {
                     </div>
                 </div>
             })}
+
+            <StoragePluginsPanel plugins=plugins/>
 
             // Supported backends info
             <div class="info-box">

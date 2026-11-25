@@ -43,6 +43,11 @@ pub struct HorcruxConfig {
     /// how it ended.
     #[serde(default)]
     pub access_log: AccessLogConfig,
+    /// Third-party storage plugins (`[storage_plugins]`, docs/storage-plugins.md):
+    /// plugin directory, per-operation timeouts. The API and the declarative
+    /// spec store changes in `<data_dir>/storage-plugins.json`.
+    #[serde(default)]
+    pub storage_plugins: horcrux_common::storage_plugins::StoragePluginSettings,
 }
 
 /// API access log settings (`[access_log]` in config.toml).
@@ -438,6 +443,12 @@ impl HorcruxConfig {
 
     /// Apply environment variable overrides
     fn apply_env_overrides(&mut self) {
+        // Storage plugins (tests and packagers point it at another directory)
+        if let Ok(dir) = std::env::var("HORCRUX_STORAGE_PLUGIN_DIR") {
+            if !dir.trim().is_empty() {
+                self.storage_plugins.plugin_dir = dir;
+            }
+        }
         // Server
         if let Ok(host) = std::env::var("HORCRUX_HOST") {
             self.server.host = host;

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>canutethegreat@errant.solutions</email>
+		<name>CanuteTheGreat</name>
+	</maintainer>
+	<longdescription lang="en">
+		Reference storage plugin of the Horcrux manager: keeps VM volumes (qcow2
+		with internal snapshots, or raw) in a directory on an SSH server, mounted
+		with SSHFS. Once installed, "SSHFS (plugin)" is a storage type in
+		Storage > Create Pool, with a form generated from the plugin's schema.
+		The plugin runs only when the manager calls it (no service on OpenRC or
+		systemd). See docs/storage-plugins.md in the Horcrux repository.
+	</longdescription>
+	<upstream>
+		<bugs-to>https://github.com/CanuteTheGreat/horcrux/issues</bugs-to>
+	</upstream>
+</pkgmetadata>
