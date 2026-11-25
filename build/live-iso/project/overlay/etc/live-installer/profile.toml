@@ -30,6 +30,10 @@ live_services = ["horcrux-api", "dbus", "libvirtd"]
 # installer pages (stages.py): optional services the user may switch off, hardening defaults, USE-flag page
 brand_color = "#6a3fa0"
 services_optional = ["docker", "libvirtd"]
+# kernel line page (liveinst/kernelline.py): default | newest (opt-in, held at what OpenZFS supports); the manager owns the setting file + pins afterwards
+kernel_line_choice = true
+kernel_line_state = "/var/lib/horcrux/kernel-line.json"
+kernel_line_pin = "horcrux-kernel-line"
 service_info = { docker = "container runtime (Docker)", libvirtd = "KVM/QEMU virtual machine manager (libvirt)" }
 # product-critical USE flags: the USE page refuses to change them (entries: "flag" or "category/package:flag")
 use_critical = ["app-emulation/libvirt:qemu", "app-emulation/qemu:kvm", "app-containers/docker:overlay2"]
