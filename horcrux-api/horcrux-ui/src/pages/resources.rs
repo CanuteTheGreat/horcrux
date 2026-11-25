@@ -33,7 +33,13 @@ fn tree_view(n: InvTreeNode) -> View {
 
 #[component]
 pub fn ResourcesPage() -> impl IntoView {
-    let (text, set_text) = create_signal(String::new());
+    // The header's global search lands here as /resources?q=...
+    let initial_q = leptos_router::use_query_map()
+        .get_untracked()
+        .get("q")
+        .cloned()
+        .unwrap_or_default();
+    let (text, set_text) = create_signal(initial_q);
     let (kind, set_kind) = create_signal(String::new());
     let (tag, set_tag) = create_signal(String::new());
     let (status, set_status) = create_signal(String::new());

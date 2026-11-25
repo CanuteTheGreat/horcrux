@@ -1,4 +1,6 @@
 //! Reusable components.
+pub mod shell;
+pub mod ui;
 mod unavailable;
 pub use unavailable::UnavailableState;
 pub mod focus;
