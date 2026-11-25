@@ -1,7 +1,7 @@
 # Horcrux desktop gaming: games at the right size on a scaled GNOME desktop
 
-Status: implemented (games-util/horcrux-game-scale-1, Horcrux overlay), QEMU-proven at 125/133/150/200 %
-(build/live-iso/common/tests/steam-game-scale-vm-test.py, section 6). Opt-in package: any Horcrux desktop
+Status: implemented (games-util/horcrux-game-scale-1, Horcrux overlay). QEMU: the problem (control) and the wrapper's
+decisions are proven; the wrapped-size measurement needs a GL virtual GPU and is still open (section 6). Opt-in package: any Horcrux desktop
 edition that has Steam installs it (machine profile or machine layer); no edition pulls it by default.
 
 ## 1. The problem
@@ -107,7 +107,22 @@ steam-launch-wrapper -- <launch option with %command% = Steam Linux Runtime entr
 waitforexitandrun game.exe>`); the launch option is the one the real horcrux-steam-launch-options wrote.
 The "game" is a fixed 1280x720 X11 window that ignores XSETTINGS, measured in QMP screendumps:
 
-RESULTS_TABLE
+Measured so far (gnome-light OpenRC, mutter 50.6, virtio-vga 2D + lavapipe, 2026-11-25):
+
+| scale (mutter) | control: game covers | expected for the scaled desktop | wrapper decision |
+|---|---|---|---|
+| 1.25 | 799x449 | 1600x900 | wrap, gamescope -W 2560 -H 1600 -w 2560 -h 1600 -f |
+| 1.333 | 853x479 | 1707x960 | wrap, same (from mutter's mode) |
+| 1.5 requested | mutter offers 1.333 for this mode | | |
+| 2.0 | 1279x719 | 2560x1440 | wrap |
+| 1.0 | | | game run directly |
+
+On a 2D virtual GPU with lavapipe, mutter rejects gamescope's buffers (zwp_linux_buffer_params_v1 error 7,
+invalid_wl_buffer: mutter renders in software and cannot import them) and gamescope aborts within 0.6 s; the
+wrapper's fallback then ran the game directly, as designed. The wrapped measurement therefore runs on a
+GL virtual GPU (virtio-vga-gl with Venus Vulkan; gamescope starts and runs there), captured with `--vnc` or
+the compositor's own ScreenCast (tests/data/mutter-monitor-capture.py) because QMP screendump cannot read a
+GL scanout.
 
 ## 7. Limits
 

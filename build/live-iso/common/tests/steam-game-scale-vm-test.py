@@ -78,6 +78,69 @@ STANDINS = {
 }
 
 
+def vnc_ppm(addr, path, timeout=30):
+    """Full-frame capture from QEMU's VNC server (RFB 3.8, no auth, raw encoding) into a binary PPM. Needed with a GL virtual
+    GPU (virtio-vga-gl + egl-headless): QMP screendump answers "no surface" for a GL scanout, VNC gets the read-back frame."""
+    import socket
+    import struct
+    host, port = addr.rsplit(":", 1)
+    s = socket.create_connection((host, int(port)), timeout=timeout)
+
+    def rd(n):
+        b = b""
+        while len(b) < n:
+            c = s.recv(n - len(b))
+            if not c:
+                raise OSError("vnc: connection closed")
+            b += c
+        return b
+    rd(12)
+    s.sendall(b"RFB 003.008\n")
+    n = rd(1)[0]
+    types = rd(n)
+    if 1 not in types:
+        raise OSError(f"vnc: no 'None' security type offered: {list(types)}")
+    s.sendall(b"\x01")
+    if struct.unpack(">I", rd(4))[0] != 0:
+        raise OSError("vnc: security handshake failed")
+    s.sendall(b"\x01")  # shared
+    w, h = struct.unpack(">HH", rd(4))
+    rd(16)
+    rd(struct.unpack(">I", rd(4))[0])
+    # 32 bpp, depth 24, little endian, true colour, r/g/b max 255 at shifts 16/8/0
+    s.sendall(struct.pack(">BxxxBBBBHHHBBBxxx", 0, 32, 24, 0, 1, 255, 255, 255, 16, 8, 0))
+    s.sendall(struct.pack(">BxHi", 2, 1, 0))  # encodings: raw
+    s.sendall(struct.pack(">BBHHHH", 3, 0, 0, 0, w, h))
+    img = bytearray(w * h * 3)
+    covered = 0
+    while covered < w * h:
+        t = rd(1)[0]
+        if t != 0:  # bell / cut text / colour map: skip what we can
+            if t == 2:
+                continue
+            if t == 3:
+                rd(3)
+                rd(struct.unpack(">I", rd(4))[0])
+                continue
+            raise OSError(f"vnc: unexpected message {t}")
+        rd(1)
+        for _ in range(struct.unpack(">H", rd(2))[0]):
+            x, y, rw, rh, enc = struct.unpack(">HHHHi", rd(12))
+            if enc != 0:
+                raise OSError(f"vnc: unexpected encoding {enc}")
+            data = rd(rw * rh * 4)
+            for r in range(rh):
+                row = data[r * rw * 4:(r + 1) * rw * 4]
+                o = ((y + r) * w + x) * 3
+                img[o:o + rw * 3:3] = row[2::4]
+                img[o + 1:o + rw * 3:3] = row[1::4]
+                img[o + 2:o + rw * 3:3] = row[0::4]
+            covered += rw * rh
+    s.close()
+    with open(path, "wb") as f:
+        f.write(b"P6\n%d %d\n255\n" % (w, h) + bytes(img))
+
+
 def ppm_bbox(path, rgb, tol=40):
     """(x0, y0, x1, y1, count) of the pixels within tol of rgb in a binary PPM (P6), or None."""
     with open(path, "rb") as f:
@@ -125,7 +188,8 @@ class Run(gsl.Run):
         disp = self.disp
         auth = self.vm.out(f"tr '\\0' '\\n' </proc/$(pgrep -u {uid} -x Xwayland | head -n1)/cmdline | sed -n '/^-auth$/{{n;p;q}}'")
         return (f"XDG_RUNTIME_DIR=/run/user/{uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus WAYLAND_DISPLAY=wayland-0 "
-                f"XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=GNOME DISPLAY={disp} XAUTHORITY={auth}")
+                f"XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=GNOME DISPLAY={disp} XAUTHORITY={auth}"
+                + "".join(" " + shq(e) for e in self.a.env))
 
     def xdisplay(self):
         """the session's Xwayland display; mutter starts Xwayland on demand, so start an X11 client first when it isn't up"""
@@ -194,8 +258,11 @@ class Run(gsl.Run):
         time.sleep(0.5)
         path = os.path.join(self.a.vm_out or self.a.out, f"{tag}.ppm")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        self.vm.qmp("screendump", filename=path)
-        time.sleep(1)
+        if self.a.vnc:
+            vnc_ppm(self.a.vnc, os.path.join(self.a.out, f"{tag}.ppm"))
+        else:
+            self.vm.qmp("screendump", filename=path)
+            time.sleep(1)
         return ppm_bbox(os.path.join(self.a.out, f"{tag}.ppm"), MAGENTA)
 
     def wait_bbox(self, tag, pred, timeout=45):
@@ -233,7 +300,8 @@ class Run(gsl.Run):
         time.sleep(2)
         vm.key("esc")  # leave the overview GNOME opens at login
         time.sleep(2)
-        vk = vm.out("vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName' | head -4")
+        venv = " ".join(shq(e) for e in a.env)
+        vk = vm.out(f"env {venv} vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName' | head -4")
         self.check(0, "vulkan-device", "deviceName" in vk, vk.replace("\n", "; ")[:200])
         self.disp = self.xdisplay()
         if not self.check(0, "xwayland-display", self.disp.startswith(":"), f"Xwayland display {self.disp!r}"):
@@ -329,6 +397,10 @@ def main():
     ap.add_argument("--out", default="gss-out")
     ap.add_argument("--vm-out", default=None)
     ap.add_argument("--scales", default="1.25,1.333,1.5,2.0")
+    ap.add_argument("--vnc", default=None, metavar="HOST:PORT",
+                    help="capture frames from QEMU's VNC server instead of QMP screendump (needed with a GL virtual GPU)")
+    ap.add_argument("--env", action="append", default=[], metavar="VAR=VALUE",
+                    help="extra environment for the game launch, e.g. VK_DRIVER_FILES=... to pick the guest's Vulkan driver")
     ap.add_argument("--cycles", type=int, default=1, help="ignored (gnome-vm-gate passes it to every test)")
     a = ap.parse_args()
     a.scales = [float(x) for x in a.scales.split(",") if x]
