@@ -15,6 +15,8 @@ pub const LICENSES_PATH: &str = "/THIRD-PARTY-LICENSES.txt";
 /// Project documentation; these are upstream documentation addresses, not node settings.
 pub const SITE_DOCS: &str = "https://horcrux.errant.solutions/docs/";
 pub const SOURCE_URL: &str = "https://github.com/CanuteTheGreat/horcrux";
+/// Where to support the project financially (one link on this page, nothing else).
+pub const SUPPORT_URL: &str = "https://errant.solutions/support/horcrux";
 
 #[component]
 pub fn AboutPage() -> impl IntoView {
@@ -49,6 +51,10 @@ pub fn AboutPage() -> impl IntoView {
                     </li>
                     <li>
                         <a href=SOURCE_URL target="_blank" rel="noopener">"Source code"</a>
+                    </li>
+                    <li>
+                        <a id="support-link" href=SUPPORT_URL target="_blank" rel="noopener">"Support Horcrux"</a>
+                        " - a one-time tip or a monthly sponsorship; the software stays free either way."
                     </li>
                 </ul>
             </div>

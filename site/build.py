@@ -20,6 +20,8 @@ DIST = os.path.join(HERE, "dist")
 SRC = f"https://github.com/CanuteTheGreat/{CFG['repo']}"
 BLOB = SRC + "/blob/main/"
 TREE = SRC + "/tree/main/"
+# Support page for this product (tips and monthly sponsorship: Stripe Checkout, run by errant.solutions). An address on another host on purpose.
+SUPPORT = f"https://errant.solutions/support/{CFG['key']}"
 
 def rel(frm, to):
     """relative URL from page dir `frm` ('' = root) to site path `to` (dir pages end with '/')."""
@@ -75,7 +77,7 @@ def page(page_dir, title, body, active="", desc=None):
     items = [("download", (r("") .rstrip("/") + "/#download") if page_dir else "#download", "Download"),
              ("docs", r("docs/"), "Docs"), ("roadmap", r("roadmap/"), "Roadmap"),
              ("updates", r("docs/update-policy/"), "Updates"),
-             ("source", SRC, "Source")]
+             ("source", SRC, "Source"), ("support", SUPPORT, "Support")]
     cur = ' aria-current="page"'
     nav = "".join(f'<a href="{h}"{cur if k == active else ""}>{t}</a>' for k, h, t in items)
     d = html.escape(desc or CFG["tagline"])
@@ -97,7 +99,7 @@ def page(page_dir, title, body, active="", desc=None):
 <footer><div class="wrap foot">
 <p>{CFG['name']} is a free, GPL-3.0 project by <a href="https://errant.solutions/">Errant Solutions</a>.
 Source: <a href="{SRC}">GitHub</a>.</p>
-<p>Commercial support: planned after 1.0. Nothing is for sale today.</p>
+<p>Commercial support: planned after 1.0. Nothing is for sale today. <a href="{SUPPORT}">Support the project</a>.</p>
 <p class="policies"><a href="{r('docs/privacy/')}">Privacy</a> &middot; <a href="{r('docs/update-policy/')}">Updates and support policy</a> &middot; <a href="{r('licenses/THIRD-PARTY-LICENSES.txt')}">Open-source licenses</a></p></div></footer>
 </body></html>
 """
@@ -196,7 +198,7 @@ def main():
     land = f"""<main>
 <section class="hero"><div class="wrap herogrid">
 <div><h1>{CFG['name']}</h1><p class="lead">{CFG['lead']}</p>
-<p class="cta"><a class="btn" href="#download">Get a daily build</a> <a class="btn ghost" href="{rel('', 'roadmap/')}">Roadmap to 1.0</a> <a class="btn ghost" href="{rel('', 'docs/')}">Docs</a></p></div>
+<p class="cta"><a class="btn" href="#download">Get a daily build</a> <a class="btn ghost" href="{rel('', 'roadmap/')}">Roadmap to 1.0</a> <a class="btn ghost" href="{rel('', 'docs/')}">Docs</a> <a class="btn ghost" href="{SUPPORT}">Support the project</a></p></div>
 <img class="logo" src="{rel('', 'assets/logo.png')}" alt="{CFG['name']} logo" width="{CFG['logo_w']}" height="{CFG['logo_h']}"></div></section>
 <section class="wrap"><h2>What it is</h2>{CFG['what_html']}</section>
 <section class="wrap"><h2>Status: pre-1.0</h2><p>{CFG['status']}</p>
@@ -222,6 +224,10 @@ sha256sum -c {CFG['key']}-server-openrc-daily-x86_64.iso.sha256</code></pre>
 <strong>Channel</strong> is <code>daily</code> (the rolling test build) or a release tag. <strong>Arch</strong> is <code>x86_64</code> or <code>aarch64</code>.
 Older download names (for example <code>{CFG['key']}-daily-x86_64.iso</code>) still work: they redirect (HTTP 301) to the new name.</p></section>
 <section class="wrap"><h2>The installer</h2><p>A text-mode wizard, on a VGA screen or a serial console. These are real captures from the CI test. A graphical installer is in progress.</p><div class="shots">{sh}</div></section>
+<section class="wrap" id="support"><h2>Support {CFG['name']}</h2>
+<p>{CFG['name']} is free software and stays free: every feature is in the free build, and nobody gets a different version for paying. It is built by one person. If it saves you time, you can help keep the work going with a one-time tip or a small monthly sponsorship.</p>
+<p>The money pays for the real test machines and hosting behind the daily builds and for the time to keep building. Payment is by card (and the wallets Stripe offers) on Stripe's own checkout page; you get a receipt by email, and no account is needed. You can cancel a monthly sponsorship at any time.</p>
+<p class="cta"><a class="btn" href="{SUPPORT}#tip">Leave a tip</a> <a class="btn ghost" href="{SUPPORT}#monthly">Sponsor monthly</a></p></section>
 <section class="wrap"><h2>Commercial support</h2>
 <p><strong>Planned after 1.0.</strong> The idea, in the style of Proxmox: an optional paid stable update channel with email support in business hours, best effort, no 24/7 guarantee. The free channel stays complete, with every feature. Nothing is for sale now and there is no sign-up. The <a href="{rel('', 'stable-channel/')}">design</a> is public, and it only starts after a stable 1.0 and a period of real use.</p></section>
 </main>"""

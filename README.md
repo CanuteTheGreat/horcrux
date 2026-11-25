@@ -15,6 +15,8 @@
 
 **Website and docs: [horcrux.errant.solutions](https://horcrux.errant.solutions)**
 
+**Support the project:** Horcrux is free and stays free. If it saves you time, you can leave a one-time tip or a small monthly sponsorship at [errant.solutions/support/horcrux](https://errant.solutions/support/horcrux).
+
 **[Documentation](docs/)** | **[Roadmap to 1.0](docs/ROADMAP.md)** | **[API reference](docs/API_DOCS.md)** | **[Installation](docs/INSTALLATION.md)** | **[Docker guide](docs/DOCKER.md)**
 
 **[Updates, supported versions and rollback](docs/UPDATE-POLICY.md)** | **[Privacy](docs/PRIVACY.md)** | **[Third-party licenses](THIRD-PARTY-LICENSES.txt)** | **[Changelog](CHANGELOG.md)**
