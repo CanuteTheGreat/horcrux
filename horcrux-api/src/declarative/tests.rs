@@ -335,6 +335,41 @@ fn remote_play_settings_are_planned_validated_and_exported() {
     assert!(plan(&back, &live, false).in_sync());
 }
 
+#[test]
+fn access_log_settings_are_planned_validated_and_exported() {
+    use horcrux_common::access_log::AccessLogSettings;
+    let live = Live::default();
+    let mut s = Spec {
+        access_log: Some(AccessLogSettings::default()),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).in_sync());
+    s.access_log = Some(AccessLogSettings {
+        retention_days: 90,
+        trusted_proxies: vec!["10.0.0.0/8".into()],
+        ..Default::default()
+    });
+    let p = plan(&s, &live, false);
+    assert_eq!(p.changes.len(), 1);
+    assert_eq!(p.changes[0].kind, "access_log");
+    let d = p.changes[0].details.join("\n");
+    assert!(d.contains("retention_days: 30 -> 90"), "{d}");
+    assert!(d.contains("trusted_proxies"), "{d}");
+    s.access_log = Some(AccessLogSettings {
+        retention_days: 0,
+        ..Default::default()
+    });
+    assert!(plan(&s, &live, false).errors[0].contains("retention_days"));
+    // a partial section in the spec file takes the documented defaults
+    let part: Spec = serde_yaml::from_str("version: 1\naccess_log:\n  max_mb: 64\n").unwrap();
+    assert_eq!(part.access_log.as_ref().unwrap().max_mb, 64);
+    assert_eq!(part.access_log.as_ref().unwrap().retention_days, 30);
+    let y = serde_yaml::to_string(&export(&live)).unwrap();
+    assert!(y.contains("access_log:"), "{y}");
+    let back: Spec = serde_yaml::from_str(&y).unwrap();
+    assert!(plan(&back, &live, false).in_sync());
+}
+
 fn gp_actions(p: &Plan) -> Vec<String> {
     actions(p)
         .into_iter()

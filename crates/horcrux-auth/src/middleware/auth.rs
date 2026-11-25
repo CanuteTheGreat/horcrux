@@ -40,6 +40,55 @@ pub enum AuthMethod {
     ClusterNode,
 }
 
+/// Who a request was made by, as far as authentication got: the access log
+/// (an outer layer) reads it after the request ran. Never holds a secret,
+/// only non-secret identifiers (the API key's id and name, not the key).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AccessIdentity {
+    pub user: Option<String>,
+    pub realm: Option<String>,
+    /// `jwt`, `session`, `api_key` or `cluster` (the credential presented,
+    /// also when it was rejected); `None` = no credential at all.
+    pub auth_method: Option<String>,
+    pub token_id: Option<String>,
+    pub token_name: Option<String>,
+}
+
+/// Shared slot an outer layer puts in the request extensions; the
+/// authentication middleware fills it in (the inner request it works on is
+/// consumed by `next.run`, so the outer layer could not see its extensions).
+#[derive(Clone, Debug, Default)]
+pub struct AccessSlot(pub Arc<std::sync::Mutex<AccessIdentity>>);
+
+impl AccessSlot {
+    pub fn set(&self, f: impl FnOnce(&mut AccessIdentity)) {
+        if let Ok(mut g) = self.0.lock() {
+            f(&mut g);
+        }
+    }
+
+    pub fn get(&self) -> AccessIdentity {
+        self.0.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+}
+
+/// The credential kind a request presents (what auth tries first).
+fn presented_credential(headers: &HeaderMap) -> Option<&'static str> {
+    if headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|s| s.starts_with("Bearer "))
+    {
+        Some("jwt")
+    } else if session_cookie(headers).is_some() {
+        Some("session")
+    } else if headers.contains_key("x-api-key") {
+        Some("api_key")
+    } else {
+        None
+    }
+}
+
 /// Extracted user information from authentication
 #[derive(Clone, Debug)]
 pub struct AuthUser {
@@ -211,6 +260,11 @@ pub async fn auth_middleware<S: super::AuthState>(
     mut request: Request,
     next: Next,
 ) -> Result<Response, AuthError> {
+    let slot = request.extensions().get::<AccessSlot>().cloned();
+    if let Some(slot) = &slot {
+        let m = presented_credential(&headers);
+        slot.set(|i| i.auth_method = m.map(str::to_string));
+    }
     // Bearer token
     if let Some(token) = headers
         .get("authorization")
@@ -247,6 +301,13 @@ pub async fn auth_middleware<S: super::AuthState>(
                     "cluster-ha service tokens are only valid for /api/ha/peer/",
                 ));
             }
+            if let Some(slot) = &slot {
+                slot.set(|i| {
+                    i.user = Some(claims.username.clone());
+                    i.realm = Some("cluster".into());
+                    i.auth_method = Some("cluster".into());
+                });
+            }
             request.extensions_mut().insert(AuthUser {
                 user_id: claims.sub,
                 username: claims.username,
@@ -272,6 +333,12 @@ pub async fn auth_middleware<S: super::AuthState>(
             .await
             .ok()
             .flatten();
+        if let Some(slot) = &slot {
+            slot.set(|i| {
+                i.user = Some(user.username.clone());
+                i.realm = Some(user.realm.clone());
+            });
+        }
         request.extensions_mut().insert(AuthUser {
             user_id: user.id,
             username: user.username,
@@ -293,6 +360,12 @@ pub async fn auth_middleware<S: super::AuthState>(
             .await
             .ok()
             .flatten();
+        if let Some(slot) = &slot {
+            slot.set(|i| {
+                i.user = Some(user.username.clone());
+                i.realm = Some(user.realm.clone());
+            });
+        }
         request.extensions_mut().insert(AuthUser {
             user_id: user.id,
             username: user.username,
@@ -306,9 +379,17 @@ pub async fn auth_middleware<S: super::AuthState>(
 
     // API key
     if let Some(key_str) = headers.get("x-api-key").and_then(|h| h.to_str().ok()) {
-        let auth_user = validate_api_key(state.database(), key_str)
+        let (auth_user, key) = validate_api_key(state.database(), key_str)
             .await
             .map_err(|e| unauthorized("invalid_api_key", e))?;
+        if let Some(slot) = &slot {
+            slot.set(|i| {
+                i.user = Some(auth_user.username.clone());
+                i.realm = Some(key.realm.clone());
+                i.token_id = Some(key.id.clone());
+                i.token_name = Some(key.name.clone());
+            });
+        }
         request.extensions_mut().insert(auth_user);
         return Ok(next.run(request).await);
     }
@@ -503,11 +584,18 @@ fn sign(mut claims: Claims, ttl_secs: usize) -> Result<String, String> {
         .map_err(|e| format!("Failed to generate JWT: {}", e))
 }
 
+/// Non-secret facts about the API key that authenticated a request.
+struct ApiKeyInfo {
+    id: String,
+    name: String,
+    realm: String,
+}
+
 /// Validate API key against database
 async fn validate_api_key(
     db: &Arc<crate::db::Database>,
     api_key: &str,
-) -> Result<AuthUser, String> {
+) -> Result<(AuthUser, ApiKeyInfo), String> {
     use argon2::{Argon2, PasswordHash, PasswordVerifier};
 
     // API keys should be in the format: "hx_<random_string>"
@@ -542,22 +630,31 @@ async fn validate_api_key(
             .is_ok()
         {
             let user_id: String = row.get("user_id");
+            let key_id: String = row.get("id");
+            let key_name: String = row.get("name");
             let _ =
                 sqlx::query("UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?")
-                    .bind(row.get::<String, _>("id"))
+                    .bind(key_id.clone())
                     .execute(pool)
                     .await;
 
             // api_keys.user_id is users.id (a UUID), not the username.
             return match crate::db::users::get_user_by_id(pool, &user_id).await {
-                Ok(user) => Ok(AuthUser {
-                    user_id: user.id,
-                    username: user.username,
-                    role: user.role,
-                    scope: None,
-                    session_id: None,
-                    method: AuthMethod::ApiKey,
-                }),
+                Ok(user) => Ok((
+                    AuthUser {
+                        user_id: user.id,
+                        username: user.username,
+                        role: user.role,
+                        scope: None,
+                        session_id: None,
+                        method: AuthMethod::ApiKey,
+                    },
+                    ApiKeyInfo {
+                        id: key_id,
+                        name: key_name,
+                        realm: user.realm,
+                    },
+                )),
                 Err(_) => Err("API key belongs to a disabled or deleted user".to_string()),
             };
         }

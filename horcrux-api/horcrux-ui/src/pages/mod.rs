@@ -124,7 +124,7 @@ pub use monitoring::{
 // Re-export dashboard components
 
 // Re-export audit components
-pub use audit::AuditLogPage;
+pub use audit::{AccessLogPage, AuditLogPage};
 
 // Re-export storage components
 

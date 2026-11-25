@@ -5008,6 +5008,123 @@ pub async fn get_audit_brute_force() -> Result<Vec<String>, ApiError> {
     fetch_json("/audit/brute-force").await
 }
 
+// ============================================================================
+// API access log (mirrors horcrux-api `api::access_log`)
+// ============================================================================
+
+pub use horcrux_common::access_log::AccessLogSettings;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AccessEntry {
+    pub id: i64,
+    pub ts_ms: i64,
+    #[serde(default)]
+    pub time: String,
+    pub node: String,
+    pub user: Option<String>,
+    pub realm: Option<String>,
+    pub auth_method: Option<String>,
+    pub token_id: Option<String>,
+    pub token_name: Option<String>,
+    pub client: String,
+    pub method: String,
+    pub path: String,
+    pub path_group: String,
+    pub status: u16,
+    pub duration_ms: f64,
+    pub bytes_out: Option<i64>,
+    pub user_agent: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AccessNodeResult {
+    pub node: String,
+    pub total: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AccessPage {
+    pub total: i64,
+    pub limit: u32,
+    pub offset: u32,
+    pub entries: Vec<AccessEntry>,
+    pub nodes: Vec<AccessNodeResult>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccessTop {
+    pub value: String,
+    pub label: Option<String>,
+    pub count: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccessBucket {
+    pub start_ms: i64,
+    pub total: i64,
+    pub s2xx: i64,
+    pub s3xx: i64,
+    pub s4xx: i64,
+    pub s5xx: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccessCollector {
+    pub enabled: bool,
+    pub dropped: u64,
+    pub written: u64,
+    pub write_errors: u64,
+    pub queue_capacity: u32,
+    pub entries: i64,
+    pub db_bytes: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccessStats {
+    pub total: i64,
+    pub errors: i64,
+    pub start_ms: Option<i64>,
+    pub end_ms: Option<i64>,
+    pub bucket_ms: i64,
+    pub buckets: Vec<AccessBucket>,
+    pub avg_duration_ms: f64,
+    pub bytes_out: i64,
+    pub top_clients: Vec<AccessTop>,
+    pub top_users: Vec<AccessTop>,
+    pub top_tokens: Vec<AccessTop>,
+    pub top_groups: Vec<AccessTop>,
+    pub top_statuses: Vec<AccessTop>,
+    pub top_methods: Vec<AccessTop>,
+    pub nodes: Vec<AccessNodeResult>,
+    pub collector: AccessCollector,
+}
+
+/// `query` is an already encoded `a=b&c=d` filter string.
+pub async fn get_access_log(query: &str) -> Result<AccessPage, ApiError> {
+    fetch_json(&format!("/access-log?{query}")).await
+}
+
+pub async fn get_access_stats(query: &str) -> Result<AccessStats, ApiError> {
+    fetch_json(&format!("/access-log/stats?{query}")).await
+}
+
+pub async fn get_access_entry(id: i64, node: &str) -> Result<AccessEntry, ApiError> {
+    fetch_json(&format!(
+        "/access-log/{id}?node={}",
+        urlencoding::encode(node)
+    ))
+    .await
+}
+
+pub async fn get_access_settings() -> Result<AccessLogSettings, ApiError> {
+    fetch_json("/access-log/settings").await
+}
+
+pub async fn put_access_settings(s: &AccessLogSettings) -> Result<AccessLogSettings, ApiError> {
+    put_json("/access-log/settings", s).await
+}
+
 // Forensics API Functions
 
 // ============================================================================

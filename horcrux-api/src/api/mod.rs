@@ -1,6 +1,7 @@
 //! HTTP route modules, one per work lane, each merged into the protected
 //! router by a single line in app/mod.rs (the router, formerly main.rs).
 
+pub mod access_log;
 pub mod alert_rules;
 pub mod audit_view;
 pub mod auth;

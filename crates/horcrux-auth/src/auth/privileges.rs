@@ -828,9 +828,16 @@ mod tests {
 
     #[test]
     fn access_log_requires_audit_to_read_and_modify_to_write() {
-        for path in ["/api/access-log", "/api/access-log/stats", "/api/access-log/42"] {
+        for path in [
+            "/api/access-log",
+            "/api/access-log/stats",
+            "/api/access-log/42",
+        ] {
             assert_eq!(priv_of(requirement("GET", path)), (P::SysAudit, "/".into()));
-            assert_eq!(priv_of(requirement("POST", path)), (P::SysModify, "/".into()));
+            assert_eq!(
+                priv_of(requirement("POST", path)),
+                (P::SysModify, "/".into())
+            );
         }
     }
 

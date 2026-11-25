@@ -535,6 +535,8 @@ pub async fn run() -> anyhow::Result<()> {
         }))
         .merge(api::auth::public_read_routes().with_state(state.clone()));
 
+    let access_log = api::access_log::start(&state).await;
+
     // Build protected routes using modular route builders
     let protected_routes = Router::new()
         .merge(vm_routes())
@@ -559,6 +561,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::tasks::routes())
         .merge(api::ceph_admin::routes())
         .merge(api::audit_view::routes())
+        .merge(api::access_log::routes())
         .merge(api::node_shell::routes())
         .merge(api::sdn_zones::routes(&state))
         .merge(api::sdn_ovs::routes(&state))
@@ -672,7 +675,14 @@ pub async fn run() -> anyhow::Result<()> {
         ))
         // Note: Auth middleware will be added per-route or per-group later
         // Serve static files (frontend) - must be last to act as fallback
-        .fallback_service(serve_dir);
+        .fallback_service(serve_dir)
+        // API access log: outermost, so it sees every request (also the
+        // ones rate limiting, CORS or authentication refuse, and /api paths
+        // nothing serves)
+        .layer(axum_middleware::from_fn_with_state(
+            access_log,
+            api::access_log::layer,
+        ));
 
     // Set up graceful shutdown
     let shutdown_coordinator = shutdown::ShutdownCoordinator::new();
