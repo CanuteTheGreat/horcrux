@@ -873,11 +873,18 @@ pub async fn leave_maintenance(state: &Arc<AppState>, policy: ReturnPolicy, dela
         return_policy: prev.return_policy,
         exit: Some(exit),
     };
-    save_maintenance(state, &m).await;
     let all = state.cluster_manager.list_nodes().await;
     if !is_clustered(&all) {
+        // Nowhere the guests could come back from: the exit is complete.
+        let mut m = m;
+        if let Some(e) = m.exit.as_mut() {
+            e.status = "done".into();
+            e.finished_at = Some(now());
+        }
+        save_maintenance(state, &m).await;
         return;
     }
+    save_maintenance(state, &m).await;
     match policy {
         ReturnPolicy::None => {}
         ReturnPolicy::Rebalance => {

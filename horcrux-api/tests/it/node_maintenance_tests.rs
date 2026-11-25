@@ -83,6 +83,17 @@ async fn per_node_maintenance_routes_settings_and_rbac() {
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["enabled"], false);
     assert_eq!(v["exit"]["kind"], "return (none)");
+    // origin on a lone node: done at once, the next call is not blocked
+    for _ in 0..2 {
+        let (s, v) = api
+            .post(
+                &format!("/nodes/{me}/maintenance"),
+                json!({"enabled": false, "return": "origin"}),
+            )
+            .await;
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["exit"]["status"], "done", "{v}");
+    }
     let (s, v) = api
         .post(
             &format!("/nodes/{me}/maintenance"),
