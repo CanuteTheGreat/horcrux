@@ -358,10 +358,12 @@ def client_connections(pid):
                     if p[3] == "0A":
                         listen.add(port)
                     elif p[3] == "01":
-                        est.append(port)
+                        est.append((p[1], p[2]))
         except OSError:
             continue
-        n += sum(1 for port in est if port in listen)
+        mine = set(est)
+        # a connection the process made to itself (its own loopback client) has both ends here: not a user
+        n += sum(1 for loc, rem in est if loc.rsplit(":", 1)[-1] in listen and (rem, loc) not in mine)
     try:
         with open(os.path.join(PROC, str(pid), "net", "unix")) as f:
             next(f, None)
