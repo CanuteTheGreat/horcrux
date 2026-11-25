@@ -67,6 +67,11 @@ enum Commands {
         #[command(subcommand)]
         command: BackupCommands,
     },
+    /// One cluster member (maintenance mode)
+    Node {
+        #[command(subcommand)]
+        command: NodeCommands,
+    },
     /// Manage cluster nodes
     Cluster {
         #[command(subcommand)]
@@ -426,6 +431,31 @@ enum BackupCommands {
     RunJob { id: String },
     /// Delete a backup job (its backups are kept)
     DeleteJob { id: String },
+}
+
+#[derive(Subcommand)]
+pub enum NodeCommands {
+    /// Put any cluster member into maintenance or take it out: entering
+    /// moves every HA guest and every running guest to other members;
+    /// leaving applies the return policy (default: the cluster's
+    /// `cluster.maintenance.return_policy`, origin = bring them back).
+    Maintenance {
+        /// Node name (any member; the request is forwarded to it)
+        node: String,
+        /// on | off | status | plan
+        #[arg(value_parser = ["on", "off", "status", "plan"])]
+        action: String,
+        /// on: the policy for this maintenance's exit; off: the policy to
+        /// apply now; plan: preview the exit with this policy
+        #[arg(long = "return", value_parser = ["origin", "rebalance", "none"])]
+        return_policy: Option<String>,
+        /// on: enter even if some guests cannot move (they stay)
+        #[arg(long)]
+        force: bool,
+        /// on: do not move any guest (only stop new placements)
+        #[arg(long)]
+        no_drain: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1236,6 +1266,9 @@ async fn main() -> Result<()> {
         }
         Commands::Backup { command } => {
             commands::backup::handle_backup_command(command, &api_client, &cli.output).await?
+        }
+        Commands::Node { command } => {
+            commands::node::handle_node_command(command, &api_client, &cli.output).await?
         }
         Commands::Cluster { command } => {
             commands::cluster::handle_cluster_command(command, &api_client, &cli.output).await?

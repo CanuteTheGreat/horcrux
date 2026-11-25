@@ -63,6 +63,76 @@ pub struct PlanGuest {
     /// Why this guest cannot be live-migrated at all (not a QEMU VM, ...).
     pub immovable: Option<String>,
     pub rules: Rules,
+    /// Managed by HA: a drain evacuates it even while it is stopped (it
+    /// moves offline, so its HA home is no longer the node in maintenance).
+    #[serde(default)]
+    pub ha: bool,
+}
+
+/// What happens to the guests a drain moved away when their node leaves
+/// maintenance (`cluster.maintenance.return_policy`, per request override).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReturnPolicy {
+    /// Move every guest the drain moved back to the node it came from.
+    #[default]
+    Origin,
+    /// Let the rebalancer even out the cluster (the guests may or may not
+    /// come back).
+    Rebalance,
+    /// Leave every guest where it is.
+    None,
+}
+
+impl ReturnPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Origin => "origin",
+            Self::Rebalance => "rebalance",
+            Self::None => "none",
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "origin" => Ok(Self::Origin),
+            "rebalance" => Ok(Self::Rebalance),
+            "none" => Ok(Self::None),
+            other => Err(format!(
+                "return policy {other:?}: expected origin, rebalance or none"
+            )),
+        }
+    }
+}
+
+/// A guest a drain moved away from `origin` (recorded with the drain run, so
+/// leaving maintenance can bring it back).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Origin {
+    pub guest_id: String,
+    pub name: String,
+    /// The node the guest was on (the node in maintenance).
+    pub origin: String,
+    /// Where the drain put it.
+    pub moved_to: String,
+    #[serde(default)]
+    pub at: String,
+}
+
+/// Merge the origins of a new drain run into the ones kept from an earlier
+/// run of the same maintenance: a guest keeps its FIRST origin (a guest
+/// moved twice still goes back to where it was before maintenance) and a
+/// guest that is back home is dropped.
+pub fn merge_origins(kept: &[Origin], new: &[Origin]) -> Vec<Origin> {
+    let mut out: Vec<Origin> = kept.to_vec();
+    for n in new {
+        match out.iter_mut().find(|o| o.guest_id == n.guest_id) {
+            Some(o) => o.moved_to = n.moved_to.clone(),
+            None => out.push(n.clone()),
+        }
+    }
+    out.retain(|o| o.origin != o.moved_to);
+    out
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -224,15 +294,23 @@ impl<'a> World<'a> {
 /// Move every running guest off `source`: biggest first, each to the allowed
 /// node with the lowest load afterwards (preferring the node that already
 /// hosts members of its affinity group). Guests nobody can take are listed
-/// with the reason; the caller saves their state instead.
+/// with the reason; the caller saves their state instead. Stopped guests
+/// that HA manages are evacuated too (offline, after the running ones), so
+/// no HA resource keeps the node in maintenance as its home; other stopped
+/// guests stay.
 pub fn plan_drain(source: &str, nodes: &[PlanNode], guests: &[PlanGuest]) -> Plan {
     let mut w = World::new(nodes, guests);
     let mut plan = Plan::default();
     let mut todo: Vec<&PlanGuest> = guests
         .iter()
-        .filter(|g| g.node == source && g.running)
+        .filter(|g| g.node == source && (g.running || g.ha))
         .collect();
-    todo.sort_by(|a, b| b.memory_mb.cmp(&a.memory_mb).then(a.id.cmp(&b.id)));
+    todo.sort_by(|a, b| {
+        b.running
+            .cmp(&a.running)
+            .then(b.memory_mb.cmp(&a.memory_mb))
+            .then(a.id.cmp(&b.id))
+    });
     for g in todo {
         let unplaced = |reason: String| Unplaced {
             guest_id: g.id.clone(),
@@ -291,6 +369,104 @@ pub fn plan_drain(source: &str, nodes: &[PlanNode], guests: &[PlanGuest]) -> Pla
         }
     }
     plan
+}
+
+/// Leaving maintenance with the `origin` policy: move every guest the drain
+/// moved away (`moved`) back to `origin`, wherever it is now, under the same
+/// rules as any move (capacity, architecture, pin, anti-affinity, node
+/// role, CPU compatibility). `origin` counts as out of maintenance. A guest
+/// that is gone, already home or not allowed back is reported with the
+/// reason and stays where it is.
+pub fn plan_return(
+    origin: &str,
+    nodes: &[PlanNode],
+    guests: &[PlanGuest],
+    moved: &[Origin],
+) -> Plan {
+    let nodes: Vec<PlanNode> = nodes
+        .iter()
+        .cloned()
+        .map(|mut n| {
+            if n.name == origin {
+                n.maintenance = false;
+            }
+            n
+        })
+        .collect();
+    let mut w = World::new(&nodes, guests);
+    let mut plan = Plan::default();
+    let Some(home) = nodes.iter().find(|n| n.name == origin) else {
+        for o in moved.iter().filter(|o| o.origin == origin) {
+            plan.unplaced.push(Unplaced {
+                guest_id: o.guest_id.clone(),
+                name: o.name.clone(),
+                reason: format!("{origin} is not online"),
+            });
+        }
+        return plan;
+    };
+    // Running guests first, biggest first: the same order the drain used.
+    let mut todo: Vec<(&Origin, Option<&PlanGuest>)> = moved
+        .iter()
+        .filter(|o| o.origin == origin)
+        .map(|o| (o, guests.iter().find(|g| g.id == o.guest_id)))
+        .collect();
+    todo.sort_by(|(a, ga), (b, gb)| {
+        let key = |g: &Option<&PlanGuest>| g.map(|g| (g.running, g.memory_mb)).unwrap_or_default();
+        key(gb).cmp(&key(ga)).then(a.guest_id.cmp(&b.guest_id))
+    });
+    for (o, g) in todo {
+        let unplaced = |reason: String| Unplaced {
+            guest_id: o.guest_id.clone(),
+            name: o.name.clone(),
+            reason,
+        };
+        let Some(g) = g else {
+            plan.unplaced.push(unplaced(
+                "no longer exists on any online node".to_string(),
+            ));
+            continue;
+        };
+        if g.node == origin {
+            continue; // already home
+        }
+        if let Some(why) = &g.immovable {
+            plan.unplaced.push(unplaced(why.clone()));
+            continue;
+        }
+        if g.rules.no_migrate {
+            plan.unplaced
+                .push(unplaced("marked never to migrate".into()));
+            continue;
+        }
+        if let Some(why) = w.refuse(g, home) {
+            plan.unplaced.push(unplaced(why));
+            continue;
+        }
+        w.at.insert(g.id.clone(), origin.to_string());
+        plan.moves.push(Move {
+            guest_id: g.id.clone(),
+            name: g.name.clone(),
+            from: g.node.clone(),
+            to: origin.to_string(),
+            reason: "return".into(),
+        });
+    }
+    plan
+}
+
+/// The guests a drain run really moved away from `origin` (finished moves).
+pub fn origins_of(origin: &str, done: &[(Move, bool)], at: &str) -> Vec<Origin> {
+    done.iter()
+        .filter(|(m, ok)| *ok && m.from == origin)
+        .map(|(m, _)| Origin {
+            guest_id: m.guest_id.clone(),
+            name: m.name.clone(),
+            origin: origin.to_string(),
+            moved_to: m.to.clone(),
+            at: at.to_string(),
+        })
+        .collect()
 }
 
 /// Even out memory load: repeatedly move a guest from the most to the least
@@ -394,7 +570,139 @@ mod tests {
             arch: "x86_64".into(),
             immovable: None,
             rules: Rules::default(),
+            ha: false,
         }
+    }
+
+    #[test]
+    fn drain_evacuates_stopped_ha_guests_but_leaves_other_stopped_guests() {
+        let nodes = [node("a", 8000), node("b", 8000)];
+        let mut ha_off = guest("ha-off", "a", 4000);
+        ha_off.running = false;
+        ha_off.ha = true;
+        let mut plain_off = guest("plain-off", "a", 100);
+        plain_off.running = false;
+        let run = guest("run", "a", 1000);
+        let p = plan_drain("a", &nodes, &[ha_off, plain_off, run]);
+        let ids: Vec<&str> = p.moves.iter().map(|m| m.guest_id.as_str()).collect();
+        assert_eq!(ids, ["run", "ha-off"], "running first, then stopped HA");
+        assert!(p.unplaced.is_empty(), "{:?}", p.unplaced);
+        assert!(p.moves.iter().all(|m| m.to == "b"));
+    }
+
+    fn origin(id: &str, from: &str, to: &str) -> Origin {
+        Origin {
+            guest_id: id.into(),
+            name: id.into(),
+            origin: from.into(),
+            moved_to: to.into(),
+            at: String::new(),
+        }
+    }
+
+    #[test]
+    fn origins_record_only_finished_moves_off_the_node() {
+        let mv = |id: &str, from: &str, to: &str| Move {
+            guest_id: id.into(),
+            name: id.into(),
+            from: from.into(),
+            to: to.into(),
+            reason: "drain".into(),
+        };
+        let done = [
+            (mv("g1", "b", "a"), true),
+            (mv("g2", "b", "c"), false),
+            (mv("g3", "x", "a"), true),
+            (mv("g4", "b", "c"), true),
+        ];
+        let mut o = origins_of("b", &done, "t");
+        assert!(o.iter().all(|x| x.at == "t"));
+        o.iter_mut().for_each(|x| x.at.clear());
+        assert_eq!(o, vec![origin("g1", "b", "a"), origin("g4", "b", "c")]);
+    }
+
+    #[test]
+    fn merging_origins_keeps_the_first_home_and_drops_guests_back_home() {
+        let kept = [origin("g1", "b", "a"), origin("g2", "b", "c")];
+        // a second drain moved g1 on to c, g2 back to b (home), and g5 is new
+        let new = [
+            origin("g1", "b", "c"),
+            origin("g2", "b", "b"),
+            origin("g5", "b", "a"),
+        ];
+        let m = merge_origins(&kept, &new);
+        assert_eq!(m, vec![origin("g1", "b", "c"), origin("g5", "b", "a")]);
+    }
+
+    #[test]
+    fn return_plan_brings_moved_guests_home_and_explains_the_rest() {
+        let mut b = node("b", 8000);
+        b.maintenance = true; // still flagged while the exit is planned
+        let nodes = [node("a", 8000), b, node("c", 8000)];
+        let g1 = guest("g1", "a", 2000);
+        let mut g2 = guest("g2", "c", 1000);
+        g2.running = false;
+        g2.ha = true;
+        let mut pinned = guest("pinned", "c", 100);
+        pinned.rules.pin = Some("c".into());
+        let home = guest("home", "b", 100);
+        let stranger = guest("stranger", "a", 500); // never moved by the drain
+        let moved = [
+            origin("g1", "b", "a"),
+            origin("g2", "b", "c"),
+            origin("pinned", "b", "c"),
+            origin("home", "b", "a"),
+            origin("gone", "b", "a"),
+            origin("other-node", "x", "a"),
+        ];
+        let p = plan_return(
+            "b",
+            &nodes,
+            &[g1, g2, pinned, home, stranger],
+            &moved,
+        );
+        let mv: Vec<(&str, &str, &str)> = p
+            .moves
+            .iter()
+            .map(|m| (m.guest_id.as_str(), m.from.as_str(), m.to.as_str()))
+            .collect();
+        assert_eq!(mv, [("g1", "a", "b"), ("g2", "c", "b")]);
+        assert!(p.moves.iter().all(|m| m.reason == "return"));
+        let why: HashMap<_, _> = p
+            .unplaced
+            .iter()
+            .map(|u| (u.guest_id.as_str(), u.reason.as_str()))
+            .collect();
+        assert_eq!(why.len(), 2, "{why:?}");
+        assert!(why["pinned"].contains("pinned to c"));
+        assert!(why["gone"].contains("no longer exists"));
+    }
+
+    #[test]
+    fn return_plan_respects_capacity_and_reports_an_offline_origin() {
+        let nodes = [node("a", 8000), node("b", 2000)];
+        let big1 = guest("big1", "a", 1500);
+        let big2 = guest("big2", "a", 1000);
+        let moved = [origin("big1", "b", "a"), origin("big2", "b", "a")];
+        let p = plan_return("b", &nodes, &[big1.clone(), big2.clone()], &moved);
+        assert_eq!(p.moves.len(), 1, "only 1800 MB usable on b");
+        assert_eq!(p.moves[0].guest_id, "big1");
+        assert!(p.unplaced[0].reason.contains("no room"));
+        let p = plan_return("b", &nodes[..1], &[big1, big2], &moved);
+        assert!(p.moves.is_empty());
+        assert_eq!(p.unplaced.len(), 2);
+        assert!(p.unplaced[0].reason.contains("not online"));
+    }
+
+    #[test]
+    fn return_policy_parses_and_defaults_to_origin() {
+        assert_eq!(ReturnPolicy::default(), ReturnPolicy::Origin);
+        for p in [ReturnPolicy::Origin, ReturnPolicy::Rebalance, ReturnPolicy::None] {
+            assert_eq!(ReturnPolicy::parse(p.as_str()), Ok(p));
+            let j = serde_json::to_string(&p).unwrap();
+            assert_eq!(j, format!("\"{}\"", p.as_str()));
+        }
+        assert!(ReturnPolicy::parse("back").is_err());
     }
 
     #[test]

@@ -477,6 +477,7 @@ pub async fn broadcast_group(state: &Arc<AppState>, change: GroupChange) {
         hung_reported: Default::default(),
         mgr_silent_since: HashMap::new(),
         synced_with_peer: true,
+        maint_known: Default::default(),
     };
     for n in state.cluster_manager.list_nodes().await {
         if n.name == local || n.is_local || n.status != NodeStatus::Online {
@@ -789,6 +790,19 @@ struct LoopState {
     /// This manager process has completed a placement sync with at least one
     /// peer (see [`may_restart_local_guests`]).
     synced_with_peer: bool,
+    /// Nodes last seen in maintenance while online. A node that goes down
+    /// while in maintenance was taken down on purpose (it was emptied for
+    /// service): it is not reported as a failed node.
+    maint_known: std::collections::HashSet<String>,
+}
+
+/// A node just went offline: report it as failed unless it was in
+/// maintenance (emptied by an administrator, so a shutdown is expected).
+pub(crate) fn report_offline_as_failure(
+    node: &str,
+    maint_known: &std::collections::HashSet<String>,
+) -> bool {
+    !maint_known.contains(node)
 }
 
 /// May this node (re)start HA guests that its own records say belong here?
@@ -1004,6 +1018,7 @@ pub fn spawn(state: Arc<AppState>) {
             hung_reported: Default::default(),
             mgr_silent_since: HashMap::new(),
             synced_with_peer: false,
+            maint_known: Default::default(),
         };
         let mut ticker = tokio::time::interval(Duration::from_secs(tick_secs()));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1089,6 +1104,12 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
         Default::default()
     };
     let targets = crate::cluster::drain::recovery_targets(&online, &maintenance);
+    // Remember who is in maintenance while they answer; an offline node keeps
+    // its last known state (it cannot be asked).
+    if online.len() > 1 {
+        ls.maint_known.retain(|n| !online.contains(n));
+        ls.maint_known.extend(maintenance.iter().cloned());
+    }
 
     // Feed live node figures to placement.
     let all = state.ha_manager.list_resources().await;
@@ -1178,12 +1199,19 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
             ls.mgr_silent_since.remove(&n.name);
         } else if n.status == NodeStatus::Offline && !ls.offline_since.contains_key(&n.name) {
             ls.offline_since.insert(n.name.clone(), now);
-            notify(
-                state,
-                "node_failed",
-                serde_json::json!({"node": n.name, "detected_by": local}),
-            )
-            .await;
+            if report_offline_as_failure(&n.name, &ls.maint_known) {
+                notify(
+                    state,
+                    "node_failed",
+                    serde_json::json!({"node": n.name, "detected_by": local}),
+                )
+                .await;
+            } else {
+                tracing::warn!(
+                    "HA: {} went offline while in maintenance (expected): not a node failure",
+                    n.name
+                );
+            }
         }
     }
     let leader = online.iter().min().cloned();
@@ -1581,6 +1609,19 @@ async fn move_vm(
                 .await;
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod maintenance_offline_tests {
+    use super::*;
+
+    #[test]
+    fn a_node_down_in_maintenance_is_no_failure() {
+        let known: std::collections::HashSet<String> = ["b".to_string()].into();
+        assert!(!report_offline_as_failure("b", &known));
+        assert!(report_offline_as_failure("a", &known));
+        assert!(report_offline_as_failure("b", &Default::default()));
     }
 }
 
@@ -2188,6 +2229,7 @@ mod sync_stall_tests {
             hung_reported: Default::default(),
             mgr_silent_since: HashMap::new(),
             synced_with_peer: true,
+            maint_known: Default::default(),
         };
         let t = std::time::Instant::now();
         let r: Result<(), String> = peer_post_for(

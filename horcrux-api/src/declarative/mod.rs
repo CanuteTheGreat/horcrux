@@ -65,6 +65,14 @@ pub struct Spec {
     /// defaults to saving state to encrypted storage).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_power: Option<GuestPowerSpec>,
+    /// Cluster-wide settings (`cluster.maintenance.return_policy`). Absent =
+    /// unmanaged; needs a server built with USE=cluster.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<ClusterSpec>,
+    /// Per-member settings keyed by node name (`nodes.<name>.maintenance`).
+    /// Absent = unmanaged; a node not listed is left alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<BTreeMap<String, NodeSpec>>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
@@ -80,6 +88,42 @@ pub struct GuestPowerSpec {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
 }
+
+/// `cluster:` - settings every member shares.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ClusterSpec {
+    #[serde(default)]
+    pub maintenance: ClusterMaintenanceSpec,
+}
+
+/// `cluster.maintenance`: what leaving maintenance does by default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ClusterMaintenanceSpec {
+    /// `origin` (default): the guests a drain moved away go back to their
+    /// node; `rebalance`: the rebalancer evens out the cluster; `none`.
+    pub return_policy: ReturnPolicy,
+}
+
+/// `nodes.<name>:` - one member.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct NodeSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<NodeMaintenanceSpec>,
+}
+
+/// `nodes.<name>.maintenance`: entering drains the node (every HA guest and
+/// every running guest moves to other members; the apply fails if a guest
+/// cannot move), leaving applies `return_policy` (default: the cluster's).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct NodeMaintenanceSpec {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_policy: Option<ReturnPolicy>,
+}
+
+pub use horcrux_cluster::cluster::drain::ReturnPolicy;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct NetworksSpec {
@@ -207,7 +251,7 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
     }
     if let Some(k) = spec.extra.keys().next() {
         return Err(format!(
-            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms and guest_power)"
+            "section {k:?} is not supported yet (managed: storage_pools, networks, vms, console, remote_play, guest_power, cluster, nodes)"
         ));
     }
     if let Some(gp) = &spec.guest_power {
@@ -339,6 +383,12 @@ pub struct Live {
     pub power_node: crate::api::guest_state::NodePolicy,
     /// Per-VM power overrides by VM name (only VMs that have one).
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
+    /// The cluster's maintenance settings (None: built without USE=cluster).
+    pub cluster_maintenance: Option<ClusterMaintenanceSpec>,
+    /// Every member that answered: its maintenance state.
+    pub node_maintenance: BTreeMap<String, NodeMaintenanceSpec>,
+    /// Members that could not be asked (offline).
+    pub nodes_unreachable: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -704,10 +754,58 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // cluster settings, then members' maintenance (after everything else:
+    // a drain moves the guests the spec just created or started).
+    if let Some(c) = &spec.cluster {
+        match &live.cluster_maintenance {
+            None => p.errors.push(
+                "cluster: this server is built without clustering (USE=cluster)".into(),
+            ),
+            Some(l) if *l != c.maintenance => creates.push(ch(
+                "cluster",
+                "maintenance",
+                Action::Update,
+                vec![format!(
+                    "return_policy: {} -> {}",
+                    l.return_policy.as_str(),
+                    c.maintenance.return_policy.as_str()
+                )],
+            )),
+            Some(_) => {}
+        }
+    }
+    for (name, n) in spec.nodes.iter().flatten() {
+        let Some(want) = &n.maintenance else { continue };
+        if live.cluster_maintenance.is_none() {
+            p.errors.push(format!(
+                "nodes.{name}: this server is built without clustering (USE=cluster)"
+            ));
+            continue;
+        }
+        let Some(l) = live.node_maintenance.get(name) else {
+            p.errors.push(if live.nodes_unreachable.contains(name) {
+                format!("nodes.{name}: {name} does not answer (offline?): its maintenance cannot be changed now")
+            } else {
+                format!("nodes.{name}: there is no member with that name")
+            });
+            continue;
+        };
+        let mut d = Vec::new();
+        diff(&mut d, "enabled", &l.enabled, &want.enabled);
+        // The return policy belongs to a maintenance: compared while one runs.
+        if want.enabled && l.enabled && want.return_policy.is_some() {
+            diff(&mut d, "return_policy", &l.return_policy, &want.return_policy);
+        }
+        if !d.is_empty() {
+            creates.push(ch("node_maintenance", name, Action::Update, d));
+        }
+    }
+
     // Creates/updates run dependency-first (pools, zones, vnets, subnets,
     // VMs, guest power); deletes run in the opposite order (VMs first, pools last).
     let rank = |k: &str| {
         [
+            "cluster",
             "console",
             "remote_play",
             "storage_pool",
@@ -716,6 +814,7 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
             "subnet",
             "vm",
             "guest_power",
+            "node_maintenance",
         ]
         .iter()
         .position(|x| *x == k)
@@ -986,6 +1085,23 @@ pub fn export(live: &Live) -> Spec {
         guest_power: Some(GuestPowerSpec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),
+        }),
+        cluster: live.cluster_maintenance.clone().map(|m| ClusterSpec { maintenance: m }),
+        nodes: (!live.node_maintenance.is_empty()).then(|| {
+            live.node_maintenance
+                .iter()
+                .map(|(n, m)| {
+                    (
+                        n.clone(),
+                        NodeSpec {
+                            maintenance: Some(NodeMaintenanceSpec {
+                                enabled: m.enabled,
+                                return_policy: m.return_policy.filter(|_| m.enabled),
+                            }),
+                        },
+                    )
+                })
+                .collect()
         }),
         extra: BTreeMap::new(),
     }

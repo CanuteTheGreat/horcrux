@@ -24,7 +24,43 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         remote_play: crate::api::remote_play::load_settings(state).await,
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
+        ..maintenance_live(state).await
     }
+}
+
+/// The cluster's and every member's maintenance (USE=cluster).
+#[cfg(feature = "cluster")]
+async fn maintenance_live(state: &Arc<AppState>) -> Live {
+    use super::{ClusterMaintenanceSpec, NodeMaintenanceSpec};
+    let view = crate::api::drain::cluster_maintenance(state).await;
+    let mut live = Live {
+        cluster_maintenance: Some(ClusterMaintenanceSpec {
+            return_policy: view.settings.return_policy,
+        }),
+        ..Default::default()
+    };
+    for row in view.nodes {
+        match row.maintenance {
+            Some(m) => {
+                live.node_maintenance.insert(
+                    row.node,
+                    NodeMaintenanceSpec {
+                        enabled: m.m.enabled,
+                        return_policy: m.m.return_policy,
+                    },
+                );
+            }
+            None => {
+                live.nodes_unreachable.insert(row.node);
+            }
+        }
+    }
+    live
+}
+
+#[cfg(not(feature = "cluster"))]
+async fn maintenance_live(_state: &Arc<AppState>) -> Live {
+    Live::default()
 }
 
 /// Per-VM power overrides by VM name.
@@ -134,6 +170,53 @@ async fn run_change(
             ))
         }
 
+        #[cfg(feature = "cluster")]
+        ("cluster", Action::Update) => {
+            let w = spec.cluster.as_ref().ok_or("not in spec")?;
+            crate::api::drain::set_maintenance_settings(
+                state,
+                &crate::api::drain::MaintenanceSettings {
+                    return_policy: w.maintenance.return_policy,
+                },
+            )
+            .await
+            .map_err(api)?;
+            Ok(None)
+        }
+        #[cfg(feature = "cluster")]
+        ("node_maintenance", Action::Update) => {
+            let w = spec
+                .nodes
+                .as_ref()
+                .and_then(|n| n.get(&c.name))
+                .and_then(|n| n.maintenance.clone())
+                .ok_or("not in spec")?;
+            let v = crate::api::drain::set_any_node_maintenance(
+                state,
+                &c.name,
+                crate::api::drain::SetMaintenance {
+                    enabled: w.enabled,
+                    // already in maintenance: only the return policy changes
+                    drain: !live.node_maintenance.get(&c.name).is_some_and(|l| l.enabled),
+                    return_policy: w.return_policy,
+                    force: false,
+                    requested_by: Some("declarative apply".into()),
+                },
+            )
+            .await
+            .map_err(api)?;
+            Ok(Some(if w.enabled {
+                format!("{} is in maintenance; its guests are moving to other members", v.node)
+            } else {
+                format!(
+                    "{} left maintenance (return policy {})",
+                    v.node,
+                    w.return_policy
+                        .unwrap_or(v.effective_return_policy)
+                        .as_str()
+                )
+            }))
+        }
         ("remote_play", Action::Update) => {
             let w = spec.remote_play.clone().ok_or("not in spec")?;
             crate::api::remote_play::set_settings(state, w).await?;
