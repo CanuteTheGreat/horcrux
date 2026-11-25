@@ -122,7 +122,7 @@ fn read_params(q: &leptos_router::ParamsMap) -> Params {
         .iter()
         .chain(PAGE_KEYS.iter())
         .filter_map(|k| {
-            q.get(*k)
+            q.get(k)
                 .filter(|v| !v.is_empty())
                 .map(|v| ((*k).to_string(), v.clone()))
         })
@@ -446,7 +446,7 @@ pub fn AccessLogPage() -> impl IntoView {
                             view! { <span class=class style=format!("height:{pct:.1}%")></span> }
                         };
                         view! {
-                            <a class="al-bar" href=h title=title aria-label=title.clone()>
+                            <a class="al-bar" href=h title=title.clone() aria-label=title>
                                 {seg(b.s5xx, "al-s5")}{seg(b.s4xx, "al-s4")}{seg(b.s3xx, "al-s3")}{seg(b.s2xx, "al-s2")}
                             </a>
                         }
@@ -678,7 +678,7 @@ mod tests {
         let now = 1_700_000_000_000;
         assert_eq!(
             api_query(&p(&[("user", "a b")]), now, 50, 0),
-            format!("user=a%20b&start={}&limit=50", 1_700_000_000 - 3600)
+            format!("start={}&user=a%20b&limit=50", 1_700_000_000 - 3600)
         );
         assert_eq!(
             api_query(&p(&[("last", "86400")]), now, 50, 100),
