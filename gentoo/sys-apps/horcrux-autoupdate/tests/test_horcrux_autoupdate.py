@@ -516,6 +516,21 @@ class RestartServices(Base):
         self.assertIsNone(pending)
         self.assertTrue(os.path.exists(os.path.join(self.m.PROC, "200")))
 
+    def test_openrc_supervisor_is_not_counted_as_a_guest(self):
+        # supervise-daemon shares the service cgroup and is replaced by the restart: not a lost guest
+        self.stale_manager_with_a_guest()
+        self.proc(90, "/sbin/supervise-daemon", cg="horcrux-api")
+        prev = self.on_restart
+
+        def restarted(argv):
+            prev(argv)
+            self.kill(90)
+            self.proc(91, "/sbin/supervise-daemon", cg="horcrux-api")
+        self.on_restart = restarted
+        summary, pending = self.m.restart_replaced(self.conf())
+        self.assertEqual(summary, "restarted horcrux-api (guests kept 1/1)")
+        self.assertIsNone(pending)
+
     def test_systemd_restart_argv(self):
         self.assertEqual(self.m.restart_argv("horcrux-api", "systemd"), ["systemctl", "restart", "horcrux-api.service"])
 
