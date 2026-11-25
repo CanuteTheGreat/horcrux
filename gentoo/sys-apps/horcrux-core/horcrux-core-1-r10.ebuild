@@ -56,6 +56,8 @@ KEYWORDS="amd64 arm64"
 #   administrator with "Permission denied"). It judges access the way the kernel does (every directory searchable, the file's own group class decides,
 #   symlinks followed), skips secrets (gnupg, auth.conf, key/token-like names), and `--fix` only adds read/search bits to root-owned entries inside
 #   /etc/portage. The sync hook records the result in /var/lib/horcrux/doctor/portage-config.json. Init-neutral (plain script, no service).
+# horcrux-doctor x11-scale (-r10): `horcrux-doctor x11-scale [--user U]` runs gnome-session-openrc-helper x11-scale-status as each logged-in GNOME user
+#   (read-only; prints the helper's OK/FAIL lines, exit 1 on FAIL; skips cleanly on systemd, without the helper or without a GNOME session).
 # /etc/grub.d/11_horcrux_unattended (-r9): installs without boot environments boot unattended when a kernel fails to load. GRUB turns its countdown
 #   off for good once an automatic boot attempt comes back to the menu, and stock grub-mkconfig output has no `fallback`: one unloadable default
 #   kernel left the machine at a menu with no timer until someone pressed a key. The script adds `fallback` (entry NUMBERS of the other kernels,

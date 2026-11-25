@@ -4,6 +4,7 @@
   horcrux-doctor                      run every check, print findings (exit 1 when any warning)
   horcrux-doctor portage-config       only the Portage configuration access check
   horcrux-doctor portage-config --fix apply the safe fix (see below)
+  horcrux-doctor x11-scale [--user U] GNOME on OpenRC: X11 apps get the UI scale (read-only, see below)
   options: --json  --root DIR  --record  --quiet  --probe
 
 portage-config
@@ -27,6 +28,13 @@ portage-config
   group and other: the 0644/0755 convention), never removed; owner and group are never changed; symlinks, secrets, files outside
   /etc/portage and ancestor directories above it are only reported. Without --fix nothing is modified.
 
+x11-scale
+  Runs `/usr/libexec/gnome-session-openrc-helper x11-scale-status` as every logged-in GNOME user (processes named gnome-shell; or
+  only --user U) with XDG_RUNTIME_DIR=/run/user/UID, and prints the helper's OK/FAIL lines prefixed with the user. Read-only: the
+  helper only queries mutter, gsettings and the X server. Exit 1 when any line is FAIL or the helper fails. Skips cleanly (exit 0,
+  one "skipped" line) on systemd, without the helper (no GNOME OpenRC session package) or with no GNOME user logged in. Running as
+  another user needs root; an unprivileged caller can only check itself. Not part of the default run: it needs a live session.
+
 Exit status: 0 healthy, 1 warnings found (after --fix: warnings that remain), 2 usage/internal error.
 """
 import argparse
@@ -35,10 +43,15 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 import time
 
+X11_HELPER = os.environ.get("HX_X11_HELPER", "/usr/libexec/gnome-session-openrc-helper")
+PROC_DIR = os.environ.get("HX_PROC_DIR", "/proc")  # the unit tests point these at fakes
+RUN_DIR = os.environ.get("HX_RUN_DIR", "/run")
+X11_TIMEOUT = int(os.environ.get("HX_X11_TIMEOUT", "60"))
 PORTAGE_GROUP = os.environ.get("HX_PORTAGE_GROUP", "portage")
 CONFIG_DIR = "/etc/portage"
 STATE_DIR = os.environ.get("HX_DOCTOR_STATE_DIR", "/var/lib/horcrux/doctor")
@@ -349,6 +362,103 @@ def apply_fix(root, gid, findings, config_dir=CONFIG_DIR, dry=False):
     return changes
 
 
+# ---------------------------------------------------------------- x11-scale
+def gnome_users():
+    """uids (sorted) that run gnome-shell, from <proc>/<pid>/comm + status."""
+    uids = set()
+    try:
+        pids = [x for x in os.listdir(PROC_DIR) if x.isdigit()]
+    except OSError:
+        return []
+    for pid in pids:
+        try:
+            with open(os.path.join(PROC_DIR, pid, "comm")) as f:
+                if f.read().strip() != "gnome-shell":
+                    continue
+            with open(os.path.join(PROC_DIR, pid, "status")) as f:
+                for line in f:
+                    if line.startswith("Uid:"):
+                        uids.add(int(line.split()[1]))
+                        break
+        except (OSError, ValueError, IndexError):
+            continue
+    return sorted(uids)
+
+
+def user_info(spec):
+    """(uid, name, gid) for a name or numeric uid; None when unknown."""
+    import pwd
+    try:
+        e = pwd.getpwuid(int(spec)) if str(spec).isdigit() else pwd.getpwnam(spec)
+    except KeyError:
+        return None
+    return e.pw_uid, e.pw_name, e.pw_gid
+
+
+def run_x11_scale(a):
+    """Returns dict(check, ok, skipped (reason or None), users=[dict(user, uid, rc, lines)])."""
+    res = dict(check="x11-scale", ok=True, skipped=None, users=[], time=int(time.time()))
+    if os.path.isdir(os.path.join(RUN_DIR, "systemd", "system")):
+        res["skipped"] = "systemd host (the check is for the GNOME OpenRC session)"
+        return res
+    if not os.access(X11_HELPER, os.X_OK):
+        res["skipped"] = "%s not installed (no GNOME OpenRC session)" % X11_HELPER
+        return res
+    if a.user:
+        ui = user_info(a.user)
+        if ui is None:
+            res["ok"], res["error"] = False, "unknown user %r" % a.user
+            return res
+        targets = [ui]
+    else:
+        targets = [ui for ui in (user_info(u) for u in gnome_users()) if ui]
+    if not targets:
+        res["skipped"] = "no GNOME user is logged in"
+        return res
+    me = os.geteuid()
+    for uid, name, gid in targets:
+        ent = dict(user=name, uid=uid, rc=None, lines=[])
+        res["users"].append(ent)
+        if uid != me and me != 0:
+            ent["lines"] = ["SKIP needs root to run the check as %s" % name]
+            if a.user:
+                res["ok"], res["error"] = False, "running as another user needs root"
+            continue
+        env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "XDG_RUNTIME_DIR": "/run/user/%d" % uid,
+               "LANG": "C", "USER": name, "LOGNAME": name}
+        if os.path.isdir("/home/" + name):
+            env["HOME"] = "/home/" + name
+        kw = dict(user=uid, group=gid, extra_groups=[]) if uid != me else {}
+        try:
+            r = subprocess.run([X11_HELPER, "x11-scale-status"], env=env, capture_output=True, text=True, timeout=X11_TIMEOUT,
+                               stdin=subprocess.DEVNULL, **kw)
+            ent["rc"] = r.returncode
+            ent["lines"] = [l for l in r.stdout.splitlines() if l.strip()]
+            if r.returncode != 0 and not any(l.startswith("FAIL") for l in ent["lines"]):
+                ent["lines"].append("FAIL helper exited %d%s" % (r.returncode, (": " + r.stderr.strip()[:200]) if r.stderr.strip() else ""))
+        except subprocess.TimeoutExpired:
+            ent["rc"] = 124
+            ent["lines"] = ["FAIL helper timed out after %ds" % X11_TIMEOUT]
+        except OSError as e:
+            ent["rc"] = 126
+            ent["lines"] = ["FAIL cannot run helper: %s" % e]
+        if ent["rc"] != 0 or any(l.startswith("FAIL") for l in ent["lines"]):
+            res["ok"] = False
+    return res
+
+
+def render_x11(res, quiet):
+    if res.get("error"):
+        print("x11-scale: %s" % res["error"], file=sys.stderr)
+    if res["skipped"]:
+        if not quiet:
+            print("x11-scale: skipped: %s" % res["skipped"])
+        return
+    for u in res["users"]:
+        for l in u["lines"]:
+            print("x11-scale %s(%d): %s" % (u["user"], u["uid"], l))
+
+
 # ---------------------------------------------------------------- driver
 def run_portage_config(a):
     root = a.root.rstrip("/") or "/"
@@ -404,7 +514,8 @@ def render(res, quiet):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="horcrux-doctor", description=__doc__.split("\n")[0])
-    p.add_argument("check", nargs="?", default="all", choices=["all", "portage-config"])
+    p.add_argument("check", nargs="?", default="all", choices=["all", "portage-config", "x11-scale"])
+    p.add_argument("--user", help="x11-scale: only this user (name or uid; default every logged-in GNOME user)")
     p.add_argument("--fix", action="store_true", help="apply the safe fix")
     p.add_argument("--json", action="store_true")
     p.add_argument("--root", default=os.environ.get("ROOT", "/"), help="operate on another root")
@@ -415,6 +526,13 @@ def main(argv=None):
     p.add_argument("--uid", type=int, help=argparse.SUPPRESS)
     p.add_argument("--force-nonroot", action="store_true", help=argparse.SUPPRESS)
     a = p.parse_args(argv)
+    if a.check == "x11-scale":
+        res = run_x11_scale(a)
+        if a.json:
+            print(json.dumps(res, indent=2, sort_keys=True))
+        else:
+            render_x11(res, a.quiet)
+        return 2 if res.get("error") else (0 if res["ok"] else 1)
     res = run_portage_config(a)
     if res is None:
         return 2
