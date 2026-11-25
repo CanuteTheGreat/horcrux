@@ -4,6 +4,7 @@ pub mod auth;
 pub mod console;
 pub mod lxc;
 pub mod remote_play;
+pub mod system_logs;
 
 pub use lxc::{
     LxcCatalogEntry, LxcFeatures, LxcMount, LxcNet, LxcOptions, LxcSnapshot, LxcTemplate,
