@@ -88,7 +88,7 @@ def main():
             page.select_option("select[aria-label='Add a condition at the top level']", "severity")
 
             # weekday toggles and time pickers (calendar leaf): Saturday on, 22:00 -> 06:00
-            cal = page.locator("li.mt-node:has(> .mt-body .mt-kind:text-is('Calendar'))")
+            cal = page.locator("li.mt-node:has(> .mt-body > .mt-kind:text-is('Calendar'))")
             expect(cal).to_have_count(1)
             cal.get_by_label("Weekday Sat").check()
             cal.get_by_label("Start time").fill("22:00")
@@ -97,7 +97,7 @@ def main():
             cal.get_by_label("Time zone, for example Europe/Berlin").dispatch_event("change")
 
             # event-type leaf: tick "Package updates"
-            ev = page.locator("li.mt-node:has(> .mt-body .mt-kind:text-is('Event type'))")
+            ev = page.locator("li.mt-node:has(> .mt-body > .mt-kind:text-is('Event type'))")
             ev.get_by_label("Event type Package updates").check()
 
             # target: every enabled channel (no channel needed)
@@ -143,7 +143,7 @@ def main():
             expect(page.locator("#matcher-editor")).to_be_visible(timeout=30000)
             expect(page.locator("#matcher-tree > ul > li.mt-group")).to_have_count(1)
             expect(page.locator("#matcher-tree li.mt-group li.mt-group")).to_have_count(1)
-            expect(page.locator("li.mt-node:has(> .mt-body .mt-kind:text-is('Calendar'))")
+            expect(page.locator("li.mt-node:has(> .mt-body > .mt-kind:text-is('Calendar'))")
                    .get_by_label("Start time")).to_have_value("22:00")
 
             # test panel: a Saturday 23:30 UTC package update matches through the calendar leaf
