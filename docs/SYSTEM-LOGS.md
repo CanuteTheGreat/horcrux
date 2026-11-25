@@ -40,7 +40,9 @@ Reads need Sys.Audit; settings and clear need Sys.Modify. A node without any log
 The OpenRC images log to a plain file. It has no priority field (guessed from the text, or read from a `<PRI>` prefix when
 the logger writes one), no unit (the unit filter matches the program name, which is the OpenRC service name for most
 services), and no boot id. Reboots are found from the login records (`wtmp` BOOT_TIME), kernel `Linux version` lines and the
-kernel's boot time; older boots get ids like `boot-<unix time>`. Only the last `syslog_tail_bytes` of the file are searched.
+kernel's boot time; older boots get ids like `boot-<unix time>`. Kernel messages of the current boot come from the kernel ring buffer when the logger writes none to its file (sysklogd
+does not); earlier boots' kernel messages are there only if the logger recorded them. Only the last `syslog_tail_bytes`
+of the file are searched.
 The page shows these limits as a note on such nodes.
 
 ## Settings (typed keys)
@@ -57,6 +59,7 @@ config (`docs/design/declarative-config.md`):
 | `syslog_tail_bytes` | 8 MiB | how much of a syslog file is searched |
 | `syslog_files` | messages, syslog, everything/current | files tried in order |
 | `wtmp_path` | /var/log/wtmp | login records for reboots |
+| `kmsg_path` | /dev/kmsg | kernel ring buffer, read for kernel messages of the current boot when the logger does not write them (empty = never) |
 | `follow_poll_ms` | 1000 | live mode look interval |
 | `follow_idle_secs` | 600 | live mode closes after this long without news |
 | `follow_max_secs` | 3600 | longest stream |

@@ -637,6 +637,35 @@ pub fn parse_journal_json(line: &str) -> Option<LogEntry> {
     })
 }
 
+/// One `/dev/kmsg` record: `pri,seq,usec-since-boot,flags;message`.
+/// Continuation lines (they start with a space) belong to the record before.
+pub fn parse_kmsg(rec: &str, boot_us: i64) -> Option<LogEntry> {
+    if rec.starts_with(' ') {
+        return None;
+    }
+    let (head, msg) = rec.split_once(';')?;
+    let mut f = head.split(',');
+    let pri: u16 = f.next()?.parse().ok()?;
+    let _seq = f.next()?;
+    let usec: i64 = f.next()?.parse().ok()?;
+    let sev = (pri & 7) as u8;
+    let ts_us = boot_us.checked_add(usec)?;
+    let ts = DateTime::from_timestamp(ts_us.div_euclid(1_000_000), (ts_us.rem_euclid(1_000_000) * 1000) as u32)?
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    Some(LogEntry {
+        timestamp: ts,
+        level: level_of_priority(sev).into(),
+        service: Some("kernel".into()),
+        message: msg.trim_end().to_string(),
+        ts_us: Some(ts_us),
+        priority: Some(sev),
+        priority_name: Some(priority_name(sev).into()),
+        identifier: Some("kernel".into()),
+        kernel: true,
+        ..Default::default()
+    })
+}
+
 // --------------------------------------------------------------- boots
 
 /// One boot of the node.
@@ -1069,6 +1098,18 @@ mod tests {
             .unwrap()
             .contains("Tue 2026-10-20"));
         assert!(parse_list_boots_json("not json").is_none());
+    }
+
+    #[test]
+    fn kernel_ring_records_become_kernel_entries() {
+        let e = parse_kmsg("4,339,5140900,-;nf_conntrack: table full", 1_792_700_000_000_000).unwrap();
+        assert_eq!((e.priority, e.kernel, e.identifier.as_deref()), (Some(4), true, Some("kernel")));
+        assert_eq!(e.ts_us, Some(1_792_700_005_140_900));
+        assert_eq!(e.message, "nf_conntrack: table full");
+        // facility bits are dropped from the severity: 30 = daemon.info
+        assert_eq!(parse_kmsg("30,1,1,-;x", 0).unwrap().priority, Some(6));
+        assert!(parse_kmsg(" SUBSYSTEM=net", 0).is_none());
+        assert!(parse_kmsg("garbage", 0).is_none());
     }
 
     #[test]
