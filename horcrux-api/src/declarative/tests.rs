@@ -440,13 +440,20 @@ nodes:
         .map(|c| (c.kind.clone(), c.name.clone(), c.details.clone()))
         .collect();
     assert_eq!(got[0].0, "cluster", "cluster settings first");
-    assert_eq!(got[0].2, vec!["return_policy: origin -> rebalance".to_string()]);
+    assert_eq!(
+        got[0].2,
+        vec!["return_policy: origin -> rebalance".to_string()]
+    );
     let na = got.iter().find(|c| c.1 == "na").unwrap();
     assert_eq!(na.0, "node_maintenance");
     assert_eq!(na.2, vec!["enabled: false -> true".to_string()]);
     let nb = got.iter().find(|c| c.1 == "nb").unwrap();
     assert!(nb.2[0].contains("return_policy"), "{:?}", nb.2);
-    assert_eq!(p.changes.last().unwrap().kind, "node_maintenance", "maintenance last");
+    assert_eq!(
+        p.changes.last().unwrap().kind,
+        "node_maintenance",
+        "maintenance last"
+    );
 
     // export -> plan is a no-op, through YAML
     let live = maint_live();
@@ -454,7 +461,11 @@ nodes:
     let text = serde_yaml::to_string(&exported).unwrap();
     assert!(text.contains("return_policy: origin"), "{text}");
     let again = parse(&text).unwrap();
-    assert!(plan(&again, &live, false).in_sync(), "{:?}", plan(&again, &live, false));
+    assert!(
+        plan(&again, &live, false).in_sync(),
+        "{:?}",
+        plan(&again, &live, false)
+    );
 }
 
 #[test]
@@ -471,9 +482,16 @@ nodes:
     let p = plan(&spec, &maint_live(), false);
     assert_eq!(p.errors.len(), 2, "{:?}", p.errors);
     assert!(p.errors.iter().any(|e| e.contains("nc does not answer")));
-    assert!(p.errors.iter().any(|e| e.contains("no member with that name")));
+    assert!(p
+        .errors
+        .iter()
+        .any(|e| e.contains("no member with that name")));
     // a server without clustering refuses the sections
     let p = plan(&spec, &Live::default(), false);
-    assert!(p.errors.iter().all(|e| e.contains("USE=cluster")), "{:?}", p.errors);
+    assert!(
+        p.errors.iter().all(|e| e.contains("USE=cluster")),
+        "{:?}",
+        p.errors
+    );
     assert!(parse("version: 1\ncluster: {maintenance: {return_policy: back}}").is_err());
 }

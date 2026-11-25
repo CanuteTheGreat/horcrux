@@ -32,13 +32,19 @@ async fn per_node_maintenance_routes_settings_and_rbac() {
     let (s, v) = api.get("/nodes/no-such-member/maintenance").await;
     assert_eq!(s, 404, "{v}");
     let (s, v) = api
-        .post("/nodes/no-such-member/maintenance", json!({"enabled": true}))
+        .post(
+            "/nodes/no-such-member/maintenance",
+            json!({"enabled": true}),
+        )
         .await;
     assert_eq!(s, 404, "{v}");
 
     // a lone node has nowhere to move guests to
     let (s, v) = api
-        .post(&format!("/nodes/{me}/maintenance"), json!({"enabled": true}))
+        .post(
+            &format!("/nodes/{me}/maintenance"),
+            json!({"enabled": true}),
+        )
         .await;
     assert_eq!(s, 409, "{v}");
     assert!(v.to_string().contains("not in a cluster"), "{v}");
@@ -48,7 +54,9 @@ async fn per_node_maintenance_routes_settings_and_rbac() {
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["moves"], json!([]));
     let (s, v) = api
-        .get(&format!("/nodes/{me}/maintenance/plan?action=exit&return=origin"))
+        .get(&format!(
+            "/nodes/{me}/maintenance/plan?action=exit&return=origin"
+        ))
         .await;
     assert_eq!(s, 200, "{v}");
     let (s, _) = api
@@ -62,7 +70,8 @@ async fn per_node_maintenance_routes_settings_and_rbac() {
     assert_eq!(v["settings"]["return_policy"], "origin");
     let rows = v["nodes"].as_array().unwrap();
     assert!(
-        rows.iter().any(|r| r["node"] == me.as_str() && r["local"] == true),
+        rows.iter()
+            .any(|r| r["node"] == me.as_str() && r["local"] == true),
         "{v}"
     );
     let (s, v) = api
@@ -78,7 +87,10 @@ async fn per_node_maintenance_routes_settings_and_rbac() {
 
     // leaving (not in maintenance) is harmless and records the exit
     let (s, v) = api
-        .post(&format!("/nodes/{me}/maintenance"), json!({"enabled": false}))
+        .post(
+            &format!("/nodes/{me}/maintenance"),
+            json!({"enabled": false}),
+        )
         .await;
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["enabled"], false);
@@ -138,7 +150,11 @@ async fn per_node_maintenance_routes_settings_and_rbac() {
     let outsider = Api::login_with(srv.client(), &base, "nm-other", pw).await;
     let operator = Api::login_with(srv.client(), &base, "nm-ops", pw).await;
     let path = format!("/nodes/{me}/maintenance");
-    assert_eq!(auditor.get(&path).await.0, 200, "Sys.Audit on the node reads it");
+    assert_eq!(
+        auditor.get(&path).await.0,
+        200,
+        "Sys.Audit on the node reads it"
+    );
     assert_eq!(
         auditor.get(&format!("{path}/plan")).await.0,
         200,
@@ -149,7 +165,11 @@ async fn per_node_maintenance_routes_settings_and_rbac() {
         403,
         "but cannot change it"
     );
-    assert_eq!(outsider.get(&path).await.0, 403, "a grant on another node does not reach this one");
+    assert_eq!(
+        outsider.get(&path).await.0,
+        403,
+        "a grant on another node does not reach this one"
+    );
     assert_eq!(outsider.post(&path, json!({"enabled": false})).await.0, 403);
     // Sys.Modify on this node passes the gate (and gets the lone-node refusal)
     assert_eq!(operator.post(&path, json!({"enabled": true})).await.0, 409);

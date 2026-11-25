@@ -758,9 +758,9 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
     // a drain moves the guests the spec just created or started).
     if let Some(c) = &spec.cluster {
         match &live.cluster_maintenance {
-            None => p.errors.push(
-                "cluster: this server is built without clustering (USE=cluster)".into(),
-            ),
+            None => p
+                .errors
+                .push("cluster: this server is built without clustering (USE=cluster)".into()),
             Some(l) if *l != c.maintenance => creates.push(ch(
                 "cluster",
                 "maintenance",
@@ -794,7 +794,12 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         diff(&mut d, "enabled", &l.enabled, &want.enabled);
         // The return policy belongs to a maintenance: compared while one runs.
         if want.enabled && l.enabled && want.return_policy.is_some() {
-            diff(&mut d, "return_policy", &l.return_policy, &want.return_policy);
+            diff(
+                &mut d,
+                "return_policy",
+                &l.return_policy,
+                &want.return_policy,
+            );
         }
         if !d.is_empty() {
             creates.push(ch("node_maintenance", name, Action::Update, d));
@@ -1086,7 +1091,10 @@ pub fn export(live: &Live) -> Spec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),
         }),
-        cluster: live.cluster_maintenance.clone().map(|m| ClusterSpec { maintenance: m }),
+        cluster: live
+            .cluster_maintenance
+            .clone()
+            .map(|m| ClusterSpec { maintenance: m }),
         nodes: (!live.node_maintenance.is_empty()).then(|| {
             live.node_maintenance
                 .iter()

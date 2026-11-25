@@ -659,8 +659,18 @@ mod tests {
     fn per_node_maintenance_routes_map_to_that_node() {
         for (m, p, want, path) in [
             ("GET", "/api/nodes/nb/maintenance", P::SysAudit, "/nodes/nb"),
-            ("POST", "/api/nodes/nb/maintenance", P::SysModify, "/nodes/nb"),
-            ("GET", "/api/nodes/nb/maintenance/plan", P::SysAudit, "/nodes/nb"),
+            (
+                "POST",
+                "/api/nodes/nb/maintenance",
+                P::SysModify,
+                "/nodes/nb",
+            ),
+            (
+                "GET",
+                "/api/nodes/nb/maintenance/plan",
+                P::SysAudit,
+                "/nodes/nb",
+            ),
             // the local node's own routes keep their node-wide rule
             ("POST", "/api/nodes/maintenance", P::SysModify, "/nodes"),
             ("GET", "/api/nodes/maintenance/plan", P::SysAudit, "/nodes"),

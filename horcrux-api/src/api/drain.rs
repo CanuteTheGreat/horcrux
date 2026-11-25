@@ -777,7 +777,11 @@ pub async fn drain_node(state: &Arc<AppState>, reason: &str, timeout_secs: u64) 
     let prev = load_maintenance(state).await;
     let mut m = Maintenance {
         enabled: true,
-        since: prev.since.clone().filter(|_| prev.enabled).or(Some(started.clone())),
+        since: prev
+            .since
+            .clone()
+            .filter(|_| prev.enabled)
+            .or(Some(started.clone())),
         reason: Some(reason.to_string()),
         drain: Some(Run {
             kind: "drain".into(),
@@ -786,7 +790,11 @@ pub async fn drain_node(state: &Arc<AppState>, reason: &str, timeout_secs: u64) 
             ..Default::default()
         }),
         // A second drain of the same maintenance keeps the first origins.
-        origins: if prev.enabled { prev.origins.clone() } else { vec![] },
+        origins: if prev.enabled {
+            prev.origins.clone()
+        } else {
+            vec![]
+        },
         return_policy: prev.return_policy,
         exit: prev.exit.clone(),
     };
@@ -1271,13 +1279,19 @@ pub async fn set_local_maintenance(
             });
             *maint_cell().lock().unwrap() = m;
         } else {
-            tracing::warn!("maintenance: {local} enters maintenance without a drain (asked by {who})");
+            tracing::warn!(
+                "maintenance: {local} enters maintenance without a drain (asked by {who})"
+            );
             let m = Maintenance {
                 enabled: true,
                 since: cur.since.clone().filter(|_| cur.enabled).or(Some(now())),
                 reason: Some("maintenance".into()),
                 drain: if cur.enabled { cur.drain.clone() } else { None },
-                origins: if cur.enabled { cur.origins.clone() } else { vec![] },
+                origins: if cur.enabled {
+                    cur.origins.clone()
+                } else {
+                    vec![]
+                },
                 return_policy: req.return_policy.or(cur.return_policy),
                 exit: cur.exit.clone(),
             };
@@ -1417,8 +1431,8 @@ async fn forward<T: serde::de::DeserializeOwned>(
             "{node} is not online: its maintenance can only be changed while it answers"
         )));
     }
-    let token = crate::middleware::auth::generate_cluster_ha_token(&local)
-        .map_err(ApiError::Internal)?;
+    let token =
+        crate::middleware::auth::generate_cluster_ha_token(&local).map_err(ApiError::Internal)?;
     let resp = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .connect_timeout(Duration::from_secs(5))
@@ -1471,7 +1485,9 @@ async fn set_node_maintenance(
     if is_local_node(&state, &node).await? {
         return Ok(Json(set_local_maintenance(&state, req).await?));
     }
-    Ok(Json(forward(&state, &node, &NodeMaintOp::Set { req }).await?))
+    Ok(Json(
+        forward(&state, &node, &NodeMaintOp::Set { req }).await?,
+    ))
 }
 
 async fn node_plan(

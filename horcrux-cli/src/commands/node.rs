@@ -166,7 +166,10 @@ mod tests {
         assert_eq!(b["return"], "none");
         assert_eq!(b["enabled"], false);
         let b = maintenance_body("on", Some("rebalance"), true, true).unwrap();
-        assert_eq!((b["force"].clone(), b["drain"].clone()), (json!(true), json!(false)));
+        assert_eq!(
+            (b["force"].clone(), b["drain"].clone()),
+            (json!(true), json!(false))
+        );
         assert!(maintenance_body("maybe", None, false, false).is_err());
         assert!(maintenance_body("off", Some("back"), false, false).is_err());
         assert!(path_segment("a/b").is_err());

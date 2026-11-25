@@ -197,7 +197,10 @@ async fn run_change(
                 crate::api::drain::SetMaintenance {
                     enabled: w.enabled,
                     // already in maintenance: only the return policy changes
-                    drain: !live.node_maintenance.get(&c.name).is_some_and(|l| l.enabled),
+                    drain: !live
+                        .node_maintenance
+                        .get(&c.name)
+                        .is_some_and(|l| l.enabled),
                     return_policy: w.return_policy,
                     force: false,
                     requested_by: Some("declarative apply".into()),
@@ -206,7 +209,10 @@ async fn run_change(
             .await
             .map_err(api)?;
             Ok(Some(if w.enabled {
-                format!("{} is in maintenance; its guests are moving to other members", v.node)
+                format!(
+                    "{} is in maintenance; its guests are moving to other members",
+                    v.node
+                )
             } else {
                 format!(
                     "{} left maintenance (return policy {})",

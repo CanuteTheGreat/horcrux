@@ -248,7 +248,7 @@ def define(args):
         A.wait_until(lambda: any(n["name"] == b and n["status"].lower() != "online" for n in hx(A, "GET", "/cluster/nodes")["body"]),
                      300, 5, "A sees B offline")
         time.sleep(120)       # past the self-fence and recovery windows
-        log_a = A.unit_log("horcrux-api", 400)
+        log_a = A.unit_log("horcrux-api", 400) + A.execute("grep -rh 'in maintenance' /var/log/horcrux/ 2>/dev/null | tail -20", 30)[1]
         m.check("b-down-reported-as-expected-not-failure", "went offline while in maintenance" in log_a, log_a[-1500:])
         rec = recoveries()
         m.check("no-ha-recovery-while-b-down", len(rec) == rec0, json.dumps(rec[: len(rec) - rec0])[:400])

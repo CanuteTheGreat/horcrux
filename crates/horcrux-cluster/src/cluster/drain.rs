@@ -422,9 +422,8 @@ pub fn plan_return(
             reason,
         };
         let Some(g) = g else {
-            plan.unplaced.push(unplaced(
-                "no longer exists on any online node".to_string(),
-            ));
+            plan.unplaced
+                .push(unplaced("no longer exists on any online node".to_string()));
             continue;
         };
         if g.node == origin {
@@ -655,12 +654,7 @@ mod tests {
             origin("gone", "b", "a"),
             origin("other-node", "x", "a"),
         ];
-        let p = plan_return(
-            "b",
-            &nodes,
-            &[g1, g2, pinned, home, stranger],
-            &moved,
-        );
+        let p = plan_return("b", &nodes, &[g1, g2, pinned, home, stranger], &moved);
         let mv: Vec<(&str, &str, &str)> = p
             .moves
             .iter()
@@ -697,7 +691,11 @@ mod tests {
     #[test]
     fn return_policy_parses_and_defaults_to_origin() {
         assert_eq!(ReturnPolicy::default(), ReturnPolicy::Origin);
-        for p in [ReturnPolicy::Origin, ReturnPolicy::Rebalance, ReturnPolicy::None] {
+        for p in [
+            ReturnPolicy::Origin,
+            ReturnPolicy::Rebalance,
+            ReturnPolicy::None,
+        ] {
             assert_eq!(ReturnPolicy::parse(p.as_str()), Ok(p));
             let j = serde_json::to_string(&p).unwrap();
             assert_eq!(j, format!("\"{}\"", p.as_str()));

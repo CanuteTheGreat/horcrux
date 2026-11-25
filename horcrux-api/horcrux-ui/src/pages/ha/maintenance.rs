@@ -166,7 +166,11 @@ pub fn NodeMaintenancePanel(node: String) -> impl IntoView {
                 Ok(m) => {
                     set_notice.set(Some(format!(
                         "{n} left maintenance (return policy {})",
-                        if p.is_empty() { m.effective_return_policy.clone() } else { p.clone() }
+                        if p.is_empty() {
+                            m.effective_return_policy.clone()
+                        } else {
+                            p.clone()
+                        }
                     )));
                     set_state.set(Some(m));
                 }
@@ -299,9 +303,15 @@ pub fn MaintenancePage() -> impl IntoView {
         });
     };
     let save_default_policy = move |_| {
-        let Some(p) = default_policy.get() else { return };
+        let Some(p) = default_policy.get() else {
+            return;
+        };
         spawn_local(async move {
-            match api::put_maintenance_settings(&api::MaintenanceSettings { return_policy: p.clone() }).await {
+            match api::put_maintenance_settings(&api::MaintenanceSettings {
+                return_policy: p.clone(),
+            })
+            .await
+            {
                 Ok(_) => set_notice.set(Some(format!("Default return policy: {p}"))),
                 Err(e) => set_error.set(Some(e.message)),
             }
@@ -323,7 +333,12 @@ pub fn MaintenancePage() -> impl IntoView {
     let member_names = create_memo(move |_| {
         members
             .get()
-            .map(|c| c.nodes.iter().map(|n| (n.node.clone(), n.local)).collect::<Vec<_>>())
+            .map(|c| {
+                c.nodes
+                    .iter()
+                    .map(|n| (n.node.clone(), n.local))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default()
     });
 
@@ -529,12 +544,21 @@ mod tests {
         assert_eq!(api::maintenance_badge(&row(Some(m.clone()))), None);
         m.enabled = true;
         m.drain = run("running");
-        assert_eq!(api::maintenance_badge(&row(Some(m.clone()))), Some("entering maintenance"));
+        assert_eq!(
+            api::maintenance_badge(&row(Some(m.clone()))),
+            Some("entering maintenance")
+        );
         m.drain = run("done");
-        assert_eq!(api::maintenance_badge(&row(Some(m.clone()))), Some("maintenance"));
+        assert_eq!(
+            api::maintenance_badge(&row(Some(m.clone()))),
+            Some("maintenance")
+        );
         m.enabled = false;
         m.exit = run("running");
-        assert_eq!(api::maintenance_badge(&row(Some(m.clone()))), Some("leaving maintenance"));
+        assert_eq!(
+            api::maintenance_badge(&row(Some(m.clone()))),
+            Some("leaving maintenance")
+        );
         m.exit = run("done");
         assert_eq!(api::maintenance_badge(&row(Some(m))), None);
     }
@@ -542,7 +566,10 @@ mod tests {
     #[test]
     fn request_body_carries_policy_only_when_chosen() {
         let b = api::node_maintenance_body(true, true, Some(""), false);
-        assert_eq!(b, serde_json::json!({"enabled": true, "drain": true, "force": false}));
+        assert_eq!(
+            b,
+            serde_json::json!({"enabled": true, "drain": true, "force": false})
+        );
         let b = api::node_maintenance_body(false, false, Some("none"), false);
         assert_eq!(b["return"], "none");
         let b = api::node_maintenance_body(true, true, None, true);
@@ -551,9 +578,10 @@ mod tests {
 
     #[test]
     fn maintenance_state_reads_old_and_new_servers() {
-        let old: MaintenanceState =
-            serde_json::from_str(r#"{"enabled":false,"since":null,"reason":null,"drain":null,"clustered":true}"#)
-                .unwrap();
+        let old: MaintenanceState = serde_json::from_str(
+            r#"{"enabled":false,"since":null,"reason":null,"drain":null,"clustered":true}"#,
+        )
+        .unwrap();
         assert!(old.origins.is_empty() && old.exit.is_none());
         let new: MaintenanceState = serde_json::from_str(
             r#"{"enabled":true,"since":"t","reason":"maintenance","drain":null,"clustered":true,
