@@ -1329,3 +1329,31 @@ td .actions { flex-wrap: nowrap; }
 .navbar.login-page .menu-toggle {
     display: none;
 }
+
+/* System log: priority colours (emerg..debug), reboot separators, filter bar */
+.log-filters { align-items: flex-end; }
+.filter-group { display: flex; flex-direction: column; gap: .15rem; font-size: .85rem; color: var(--secondary); }
+.filter-group input, .filter-group select { min-width: 9rem; }
+.field-hint { color: var(--secondary); font-size: .75rem; }
+.live-note { color: var(--secondary); font-size: .85rem; }
+.note.log-limits { background: var(--note-bg); border: 1px solid var(--info); border-radius: 4px; padding: .5rem .75rem; margin: .75rem 0; }
+.note.log-limits ul { margin: .25rem 0 0 1.25rem; }
+.logs-table-container { overflow-x: auto; }
+.logs-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.logs-table th, .logs-table td { padding: .3rem .5rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.logs-table .message-text { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem; }
+.logs-table .log-details { color: var(--secondary); font-size: .8rem; }
+.logs-table .log-timestamp { white-space: nowrap; }
+.level-badge { display: inline-block; padding: 0 .4rem; border: 1px solid currentColor; border-radius: 3px; font-size: .75rem; font-weight: 600; text-transform: uppercase; white-space: nowrap; }
+.log-row.prio-0 td, .log-row.prio-1 td, .log-row.prio-2 td { background: var(--crit-bg); color: var(--danger); font-weight: 600; }
+.log-row.prio-3 td { background: var(--bad-bg); }
+.log-row.prio-3 .level-badge { color: var(--danger); }
+.log-row.prio-4 td { background: var(--warn-bg); }
+.log-row.prio-4 .level-badge { color: var(--warning-text); }
+.log-row.prio-5 .level-badge { color: var(--info); }
+.log-row.prio-6 .level-badge { color: var(--secondary); }
+.log-row.prio-7 td { color: var(--secondary); }
+.log-row.prio-7 .level-badge { color: var(--secondary); }
+.logs-table tr.boot-sep td { text-align: center; background: var(--note-bg); color: var(--text); font-weight: 600; border-top: 2px solid var(--info); border-bottom: 2px solid var(--info); }
+.log-settings { margin-top: 1rem; }
+.log-settings summary { cursor: pointer; color: var(--secondary); }
