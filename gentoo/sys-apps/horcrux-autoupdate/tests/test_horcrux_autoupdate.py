@@ -529,8 +529,11 @@ class RestartServices(Base):
         # listening on :443 (0x01BB) and one accepted client on it; an outbound connection (to a peer) does not count
         tcp = ("   0: 00000000:01BB 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 11 1 0000000000000000 100 0 0 10 0\n"
                "   1: 0100007F:01BB 0100007F:D431 01 00000000:00000000 00:00000000 00000000     0        0 12 1 0000000000000000 100 0 0 10 0\n"
-               "   2: 0A000002:9C40 0A000009:01BB 01 00000000:00000000 00:00000000 00000000     0        0 13 1 0000000000000000 100 0 0 10 0\n")
-        self.stale_manager_with_a_guest(sockets=(11, 12, 13), tcp=tcp)
+               "   2: 0A000002:9C40 0A000009:01BB 01 00000000:00000000 00:00000000 00000000     0        0 13 1 0000000000000000 100 0 0 10 0\n"
+               # the manager's own loopback client to itself (both ends are its sockets): not a user
+               "   3: 0100007F:8260 0100007F:01BB 01 00000000:00000000 00:00000000 00000000     0        0 14 1 0000000000000000 100 0 0 10 0\n"
+               "   4: 0100007F:01BB 0100007F:8260 01 00000000:00000000 00:00000000 00000000     0        0 15 1 0000000000000000 100 0 0 10 0\n")
+        self.stale_manager_with_a_guest(sockets=(11, 12, 13, 14, 15), tcp=tcp)
         summary, pending = self.m.restart_replaced(self.conf())
         self.assertEqual(self.restarts(), [])
         self.assertIn("1 open client connection", pending)
