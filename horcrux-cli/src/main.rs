@@ -47,6 +47,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Install Ceph, choose and upgrade its release
+    Ceph {
+        #[command(subcommand)]
+        command: commands::platform::CephCommands,
+    },
+    /// The kernel line (default stable kernel or the newest, opt-in)
+    Kernel {
+        #[command(subcommand)]
+        command: commands::platform::KernelCommands,
+    },
+    /// Kernel, QEMU, Incus/LXC, OpenZFS and Ceph versions on this node
+    Versions,
     /// Save state on host shutdown / resume on boot (Hyper-V style)
     Power {
         #[command(subcommand)]
@@ -1225,6 +1237,13 @@ async fn main() -> Result<()> {
 
     // Execute command
     match cli.command {
+        Commands::Ceph { command } => {
+            commands::platform::handle_ceph(command, &api_client, &cli.output).await?
+        }
+        Commands::Kernel { command } => {
+            commands::platform::handle_kernel(command, &api_client, &cli.output).await?
+        }
+        Commands::Versions => commands::platform::handle_versions(&api_client, &cli.output).await?,
         Commands::Power { command } => {
             commands::power::handle_power_command(command, &api_client, &cli.output).await?
         }
