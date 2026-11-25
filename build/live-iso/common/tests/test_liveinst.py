@@ -295,7 +295,7 @@ def tiny_meta():
 
 class Stages(unittest.TestCase):
     def test_stage_ids_and_orders(self):
-        self.assertEqual(ST.UI_ORDER, ["keymap", "hostname", "disk", "extract", "rootpass", "desktop", "t2", "gnome", "netconfig", "services", "hardening", "use_flags", "machine", "finish"])
+        self.assertEqual(ST.UI_ORDER, ["keymap", "hostname", "disk", "extract", "rootpass", "desktop", "t2", "gnome", "netconfig", "services", "hardening", "kernel", "use_flags", "machine", "finish"])
         self.assertEqual(sorted(ST.APPLY_ORDER), sorted(ST.UI_ORDER))
         self.assertEqual(ST.APPLY_ORDER[:2], ["disk", "extract"], "disks first, then the image, then everything that writes into it")
 

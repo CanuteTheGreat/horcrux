@@ -22,9 +22,19 @@ pub fn routes() -> Router<Arc<AppState>> {
 
 /// (id, display name, Portage atom, Debian package)
 pub const COMPONENTS: &[(&str, &str, &str, &str)] = &[
-    ("kernel", "Linux kernel", "virtual/dist-kernel", "linux-image-amd64"),
+    (
+        "kernel",
+        "Linux kernel",
+        "virtual/dist-kernel",
+        "linux-image-amd64",
+    ),
     ("qemu", "QEMU", "app-emulation/qemu", "qemu-system-x86"),
-    ("libvirt", "libvirt", "app-emulation/libvirt", "libvirt-daemon"),
+    (
+        "libvirt",
+        "libvirt",
+        "app-emulation/libvirt",
+        "libvirt-daemon",
+    ),
     ("incus", "Incus", "app-containers/incus", "incus"),
     ("lxc", "LXC", "app-containers/lxc", "lxc"),
     ("lxd", "LXD", "app-containers/lxd", "lxd"),
@@ -79,7 +89,10 @@ pub fn gather(root: &Path, portage: bool, apt: bool) -> Versions {
         .iter()
         .map(|(id, name, atom, deb)| {
             let (package, mut version) = if portage {
-                (atom.to_string(), pt::installed(root, atom).into_iter().next())
+                (
+                    atom.to_string(),
+                    pt::installed(root, atom).into_iter().next(),
+                )
             } else if apt {
                 (deb.to_string(), dpkg_version(deb))
             } else {
@@ -156,7 +169,11 @@ mod tests {
         std::fs::create_dir_all(t.path().join("sys/module/zfs")).unwrap();
         std::fs::write(t.path().join("sys/module/zfs/version"), "2.4.4-1\n").unwrap();
         std::fs::create_dir_all(t.path().join("proc/sys/kernel")).unwrap();
-        std::fs::write(t.path().join("proc/sys/kernel/osrelease"), "6.18.64-p1-gentoo-dist\n").unwrap();
+        std::fs::write(
+            t.path().join("proc/sys/kernel/osrelease"),
+            "6.18.64-p1-gentoo-dist\n",
+        )
+        .unwrap();
         let v = gather(t.path(), true, false);
         let get = |id: &str| v.components.iter().find(|c| c.id == id).unwrap().clone();
         assert_eq!(v.package_db, "portage");

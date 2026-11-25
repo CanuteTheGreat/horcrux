@@ -565,6 +565,8 @@ def _default_config(profile, fs, fs_why):
         "services_off": [], "ssh_enabled": True,
         "sysctl_hardening": bool(profile.get("sysctl_hardening", True)),
         "use": {"preset": "recommended", "flags": {}},
+        # kernel line (kernelline.py; profile kernel_line_choice): default | newest
+        "kernel_line": "default",
     }
 
 
@@ -600,6 +602,7 @@ def config_from_answers(profile, path):
     for fl in u.get("disable", []):
         c["use"]["flags"][fl] = False
     c["use"]["from_answers"] = bool(u)
+    c["kernel_line"] = str(a.get("system", {}).get("kernel_line", c["kernel_line"])).lower()
     d = a.get("disk", {})
     if d.get("filesystem"):
         c["fs"], c["fs_why"] = d["filesystem"], "chosen in the answer file"
@@ -658,6 +661,13 @@ def validate_config(profile, c, unattended=False, require_secret=True):
     if bad_off:
         errs.append("services.disable may only name optional services: " + ", ".join(bad_off))
     errs += use_problems(profile, c)
+    from . import kernelline
+    kl = c.get("kernel_line", "default")
+    kp = kernelline.problem(kl)
+    if kp:
+        errs.append(f"system.{kp}")
+    elif kl != "default" and not kernelline.offered(profile):
+        errs.append("system.kernel_line: this product does not offer a kernel line choice")
     if c["fs"] not in profile["filesystems"]:
         errs.append(f"filesystem {c['fs']} not offered ({', '.join(profile['filesystems'])})")
     if hostname_problem(c["hostname"]):
@@ -900,6 +910,12 @@ class Installer:
         self.cfg_hardening()
         if testmachine.requested(self.c):
             testmachine.install_payload(self)         # watchdog + never-suspend from the first boot (a lab machine must never need a power-cycle)
+
+    def stage_kernel(self):
+        self.prog(86, "Kernel line")
+        from . import kernelline
+        kernelline.apply(self, self.c.get("kernel_line", "default"), self.p)
+        self.log(f"kernel line: {self.c.get('kernel_line', 'default')}")
 
     def stage_use_flags(self):
         self.prog(87, "Software settings (USE flags)")

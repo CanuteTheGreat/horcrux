@@ -4,6 +4,7 @@ pub mod configuration;
 pub mod console_settings;
 pub mod diagnostics;
 pub mod health;
+pub mod kernel_line;
 pub mod logs;
 pub mod package_manager;
 pub mod services;

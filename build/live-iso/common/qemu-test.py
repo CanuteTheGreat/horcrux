@@ -960,6 +960,8 @@ def answer_toml(a, pubkey, pwhash):
     lines += ["", "[hardening]", "ssh = true", "sysctl = true", "",
               "[use_flags]", 'preset = "minimal"', ""]          # answer-file use_flags: Minimal preset (checked against the Portage metadata)
     if p == "horcrux":
+        if getattr(a, "kernel_line", "default") != "default":
+            lines += ["[system]", f'kernel_line = "{a.kernel_line}"', ""]       # kernel line opt-in (liveinst/kernelline.py)
         lines += ["[network.management]"]
         if a.static_ip:
             lines += ['mode = "static"', f'address = "{a.static_ip}/24"', 'gateway = "10.0.2.2"', 'dns = ["10.0.2.3"]']
@@ -1482,6 +1484,9 @@ class Runner:
             kb.key("TAB"); kb.key("TAB"); kb.key("ENTER", 1)
         else:
             kb.key("TAB"); kb.key("TAB"); kb.key("TAB"); kb.key("ENTER", 1)
+        if a.project == "horcrux":                          # kernel line page (profile kernel_line_choice): one choice field, keep Default
+            wait(r"\] Kernel", "09c-kernel-line")
+            kb.key("TAB"); kb.key("ENTER", 1)               # field -> buttons (Next) -> Next
         wait(r"Software \(USE flags\)", "10-software-use-flags")
         shot("10b-software-use-flags")
         kb.key("TAB"); kb.key("ENTER", 1)                  # list -> buttons -> Next
@@ -1775,6 +1780,9 @@ class Runner:
             self.gkey(vm, "spc", pause=2)
             self.gshot(vm, shot, desc)
             self.gkey(vm, "spc", pause=2)
+        if a.project == "horcrux":                          # kernel line page (profile kernel_line_choice): keep Default
+            self.gnext(vm, "kernel")
+            self.gshot(vm, "kernel-line", "Kernel line: Default (stable) or Newest (opt-in, held at what OpenZFS supports)")
         self.gnext(vm, "use_flags")
         # ---- USE flags
         st = self.gwait(vm, "use_flags", 60)
@@ -2564,6 +2572,14 @@ class Runner:
             parts = uf.split("---")
             self.step("answer-file-use-flags-applied", rc == 0 and len(parts) >= 3 and "*/* -" in parts[0] and "minimal" in parts[1], re.sub(r"\s+", " ", uf)[:220])
             self.step("hardening-sysctl-applied", parts[-1].strip().endswith("2"), "kernel.kptr_restrict=" + parts[-1].strip()[-3:])
+            if a.project == "horcrux" and a.kernel_line != "default":
+                rc, kl = ssh(FWD_SSH, self.key, "cat /var/lib/horcrux/kernel-line.json; echo ---; cat /etc/portage/package.accept_keywords/horcrux-kernel-line; "
+                             "echo ---; cat /etc/portage/package.mask/horcrux-kernel-line 2>/dev/null; echo ---; "
+                             "ls -d /var/db/pkg/sys-fs/zfs-kmod-* 2>/dev/null")
+                kp = kl.split("---")
+                ok = (rc == 0 and len(kp) >= 4 and f'"line": "{a.kernel_line}"' in kp[0] and "sys-kernel/gentoo-kernel-bin ~" in kp[1]
+                      and ("zfs-kmod" not in kp[3] or ">=sys-kernel/gentoo-kernel-bin-" in kp[2]))
+                self.step("answer-file-kernel-line-applied", ok, re.sub(r"\s+", " ", kl)[:300])
         rc, g = ssh(FWD_SSH, self.key, "command -v cage; ls /var/db/pkg/gui-wm /var/db/pkg/gui-libs 2>&1 | head -3; python3 -c 'import gi' 2>&1 | tail -1; echo END")
         rc, vr = ssh(FWD_SSH, self.key, "cat /etc/live-iso-variant 2>/dev/null")
         if "desktop" in vr:                 # the Desktop image IS a GTK/GNOME system: its GUI packages are part of the product, not live-only
@@ -2666,6 +2682,8 @@ def main():
     ap.add_argument("--answer-file", default="", help="auto flow: use this answer file verbatim (__HX_TEST_PUBKEY__ is replaced by the run's ssh key) instead of the built-in one")
     ap.add_argument("--lan-ip", default="10.77.0.1", help="patronus LAN address")
     ap.add_argument("--console-open", action="store_true", help="installer option: open console menu (no login on the console)")
+    ap.add_argument("--kernel-line", choices=["default", "newest"], default="default",
+                    help="horcrux auto flow: answer-file [system] kernel_line (the installed system's Portage pins + manager setting are checked)")
     ap.add_argument("--hold-file", default="", help="gui flow: before powering the installed system off, wait until this file exists (screenshot of the web UI from outside)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--keep-disks", action="store_true", help="keep target*.qcow2/answers.img/OVMF_VARS.fd in --out (default: delete them when the run ends, pass or fail; they are 20-40 GB of regenerable state)")

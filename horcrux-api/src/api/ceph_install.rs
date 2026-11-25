@@ -156,7 +156,7 @@ pub fn catalog(root: &Path, arch: &str) -> CephReleases {
             }),
         }
     }
-    by_major.sort_by(|a, b| b.major.cmp(&a.major));
+    by_major.sort_by_key(|a| std::cmp::Reverse(a.major));
     let installed = pt::installed(root, CEPH_ATOM).into_iter().next();
     let pinned = pt::read_pin(root, "package.mask", PIN_NAME).and_then(|t| {
         t.lines()
@@ -326,8 +326,12 @@ pub fn parse_cidr(s: &str) -> Result<(IpAddr, u8), String> {
         .trim()
         .split_once('/')
         .ok_or_else(|| format!("'{s}' is not a network in CIDR form (10.0.0.0/24)"))?;
-    let ip: IpAddr = a.parse().map_err(|_| format!("'{a}' is not an IP address"))?;
-    let p: u8 = p.parse().map_err(|_| format!("'{p}' is not a prefix length"))?;
+    let ip: IpAddr = a
+        .parse()
+        .map_err(|_| format!("'{a}' is not an IP address"))?;
+    let p: u8 = p
+        .parse()
+        .map_err(|_| format!("'{p}' is not a prefix length"))?;
     if p > if ip.is_ipv4() { 32 } else { 128 } {
         return Err(format!("prefix /{p} is too long"));
     }
@@ -337,11 +341,19 @@ pub fn parse_cidr(s: &str) -> Result<(IpAddr, u8), String> {
 pub fn in_network(ip: IpAddr, net: (IpAddr, u8)) -> bool {
     match (ip, net.0) {
         (IpAddr::V4(a), IpAddr::V4(n)) => {
-            let m = if net.1 == 0 { 0 } else { u32::MAX << (32 - net.1) };
+            let m = if net.1 == 0 {
+                0
+            } else {
+                u32::MAX << (32 - net.1)
+            };
             u32::from(a) & m == u32::from(n) & m
         }
         (IpAddr::V6(a), IpAddr::V6(n)) => {
-            let m = if net.1 == 0 { 0 } else { u128::MAX << (128 - net.1) };
+            let m = if net.1 == 0 {
+                0
+            } else {
+                u128::MAX << (128 - net.1)
+            };
             u128::from(a) & m == u128::from(n) & m
         }
         _ => false,
@@ -435,7 +447,11 @@ pub fn ceph_conf(fsid: &str, host: &str, mon_ip: IpAddr, n: &NewCluster) -> Stri
         mon_addrv(mon_ip, &n.ports),
         n.public_network.trim()
     );
-    if let Some(cn) = n.cluster_network.as_deref().filter(|s| !s.trim().is_empty()) {
+    if let Some(cn) = n
+        .cluster_network
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
         c.push_str(&format!("cluster_network = {}\n", cn.trim()));
     }
     c.push_str(&format!(
@@ -584,7 +600,8 @@ pub fn install_script(p: &InstallPlan) -> String {
 
 fn run_script(kind: &str, target: &str, who: &str, script: &str) -> Result<String, ApiError> {
     let dir = data_dir().join("ceph");
-    std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(format!("{}: {e}", dir.display())))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| ApiError::Internal(format!("{}: {e}", dir.display())))?;
     let path = dir.join(format!(
         "{kind}-{}.sh",
         chrono::Utc::now().format("%Y%m%dT%H%M%S%.3f")
@@ -624,7 +641,10 @@ fn need_portage() -> Result<(), ApiError> {
 }
 
 fn ceph_emerge_args() -> Vec<String> {
-    crate::api::system_admin::packages::emerge_args(&["--update", "--noreplace"], &[CEPH_ATOM.into()])
+    crate::api::system_admin::packages::emerge_args(
+        &["--update", "--noreplace"],
+        &[CEPH_ATOM.into()],
+    )
 }
 
 async fn releases() -> Json<CephReleases> {
@@ -632,7 +652,11 @@ async fn releases() -> Json<CephReleases> {
 }
 
 /// Check the request against what the node has; -> the release to pin.
-pub fn check_install(cat: &CephReleases, major: u64, b: &Bootstrap) -> Result<CephRelease, ApiError> {
+pub fn check_install(
+    cat: &CephReleases,
+    major: u64,
+    b: &Bootstrap,
+) -> Result<CephRelease, ApiError> {
     let rel = cat
         .releases
         .iter()
@@ -663,7 +687,11 @@ pub fn check_install(cat: &CephReleases, major: u64, b: &Bootstrap) -> Result<Ce
     Ok(rel)
 }
 
-async fn install(State(state): State<Arc<AppState>>, u: AuthExt, Json(r): Json<InstallReq>) -> Res<serde_json::Value> {
+async fn install(
+    State(state): State<Arc<AppState>>,
+    u: AuthExt,
+    Json(r): Json<InstallReq>,
+) -> Res<serde_json::Value> {
     need_portage()?;
     let major = parse_release(&r.release).map_err(ApiError::ValidationError)?;
     let root = sysroot();
@@ -681,7 +709,11 @@ async fn install(State(state): State<Arc<AppState>>, u: AuthExt, Json(r): Json<I
         Bootstrap::None => PlanStep::None,
         Bootstrap::New(n) => {
             let net = parse_cidr(&n.public_network).map_err(ApiError::ValidationError)?;
-            if let Some(cn) = n.cluster_network.as_deref().filter(|s| !s.trim().is_empty()) {
+            if let Some(cn) = n
+                .cluster_network
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
                 parse_cidr(cn).map_err(ApiError::ValidationError)?;
             }
             if n.pool_size == 0 || n.pool_min_size == 0 || n.pool_min_size > n.pool_size {
@@ -702,7 +734,9 @@ async fn install(State(state): State<Arc<AppState>>, u: AuthExt, Json(r): Json<I
         Bootstrap::Join(j) => {
             let m = fetch_join_material(&state, j).await?;
             let net = conf_value(&m.conf, "public_network")
-                .ok_or_else(|| ApiError::Conflict("the peer's ceph.conf has no public_network".into()))
+                .ok_or_else(|| {
+                    ApiError::Conflict("the peer's ceph.conf has no public_network".into())
+                })
                 .and_then(|n| parse_cidr(&n).map_err(ApiError::Conflict))?;
             let mon_ip = choose_ip(j.mon_ip.as_deref(), net)?;
             write_join_material(&root, &m)?;
@@ -722,8 +756,15 @@ async fn install(State(state): State<Arc<AppState>>, u: AuthExt, Json(r): Json<I
         host,
         step,
     };
-    let upid = run_script("ceph-install", &release_label(major), &user_of(&u), &install_script(&plan))?;
-    Ok(Json(serde_json::json!({"upid": upid, "release": major, "name": release_label(major)})))
+    let upid = run_script(
+        "ceph-install",
+        &release_label(major),
+        &user_of(&u),
+        &install_script(&plan),
+    )?;
+    Ok(Json(
+        serde_json::json!({"upid": upid, "release": major, "name": release_label(major)}),
+    ))
 }
 
 /// Pin `major` and install or update its packages (no cluster bootstrap):
@@ -813,10 +854,13 @@ pub struct JoinMaterial {
 
 async fn join_material() -> Res<JoinMaterial> {
     let root = sysroot();
-    let conf = std::fs::read_to_string(root.join("etc/ceph/ceph.conf")).map_err(|_| ApiError::NotAvailable {
-        reason: "ceph-not-configured",
-        message: "This node is not a Ceph cluster member (no /etc/ceph/ceph.conf).".into(),
-        hint: "Join through a node that runs a Ceph monitor, or create the cluster first.".into(),
+    let conf = std::fs::read_to_string(root.join("etc/ceph/ceph.conf")).map_err(|_| {
+        ApiError::NotAvailable {
+            reason: "ceph-not-configured",
+            message: "This node is not a Ceph cluster member (no /etc/ceph/ceph.conf).".into(),
+            hint: "Join through a node that runs a Ceph monitor, or create the cluster first."
+                .into(),
+        }
     })?;
     let admin_keyring = std::fs::read_to_string(root.join("etc/ceph/ceph.client.admin.keyring"))
         .map_err(|_| ApiError::Conflict("this node has no Ceph admin keyring to share".into()))?;
@@ -828,7 +872,10 @@ async fn join_material() -> Res<JoinMaterial> {
     }))
 }
 
-async fn fetch_join_material(state: &Arc<AppState>, j: &JoinCluster) -> Result<JoinMaterial, ApiError> {
+async fn fetch_join_material(
+    state: &Arc<AppState>,
+    j: &JoinCluster,
+) -> Result<JoinMaterial, ApiError> {
     let peer = j.peer.trim();
     if peer.is_empty() || peer.contains(['/', ' ', '@']) {
         return Err(ApiError::ValidationError(
@@ -899,8 +946,10 @@ fn write_join_material(root: &Path, m: &JoinMaterial) -> Result<(), ApiError> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let dir = root.join("etc/ceph");
-    std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(format!("{}: {e}", dir.display())))?;
-    std::fs::write(dir.join("ceph.conf"), &m.conf).map_err(|e| ApiError::Internal(e.to_string()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| ApiError::Internal(format!("{}: {e}", dir.display())))?;
+    std::fs::write(dir.join("ceph.conf"), &m.conf)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -979,8 +1028,7 @@ pub fn next_step(d: &DaemonVersions, installed_major: Option<u64>, target: u64) 
         ("mds", "restart-mds"),
         ("rgw", "restart-rgw"),
     ] {
-        if d
-            .by_type
+        if d.by_type
             .iter()
             .any(|(k, l)| k == kind && l.iter().any(|(m, _)| *m < target))
         {
@@ -1060,7 +1108,11 @@ pub struct UpgradeReq {
     pub wait_secs: u64,
 }
 
-pub fn check_upgrade(cat: &CephReleases, major: u64, steps: &[String]) -> Result<CephRelease, ApiError> {
+pub fn check_upgrade(
+    cat: &CephReleases,
+    major: u64,
+    steps: &[String],
+) -> Result<CephRelease, ApiError> {
     for s in steps {
         if !UPGRADE_STEPS.contains(&s.as_str()) {
             return Err(ApiError::ValidationError(format!(
@@ -1069,9 +1121,9 @@ pub fn check_upgrade(cat: &CephReleases, major: u64, steps: &[String]) -> Result
             )));
         }
     }
-    let im = cat
-        .installed_major
-        .ok_or_else(|| ApiError::Conflict("Ceph is not installed on this node: install it first".into()))?;
+    let im = cat.installed_major.ok_or_else(|| {
+        ApiError::Conflict("Ceph is not installed on this node: install it first".into())
+    })?;
     let rel = cat
         .releases
         .iter()
@@ -1094,7 +1146,13 @@ pub fn check_upgrade(cat: &CephReleases, major: u64, steps: &[String]) -> Result
     Ok(rel)
 }
 
-pub fn upgrade_script(major: u64, steps: &[String], emerge: &[String], host: &str, wait: u64) -> String {
+pub fn upgrade_script(
+    major: u64,
+    steps: &[String],
+    emerge: &[String],
+    host: &str,
+    wait: u64,
+) -> String {
     let mut s = String::from(SCRIPT_HEAD);
     s.push_str(&format!("HOST={}\n", sq(host)));
     let all: Vec<String> = if steps.is_empty() {
@@ -1164,7 +1222,13 @@ async fn upgrade(u: AuthExt, Json(r): Json<UpgradeReq>) -> Res<serde_json::Value
     }
     crate::api::system_admin::packages::guard_one_at_a_time()?;
     write_pins(&root, &rel, arch)?;
-    let script = upgrade_script(major, &r.steps, &ceph_emerge_args(), &short_hostname(), r.wait_secs);
+    let script = upgrade_script(
+        major,
+        &r.steps,
+        &ceph_emerge_args(),
+        &short_hostname(),
+        r.wait_secs,
+    );
     let upid = run_script("ceph-upgrade", &release_label(major), &user_of(&u), &script)?;
     Ok(Json(serde_json::json!({"upid": upid, "release": major})))
 }
@@ -1176,10 +1240,34 @@ mod tests {
 
     fn tree(arch: &str) -> tempfile::TempDir {
         let t = tempfile::tempdir().unwrap();
-        ebuild(t.path(), "gentoo", CEPH_ATOM, "20.2.5", &format!("KEYWORDS=\"~{arch} ~arm64\"\n"));
-        ebuild(t.path(), "gentoo", CEPH_ATOM, "20.1.1-r1", &format!("KEYWORDS=\"{arch} ppc64\"\n"));
-        ebuild(t.path(), "horcrux", CEPH_ATOM, "21.2.0", &format!("KEYWORDS=\"~{arch}\"\n"));
-        ebuild(t.path(), "gentoo", CEPH_ATOM, "19.2.7", "KEYWORDS=\"~ppc64\"\n");
+        ebuild(
+            t.path(),
+            "gentoo",
+            CEPH_ATOM,
+            "20.2.5",
+            &format!("KEYWORDS=\"~{arch} ~arm64\"\n"),
+        );
+        ebuild(
+            t.path(),
+            "gentoo",
+            CEPH_ATOM,
+            "20.1.1-r1",
+            &format!("KEYWORDS=\"{arch} ppc64\"\n"),
+        );
+        ebuild(
+            t.path(),
+            "horcrux",
+            CEPH_ATOM,
+            "21.2.0",
+            &format!("KEYWORDS=\"~{arch}\"\n"),
+        );
+        ebuild(
+            t.path(),
+            "gentoo",
+            CEPH_ATOM,
+            "19.2.7",
+            "KEYWORDS=\"~ppc64\"\n",
+        );
         std::fs::create_dir_all(t.path().join("var/db/pkg")).unwrap();
         t
     }
@@ -1200,7 +1288,10 @@ mod tests {
     fn the_catalog_groups_by_release_for_this_arch() {
         let t = tree("amd64");
         let c = catalog(t.path(), "amd64");
-        assert_eq!(c.releases.iter().map(|r| r.major).collect::<Vec<_>>(), [21, 20]);
+        assert_eq!(
+            c.releases.iter().map(|r| r.major).collect::<Vec<_>>(),
+            [21, 20]
+        );
         assert_eq!(c.recommended, Some(21));
         assert_eq!(c.releases[0].repo, "horcrux");
         assert_eq!(c.releases[1].newest, "20.2.5");
@@ -1217,9 +1308,15 @@ mod tests {
         let t = tree("amd64");
         let c = catalog(t.path(), "amd64");
         let (kw, mask) = pins(&c.releases[0], "amd64");
-        assert!(mask.contains("<sys-cluster/ceph-21\n>=sys-cluster/ceph-22\n"), "{mask}");
+        assert!(
+            mask.contains("<sys-cluster/ceph-21\n>=sys-cluster/ceph-22\n"),
+            "{mask}"
+        );
         assert!(mask.contains("# release: 21\n"));
-        assert_eq!(kw.unwrap().lines().last(), Some("=sys-cluster/ceph-21* ~amd64"));
+        assert_eq!(
+            kw.unwrap().lines().last(),
+            Some("=sys-cluster/ceph-21* ~amd64")
+        );
         write_pins(t.path(), &c.releases[0], "amd64").unwrap();
         assert_eq!(catalog(t.path(), "amd64").pinned, Some(21));
         let stable = CephRelease {
@@ -1243,36 +1340,57 @@ mod tests {
         }
         vdb(t.path(), CEPH_ATOM, "20.2.5", "");
         let c = catalog(t.path(), "amd64");
-        assert!(matches!(check_install(&c, 21, &Bootstrap::None), Err(ApiError::Conflict(m)) if m.contains("upgrade")));
+        assert!(
+            matches!(check_install(&c, 21, &Bootstrap::None), Err(ApiError::Conflict(m)) if m.contains("upgrade"))
+        );
         assert!(check_install(&c, 20, &Bootstrap::None).is_ok());
         std::fs::create_dir_all(t.path().join("etc/ceph")).unwrap();
         std::fs::write(t.path().join("etc/ceph/ceph.conf"), "[global]\n").unwrap();
         let c = catalog(t.path(), "amd64");
-        let n = Bootstrap::New(serde_json::from_value(serde_json::json!({"public_network": "10.0.0.0/24"})).unwrap());
-        assert!(matches!(check_install(&c, 20, &n), Err(ApiError::Conflict(_))));
+        let n = Bootstrap::New(
+            serde_json::from_value(serde_json::json!({"public_network": "10.0.0.0/24"})).unwrap(),
+        );
+        assert!(matches!(
+            check_install(&c, 20, &n),
+            Err(ApiError::Conflict(_))
+        ));
     }
 
     #[test]
     fn networks_and_addresses() {
         let n = parse_cidr("10.0.2.0/24").unwrap();
-        let a: Vec<IpAddr> = ["127.0.0.1", "192.168.5.4", "10.0.2.15"].iter().map(|s| s.parse().unwrap()).collect();
+        let a: Vec<IpAddr> = ["127.0.0.1", "192.168.5.4", "10.0.2.15"]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
         assert_eq!(pick_ip(&a, n), Some("10.0.2.15".parse().unwrap()));
-        assert!(in_network("fd00::5".parse().unwrap(), parse_cidr("fd00::/64").unwrap()));
+        assert!(in_network(
+            "fd00::5".parse().unwrap(),
+            parse_cidr("fd00::/64").unwrap()
+        ));
         assert!(!in_network("10.0.3.1".parse().unwrap(), n));
         assert!(parse_cidr("10.0.0.0").is_err());
         assert!(parse_cidr("10.0.0.0/33").is_err());
-        assert_eq!(mon_addrv("10.0.2.15".parse().unwrap(), &MonPorts::default()), "[v2:10.0.2.15:3300,v1:10.0.2.15:6789]");
-        assert_eq!(mon_addrv("fd00::5".parse().unwrap(), &MonPorts::default()), "[v2:[fd00::5]:3300,v1:[fd00::5]:6789]");
+        assert_eq!(
+            mon_addrv("10.0.2.15".parse().unwrap(), &MonPorts::default()),
+            "[v2:10.0.2.15:3300,v1:10.0.2.15:6789]"
+        );
+        assert_eq!(
+            mon_addrv("fd00::5".parse().unwrap(), &MonPorts::default()),
+            "[v2:[fd00::5]:3300,v1:[fd00::5]:6789]"
+        );
         assert!(valid_mon_id("node-1") && !valid_mon_id("a b") && !valid_mon_id(""));
         assert_eq!(sq("it's"), r"'it'\''s'");
     }
 
     #[test]
     fn the_bootstrap_request_reads_from_json() {
-        let r: InstallReq = serde_json::from_value(serde_json::json!({"release": "umbrella"})).unwrap();
+        let r: InstallReq =
+            serde_json::from_value(serde_json::json!({"release": "umbrella"})).unwrap();
         assert_eq!(r.bootstrap, Bootstrap::None);
         let r: InstallReq = serde_json::from_value(serde_json::json!({
-            "release": "21", "bootstrap": {"mode": "new", "public_network": "10.0.0.0/24"}})).unwrap();
+            "release": "21", "bootstrap": {"mode": "new", "public_network": "10.0.0.0/24"}}))
+        .unwrap();
         match r.bootstrap {
             Bootstrap::New(n) => {
                 assert_eq!(n.pool_size, 3);
@@ -1289,20 +1407,39 @@ mod tests {
 
     #[test]
     fn the_new_cluster_script_creates_mon_and_mgr() {
-        let n: NewCluster = serde_json::from_value(serde_json::json!({"public_network": "10.0.2.0/24", "cluster_network": "10.9.0.0/24"})).unwrap();
+        let n: NewCluster = serde_json::from_value(
+            serde_json::json!({"public_network": "10.0.2.0/24", "cluster_network": "10.9.0.0/24"}),
+        )
+        .unwrap();
         let ip: IpAddr = "10.0.2.15".parse().unwrap();
         let conf = ceph_conf("f-1", "node1", ip, &n);
         assert!(conf.contains("fsid = f-1\n"));
         assert!(conf.contains("mon_host = [v2:10.0.2.15:3300,v1:10.0.2.15:6789]\n"));
         assert!(conf.contains("cluster_network = 10.9.0.0/24\n"));
         assert!(conf.contains("osd_pool_default_size = 3\n"));
-        assert_eq!(conf_value(&conf, "public_network").as_deref(), Some("10.0.2.0/24"));
-        assert_eq!(conf_value("[global]\npublic network = 1.2.3.0/24\n[mon.a]\nfsid = x\n", "public_network").as_deref(), Some("1.2.3.0/24"));
+        assert_eq!(
+            conf_value(&conf, "public_network").as_deref(),
+            Some("10.0.2.0/24")
+        );
+        assert_eq!(
+            conf_value(
+                "[global]\npublic network = 1.2.3.0/24\n[mon.a]\nfsid = x\n",
+                "public_network"
+            )
+            .as_deref(),
+            Some("1.2.3.0/24")
+        );
         let s = install_script(&InstallPlan {
             major: 21,
             emerge: vec!["--ask=n".into(), CEPH_ATOM.into()],
             host: "node1".into(),
-            step: PlanStep::New { fsid: "f-1".into(), conf, mon_ip: ip, ports: MonPorts::default(), wait: 60 },
+            step: PlanStep::New {
+                fsid: "f-1".into(),
+                conf,
+                mon_ip: ip,
+                ports: MonPorts::default(),
+                wait: 60,
+            },
         });
         assert!(s.starts_with("#!/bin/sh\n"));
         assert!(s.contains("emerge '--ask=n' 'sys-cluster/ceph'\n"));
@@ -1321,7 +1458,13 @@ mod tests {
             major: 21,
             emerge: vec![CEPH_ATOM.into()],
             host: "node2".into(),
-            step: PlanStep::Join { peer: "10.0.2.15".into(), mon_ip: "10.0.2.16".parse().unwrap(), mon: true, mgr: false, wait: 30 },
+            step: PlanStep::Join {
+                peer: "10.0.2.15".into(),
+                mon_ip: "10.0.2.16".parse().unwrap(),
+                mon: true,
+                mgr: false,
+                wait: 30,
+            },
         });
         assert!(s.contains("ceph auth get client.bootstrap-osd"));
         assert!(s.contains("ceph mon getmap -o \"$TMP/monmap\""));
@@ -1347,8 +1490,17 @@ mod tests {
         assert_eq!(next_step(&parse_versions(&v), Some(21), 21), "restart-osd");
         let v = serde_json::json!({"mon": {"ceph version 21.2.0 (a) umbrella (stable)": 3}});
         assert_eq!(next_step(&parse_versions(&v), Some(21), 21), "finish");
-        let s = upgrade_script(21, &["restart-mon".into(), "packages".into()], &[CEPH_ATOM.into()], "n1", 30);
-        let (p, m) = (s.find("emerge 'sys-cluster/ceph'").unwrap(), s.find("svc_restart_all mon").unwrap());
+        let s = upgrade_script(
+            21,
+            &["restart-mon".into(), "packages".into()],
+            &[CEPH_ATOM.into()],
+            "n1",
+            30,
+        );
+        let (p, m) = (
+            s.find("emerge 'sys-cluster/ceph'").unwrap(),
+            s.find("svc_restart_all mon").unwrap(),
+        );
         assert!(p < m, "packages before the monitor restart");
         assert!(!s.contains("require-osd-release"));
         let s = upgrade_script(21, &[], &[CEPH_ATOM.into()], "n1", 30);
@@ -1360,14 +1512,24 @@ mod tests {
     fn upgrade_checks() {
         let t = tree("amd64");
         let c = catalog(t.path(), "amd64");
-        assert!(matches!(check_upgrade(&c, 21, &[]), Err(ApiError::Conflict(m)) if m.contains("not installed")));
+        assert!(
+            matches!(check_upgrade(&c, 21, &[]), Err(ApiError::Conflict(m)) if m.contains("not installed"))
+        );
         vdb(t.path(), CEPH_ATOM, "20.2.5", "");
         let c = catalog(t.path(), "amd64");
         assert!(check_upgrade(&c, 21, &["packages".into()]).is_ok());
-        assert!(matches!(check_upgrade(&c, 21, &["reboot".into()]), Err(ApiError::ValidationError(_))));
+        assert!(matches!(
+            check_upgrade(&c, 21, &["reboot".into()]),
+            Err(ApiError::ValidationError(_))
+        ));
         let mut c2 = c.clone();
         c2.installed_major = Some(17);
-        c2.releases.push(CephRelease { major: 17, ..c.releases[0].clone() });
-        assert!(matches!(check_upgrade(&c2, 21, &[]), Err(ApiError::Conflict(m)) if m.contains("at most 2")));
+        c2.releases.push(CephRelease {
+            major: 17,
+            ..c.releases[0].clone()
+        });
+        assert!(
+            matches!(check_upgrade(&c2, 21, &[]), Err(ApiError::Conflict(m)) if m.contains("at most 2"))
+        );
     }
 }
