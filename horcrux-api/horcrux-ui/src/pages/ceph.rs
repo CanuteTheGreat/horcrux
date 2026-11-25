@@ -77,6 +77,34 @@ pub fn CephPage() -> impl IntoView {
             reload();
         });
     };
+    let osd_device = create_rw_signal(String::new());
+    let create_osd = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let dev = osd_device.get().trim().to_string();
+        if dev.is_empty() {
+            return;
+        }
+        let typed = web_sys::window().and_then(|w| {
+            w.prompt_with_message(&format!(
+                "Creating an OSD on {dev} ERASES the whole disk. Type the device path to confirm:"
+            ))
+            .ok()
+            .flatten()
+        });
+        if typed.as_deref() != Some(dev.as_str()) {
+            return;
+        }
+        spawn_local(async move {
+            match c::ceph_create_osd(&dev).await {
+                Ok(()) => {
+                    osd_device.set(String::new());
+                    ok(format!("OSD creation on {dev} started"));
+                }
+                Err(e) => fail(e),
+            }
+            reload();
+        });
+    };
     let create = move |ev: ev::SubmitEvent| {
         ev.prevent_default();
         let (n, pg, sz, a) = (
@@ -206,6 +234,11 @@ pub fn CephPage() -> impl IntoView {
                     }).collect_view()}
                 </tbody>
             </table>
+
+            <form id="ceph-osd-form" class="form-row fields" on:submit=create_osd>
+                <div class="form-group"><label for="ceph-osd-device">"Blank disk on this node"</label><input id="ceph-osd-device" type="text" required placeholder="/dev/nvme1n1" prop:value=osd_device on:input=move |ev| osd_device.set(event_target_value(&ev))/></div>
+                <button id="ceph-osd-create" type="submit" class="btn btn-danger">"Create OSD"</button>
+            </form>
 
             <h2>"Pools"</h2>
             <form id="ceph-pool-form" class="form-row fields" on:submit=create>

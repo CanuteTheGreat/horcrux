@@ -93,6 +93,15 @@ pub async fn ceph_osd_action(id: u64, action: &str) -> Result<(), ApiError> {
     post_json::<serde_json::Value, _>(&format!("/ceph/osds/{id}/{action}"), &()).await?;
     Ok(())
 }
+/// `POST /api/ceph/osds`: create an OSD on a blank whole disk of this node.
+pub async fn ceph_create_osd(device: &str) -> Result<(), ApiError> {
+    post_json::<serde_json::Value, _>(
+        "/ceph/osds",
+        &serde_json::json!({"device": device, "confirm": device}),
+    )
+    .await?;
+    Ok(())
+}
 pub async fn ceph_pools() -> Result<Vec<Pool>, ApiError> {
     fetch_json("/ceph/pools").await
 }
