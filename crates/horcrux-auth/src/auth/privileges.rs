@@ -414,6 +414,9 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         // The node shell is a root shell: always Sys.Modify, even for the
         // WebSocket GET that redeems the ticket.
         "nodes" if arg(1) == "shell" => need(P::SysModify, "/nodes"),
+        // Live log stream: the ticket is a POST but only reads the log, so
+        // it needs Sys.Audit like the log itself (the upgrade GET too).
+        "system" if arg(1) == "logs" && arg(2) == "stream" => need(P::SysAudit, "/nodes"),
         "gpu" | "system" | "nodes" | "host-agent" => {
             read_write(m, P::SysAudit, P::SysModify, "/nodes")
         }
@@ -656,6 +659,30 @@ mod tests {
             assert_eq!(
                 priv_of(requirement(m, p)),
                 (want, "/vms/g1".into()),
+                "{m} {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn system_log_routes_map_to_privileges() {
+        for (m, p, want) in [
+            ("GET", "/api/system/logs", P::SysAudit),
+            ("GET", "/api/system/logs/boots", P::SysAudit),
+            ("GET", "/api/system/logs/units", P::SysAudit),
+            ("GET", "/api/system/logs/info", P::SysAudit),
+            ("GET", "/api/system/logs/settings", P::SysAudit),
+            ("GET", "/api/system/logs/export", P::SysAudit),
+            // the ticket is minted with POST but only reads: Sys.Audit
+            ("POST", "/api/system/logs/stream/ticket", P::SysAudit),
+            ("GET", "/api/system/logs/stream/ws/abc", P::SysAudit),
+            // changing or clearing needs Sys.Modify
+            ("PUT", "/api/system/logs/settings", P::SysModify),
+            ("DELETE", "/api/system/logs", P::SysModify),
+        ] {
+            assert_eq!(
+                priv_of(requirement(m, p)),
+                (want, "/nodes".into()),
                 "{m} {p}"
             );
         }
