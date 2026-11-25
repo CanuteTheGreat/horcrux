@@ -171,7 +171,7 @@ struct TestBody {
 async fn test_matchers(
     Extension(store): Store,
     Json(b): Json<TestBody>,
-) -> Result<Json<horcrux_monitoring::notification_matchers::TestResult>, ApiError> {
+) -> Result<Json<horcrux_common::notify::TestResult>, ApiError> {
     if let Some(d) = &b.matcher {
         let ids: Vec<String> = store
             .channel_names()

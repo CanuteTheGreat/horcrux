@@ -15,7 +15,19 @@ pub fn NotificationsPage() -> impl IntoView {
     let (loading, set_loading) = create_signal(false);
     let (error_message, set_error_message) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
-    let (active_tab, set_active_tab) = create_signal("channels".to_string());
+    let query = leptos_router::use_query_map();
+    let (active_tab, set_active_tab) = create_signal(
+        query
+            .with_untracked(|q| q.get("tab").cloned())
+            .filter(|t| t == "routing")
+            .unwrap_or_else(|| "channels".to_string()),
+    );
+    // links such as ?tab=routing&matcher=<id> switch tabs without a reload
+    create_effect(move |_| {
+        if query.with(|q| q.get("tab").map(|t| t == "routing").unwrap_or(false)) {
+            set_active_tab.set("routing".to_string());
+        }
+    });
 
     // Channel form
     let (form_name, set_form_name) = create_signal(String::new());
@@ -791,6 +803,13 @@ pub fn NotificationsPage() -> impl IntoView {
                     >
                         "Webhooks ("{move || webhook_configs.get().len()}")"
                     </button>
+                    <button
+                        id="tab-routing"
+                        class={move || if active_tab.get() == "routing" { "tab-button active" } else { "tab-button" }}
+                        on:click=move |_| set_active_tab.set("routing".to_string())
+                    >
+                        "Routing"
+                    </button>
                 </div>
 
                 <div class="tab-content">
@@ -1003,6 +1022,9 @@ pub fn NotificationsPage() -> impl IntoView {
                             </div>
                         }.into_view(),
 
+                        "routing" => view! {
+                            <super::notification_routing::RoutingTab channels=notification_channels/>
+                        }.into_view(),
                         _ => view! {}.into_view(),
                     }}
                 </div>

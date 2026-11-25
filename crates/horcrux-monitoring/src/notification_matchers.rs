@@ -3,8 +3,9 @@
 
 use crate::notification_channels::{NotificationChannelStore, StoreError};
 use chrono::{DateTime, Datelike, Timelike, Utc};
-use horcrux_common::notify::{Event, MatchMode, MatchNode, Matcher, NodeTrace, Weekday};
-use serde::{Deserialize, Serialize};
+use horcrux_common::notify::{
+    Event, MatchMode, MatchNode, Matcher, MatcherVerdict, NodeTrace, TargetRef, TestResult, Weekday,
+};
 use sqlx::Row;
 
 /// Deepest nesting of groups a matcher may have (typed limit, documented
@@ -495,32 +496,6 @@ pub fn route(
         }
     }
     (targets, hit)
-}
-
-/// What the test endpoint answers for one matcher.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MatcherVerdict {
-    pub id: String,
-    pub name: String,
-    pub enabled: bool,
-    pub matched: bool,
-    /// Per-node reasons.
-    pub trace: NodeTrace,
-    /// Channels this matcher would send to (enabled ones only).
-    pub targets: Vec<TargetRef>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TargetRef {
-    pub id: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TestResult {
-    pub matchers: Vec<MatcherVerdict>,
-    /// Union of the targets of every matcher that matched.
-    pub targets: Vec<TargetRef>,
 }
 
 fn db_err(e: sqlx::Error) -> StoreError {

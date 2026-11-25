@@ -398,6 +398,119 @@ pub struct NodeTrace {
     pub children: Vec<NodeTrace>,
 }
 
+/// What the test endpoint answers for one matcher.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MatcherVerdict {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub matched: bool,
+    /// Per-node reasons.
+    pub trace: NodeTrace,
+    /// Channels this matcher would send to (enabled ones only).
+    pub targets: Vec<TargetRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TargetRef {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TestResult {
+    pub matchers: Vec<MatcherVerdict>,
+    /// Union of the targets of every matcher that matched.
+    pub targets: Vec<TargetRef>,
+}
+
+// ------------------------------------------------------------ tree editing
+
+/// Position of a node in a matcher's tree: indexes from the matcher's own
+/// child list down. The empty path is the matcher itself (the root group).
+pub type NodePath = Vec<usize>;
+
+/// The child list of the group at `group` (empty path = the root list).
+pub fn children_mut<'a>(
+    root: &'a mut Vec<MatchNode>,
+    group: &[usize],
+) -> Option<&'a mut Vec<MatchNode>> {
+    let mut cur = root;
+    for i in group {
+        match cur.get_mut(*i)? {
+            MatchNode::Group { children, .. } => cur = children,
+            _ => return None,
+        }
+    }
+    Some(cur)
+}
+
+pub fn node_at<'a>(root: &'a [MatchNode], path: &[usize]) -> Option<&'a MatchNode> {
+    let (last, parent) = path.split_last()?;
+    let mut cur = root;
+    for i in parent {
+        match cur.get(*i)? {
+            MatchNode::Group { children, .. } => cur = children,
+            _ => return None,
+        }
+    }
+    cur.get(*last)
+}
+
+pub fn node_at_mut<'a>(root: &'a mut Vec<MatchNode>, path: &[usize]) -> Option<&'a mut MatchNode> {
+    let (last, parent) = path.split_last()?;
+    children_mut(root, parent)?.get_mut(*last)
+}
+
+/// Append `node` to the group at `group`.
+pub fn add_node(root: &mut Vec<MatchNode>, group: &[usize], node: MatchNode) -> Result<(), String> {
+    children_mut(root, group)
+        .ok_or_else(|| "that is not a group".to_string())?
+        .push(node);
+    Ok(())
+}
+
+pub fn remove_node(root: &mut Vec<MatchNode>, path: &[usize]) -> Option<MatchNode> {
+    let (last, parent) = path.split_last()?;
+    let list = children_mut(root, parent)?;
+    (*last < list.len()).then(|| list.remove(*last))
+}
+
+/// Move the node at `from` into the group `to_group`, before position
+/// `index` (clamped to the end). A group can not move into itself or one of
+/// its own descendants. `to_group` and `index` are given as they are on
+/// screen before the move; this adjusts them for the removal.
+pub fn move_node(
+    root: &mut Vec<MatchNode>,
+    from: &[usize],
+    to_group: &[usize],
+    index: usize,
+) -> Result<(), String> {
+    let (i, parent) = from.split_last().ok_or("nothing to move")?;
+    if to_group.len() >= from.len() && to_group[..from.len()] == *from {
+        return Err("a group can not be moved into itself".into());
+    }
+    if node_at(root, from).is_none() {
+        return Err("the dragged condition no longer exists".into());
+    }
+    let mut to = to_group.to_vec();
+    let mut index = index;
+    if to.len() > parent.len() && to[..parent.len()] == *parent && to[parent.len()] > *i {
+        to[parent.len()] -= 1;
+    }
+    if to == parent && index > *i {
+        index -= 1;
+    }
+    // work on a copy: a refused move must leave the tree untouched
+    let mut work = root.clone();
+    let node = remove_node(&mut work, from).ok_or("the dragged condition no longer exists")?;
+    let list = children_mut(&mut work, &to).ok_or("the target is not a group")?;
+    let at = index.min(list.len());
+    list.insert(at, node);
+    *root = work;
+    Ok(())
+}
+
 // --------------------------------------------------------------------- bus
 
 type Sink = Arc<dyn Fn(Event) + Send + Sync>;
@@ -445,6 +558,76 @@ mod tests {
         assert!(j.contains("\"type\":\"group\""), "{j}");
         let back: Matcher = serde_json::from_str(&j).unwrap();
         assert_eq!(back, m);
+    }
+
+    fn leafn(n: &str) -> MatchNode {
+        MatchNode::Node {
+            invert: false,
+            names: vec![n.into()],
+        }
+    }
+    fn grp(children: Vec<MatchNode>) -> MatchNode {
+        MatchNode::Group {
+            mode: MatchMode::Any,
+            invert: false,
+            children,
+        }
+    }
+    fn names(l: &[MatchNode]) -> String {
+        l.iter()
+            .map(|n| match n {
+                MatchNode::Node { names, .. } => names[0].clone(),
+                MatchNode::Group { children, .. } => format!("[{}]", names(children)),
+                _ => "?".into(),
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    #[test]
+    fn moving_nodes_between_groups_adjusts_for_the_removal() {
+        // a, [b, c], d
+        let mut t = vec![leafn("a"), grp(vec![leafn("b"), leafn("c")]), leafn("d")];
+        // a -> end of the group (group index shifts from 1 to 0 after removal)
+        move_node(&mut t, &[0], &[1], 2).unwrap();
+        assert_eq!(names(&t), "[b,c,a],d");
+        // d -> first place inside the group
+        move_node(&mut t, &[1], &[0], 0).unwrap();
+        assert_eq!(names(&t), "[d,b,c,a]");
+        // c out of the group to the top level, before everything
+        move_node(&mut t, &[0, 2], &[], 0).unwrap();
+        assert_eq!(names(&t), "c,[d,b,a]");
+        // reorder inside one list: move c after the group (index counts the on-screen list)
+        move_node(&mut t, &[0], &[], 2).unwrap();
+        assert_eq!(names(&t), "[d,b,a],c");
+        // a group moves with its children
+        move_node(&mut t, &[0], &[], 2).unwrap();
+        assert_eq!(names(&t), "c,[d,b,a]");
+    }
+
+    #[test]
+    fn a_group_never_moves_into_itself() {
+        let mut t = vec![grp(vec![grp(vec![leafn("x")])])];
+        assert!(move_node(&mut t, &[0], &[0, 0], 0).is_err());
+        assert!(move_node(&mut t, &[0], &[0], 0).is_err());
+        assert_eq!(names(&t), "[[x]]");
+        assert!(move_node(&mut t, &[5], &[], 0).is_err());
+        // leaves are not groups
+        let mut t = vec![leafn("a"), leafn("b")];
+        assert!(move_node(&mut t, &[0], &[1], 0).is_err());
+        assert_eq!(names(&t), "a,b");
+    }
+
+    #[test]
+    fn add_and_remove_by_path() {
+        let mut t = vec![grp(vec![])];
+        add_node(&mut t, &[0], leafn("a")).unwrap();
+        add_node(&mut t, &[], leafn("b")).unwrap();
+        assert_eq!(names(&t), "[a],b");
+        assert!(add_node(&mut t, &[1], leafn("c")).is_err());
+        assert!(remove_node(&mut t, &[0, 0]).is_some());
+        assert_eq!(names(&t), "[],b");
+        assert!(remove_node(&mut t, &[3]).is_none());
     }
 
     #[test]
