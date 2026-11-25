@@ -8,6 +8,7 @@ pub mod auth;
 #[cfg(feature = "backup")]
 pub mod backup;
 pub mod ceph_admin;
+pub mod ceph_install;
 #[cfg(feature = "cluster")]
 pub mod cluster_join;
 pub mod container_runtimes;

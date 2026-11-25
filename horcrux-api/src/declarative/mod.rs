@@ -65,9 +65,34 @@ pub struct Spec {
     /// defaults to saving state to encrypted storage).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_power: Option<GuestPowerSpec>,
+    /// Node platform choices (`kernel_line`: default | newest). Absent = unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<SystemSpec>,
+    /// The Ceph release this node runs (`release`: a major version or a
+    /// release name). Apply installs or upgrades the packages; creating or
+    /// joining a cluster stays an explicit action (Storage > Ceph, `POST
+    /// /api/ceph/install`). Absent = unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceph: Option<CephSpec>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+/// Node platform choices.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SystemSpec {
+    /// `default` (the stable kernel) or `newest` (opt-in; capped by the ZFS
+    /// module). Absent = unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kernel_line: Option<crate::api::system_admin::kernel_line::KernelLine>,
+}
+
+/// The Ceph release of this node.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct CephSpec {
+    /// `21`, `umbrella`, `tentacle`, ...
+    pub release: String,
 }
 
 /// Host shutdown / boot behaviour of guests (see docs/SAVE_STATE.md). Every
@@ -339,6 +364,13 @@ pub struct Live {
     pub power_node: crate::api::guest_state::NodePolicy,
     /// Per-VM power overrides by VM name (only VMs that have one).
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
+    pub kernel_line: crate::api::system_admin::kernel_line::KernelLine,
+    /// installed Ceph major version (`None`: not installed)
+    pub ceph_major: Option<u64>,
+    /// the release the Ceph pin holds
+    pub ceph_pinned: Option<u64>,
+    /// releases the repositories carry for this architecture
+    pub ceph_available: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -704,10 +736,77 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // node platform: the kernel line
+    if let Some(want) = spec.system.as_ref().and_then(|s| s.kernel_line) {
+        if want != live.kernel_line {
+            creates.push(ch(
+                "system",
+                "kernel_line",
+                Action::Update,
+                vec![format!(
+                    "kernel_line: {} -> {} (the kernel arrives with the next update; reboot when ready)",
+                    live.kernel_line.as_str(),
+                    want.as_str()
+                )],
+            ));
+        }
+    }
+
+    // Ceph release: install / upgrade the packages, never a downgrade
+    if let Some(c) = &spec.ceph {
+        use crate::api::ceph_install::{parse_release, release_label, MAX_UPGRADE_SPAN};
+        match parse_release(&c.release) {
+            Err(e) => p.errors.push(format!("ceph.release: {e}")),
+            Ok(m) if !live.ceph_available.contains(&m) => p.errors.push(format!(
+                "ceph.release: {} is not available for this node's architecture in its repositories",
+                release_label(m)
+            )),
+            Ok(m) => match live.ceph_major {
+                None => creates.push(ch(
+                    "ceph",
+                    "release",
+                    Action::Create,
+                    vec![format!(
+                        "install Ceph {} (packages; create or join a cluster from Storage > Ceph)",
+                        release_label(m)
+                    )],
+                )),
+                Some(im) if im > m => p.errors.push(format!(
+                    "ceph.release: {} is installed and Ceph cannot be downgraded to {}",
+                    release_label(im),
+                    release_label(m)
+                )),
+                Some(im) if m > im + MAX_UPGRADE_SPAN => p.errors.push(format!(
+                    "ceph.release: Ceph upgrades at most {MAX_UPGRADE_SPAN} releases at a time ({} is installed)",
+                    release_label(im)
+                )),
+                Some(im) if im < m => creates.push(ch(
+                    "ceph",
+                    "release",
+                    Action::Update,
+                    vec![format!(
+                        "upgrade Ceph {} -> {} (packages; then restart the daemons in Ceph's order from Storage > Ceph > Upgrade)",
+                        release_label(im),
+                        release_label(m)
+                    )],
+                )),
+                Some(_) if live.ceph_pinned != Some(m) => creates.push(ch(
+                    "ceph",
+                    "release",
+                    Action::Update,
+                    vec![format!("pin the release to {}", release_label(m))],
+                )),
+                Some(_) => {}
+            },
+        }
+    }
+
     // Creates/updates run dependency-first (pools, zones, vnets, subnets,
     // VMs, guest power); deletes run in the opposite order (VMs first, pools last).
     let rank = |k: &str| {
         [
+            "system",
+            "ceph",
             "console",
             "remote_play",
             "storage_pool",
@@ -719,7 +818,7 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         ]
         .iter()
         .position(|x| *x == k)
-        .unwrap_or(9)
+        .unwrap_or(99)
     };
     creates.sort_by_key(|c| rank(&c.kind));
     deletes.sort_by_key(|c| std::cmp::Reverse(rank(&c.kind)));
@@ -986,6 +1085,14 @@ pub fn export(live: &Live) -> Spec {
         guest_power: Some(GuestPowerSpec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),
+        }),
+        system: Some(SystemSpec {
+            kernel_line: Some(live.kernel_line),
+        }),
+        ceph: live.ceph_major.map(|m| CephSpec {
+            release: crate::api::ceph_install::release_name(m)
+                .map(|n| n.to_ascii_lowercase())
+                .unwrap_or_else(|| m.to_string()),
         }),
         extra: BTreeMap::new(),
     }
