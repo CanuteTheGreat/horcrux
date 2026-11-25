@@ -64,6 +64,20 @@ guest_power:          # what guests do when the HOST shuts down / restarts
     save_dir: null                 # default: <data dir>/saved-state/data
   vms:                # per-VM overrides by VM name (same keys as the power policy API)
     app1: {host_shutdown_action: shutdown, start_order: 10}
+
+logs:                 # System Log viewer limits (docs/SYSTEM-LOGS.md); every key optional
+  max_lines: 5000               # most lines one request or export returns
+  default_lines: 200
+  max_scan_lines: 200000        # lines scanned while looking for matches
+  query_timeout_secs: 30
+  syslog_tail_bytes: 8388608    # how much of the end of a syslog file is searched
+  syslog_files: [/var/log/messages, /var/log/syslog, /var/log/everything/current]
+  wtmp_path: /var/log/wtmp
+  follow_poll_ms: 1000          # live mode: how often new entries are looked for
+  follow_idle_secs: 600         # live mode: closes after this long without a new entry
+  follow_max_secs: 3600
+  follow_max_entries: 20000
+  follow_max_streams: 8
 ```
 
 Notes:
@@ -75,6 +89,7 @@ Notes:
   subnets by derived id.
 - `guest_power` is planned as kind `guest_power` (`(node defaults)` and one entry
   per VM override); with `prune`, overrides the spec does not list are removed.
+- `logs` is one node-wide object (kind `logs`); absent = unmanaged.
 - Keys for later phases (`containers`, `users`, `acl`, `firewall`,
   `backup_jobs`, `ha_groups`, `nodes`) are *rejected* with "not supported
   yet" rather than ignored, so a spec never half-applies without saying so.

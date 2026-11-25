@@ -187,6 +187,32 @@ def main():
     ok(len(expect(200, "GET", "/system/logs?limit=1")) == 1, "limit")
     csv = expect(200, "GET", "/system/logs/export?format=csv", raw=True)
     ok(csv.startswith("timestamp,level,service,message") and "Failed password" in csv, "CSV export")
+    # structured entries and the Proxmox-level filters, on a real OpenRC host with a plain syslog file
+    e0 = logs[0]
+    ok(e0["identifier"] == "kernel" and e0["kernel"] and e0["hostname"] == "gw" and e0["priority_inferred"] and e0["priority"] == 4, "entries carry identifier, host, kernel flag and a guessed priority")
+    ok(logs[2]["pid"] == 411 and logs[2]["priority_name"] == "err", "pid and priority name parsed from sshd[411]")
+    ok([e["identifier"] for e in expect(200, "GET", "/system/logs?priority=3")] == ["sshd"], "minimum priority 3 = errors and worse")
+    ok(len(expect(200, "GET", "/system/logs?identifier=s*")) == 1 and len(expect(200, "GET", "/system/logs?identifier=*r*")) == 2, "identifier wildcard (*)")
+    ok(len(expect(200, "GET", "/system/logs?identifier=cron")) == 1, "identifier exact")
+    ok([e["identifier"] for e in expect(200, "GET", "/system/logs?kernel=true")] == ["kernel"], "kernel only")
+    ok(len(expect(200, "GET", "/system/logs?unit=sshd.service")) == 1, "unit filter matches the program name on a syslog host")
+    ok(len(expect(200, "GET", "/system/logs?since=1m")) == 0 and len(expect(200, "GET", "/system/logs?since=3000d")) == 3, "relative time span")
+    expect(400, "GET", "/system/logs?since=garbage")
+    expect(400, "GET", "/system/logs?priority=9")
+    info = expect(200, "GET", "/system/logs/info")
+    ok(info["source"] == "syslog-file" and any("priority" in l for l in info["limitations"]), "info says what the syslog file cannot give")
+    ok(len(expect(200, "GET", "/system/logs/boots")) >= 1, "boots are derived without journald")
+    units = expect(200, "GET", "/system/logs/units")
+    ok(units["kind"] in ("openrc", "identifiers") and "sshd" in units["units"], "unit picker lists init scripts and identifiers")
+    st = expect(200, "GET", "/system/logs/settings")
+    ok(st["max_lines"] == 5000 and st["follow_idle_secs"] == 600, "typed limits have documented defaults")
+    st["max_lines"] = 1000
+    expect(200, "PUT", "/system/logs/settings", st)
+    ok(expect(200, "GET", "/system/logs/settings")["max_lines"] == 1000, "limits are stored")
+    st["max_lines"] = 10
+    expect(400, "PUT", "/system/logs/settings", st)
+    st["max_lines"] = 5000
+    expect(200, "PUT", "/system/logs/settings", st)
     expect(200, "DELETE", "/system/logs")
     ok(os.path.getsize("/var/log/messages") == 0 and expect(200, "GET", "/system/logs") == [], "clear truncated the log file")
 
