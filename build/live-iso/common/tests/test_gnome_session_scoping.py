@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -248,10 +249,13 @@ class SessionScoping(unittest.TestCase):
                 r = subprocess.run(["sh", str(helper), "xsettings-start", f":{n}"], capture_output=True, text=True,
                                    env=dict(env, XAUTHORITY=str(xa)), timeout=30)
                 self.assertEqual(r.returncode, 0, r.stderr)
-                for _ in range(50):
+                # the helper detaches rc-service: wait on a monotonic deadline with a sleep nothing can patch away (another test
+                # replacing the shared time.sleep once turned this into 50 instant polls and a lost race)
+                deadline, tick = time.monotonic() + 15, threading.Event()
+                while time.monotonic() < deadline:
                     if Path(d, "rc").exists() and "start" in Path(d, "rc").read_text().split():
                         break
-                    time.sleep(0.1)
+                    tick.wait(0.1)
                 self.assertEqual((rt / "gnome-session-openrc-xwayland-display").read_text().strip(), f":{n}")
                 self.assertIn("-U gsd-xsettings start", Path(d, "rc").read_text())
                 r = subprocess.run(["sh", str(helper), "x-display"], capture_output=True, text=True, env=env, timeout=30)
@@ -274,7 +278,7 @@ class SessionScoping(unittest.TestCase):
                     r = subprocess.run(["sh", str(helper), "xsettings-start", arg], capture_output=True, text=True,
                                        env=dict(env, XDG_SESSION_CLASS=cls), timeout=30)
                     self.assertEqual(r.returncode, 0)
-                time.sleep(0.5)
+                threading.Event().wait(0.5)
                 self.assertFalse(Path(d, "rc").exists())
             finally:
                 lock.unlink()

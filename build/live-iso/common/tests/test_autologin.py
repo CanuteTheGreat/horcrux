@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COMMON = os.path.join(HERE, "..")
@@ -156,6 +157,11 @@ class GateSelfTest(unittest.TestCase):
         cls.qt = importlib.util.module_from_spec(sp)
         sp.loader.exec_module(cls.qt)
 
+    def tearDown(self):
+        # a patched time.sleep must never outlive its test: it is the process-wide `time` module (it made
+        # test_gnome_session_scoping's wait loops return instantly, so a detached helper child lost the race)
+        mock.patch.stopall()
+
     def run_gate(self, files):
         out = "".join(f"@@@FILE {p}\n{t}" for p, t in files.items()) + "@@@END\n"
         got = {}
@@ -189,7 +195,7 @@ class GateSelfTest(unittest.TestCase):
                 return 0, "@@S\n 1 1000 owner seat0 tty7 active no -\n@@P\n 1234 xfce4-session\n@@L\n1234\n1000\n"
             return 0, "DM\n  555 lightdm-gtk-greeter\n"
         got = {}
-        self.qt.time.sleep = lambda s: None
+        mock.patch.object(self.qt.time, "sleep", lambda s: None).start()  # undone by tearDown: `time` is the one shared module
         self.qt.greeter_no_session_gate(sh, lambda n, ok, info="": got.update(ok=ok, info=info) if not n.endswith("not-root") else None, "owner", "lightdm", wait=1)
         self.assertFalse(got["ok"])
 
@@ -201,7 +207,7 @@ class GateSelfTest(unittest.TestCase):
                 return 0, "@@S\n c1 110 lightdm - - active no -\n@@P\n@@L\n1000\n"
             return 0, "DM\n  555 lightdm-gtk-greeter\n"
         got = {}
-        self.qt.time.sleep = lambda s: None
+        mock.patch.object(self.qt.time, "sleep", lambda s: None).start()  # undone by tearDown: `time` is the one shared module
         self.qt.greeter_no_session_gate(sh, lambda n, ok, info="": got.update(ok=ok, info=info) if not n.endswith("not-root") else None, "owner", "lightdm", wait=1)
         self.assertTrue(got["ok"], got)
 
@@ -214,7 +220,7 @@ class GateSelfTest(unittest.TestCase):
             if "@@S" in cmd:
                 return 0, "@@S\n c1 110 lightdm - - active no -\n@@P\n@@L\n1000\n"
             return 0, "DM\n  555 lightdm-gtk-greeter\n"
-        self.qt.time.sleep = lambda s: None
+        mock.patch.object(self.qt.time, "sleep", lambda s: None).start()  # undone by tearDown: `time` is the one shared module
         ret = self.qt.greeter_no_session_gate(sh, lambda n, ok, info="": steps.update({n: ok}), "owner", "lightdm", wait=1)
         return ret, steps
 
