@@ -568,7 +568,10 @@ def flow(profile, st=None):
         scr += [s_rootpass] + desk + [s_ifaces, s_addr] + ([s_stage("netadv")] if S.netvirt.enabled(profile) else [])
     else:
         scr += [s_rootpass] + desk + [s_mgmt]
-    scr += [s_stage("services"), s_stage("hardening"), s_use, s_summary, s_install, s_done]
+    scr += [s_stage("services"), s_stage("hardening")]
+    if ST.BY_ID["kernel"].applies(ST.Ctx(profile, {})):
+        scr += [s_stage("kernel")]
+    scr += [s_use, s_summary, s_install, s_done]
     return scr
 
 

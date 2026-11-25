@@ -118,7 +118,7 @@ if [ "$result" = pass ]; then
       "bios-cdrom-tui-serial-xfs-static|--mode bios --media cdrom --flow tui --fs xfs --static-ip 10.0.2.77"
       "uefi-usb-tui-vga-zfs-mirror-static|--mode uefi --media usb --flow tui-vga --fs zfs --zfs-raid mirror --static-ip 10.0.2.88"
       "bios-cdrom-fallback-no-answer-file|--mode bios --media cdrom --flow fallback"
-      "uefi-usb-auto-zfs-mirror-sshpw|--mode uefi --media usb --flow auto --fs zfs --zfs-raid mirror --static-ip 10.0.2.99 --ssh-password-opt-in"
+      "uefi-usb-auto-zfs-mirror-sshpw-kernel-newest|--mode uefi --media usb --flow auto --fs zfs --zfs-raid mirror --static-ip 10.0.2.99 --ssh-password-opt-in --kernel-line newest"
       "uefi-usb-gui-ext4|--mode uefi --media usb --flow gui --fs ext4"
       "bios-cdrom-gui-xfs-static|--mode bios --media cdrom --flow gui --fs xfs --static-ip 10.0.2.66"
     )
@@ -142,7 +142,7 @@ if [ "$result" = pass ]; then
       "uefi-cdrom-tui-serial-xfs-static|--mode uefi --media cdrom --flow tui --fs xfs --static-ip 10.0.2.77"
       "uefi-usb-tui-vga-ext4|--mode uefi --media usb --flow tui-vga --fs ext4"
       "uefi-cdrom-fallback-no-answer-file|--mode uefi --media cdrom --flow fallback"
-      "uefi-usb-auto-zfs-mirror-sshpw|--mode uefi --media usb --flow auto --fs zfs --zfs-raid mirror --static-ip 10.0.2.99 --ssh-password-opt-in"
+      "uefi-usb-auto-zfs-mirror-sshpw-kernel-newest|--mode uefi --media usb --flow auto --fs zfs --zfs-raid mirror --static-ip 10.0.2.99 --ssh-password-opt-in --kernel-line newest"
     )
   else
     MATRIX=(

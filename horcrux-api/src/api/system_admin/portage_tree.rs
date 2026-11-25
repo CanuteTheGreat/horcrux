@@ -145,7 +145,10 @@ pub fn installed(root: &Path, atom: &str) -> Vec<String> {
 /// as zfs-kmod's `MODULES_KERNEL_MAX`).
 pub fn installed_ebuild_text(root: &Path, atom: &str, version: &str) -> Option<String> {
     let (cat, pn) = atom.split_once('/')?;
-    let d = root.join("var/db/pkg").join(cat).join(format!("{pn}-{version}"));
+    let d = root
+        .join("var/db/pkg")
+        .join(cat)
+        .join(format!("{pn}-{version}"));
     std::fs::read_to_string(d.join(format!("{pn}-{version}.ebuild"))).ok()
 }
 
@@ -267,7 +270,9 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&d).unwrap();
         std::fs::create_dir_all(root.join("var/db/repos").join(repo).join("profiles")).unwrap();
         std::fs::write(
-            root.join("var/db/repos").join(repo).join("profiles/repo_name"),
+            root.join("var/db/repos")
+                .join(repo)
+                .join("profiles/repo_name"),
             format!("{repo}\n"),
         )
         .unwrap();
@@ -276,7 +281,10 @@ pub(crate) mod tests {
 
     pub fn vdb(root: &Path, atom: &str, ver: &str, ebuild_body: &str) {
         let (cat, pn) = atom.split_once('/').unwrap();
-        let d = root.join("var/db/pkg").join(cat).join(format!("{pn}-{ver}"));
+        let d = root
+            .join("var/db/pkg")
+            .join(cat)
+            .join(format!("{pn}-{ver}"));
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join(format!("{pn}-{ver}.ebuild")), ebuild_body).unwrap();
     }
@@ -300,9 +308,27 @@ pub(crate) mod tests {
     #[test]
     fn ebuilds_carry_keywords_and_sort_newest_first() {
         let t = tempfile::tempdir().unwrap();
-        ebuild(t.path(), "gentoo", "sys-cluster/ceph", "20.2.5", "EAPI=8\nKEYWORDS=\"~amd64 ~arm64\"\n");
-        ebuild(t.path(), "gentoo", "sys-cluster/ceph", "20.1.1-r1", "KEYWORDS=\"amd64 ~arm64 ppc64\"\n");
-        ebuild(t.path(), "horcrux", "sys-cluster/ceph", "21.2.0", "KEYWORDS=\"~amd64\" # ported\n");
+        ebuild(
+            t.path(),
+            "gentoo",
+            "sys-cluster/ceph",
+            "20.2.5",
+            "EAPI=8\nKEYWORDS=\"~amd64 ~arm64\"\n",
+        );
+        ebuild(
+            t.path(),
+            "gentoo",
+            "sys-cluster/ceph",
+            "20.1.1-r1",
+            "KEYWORDS=\"amd64 ~arm64 ppc64\"\n",
+        );
+        ebuild(
+            t.path(),
+            "horcrux",
+            "sys-cluster/ceph",
+            "21.2.0",
+            "KEYWORDS=\"~amd64\" # ported\n",
+        );
         let e = ebuilds(t.path(), "sys-cluster/ceph");
         assert_eq!(
             e.iter().map(|x| x.version.as_str()).collect::<Vec<_>>(),
@@ -318,7 +344,10 @@ pub(crate) mod tests {
     fn pins_are_written_and_removed() {
         let t = tempfile::tempdir().unwrap();
         write_pin(t.path(), "package.mask", "horcrux-x", Some(">=a/b-2\n")).unwrap();
-        assert_eq!(read_pin(t.path(), "package.mask", "horcrux-x").unwrap(), ">=a/b-2\n");
+        assert_eq!(
+            read_pin(t.path(), "package.mask", "horcrux-x").unwrap(),
+            ">=a/b-2\n"
+        );
         write_pin(t.path(), "package.mask", "horcrux-x", None).unwrap();
         assert!(read_pin(t.path(), "package.mask", "horcrux-x").is_none());
         write_pin(t.path(), "package.mask", "horcrux-x", None).unwrap();
@@ -330,11 +359,19 @@ pub(crate) mod tests {
     #[test]
     fn vdb_versions_and_ebuild_vars() {
         let t = tempfile::tempdir().unwrap();
-        vdb(t.path(), "sys-fs/zfs-kmod", "2.3.9", "MODULES_KERNEL_MAX=7.2\nMODULES_KERNEL_MIN=4.18\n");
+        vdb(
+            t.path(),
+            "sys-fs/zfs-kmod",
+            "2.3.9",
+            "MODULES_KERNEL_MAX=7.2\nMODULES_KERNEL_MIN=4.18\n",
+        );
         vdb(t.path(), "sys-fs/zfs", "2.3.9", "");
         assert_eq!(installed(t.path(), "sys-fs/zfs-kmod"), ["2.3.9"]);
         let txt = installed_ebuild_text(t.path(), "sys-fs/zfs-kmod", "2.3.9").unwrap();
-        assert_eq!(ebuild_var(&txt, "MODULES_KERNEL_MAX").as_deref(), Some("7.2"));
+        assert_eq!(
+            ebuild_var(&txt, "MODULES_KERNEL_MAX").as_deref(),
+            Some("7.2")
+        );
         assert!(installed(t.path(), "sys-fs/nothing").is_empty());
     }
 }
