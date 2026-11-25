@@ -671,9 +671,83 @@ pub fn pick_host_id(node: &str, claims: &[HostId]) -> u16 {
         .unwrap_or(MAX_HOST_ID)
 }
 
+/// The `san:` section of the declarative spec (cluster-wide, like the API).
+/// CHAP secrets are not part of it: set them through the API once; an
+/// apply keeps the stored secret.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct SanSpec {
+    #[serde(default)]
+    pub settings: MultipathSettings,
+    #[serde(default)]
+    pub targets: Vec<IscsiTargetSpec>,
+    #[serde(default)]
+    pub shared_lvm: Vec<SharedLvmSpec>,
+}
+
+impl SanSpec {
+    /// Without merge counters/tombstones, sorted by id: what a diff compares.
+    pub fn normalized(&self) -> Self {
+        let mut s = self.clone();
+        s.settings.rev = 0;
+        s.targets.retain(|t| !t.deleted);
+        s.shared_lvm.retain(|l| !l.deleted);
+        for t in &mut s.targets {
+            t.rev = 0;
+        }
+        for l in &mut s.shared_lvm {
+            l.rev = 0;
+        }
+        s.targets.sort_by(|a, b| a.id.cmp(&b.id));
+        s.shared_lvm.sort_by(|a, b| a.id.cmp(&b.id));
+        s
+    }
+
+    pub fn validate(&mut self) -> Result<(), String> {
+        self.settings.validate().map_err(|e| format!("settings: {e}"))?;
+        let mut ids = std::collections::BTreeSet::new();
+        for t in &mut self.targets {
+            t.validate().map_err(|e| format!("targets.{}: {e}", t.id))?;
+            if !ids.insert(t.id.clone()) {
+                return Err(format!("targets: {} twice", t.id));
+            }
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for l in &mut self.shared_lvm {
+            l.validate().map_err(|e| format!("shared_lvm.{}: {e}", l.id))?;
+            if !ids.insert(l.id.clone()) {
+                return Err(format!("shared_lvm: {} twice", l.id));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn san_spec_normalizes_for_diffs() {
+        let mut a: SanSpec = serde_json::from_value(serde_json::json!({
+            "targets": [
+                {"id": "b", "iqn": "iqn.2003-01.org.x:b", "portals": ["10.0.0.2"], "rev": 9},
+                {"id": "a", "iqn": "iqn.2003-01.org.x:a", "portals": ["10.0.0.1"]},
+                {"id": "z", "iqn": "iqn.2003-01.org.x:z", "portals": ["10.0.0.3"], "deleted": true}
+            ]
+        }))
+        .unwrap();
+        a.validate().unwrap();
+        let n = a.normalized();
+        assert_eq!(n.targets.len(), 2);
+        assert_eq!(n.targets[0].id, "a");
+        assert_eq!(n.targets[1].rev, 0);
+        let dup: Result<(), String> = SanSpec {
+            targets: vec![a.targets[0].clone(), a.targets[0].clone()],
+            ..Default::default()
+        }
+        .validate();
+        assert!(dup.is_err());
+    }
 
     #[test]
     fn iqn_validation() {

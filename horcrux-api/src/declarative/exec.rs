@@ -24,6 +24,10 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         remote_play: crate::api::remote_play::load_settings(state).await,
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
+        #[cfg(feature = "san")]
+        san: crate::api::san::live_spec(state).await,
+        #[cfg(not(feature = "san"))]
+        san: Default::default(),
     }
 }
 
@@ -132,6 +136,13 @@ async fn run_change(
                  takes effect at each VM's next start"
                     .into(),
             ))
+        }
+
+        #[cfg(feature = "san")]
+        (k @ ("san_settings" | "san_target" | "san_lvm"), a) => {
+            let w = spec.san.as_ref().ok_or("not in spec")?;
+            crate::api::san::declarative_apply(state, w, k, &c.name, a).await?;
+            Ok(Some("replicated to every cluster member and applied on each".into()))
         }
 
         ("remote_play", Action::Update) => {

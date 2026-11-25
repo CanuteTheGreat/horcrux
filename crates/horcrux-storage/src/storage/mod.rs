@@ -134,6 +134,42 @@ pub fn parse_ceph_df(json: &str, pool: &str) -> Option<(u64, u64)> {
     Some(((used + avail) / gb, avail / gb))
 }
 
+/// (total, available) GB of an LVM volume group (`vgs --units b -o
+/// vg_size,vg_free`): an LVM pool's path is the VG NAME, so statvfs on it
+/// fails and the pool reported 0 GB (every `lvcreate` was then refused by the
+/// space check, shared VGs on a SAN LUN included).
+pub fn lvm_capacity_gb(vg: &str) -> Option<(u64, u64)> {
+    // HORCRUX_VGS_BIN lets tests (and unusual installs) point at another vgs binary.
+    let bin = std::env::var_os("HORCRUX_VGS_BIN").unwrap_or_else(|| "vgs".into());
+    let out = std::process::Command::new(bin)
+        .args([
+            "--noheadings",
+            "--units",
+            "b",
+            "--nosuffix",
+            "-o",
+            "vg_size,vg_free",
+            "--",
+        ])
+        .arg(vg)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_vgs_capacity(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse one `vgs --units b --nosuffix -o vg_size,vg_free` line into (total, available) GB.
+pub fn parse_vgs_capacity(text: &str) -> Option<(u64, u64)> {
+    let line = text.lines().find(|l| !l.trim().is_empty())?;
+    let mut f = line.split_whitespace();
+    let size: u64 = f.next()?.parse().ok()?;
+    let free: u64 = f.next()?.parse().ok()?;
+    let gb = 1024 * 1024 * 1024;
+    Some((size / gb, free / gb))
+}
+
 /// How the manager measures a pool's filesystem: `fs_capacity_gb`
 /// (tests substitute a fake to pin or move the numbers).
 pub type CapacityProbe = fn(&str) -> Option<(u64, u64)>;
@@ -157,9 +193,10 @@ fn measured_by_statvfs(t: &StorageType) -> bool {
 }
 
 /// Pools measured by a probe: statvfs for filesystem pools, `zfs list` for ZFS,
-/// `ceph df` for Ceph RBD.
+/// `ceph df` for Ceph RBD, `vgs` for LVM.
 fn measured_by_probe(t: &StorageType) -> bool {
-    measured_by_statvfs(t) || matches!(t, StorageType::Zfs | StorageType::Ceph)
+    measured_by_statvfs(t)
+        || matches!(t, StorageType::Zfs | StorageType::Ceph | StorageType::Lvm)
 }
 
 /// Defence in depth: every backend re-checks each name it joins onto a pool
@@ -301,6 +338,7 @@ pub struct StorageManager {
     /// Same for ZFS pools (dataset names, measured with `zfs list`).
     zfs_probe: CapacityProbe,
     ceph_probe: CapacityProbe,
+    lvm_probe: CapacityProbe,
     /// Pools whose last measurement hasn't returned yet (hung mount): not
     /// probed again until it does, so blocked threads don't pile up.
     measuring: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
@@ -338,6 +376,7 @@ impl StorageManager {
             capacity_probe: fs_capacity_gb,
             zfs_probe: zfs_capacity_gb,
             ceph_probe: ceph_capacity_gb,
+            lvm_probe: lvm_capacity_gb,
             measuring: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
@@ -398,6 +437,7 @@ impl StorageManager {
         self.capacity_probe = probe;
         self.zfs_probe = probe;
         self.ceph_probe = probe;
+        self.lvm_probe = probe;
         self
     }
 
@@ -407,6 +447,8 @@ impl StorageManager {
             self.zfs_probe
         } else if matches!(t, StorageType::Ceph) {
             self.ceph_probe
+        } else if matches!(t, StorageType::Lvm) {
+            self.lvm_probe
         } else {
             self.capacity_probe
         }
@@ -2045,6 +2087,31 @@ mod tests {
         std::env::set_var("HORCRUX_CEPH_BIN", dir.join("no-such-ceph"));
         assert_eq!(ceph_capacity_gb("hxpool"), None);
         std::env::remove_var("HORCRUX_CEPH_BIN");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `lvm_capacity_gb` runs `vgs` in bytes and reports the VG in GB; None
+    /// when vgs fails (VG not visible). (The only test that sets HORCRUX_VGS_BIN.)
+    #[test]
+    fn lvm_capacity_gb_runs_vgs_and_reports_its_numbers() {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            parse_vgs_capacity("\n  3217031168 2143289344\n"),
+            Some((2, 1))
+        );
+        assert_eq!(parse_vgs_capacity("  garbage\n"), None);
+        let dir = scratch("vgs-bin");
+        let f = dir.join("vgs");
+        std::fs::write(
+            &f,
+            "#!/bin/sh\n[ \"$*\" = '--noheadings --units b --nosuffix -o vg_size,vg_free -- vg_t' ] || exit 5\necho '  5368709120 4294967296'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("HORCRUX_VGS_BIN", &f);
+        assert_eq!(lvm_capacity_gb("vg_t"), Some((5, 4)));
+        assert_eq!(lvm_capacity_gb("vg_other"), None);
+        std::env::remove_var("HORCRUX_VGS_BIN");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

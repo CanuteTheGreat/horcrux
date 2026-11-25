@@ -103,7 +103,15 @@ impl LvmManager {
             }
             crate::san::lvm_shared::activate_exclusive(vg_name, volume_name, t)
                 .await
-                .map_err(sys)?;
+                .map_err(|e| {
+                    if e.contains("Failed to find logical volume") {
+                        horcrux_common::Error::NotFound(format!(
+                            "logical volume {vg_name}/{volume_name} does not exist"
+                        ))
+                    } else {
+                        sys(e)
+                    }
+                })?;
             let dev = format!("/dev/{vg_name}/{volume_name}");
             // Scrubbing a big LV takes a while: give it its own budget.
             let scrub_t = std::time::Duration::from_secs(opts.scrub_timeout_secs.into());

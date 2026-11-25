@@ -393,3 +393,58 @@ fn guest_power_rejects_unknown_vms_and_bad_values() {
     assert!(parse("guest_power: {node: {max_parallel: 0}}").is_err());
     assert!(parse("guest_power: {vms: {a: {save_dir: relative}}}").is_err());
 }
+
+#[cfg(feature = "san")]
+#[test]
+fn san_section_plans_creates_updates_and_prunes() {
+    use horcrux_storage::san::SanSpec;
+    let t = |id: &str, portal: &str| -> horcrux_storage::san::IscsiTargetSpec {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "iqn": format!("iqn.2003-01.org.x:{id}"), "portals": [portal]
+        }))
+        .unwrap()
+    };
+    let live = Live {
+        san: SanSpec {
+            targets: vec![t("a", "10.0.0.1:3260"), t("old", "10.0.0.9:3260")],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    // export -> plan is in sync
+    let e = export(&live);
+    assert!(e.san.is_some());
+    assert!(plan(&e, &live, true).changes.is_empty());
+    // a new target, a changed one, a missing one (pruned), new settings
+    let mut want = e.san.clone().unwrap();
+    want.targets = vec![t("a", "10.0.0.2"), t("b", "10.0.1.1")];
+    want.settings.polling_interval_secs = 10;
+    let s = Spec {
+        san: Some(want),
+        ..Default::default()
+    };
+    let p = plan(&s, &live, true);
+    assert!(p.errors.is_empty(), "{:?}", p.errors);
+    let got: Vec<(String, String, Action)> = p
+        .changes
+        .iter()
+        .map(|c| (c.kind.clone(), c.name.clone(), c.action))
+        .collect();
+    assert!(got.contains(&("san_settings".into(), "cluster".into(), Action::Update)));
+    assert!(got.contains(&("san_target".into(), "a".into(), Action::Update)));
+    assert!(got.contains(&("san_target".into(), "b".into(), Action::Create)));
+    assert!(got.contains(&("san_target".into(), "old".into(), Action::Delete)));
+    // invalid sections are plan errors, not applies
+    let mut bad = SanSpec::default();
+    bad.settings.config_path = "/etc/multipath.conf".into();
+    let p = plan(
+        &Spec {
+            san: Some(bad),
+            ..Default::default()
+        },
+        &live,
+        false,
+    );
+    assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
+}
+

@@ -34,12 +34,14 @@ pub fn render_sanlock_conf(watchdog: bool) -> Option<String> {
     }
 }
 
-/// A file only made of comments and blank lines (the packaged default).
+/// A file with no settings: comments, blank lines and empty sections only
+/// (the packaged `lvmlocal.conf` is a commented `local { }`).
 pub fn only_comments(text: &str) -> bool {
-    text.lines().all(|l| {
-        let t = l.trim();
-        t.is_empty() || t.starts_with('#')
-    })
+    text.lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|t| !t.is_empty())
+        .flat_map(|t| t.split_whitespace())
+        .all(|w| matches!(w, "{" | "}" | "local" | "local{" | "global" | "global{"))
 }
 
 /// Write a Horcrux-owned config file. A packaged comments-only default is
@@ -145,10 +147,9 @@ pub async fn vg_lock_type(vg: &str, t: Duration) -> Result<Option<String>, Strin
 
 /// Create the shared VG on `dev` (once, from one node).
 pub async fn create_shared_vg(vg: &str, dev: &str, t: Duration) -> Result<(), String> {
-    let r = run("pvcreate", &["-y", dev], t).await?;
-    if !r.ok && !r.stderr.contains("is already") {
-        return Err(fail("pvcreate", &r));
-    }
+    // No separate pvcreate: it needs lvmlockd's global lock, which only
+    // exists once the first shared VG does (lvmlockd(8), "Initial set up");
+    // vgcreate initializes the device itself.
     let r = run(
         "vgcreate",
         &["--shared", "--locktype", "sanlock", vg, dev],
@@ -258,6 +259,10 @@ mod tests {
             std::fs::read_to_string(&p).unwrap(),
             "# packaged default\n\n#local {\n#}\n"
         );
+        // the packaged lvmlocal.conf: a commented, empty local section
+        let q = d.path().join("pkg.conf");
+        std::fs::write(&q, "# lvmlocal.conf\nlocal {\n\t# host_id = 0\n}\n").unwrap();
+        assert!(write_owned(&q, &render_lvmlocal(3)).unwrap());
         std::fs::write(&p, "local {\n\thost_id = 9\n}\n").unwrap();
         assert!(write_owned(&p, &render_lvmlocal(1)).is_err());
         assert!(!remove_owned(&p).unwrap());

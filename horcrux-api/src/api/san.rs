@@ -1280,6 +1280,139 @@ async fn delete_lvm(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ------------------------------------------------------------ declarative
+
+/// The SAN rows as the declarative spec shows them.
+pub async fn live_spec(state: &AppState) -> san::SanSpec {
+    let s = rows::<MultipathSettings>(state, kinds::SETTINGS).await;
+    san::SanSpec {
+        settings: s.into_iter().next().unwrap_or_default(),
+        targets: live_targets(state).await,
+        shared_lvm: live_lvm(state).await,
+    }
+    .normalized()
+}
+
+/// Carry out one declarative change (`san_settings`, `san_target`,
+/// `san_lvm`) through the same paths as the API.
+pub async fn declarative_apply(
+    state: &Arc<AppState>,
+    w: &san::SanSpec,
+    kind: &str,
+    name: &str,
+    action: crate::declarative::Action,
+) -> Result<(), String> {
+    use crate::declarative::Action;
+    let msg = |e: ApiError| format!("{e:?}");
+    match (kind, action) {
+        ("san_settings", _) => {
+            let mut st = w.settings.clone();
+            st.validate()?;
+            st.rev = now_ms().max(settings(state).await.rev + 1);
+            put_row(state, kinds::SETTINGS, SETTINGS_ID, &st).await.map_err(msg)?;
+            push_to_peers(
+                state,
+                PeerList {
+                    settings: Some(st),
+                    ..Default::default()
+                },
+            )
+            .await;
+            kick(state);
+            Ok(())
+        }
+        ("san_target", Action::Delete) => {
+            let mut t = find_target(state, name).await.map_err(msg)?;
+            t.deleted = true;
+            t.rev = now_ms().max(t.rev + 1);
+            put_row(state, kinds::TARGET, &t.id, &t).await.map_err(msg)?;
+            write_secret(state, &t.id, None).map_err(msg)?;
+            push_to_peers(
+                state,
+                PeerList {
+                    targets: vec![TargetWire {
+                        target: t,
+                        chap_secret: None,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .await;
+            kick(state);
+            Ok(())
+        }
+        ("san_target", _) => {
+            let mut t = w
+                .targets
+                .iter()
+                .find(|t| t.id == name)
+                .cloned()
+                .ok_or("not in spec")?;
+            t.validate()?;
+            t.deleted = false;
+            let base = rows::<IscsiTargetSpec>(state, kinds::TARGET)
+                .await
+                .into_iter()
+                .find(|o| o.id == t.id)
+                .map(|o| o.rev)
+                .unwrap_or(0);
+            // None: keep the stored CHAP secret.
+            commit_target(state, t, None, base).await.map_err(msg)?;
+            Ok(())
+        }
+        ("san_lvm", Action::Delete) => {
+            let mut l = live_lvm(state)
+                .await
+                .into_iter()
+                .find(|l| l.id == name)
+                .ok_or("not live")?;
+            l.deleted = true;
+            l.rev = now_ms().max(l.rev + 1);
+            put_row(state, kinds::SHARED_LVM, &l.id, &l).await.map_err(msg)?;
+            remove_pool_for(state, &l).await;
+            let _ = lvm_shared::lockstop(&l.vg_name, TOOL_TIMEOUT).await;
+            push_to_peers(
+                state,
+                PeerList {
+                    lvm: vec![l],
+                    ..Default::default()
+                },
+            )
+            .await;
+            Ok(())
+        }
+        ("san_lvm", _) => {
+            let mut l = w
+                .shared_lvm
+                .iter()
+                .find(|l| l.id == name)
+                .cloned()
+                .ok_or("not in spec")?;
+            l.validate()?;
+            l.deleted = false;
+            let base = rows::<SharedLvmSpec>(state, kinds::SHARED_LVM)
+                .await
+                .into_iter()
+                .find(|o| o.id == l.id)
+                .map(|o| o.rev)
+                .unwrap_or(0);
+            l.rev = now_ms().max(base + 1);
+            put_row(state, kinds::SHARED_LVM, &l.id, &l).await.map_err(msg)?;
+            push_to_peers(
+                state,
+                PeerList {
+                    lvm: vec![l],
+                    ..Default::default()
+                },
+            )
+            .await;
+            kick(state);
+            Ok(())
+        }
+        _ => Err(format!("unknown SAN change {kind}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
