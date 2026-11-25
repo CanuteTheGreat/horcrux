@@ -42,6 +42,7 @@ mod replication_api_tests;
 mod resource_pool_tests;
 mod sdn_tests;
 mod storage_content_tests;
+mod storage_plugin_tests;
 mod storage_volume_tests;
 mod vm_clone_tests;
 mod vm_create_form_tests;

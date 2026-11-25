@@ -1,0 +1,22 @@
+[package]
+name = "horcrux-storage-plugin-sdk"
+version = "0.1.0"
+edition = "2021"
+authors = ["Horcrux Contributors"]
+license = "GPL-3.0"
+repository = "https://github.com/CanuteTheGreat/horcrux"
+description = "Protocol types, config-schema validation and a stdio server loop for Horcrux storage plugins"
+
+# No workspace inheritance on purpose: plugins (crates/horcrux-storage-plugin-sshfs
+# is one) build this crate from their own small workspace and lock file, so a
+# distribution package fetches a handful of crates, not the whole manager's.
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = { version = "1.10", optional = true }
+
+[features]
+default = []
+# Check `pattern` constraints of string fields (the host enables it; a plugin
+# only needs it if it validates its own config again).
+pattern = ["dep:regex"]

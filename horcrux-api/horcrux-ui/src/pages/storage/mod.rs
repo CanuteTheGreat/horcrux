@@ -7,6 +7,7 @@
 //! - SMART monitoring
 
 mod disk_management;
+mod plugin_form;
 mod pool_management;
 mod smart_monitoring;
 
