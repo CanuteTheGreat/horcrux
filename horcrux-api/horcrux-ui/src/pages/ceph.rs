@@ -157,6 +157,7 @@ pub fn CephPage() -> impl IntoView {
             <div class="page-header"><h1>"Ceph"</h1></div>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="ceph-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="ceph-error">{e}</div> })}
+            <crate::pages::ceph_install::CephInstallCard/>
             {move || status.get().map(|s| {
                 if !s.reachable {
                     return view! {

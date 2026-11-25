@@ -66,10 +66,57 @@ impl KernelLine {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelLineSettings {
     #[serde(default)]
     pub line: KernelLine,
+    /// How often (minutes) the manager re-checks that the Portage pins match
+    /// the setting: an OpenZFS update that supports a newer kernel lifts the
+    /// cap at the next check. 0 = only when the setting is saved or applied.
+    #[serde(default = "default_reconcile_minutes")]
+    pub reconcile_minutes: u64,
+}
+
+pub fn default_reconcile_minutes() -> u64 {
+    60
+}
+
+impl Default for KernelLineSettings {
+    fn default() -> Self {
+        KernelLineSettings {
+            line: KernelLine::Default,
+            reconcile_minutes: default_reconcile_minutes(),
+        }
+    }
+}
+
+/// Keep the pins in step with the setting (and the ZFS module's cap): at
+/// start and every `reconcile_minutes`. Only a node that saved a setting is
+/// touched; nothing is installed here.
+pub fn spawn_reconcile() {
+    tokio::spawn(async move {
+        loop {
+            let has_setting = settings_path().is_file();
+            let s = load();
+            if has_setting && which("emerge").is_some() {
+                let st = compute(&sysroot(), s.line);
+                if !st.pins_in_sync {
+                    match save(&s) {
+                        Ok(_) => tracing::info!(
+                            "kernel line {}: Portage pins rewritten (cap {:?})",
+                            s.line.as_str(),
+                            st.cap.map(|c| c.max)
+                        ),
+                        Err(e) => tracing::warn!("kernel line: cannot write the Portage pins: {e}"),
+                    }
+                }
+            }
+            if s.reconcile_minutes == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(s.reconcile_minutes * 60)).await;
+        }
+    });
 }
 
 fn settings_path() -> std::path::PathBuf {
@@ -135,7 +182,11 @@ pub struct KernelLineStatus {
 }
 
 /// The pin files for a line: (accept_keywords, mask). `default` writes none.
-pub fn pins(line: KernelLine, arch: &str, cap: Option<&KernelCap>) -> (Option<String>, Option<String>) {
+pub fn pins(
+    line: KernelLine,
+    arch: &str,
+    cap: Option<&KernelCap>,
+) -> (Option<String>, Option<String>) {
     match line {
         KernelLine::Default => (None, None),
         KernelLine::Newest => {
@@ -267,18 +318,40 @@ async fn status() -> Json<KernelLineStatus> {
     Json(compute(&sysroot(), load().line))
 }
 
-async fn set(u: AuthExt, Json(s): Json<KernelLineSettings>) -> Result<Json<KernelLineStatus>, ApiError> {
+/// `PUT` body: every field optional; absent ones keep their saved value.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetReq {
+    #[serde(default)]
+    pub line: Option<KernelLine>,
+    #[serde(default)]
+    pub reconcile_minutes: Option<u64>,
+}
+
+async fn set(u: AuthExt, Json(r): Json<SetReq>) -> Result<Json<KernelLineStatus>, ApiError> {
     need_portage()?;
+    let mut s = load();
+    if let Some(l) = r.line {
+        s.line = l;
+    }
+    if let Some(m) = r.reconcile_minutes {
+        s.reconcile_minutes = m;
+    }
     let r = save(&s);
     tasks::record_done(
         "kernel-line",
         s.line.as_str(),
         &user_of(&u),
         &r.as_ref()
-            .map(|st| format!("kernel line: {}; selects {:?}", s.line.as_str(), match s.line {
-                KernelLine::Default => &st.default_version,
-                KernelLine::Newest => &st.newest_version,
-            }))
+            .map(|st| {
+                format!(
+                    "kernel line: {}; selects {:?}",
+                    s.line.as_str(),
+                    match s.line {
+                        KernelLine::Default => &st.default_version,
+                        KernelLine::Newest => &st.newest_version,
+                    }
+                )
+            })
             .map_err(|e| e.clone()),
     );
     r.map(Json).map_err(ApiError::Internal)
@@ -307,7 +380,14 @@ async fn apply(u: AuthExt) -> Result<Json<TaskRef>, ApiError> {
     save(&load()).map_err(ApiError::Internal)?;
     let who = user_of(&u);
     let upid = if which("horcrux-autoupdate").is_some() {
-        tasks::spawn_command("kernel-update", "kernel", &who, "horcrux-autoupdate", &["run".into()], &[])?
+        tasks::spawn_command(
+            "kernel-update",
+            "kernel",
+            &who,
+            "horcrux-autoupdate",
+            &["run".into()],
+            &[],
+        )?
     } else {
         tasks::spawn_command(
             "kernel-update",
@@ -326,6 +406,33 @@ mod tests {
     use super::super::portage_tree::tests::{ebuild, vdb};
     use super::*;
 
+    /// The installer writes the same pins at install time
+    /// (build/live-iso/common/tests/test_kernel_line.py, GOLDEN_*): change both together.
+    #[test]
+    fn pin_text_matches_the_installer() {
+        let head = "# Written by Horcrux: system.kernel_line = newest (System > Packages > Kernel line).\n\
+                    # Edit the setting, not this file: Horcrux rewrites it.\n";
+        let cap = KernelCap {
+            max: "6.18".into(),
+            by: "sys-fs/zfs-kmod-2.4.4".into(),
+        };
+        let (kw, mask) = pins(KernelLine::Newest, "amd64", Some(&cap));
+        assert_eq!(
+            kw.unwrap(),
+            format!(
+                "{head}sys-kernel/gentoo-kernel-bin ~amd64\nsys-kernel/gentoo-kernel ~amd64\nvirtual/dist-kernel ~amd64\n"
+            )
+        );
+        assert_eq!(
+            mask.unwrap(),
+            format!(
+                "{head}# sys-fs/zfs-kmod-2.4.4 builds against kernels up to 6.18: newer kernel lines wait for it.\n\
+                 >=sys-kernel/gentoo-kernel-bin-6.19\n>=sys-kernel/gentoo-kernel-6.19\n>=virtual/dist-kernel-6.19\n"
+            )
+        );
+        assert_eq!(pins(KernelLine::Default, "amd64", Some(&cap)), (None, None));
+    }
+
     fn tree() -> tempfile::TempDir {
         let t = tempfile::tempdir().unwrap();
         let a = pt::portage_arch();
@@ -335,13 +442,24 @@ mod tests {
             ("6.18.64_p1", a.to_string()),
             ("6.12.118_p1", a.to_string()),
         ] {
-            ebuild(t.path(), "gentoo", "sys-kernel/gentoo-kernel-bin", v, &format!("KEYWORDS=\"{kw}\"\n"));
+            ebuild(
+                t.path(),
+                "gentoo",
+                "sys-kernel/gentoo-kernel-bin",
+                v,
+                &format!("KEYWORDS=\"{kw}\"\n"),
+            );
         }
         vdb(t.path(), "sys-kernel/gentoo-kernel-bin", "6.18.64_p1", "");
         vdb(t.path(), ZFS_MODULE, "2.3.9", "MODULES_KERNEL_MAX=7.2\n");
-        std::fs::create_dir_all(t.path().join("lib/modules/6.18.64-p1-gentoo-dist/kernel")).unwrap();
+        std::fs::create_dir_all(t.path().join("lib/modules/6.18.64-p1-gentoo-dist/kernel"))
+            .unwrap();
         std::fs::create_dir_all(t.path().join("proc/sys/kernel")).unwrap();
-        std::fs::write(t.path().join("proc/sys/kernel/osrelease"), "6.18.64-p1-gentoo-dist\n").unwrap();
+        std::fs::write(
+            t.path().join("proc/sys/kernel/osrelease"),
+            "6.18.64-p1-gentoo-dist\n",
+        )
+        .unwrap();
         t
     }
 
@@ -371,7 +489,10 @@ mod tests {
         assert!(kw.contains("sys-kernel/gentoo-kernel-bin ~amd64\n"));
         assert!(kw.contains("virtual/dist-kernel ~amd64\n"));
         let mask = mask.unwrap();
-        assert!(mask.contains(">=sys-kernel/gentoo-kernel-bin-7.3\n"), "{mask}");
+        assert!(
+            mask.contains(">=sys-kernel/gentoo-kernel-bin-7.3\n"),
+            "{mask}"
+        );
         assert!(mask.contains(">=virtual/dist-kernel-7.3\n"));
     }
 
@@ -396,12 +517,18 @@ mod tests {
 
     #[test]
     fn saving_writes_the_pins_and_switching_back_removes_them() {
-        let _g = super::super::SYSROOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = super::super::SYSROOT_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let t = tree();
         let data = tempfile::tempdir().unwrap();
         std::env::set_var("HORCRUX_SYSROOT", t.path());
         std::env::set_var("HORCRUX_DATA_DIR", data.path());
-        let s = save(&KernelLineSettings { line: KernelLine::Newest }).unwrap();
+        let s = save(&KernelLineSettings {
+            line: KernelLine::Newest,
+            ..Default::default()
+        })
+        .unwrap();
         assert!(s.pins_in_sync);
         assert_eq!(load().line, KernelLine::Newest);
         assert!(pt::read_pin(t.path(), "package.mask", PIN_NAME).is_some());

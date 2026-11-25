@@ -662,7 +662,11 @@ mod tests {
             ("PUT", "/api/system/kernel-line"),
             ("POST", "/api/system/kernel-line/apply"),
         ] {
-            assert_eq!(priv_of(requirement(m, p)), (P::SysModify, "/nodes".into()), "{m} {p}");
+            assert_eq!(
+                priv_of(requirement(m, p)),
+                (P::SysModify, "/nodes".into()),
+                "{m} {p}"
+            );
         }
         assert_eq!(
             priv_of(requirement("GET", "/api/ceph/releases")),
@@ -677,7 +681,11 @@ mod tests {
             (P::DatastoreAllocate, "/storage".into())
         );
         for p in ["/api/system/kernel-line", "/api/system/versions"] {
-            assert_eq!(priv_of(requirement("GET", p)), (P::SysAudit, "/nodes".into()), "{p}");
+            assert_eq!(
+                priv_of(requirement("GET", p)),
+                (P::SysAudit, "/nodes".into()),
+                "{p}"
+            );
         }
     }
 
