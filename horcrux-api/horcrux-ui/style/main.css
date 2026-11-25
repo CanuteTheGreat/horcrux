@@ -1294,3 +1294,32 @@ td .actions { flex-wrap: nowrap; }
 .iommu-status .icon, .health-icon, .stat-icon { margin-right: .5rem; font-weight: 700; }
 .iommu-status.enabled .icon { color: var(--success, #2e7d32); }
 .iommu-status.disabled .icon { color: var(--danger, #c62828); }
+
+/* Resources page: the inventory tree (datacenter > node > guests) */
+.resource-tree, .resource-tree ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.resource-tree {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+}
+.resource-tree ul {
+    margin-left: 0.6rem;
+    padding-left: 1rem;
+    border-left: 1px solid var(--border);
+}
+.resource-tree .tree-node {
+    padding: 0.2rem 0;
+}
+.resource-tree .tree-label {
+    display: inline-block;
+    padding: 0.1rem 0.25rem;
+    font-size: 0.95rem;
+}
+.resource-tree .tree-tags {
+    opacity: 0.7;
+}
