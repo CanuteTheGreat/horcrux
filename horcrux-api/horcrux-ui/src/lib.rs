@@ -91,7 +91,7 @@ pub fn App() -> impl IntoView {
         <Router>
             <titles::PageTitle/>
             <div class="nav-backdrop" class:open=move || nav_open.get() on:click=move |_| set_nav_open.set(false)></div>
-            <nav class="navbar" class:nav-open=move || nav_open.get() data-features-loaded=move || features.loaded().to_string()>
+            <nav class="navbar" class:nav-open=move || nav_open.get() class:login-page=move || use_location().pathname.get() == "/login" data-features-loaded=move || features.loaded().to_string()>
                 <button class="menu-toggle" type="button" aria-label="Open menu"
                     aria-expanded=move || nav_open.get().to_string()
                     on:click=move |_| set_nav_open.update(|o| *o = !*o)>"☰"</button>

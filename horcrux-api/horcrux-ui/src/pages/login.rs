@@ -307,7 +307,7 @@ pub fn Login() -> impl IntoView {
                 <p class="hint" id="system-user-hint">
                     "Sign in with your system (Linux) user name and password."
                 </p>
-                <p class="version">"Version 0.1.0"</p>
+                <p class="version">"Version " {env!("CARGO_PKG_VERSION")}</p>
             </div>
         </div>
     }

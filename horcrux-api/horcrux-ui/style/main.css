@@ -1323,3 +1323,9 @@ td .actions { flex-wrap: nowrap; }
 .resource-tree .tree-tags {
     opacity: 0.7;
 }
+
+/* Logged-out login page: brand only, no navigation to pages that need a session. */
+.navbar.login-page .navbar-menu,
+.navbar.login-page .menu-toggle {
+    display: none;
+}

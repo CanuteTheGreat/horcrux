@@ -247,6 +247,10 @@ def main():
 
         # ---- login ---------------------------------------------------------
         page.goto(f"{BASE}/login")
+        # Logged out: brand only (no menu of pages that need a session), card version = build version.
+        expect(page.locator("nav.navbar.login-page")).to_have_count(1, timeout=30000)
+        expect(page.locator("nav.navbar .navbar-menu")).to_be_hidden()
+        expect(page.locator("p.version")).not_to_have_text("Version 0.1.0")
         page.locator("input[type=text], input:not([type])").first.fill("admin")
         page.locator("input[type=password]").fill("admin")
         page.locator("button[type=submit]").click()
