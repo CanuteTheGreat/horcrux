@@ -35,6 +35,9 @@ except ImportError:  # Python < 3.11
 
 VERSION = "1"
 SYSTEM_CONF = os.environ.get("HORCRUX_GAME_SCALE_SYSCONF", "/etc/horcrux/game-scale.toml")
+# set by the outer wrapper for the copy of itself that gamescope starts in front of the game; that copy creates the file, which
+# tells the outer one that gamescope did start the game (so a game that itself fails fast is never started a second time)
+MARKER_ENV = "HORCRUX_GAME_SCALE_MARKER"
 
 DEFAULTS = {
     # auto: wrap in gamescope when the monitor is scaled; gamescope: always wrap (on a Wayland session); off: never wrap
@@ -203,6 +206,8 @@ def decide(cmd, env=None, cfg=None, monitors=None, which=shutil.which, gpus=None
     direct = lambda reason: (False, list(cmd), reason, info)  # noqa: E731
     if not cmd:
         return False, [], "no command given", info
+    if env.get(MARKER_ENV):
+        return direct("started by horcrux-game-scale inside gamescope")
     if env.get("HORCRUX_GAME_SCALE", "").lower() in ("0", "off", "no", "false"):
         return direct("HORCRUX_GAME_SCALE=0 in the environment")
     mode = cfg["mode"]
@@ -298,23 +303,48 @@ def main(argv):
         print("usage: horcrux-game-scale GAME [ARGS...]   (Steam: horcrux-game-scale %command%)", file=sys.stderr)
         return 2
     if not wrap:
+        marker = os.environ.pop(MARKER_ENV, None)
+        if marker:
+            try:
+                with open(marker, "w") as f:
+                    f.write(f"{os.getpid()}\n")
+            except OSError:
+                pass
         os.execvp(run[0], run)
     # gamescope runs as a child so that a gamescope that cannot start on this GPU/compositor never leaves the user without the
     # game: a non-zero exit within fallback_seconds runs the game directly (logged).
+    # The game is started inside gamescope through a second copy of this wrapper, which only marks that gamescope got as far as
+    # starting it: a fast non-zero exit WITH the mark is the game's own exit code (crash on start, a launcher that hands off),
+    # never a reason to start the game a second time.
     import signal
     import subprocess
+    import tempfile
+    sep = run.index("--")
+    run = run[:sep + 1] + [sys.executable, os.path.realpath(__file__)] + run[sep + 1:]
+    fd, marker = tempfile.mkstemp(prefix="horcrux-game-scale-", dir=os.environ.get("XDG_RUNTIME_DIR") or None)
+    os.close(fd)
+    os.unlink(marker)
+    child_env = dict(os.environ, **{MARKER_ENV: marker})
     t0 = time.monotonic()
     try:
-        p = subprocess.Popen(run)
+        p = subprocess.Popen(run, env=child_env)
     except OSError as e:
         log(cfg, f"gamescope could not be started ({e}); running the game directly")
         os.execvp(args[0], args)
     for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(s, lambda n, _f: p.send_signal(n))
     rc = p.wait()
-    if rc != 0 and time.monotonic() - t0 < float(cfg["fallback_seconds"]):
-        log(cfg, f"gamescope exited {rc} after {time.monotonic() - t0:.1f} s; running the game directly")
+    started = os.path.exists(marker)
+    try:
+        os.unlink(marker)
+    except OSError:
+        pass
+    dt = time.monotonic() - t0
+    if rc != 0 and not started and dt < float(cfg["fallback_seconds"]):
+        log(cfg, f"gamescope exited {rc} after {dt:.1f} s before starting the game; running the game directly")
         os.execvp(args[0], args)
+    if rc != 0:
+        log(cfg, f"exit {rc} after {dt:.1f} s (game {'started' if started else 'not started'} inside gamescope)")
     return rc if rc >= 0 else 128 - rc
 
 

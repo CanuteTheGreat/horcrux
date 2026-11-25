@@ -186,6 +186,46 @@ class Decide(unittest.TestCase):
             self.assertIn("wrap=yes", log)
             self.assertIn("running the game directly", log)
 
+    def run_wrapped(self, d, gamescope_body, game):
+        fake = os.path.join(d, "gamescope")
+        with open(fake, "w") as f:
+            f.write("#!/bin/sh\n" + gamescope_body)
+        os.chmod(fake, 0o755)
+        conf = os.path.join(d, "c.toml")
+        with open(conf, "w") as f:
+            f.write(f'[wrapper]\nmode = "gamescope"\ngamescope = "{fake}"\n')
+        code = ("import importlib.machinery,importlib.util,sys\n"
+                f"l=importlib.machinery.SourceFileLoader('g',{os.path.join(FILES, 'horcrux-game-scale')!r})\n"
+                "s=importlib.util.spec_from_loader('g',l);m=importlib.util.module_from_spec(s);l.exec_module(m)\n"
+                f"m.mutter_monitors=lambda:[{MON!r}]\n"
+                "sys.exit(m.main(['horcrux-game-scale']+sys.argv[1:]))\n")
+        env = dict(os.environ, HORCRUX_GAME_SCALE_SYSCONF=conf, WAYLAND_DISPLAY="wayland-0", XDG_SESSION_TYPE="wayland",
+                   XDG_STATE_HOME=d, XDG_RUNTIME_DIR=d)
+        for k in ("GAMESCOPE_WAYLAND_DISPLAY", "HORCRUX_GAME_SCALE_MARKER", "HORCRUX_GAME_SCALE"):
+            env.pop(k, None)
+        return subprocess.run([sys.executable, "-c", code] + game, env=env, capture_output=True, text=True)
+
+    def test_game_failing_fast_inside_gamescope_is_not_started_twice(self):
+        with tempfile.TemporaryDirectory() as d:
+            runs = os.path.join(d, "runs")
+            # a gamescope that works: runs what follows "--" (the wrapper's inner copy, then the game)
+            body = 'while [ "$1" != "--" ]; do shift; done\nshift\n"$@"\n'
+            r = self.run_wrapped(d, body, ["sh", "-c", f"echo x >> {runs}; exit 3"])
+            self.assertEqual(r.returncode, 3, r.stderr)
+            self.assertEqual(slo.read(runs), "x\n")                       # started exactly once
+            log = slo.read(os.path.join(d, "horcrux", "game-scale.log"))
+            self.assertIn("started by horcrux-game-scale inside gamescope", log)
+            self.assertNotIn("running the game directly", log)
+            self.assertEqual([p for p in os.listdir(d) if p.startswith("horcrux-game-scale-")], [])  # marker removed
+
+    def test_gamescope_failure_before_the_game_falls_back_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            runs = os.path.join(d, "runs")
+            r = self.run_wrapped(d, "exit 1\n", ["sh", "-c", f"echo x >> {runs}; exit 0"])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(slo.read(runs), "x\n")
+            self.assertIn("before starting the game; running the game directly", slo.read(os.path.join(d, "horcrux", "game-scale.log")))
+
 
 LOCALCONFIG = '''"UserLocalConfigStore"
 {
@@ -277,7 +317,7 @@ class LaunchOptions(unittest.TestCase):
         # other sections survive, escapes included
         tree = slo.vdf_loads(slo.read(self.lc))
         fr = slo.child(slo.child(tree, "UserLocalConfigStore"), "friends")
-        self.assertEqual(fr, [['name "quoted"', "a\\b"]])
+        self.assertEqual(slo.get(fr, 'name "quoted"'), "a\\b")
         self.assertEqual(slo.edit(self.cfg, "apply", out=msgs.append), 0)  # idempotent
         self.assertTrue([p for p in os.listdir(os.path.dirname(self.lc)) if p.endswith(".bak")])
         self.assertEqual(slo.edit(self.cfg, "remove", out=msgs.append), 3)
@@ -285,6 +325,24 @@ class LaunchOptions(unittest.TestCase):
         self.assertEqual(o["550"], "-novid")
         self.assertEqual(o["782330"], "PROTON_LOG=1 %command% +com_skipIntroVideo 1")
         self.assertEqual(o["9000"], "")
+
+    def test_untouched_strings_are_written_back_byte_for_byte(self):
+        """Values with escapes Steam's parser keeps literally (single backslashes in Windows paths, \\x) and quoted text must
+        survive an apply unchanged; remove restores a launch option containing an escaped quote exactly."""
+        text = slo.read(self.lc)
+        text = text.replace('"-novid"', '"-novid +exec \\"my cfg\\""')
+        text = text.replace('\t\t"name \\"quoted\\""\t\t"a\\\\b"\n',
+                            '\t\t"name \\"quoted\\""\t\t"a\\\\b"\n\t\t"path"\t\t"C:\\Games\\x"\n\t\t"dbl"\t\t"C:\\\\Games\\\\x"\n')
+        self.assertIn('"C:\\Games\\x"', text)
+        with open(self.lc, "w") as f:
+            f.write(text)
+        friends_before = text[text.index('\t"friends"'):]
+        self.assertEqual(slo.edit(self.cfg, "apply", out=lambda m: None), 3)
+        after = slo.read(self.lc)
+        self.assertEqual(after[after.index('\t"friends"'):], friends_before)
+        self.assertEqual(self.opts()["550"], 'horcrux-game-scale %command% -novid +exec "my cfg"')
+        self.assertEqual(slo.edit(self.cfg, "remove", out=lambda m: None), 3)
+        self.assertIn('"LaunchOptions"\t\t"-novid +exec \\"my cfg\\""', slo.read(self.lc))
 
     def test_not_while_steam_runs_and_excludes(self):
         slo.steam_running = lambda roots: True

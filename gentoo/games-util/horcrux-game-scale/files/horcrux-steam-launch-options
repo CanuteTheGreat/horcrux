@@ -87,7 +87,8 @@ def read(path, errors="strict"):
 
 
 def vdf_loads(text):
-    """Parse to nested lists of [key, value] pairs (value = str or list), order and duplicates preserved."""
+    """Parse to nested lists of [key, value] pairs (value = str or list), order and duplicates preserved. Strings stay in their
+    escaped on-disk form; get()/put() convert, so a value this tool never changes is written back exactly as Steam wrote it."""
     toks = []
     pos = 0
     while pos < len(text):
@@ -96,7 +97,7 @@ def vdf_loads(text):
             raise VdfError(f"unexpected character at offset {pos}")
         pos = m.end()
         if m.group(1) is not None:
-            toks.append(("s", _unescape(m.group(1))))
+            toks.append(("s", m.group(1)))  # kept as written (escaped): untouched strings go back byte for byte
         elif m.group(2):
             toks.append((m.group(2), None))
         elif m.group(3):
@@ -139,36 +140,49 @@ def vdf_dumps(items, depth=0):
     ind = "\t" * depth
     for k, v in items:
         if isinstance(v, list):
-            out.append(f'{ind}"{_escape(k)}"\n{ind}{{\n{vdf_dumps(v, depth + 1)}{ind}}}\n')
+            out.append(f'{ind}"{k}"\n{ind}{{\n{vdf_dumps(v, depth + 1)}{ind}}}\n')
         else:
-            out.append(f'{ind}"{_escape(k)}"\t\t"{_escape(v)}"\n')
+            out.append(f'{ind}"{k}"\t\t"{v}"\n')
     return "".join(out)
+
+
+def _key(k):
+    return _unescape(k).lower()
 
 
 def child(items, key, create=False):
     for kv in items:
-        if kv[0].lower() == key.lower() and isinstance(kv[1], list):
+        if _key(kv[0]) == key.lower() and isinstance(kv[1], list):
             return kv[1]
     if create:
         new = []
-        items.append([key, new])
+        items.append([_escape(key), new])
         return new
     return None
 
 
-def get(items, key):
+def get_raw(items, key):
     for kv in items:
-        if kv[0].lower() == key.lower() and isinstance(kv[1], str):
+        if _key(kv[0]) == key.lower() and isinstance(kv[1], str):
             return kv[1]
     return None
 
 
-def put(items, key, value):
+def get(items, key):
+    raw = get_raw(items, key)
+    return None if raw is None else _unescape(raw)
+
+
+def put_raw(items, key, raw):
     for kv in items:
-        if kv[0].lower() == key.lower() and isinstance(kv[1], str):
-            kv[1] = value
+        if _key(kv[0]) == key.lower() and isinstance(kv[1], str):
+            kv[1] = raw
             return
-    items.append([key, value])
+    items.append([_escape(key), raw])
+
+
+def put(items, key, value):
+    put_raw(items, key, _escape(value))
 
 
 # ------------------------------------------------------------------ Steam layout
@@ -311,15 +325,16 @@ def edit(cfg, mode, force=False, out=print):
                 out(f"{lc}: cannot parse ({e}); left untouched")
                 continue
             apps = apps_section(tree)
-            known = {kv[0] for kv in apps if isinstance(kv[1], list)}
+            known = {_unescape(kv[0]) for kv in apps if isinstance(kv[1], list)}
             mine = st.setdefault(lc, {})
             n = 0
             if mode == "remove":
                 for kv in apps:
-                    if kv[0] in mine and isinstance(kv[1], list):
+                    if _unescape(kv[0]) in mine and isinstance(kv[1], list):
                         cur = get(kv[1], "LaunchOptions") or ""
                         if wrapped(cur, cfg["wrapper"]):
-                            put(kv[1], "LaunchOptions", mine[kv[0]])
+                            # the state holds the option exactly as it was on disk (escaped form)
+                            put_raw(kv[1], "LaunchOptions", mine[_unescape(kv[0])])
                             n += 1
                 mine.clear()
             else:
@@ -341,7 +356,7 @@ def edit(cfg, mode, force=False, out=print):
                     if new is None:
                         continue
                     if appid not in mine:
-                        mine[appid] = cur or ""
+                        mine[appid] = get_raw(app, "LaunchOptions") or ""
                     put(app, "LaunchOptions", new)
                     n += 1
             if n and mode != "status":
