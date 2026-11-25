@@ -76,7 +76,8 @@ def define(args):
         for src, name in ((binary, "horcrux-api"), (cirros, "cirros.img"), (os.path.join(repo, "horcrux-api/tests/hx_node.py"), "hx_node.py"),
                           (os.path.join(repo, "deploy/openrc/horcrux-guests"), "horcrux-guests.initd"),
                           (os.path.join(repo, "deploy/systemd/horcrux-guests.service"), "horcrux-guests.service"),
-                          (os.path.join(repo, "gentoo/app-emulation/horcrux-bin/files/horcrux-api.service"), "horcrux-api.service")):
+                          (os.path.join(repo, "gentoo/app-emulation/horcrux-bin/files/horcrux-api.service"), "horcrux-api.service"),
+                          (os.path.join(repo, "gentoo/sys-apps/horcrux-autoupdate/files/horcrux-autoupdate"), "horcrux-autoupdate")):
             try:
                 os.link(src, os.path.join(d, name))
             except OSError:
@@ -89,7 +90,7 @@ def define(args):
             n.succeed("mkdir -p /var/lib/horcrux/images")
             for f, dst, mode in (("horcrux-api", "/tmp/horcrux-api.new", "755"), ("cirros.img", "/var/lib/horcrux/images/cirros.img", "644"), ("hx_node.py", "/root/hx_node.py", "755"),
                                  ("horcrux-guests.initd", "/tmp/horcrux-guests.initd", "755"), ("horcrux-guests.service", "/tmp/horcrux-guests.service", "644"),
-                                 ("horcrux-api.service", "/tmp/horcrux-api.service", "644")):
+                                 ("horcrux-api.service", "/tmp/horcrux-api.service", "644"), ("horcrux-autoupdate", "/root/horcrux-autoupdate", "755")):
                 n.succeed(f"curl -sf --retry 3 {base}/{f} -o {dst} && chmod {mode} {dst}", timeout=600)
         finally:
             srv.terminate()
@@ -175,6 +176,35 @@ def define(args):
             m.check(f"manual-save-409-{where}", good, f"{r['status']} {json.dumps(r['body'])[:300]}" + ("" if good else "\n" + n.unit_log("horcrux-api", 60)[-3000:]))
         hx("PUT", "/nodes/guest-power", {**node, "save_dir": None})
         m.check("vm-kept-running-after-refusals", hx("GET", "/vms/vmA")["body"]["status"] == "running", "")
+
+        m.phase("an update replaced the manager's program: horcrux-autoupdate restarts it, the VM keeps running")
+        qemu_pid = lambda: n.succeed("pgrep -f '[q]emu-system.*vmA' | head -1").strip()
+        api_pid = lambda: n.succeed("for p in $(pgrep -x horcrux-api); do tr '\\0' ' ' < /proc/$p/cmdline | grep -qE '^/usr/bin/horcrux-api *$' && echo $p; done | head -1").strip()
+        au = "/root/horcrux-autoupdate restart-services"
+        q0, a0 = qemu_pid(), api_pid()
+        r = n.succeed(f"{au}; echo rc=$?", timeout=300)
+        # (the fence agent still runs the image's program, replaced above: it may be restarted here; the manager is current)
+        m.check("au-current-manager-left-alone", "restarted horcrux-api" not in r and "rc=0" in r and api_pid() == a0, r.strip()[-200:])
+        # what a package merge does: a new file replaces the program, the running manager keeps the old (deleted) inode
+        n.succeed("cp -p /usr/bin/horcrux-api /usr/bin/.horcrux-api.new && mv -f /usr/bin/.horcrux-api.new /usr/bin/horcrux-api")
+        m.check("au-running-manager-runs-a-replaced-file", "(deleted)" in n.succeed(f"readlink /proc/{a0}/exe"), a0)
+        port = n.succeed("for p in 8006 443; do (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null && { echo $p; break; }; done").strip()
+        n.succeed(f"nohup python3 -c 'import socket,time; s=socket.create_connection((\"127.0.0.1\", {port})); time.sleep(600)' >/dev/null 2>&1 & echo $! > /root/holder.pid")
+        time.sleep(2)
+        r = n.succeed(f"{au}; echo rc=$?", timeout=300)
+        m.check("au-waits-while-a-client-is-connected", "waiting: " in r and "client connection" in r and api_pid() == a0, r.strip()[-300:])
+        n.succeed("kill $(cat /root/holder.pid) || true")
+        time.sleep(2)
+        r = n.succeed(f"{au}; echo rc=$?", timeout=300)
+        a1 = api_pid()
+        m.check("au-restarted-the-replaced-manager", "restarted horcrux-api" in r and "rc=0" in r and a1 and a1 != a0, r.strip()[-300:])
+        m.check("au-new-manager-runs-the-new-file", "(deleted)" not in n.succeed(f"readlink /proc/{a1}/exe"), a1)
+        n.wait_until(lambda: n.http("web", "/api/health")[0] == 200, 180, 3, "api health after the restart")
+        m.check("au-vm-qemu-process-kept", qemu_pid() == q0, f"{q0} -> {qemu_pid()}")
+        m.check("au-vm-still-running", hx("GET", "/vms/vmA")["body"]["status"] == "running", "")
+        m.check("au-guest-counter-process-alive", serial(cfgA, f"test -d /proc/{pid} && echo alive").split()[-1] == "alive", pid)
+        m.check("au-guests-service-not-stopped", n.unit_active("horcrux-guests"), "")
+        m.check("au-no-saved-state-written", n.succeed("ls /var/lib/horcrux/saved-state/data 2>/dev/null | wc -l").strip() == "0", "")
 
         m.phase("HOST REBOOT (the init system's own reboot): vmA saved, vmP shut down")
         n.execute("sync", timeout=30)

@@ -52,6 +52,8 @@ class Base(unittest.TestCase):
         m.LOCK, m.EMERGE_LOG = os.path.join(d, "lock"), os.path.join(d, "emerge.log")
         m.PRESERVED, m.RUN_REBOOT_FLAG, m.CONF = os.path.join(d, "preserved"), os.path.join(d, "reboot-flag"), os.path.join(d, "conf")
         m.root_zfs = lambda: None  # no ZFS root unless a test says so
+        m.PROC, m.CGROUP, m.RC_CONF = os.path.join(d, "proc"), os.path.join(d, "cgroup"), os.path.join(d, "rc.conf")
+        m.init_system = lambda: "openrc"
         m.sh = self.fake_sh  # logger etc. also go through it
         self.calls = []
         self.rc = {}
@@ -443,6 +445,168 @@ class Check(Base):
     def test_status_json_roundtrip(self):
         self.m.write_status({"result": "ok", "pending": 3})
         self.assertEqual(json.load(open(os.path.join(self.m.STATE_DIR, "status.json")))["pending"], 3)
+
+
+class RestartServices(Base):
+    """the manager keeps running the old program after an upgrade until it is restarted; restarting it must never end a guest"""
+    API = "/usr/bin/horcrux-api"
+
+    def setUp(self):
+        super().setUp()
+        self.m.SLEEP = lambda s: None
+        self.m.other_emerge_running = lambda: False
+        self.next_pid = 5000
+        self.on_restart = None
+
+    def proc(self, pid, exe, cmdline=(), sockets=(), tcp="", unix="", cg=None):
+        d = os.path.join(self.m.PROC, str(pid))
+        os.makedirs(os.path.join(d, "fd"), exist_ok=True)
+        os.makedirs(os.path.join(d, "net"), exist_ok=True)
+        os.symlink(exe, os.path.join(d, "exe"))
+        with open(os.path.join(d, "cmdline"), "wb") as f:
+            f.write(b"\0".join(x.encode() for x in (cmdline or [exe.split(" ")[0]])) + b"\0")
+        for i, ino in enumerate(sockets):
+            os.symlink(f"socket:[{ino}]", os.path.join(d, "fd", str(10 + i)))
+        hdr = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+        for name, body in (("tcp", tcp), ("tcp6", "")):
+            with open(os.path.join(d, "net", name), "w") as f:
+                f.write(hdr + body)
+        with open(os.path.join(d, "net", "unix"), "w") as f:
+            f.write("Num       RefCount Protocol Flags    Type St Inode Path\n" + unix)
+        if cg:
+            self.cg_add(cg, pid)
+
+    def cg_add(self, svc, pid):
+        p = os.path.join(self.m.CGROUP, f"openrc.{svc}")
+        os.makedirs(p, exist_ok=True)
+        with open(os.path.join(p, "cgroup.procs"), "a") as f:
+            f.write(f"{pid}\n")
+
+    def kill(self, pid):
+        import shutil
+        shutil.rmtree(os.path.join(self.m.PROC, str(pid)))
+        p = os.path.join(self.m.CGROUP, "openrc.horcrux-api", "cgroup.procs")
+        pids = [x for x in open(p).read().split() if x != str(pid)]
+        with open(p, "w") as f:
+            f.write("".join(x + "\n" for x in pids))
+
+    def fake_sh(self, argv, log=None, timeout=None, env=None, full=False):
+        r = super().fake_sh(argv, log, timeout, env, full)
+        if argv[-1:] == ["restart"] and self.on_restart:
+            self.on_restart(argv)
+        return r
+
+    def stale_manager_with_a_guest(self, **kw):
+        self.proc(100, self.API + " (deleted)", cg="horcrux-api", **kw)
+        self.proc(200, "/usr/bin/qemu-system-x86_64", cg="horcrux-api")
+
+        def restarted(argv):
+            self.kill(100)
+            self.proc(101, self.API, cg="horcrux-api")
+        self.on_restart = restarted
+
+    def restarts(self):
+        return [c for c in self.calls if c[-1:] == ["restart"]]
+
+    def test_replaced_manager_restarted_without_deps_guest_kept(self):
+        self.stale_manager_with_a_guest()
+        summary, pending = self.m.restart_replaced(self.conf())
+        self.assertEqual(self.restarts(), [["/etc/init.d/horcrux-api", "--nodeps", "restart"]])
+        self.assertEqual(summary, "restarted horcrux-api (guests kept 1/1)")
+        self.assertIsNone(pending)
+        self.assertTrue(os.path.exists(os.path.join(self.m.PROC, "200")))
+
+    def test_systemd_restart_argv(self):
+        self.assertEqual(self.m.restart_argv("horcrux-api", "systemd"), ["systemctl", "restart", "horcrux-api.service"])
+
+    def test_nothing_replaced_nothing_restarted(self):
+        self.proc(100, self.API, cg="horcrux-api")
+        self.proc(200, "/usr/bin/qemu-system-x86_64 (deleted)", cg="horcrux-api")  # a replaced QEMU is the guest's, never a restart reason
+        self.assertEqual(self.m.restart_replaced(self.conf()), ("nothing to restart", None))
+        self.assertEqual(self.calls, [])
+
+    def test_open_web_connection_defers_and_now_overrides(self):
+        # listening on :443 (0x01BB) and one accepted client on it; an outbound connection (to a peer) does not count
+        tcp = ("   0: 00000000:01BB 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 11 1 0000000000000000 100 0 0 10 0\n"
+               "   1: 0100007F:01BB 0100007F:D431 01 00000000:00000000 00:00000000 00000000     0        0 12 1 0000000000000000 100 0 0 10 0\n"
+               "   2: 0A000002:9C40 0A000009:01BB 01 00000000:00000000 00:00000000 00000000     0        0 13 1 0000000000000000 100 0 0 10 0\n")
+        self.stale_manager_with_a_guest(sockets=(11, 12, 13), tcp=tcp)
+        summary, pending = self.m.restart_replaced(self.conf())
+        self.assertEqual(self.restarts(), [])
+        self.assertIn("1 open client connection", pending)
+        self.assertTrue(summary.startswith("waiting: horcrux-api"))
+        self.m.record_restart(summary, pending)
+        since, why = self.m.restart_pending()
+        self.assertEqual(why, pending)
+        t = int(time.time())
+        code, text = self.m.check_result(self.conf(), {"result": "ok", "last_success": t, "pending": 0})
+        self.assertEqual(code, 0)
+        self.assertIn("service restart waiting", text)
+        with open(self.m.state_path("restart-pending"), "w") as f:
+            f.write(f"{t - 5 * 86400} {pending}\n")
+        self.assertEqual(self.m.check_result(self.conf(), {"result": "ok", "last_success": t, "pending": 0})[0], 1)  # waiting for days: warning
+        summary, pending = self.m.restart_replaced(self.conf(), force=True)
+        self.assertEqual(len(self.restarts()), 1)
+        self.assertIsNone(pending)
+        self.m.record_restart(summary, pending)
+        self.assertEqual(self.m.restart_pending(), (None, None))
+
+    def test_local_viewer_on_a_unix_socket_defers(self):
+        unix = ("0000000000000000: 00000002 00000000 00010000 0001 01 21 /var/lib/horcrux/console.sock\n"
+                "0000000000000000: 00000003 00000000 00000000 0001 03 22 /var/lib/horcrux/console.sock\n"
+                "0000000000000000: 00000003 00000000 00000000 0001 03 23\n")  # the manager's own QMP client socket: unnamed
+        self.stale_manager_with_a_guest(sockets=(21, 22, 23), unix=unix)
+        self.assertIn("1 open client connection", self.m.restart_replaced(self.conf())[1])
+        self.assertEqual(self.restarts(), [])
+
+    def test_guest_power_pass_defers(self):
+        self.stale_manager_with_a_guest()
+        self.proc(300, self.API, cmdline=(self.API, "guests", "boot"))
+        self.assertEqual(self.m.restart_replaced(self.conf())[1], "a guest power pass is running")
+        self.assertEqual(self.restarts(), [])
+
+    def test_refuses_when_a_restart_would_end_the_guests(self):
+        self.stale_manager_with_a_guest()
+        with open(self.m.RC_CONF, "w") as f:
+            f.write('rc_cgroup_cleanup="YES"\n')
+        summary, pending = self.m.restart_replaced(self.conf())
+        self.assertEqual(self.restarts(), [])
+        self.assertIn("rc_cgroup_cleanup", pending)
+        self.m.init_system = lambda: "systemd"
+        self.out["KillMode"] = "control-group"
+        summary, pending = self.m.restart_replaced(self.conf())
+        self.assertEqual(self.restarts(), [])
+        self.assertIn("KillMode=control-group", pending)
+
+    def test_disabled(self):
+        self.stale_manager_with_a_guest()
+        self.assertEqual(self.m.restart_replaced(self.conf(RESTART_SERVICES_ENABLED="no")), ("disabled", None))
+        self.assertEqual(self.restarts(), [])
+
+    def test_restart_that_does_not_come_back_is_a_failure(self):
+        self.stale_manager_with_a_guest()
+        self.on_restart = lambda argv: None  # the old process never goes away
+        summary, pending = self.m.restart_replaced(self.conf(), wait=0)
+        self.assertTrue(pending.startswith("restart failed"))
+
+    def test_update_run_restarts_the_manager_it_replaced(self):
+        self.stale_manager_with_a_guest()
+        st = self.m.do_run(self.conf(SYNC="no"), runner=self.fake_sh)
+        self.assertEqual(st["result"], "ok")
+        self.assertEqual(st["steps"]["restart"], "restarted horcrux-api (guests kept 1/1)")
+
+    def test_hourly_trigger_between_updates_restarts_and_stays_silent(self):
+        import contextlib
+        import io
+        self.m.write_status({"result": "ok", "started": int(time.time()) - 60, "last_success": int(time.time())})
+        self.stale_manager_with_a_guest()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(self.m.cmd_run(None, True), 0)
+        self.assertEqual(buf.getvalue(), "")  # cron mails whatever a job prints
+        self.assertEqual(len(self.restarts()), 1)
+        self.assertEqual(self.m.read_status()["restart"]["result"], "restarted horcrux-api (guests kept 1/1)")
+        self.assertFalse([c for c in self.calls if c[:1] == ["emerge"]])
 
 
 if __name__ == "__main__":
