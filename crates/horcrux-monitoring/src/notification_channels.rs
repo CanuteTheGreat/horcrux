@@ -12,6 +12,7 @@
 use crate::alerts::{Alert, AlertSeverity};
 use crate::db::Database;
 use chrono::{DateTime, Utc};
+use horcrux_common::notify::{Event, EventKind, Matcher, Severity};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::HashMap;
@@ -373,7 +374,7 @@ fn pd_severity(s: &str) -> Result<&'static str, String> {
         "critical" => Ok("critical"),
         "error" => Ok("error"),
         "warning" => Ok("warning"),
-        "info" => Ok("info"),
+        "info" | "notice" => Ok("info"),
         other => Err(format!(
             "PagerDuty severity must be critical, error, warning or info (got '{}')",
             other
@@ -402,6 +403,32 @@ pub struct NotificationChannel {
     pub failure_count: u32,
 }
 
+/// The routing event of a fired or resolved alert.
+pub fn event_from_alert(alert: &Alert) -> Event {
+    let severity = match alert.severity {
+        AlertSeverity::Info => Severity::Info,
+        AlertSeverity::Warning => Severity::Warning,
+        AlertSeverity::Critical => Severity::Critical,
+    };
+    let mut ev = Event::new(
+        EventKind::Alert,
+        severity,
+        format!(
+            "[{}] {} - {}",
+            severity.as_str().to_uppercase(),
+            alert.rule_name,
+            alert.target
+        ),
+    )
+    .subtype(format!("{:?}", alert.status).to_lowercase())
+    .body(alert.message.clone())
+    .field("target", alert.target.clone())
+    .field("rule_name", alert.rule_name.clone())
+    .field("value", alert.metric_value.to_string());
+    ev.rule_id = Some(alert.rule_id.clone());
+    ev
+}
+
 /// What is being delivered.
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -411,6 +438,8 @@ pub struct Message {
     pub severity: String,
     pub event: String,
     pub alert: Option<Alert>,
+    /// The routed event (every kind, not only alerts).
+    pub details: Option<Event>,
 }
 
 impl Message {
@@ -429,6 +458,7 @@ impl Message {
             severity: "info".into(),
             event: "test".into(),
             alert: None,
+            details: None,
         }
     }
 
@@ -452,6 +482,27 @@ impl Message {
             severity: severity.into(),
             event: "alert".into(),
             alert: Some(alert.clone()),
+            details: Some(event_from_alert(alert)),
+        }
+    }
+
+    /// A message for any routed event.
+    pub fn from_event(ev: &Event) -> Self {
+        Self {
+            title: if ev.title.is_empty() {
+                format!(
+                    "[{}] {}",
+                    ev.severity.as_str().to_uppercase(),
+                    ev.kind.as_str()
+                )
+            } else {
+                ev.title.clone()
+            },
+            body: ev.body.clone(),
+            severity: ev.severity.as_str().into(),
+            event: ev.kind.as_str().into(),
+            alert: None,
+            details: Some(ev.clone()),
         }
     }
 }
@@ -476,7 +527,9 @@ impl From<StoreError> for crate::error::ApiError {
 /// Persistent channel registry.
 pub struct NotificationChannelStore {
     db: Arc<Database>,
-    channels: RwLock<Vec<NotificationChannel>>,
+    pub(crate) channels: RwLock<Vec<NotificationChannel>>,
+    /// Routing rules, see `notification_matchers`.
+    pub(crate) matchers: RwLock<Vec<Matcher>>,
     http: reqwest::Client,
 }
 
@@ -524,9 +577,11 @@ impl NotificationChannelStore {
                 failure_count: r.get::<i64, _>("failure_count") as u32,
             });
         }
+        let matchers = Self::load_matchers(&db).await?;
         Ok(Self {
             db,
             channels: RwLock::new(channels),
+            matchers: RwLock::new(matchers),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(20))
                 .build()
@@ -658,7 +713,13 @@ impl NotificationChannelStore {
             .execute(self.db.pool())
             .await
             .map_err(db_err)?;
+        drop(channels);
+        self.forget_target(id).await;
         Ok(())
+    }
+
+    pub(crate) fn pool(&self) -> &sqlx::SqlitePool {
+        self.db.pool()
     }
 
     async fn record(&self, id: &str, ok: bool) {
@@ -698,10 +759,45 @@ impl NotificationChannelStore {
         Ok(result)
     }
 
-    /// Deliver a fired alert to every enabled channel. Returns
-    /// (delivered, failed) channel counts.
+    /// Route a message through the matchers (its `details` event, or one
+    /// derived from the message) and deliver it to the chosen channels.
+    /// Returns (delivered, failed) channel counts.
     pub async fn dispatch(&self, msg: &Message) -> (usize, usize) {
-        let channels: Vec<NotificationChannel> = self
+        let ev = msg.details.clone().unwrap_or_else(|| Event {
+            kind: if msg.event == "alert" {
+                EventKind::Alert
+            } else {
+                EventKind::Test
+            },
+            subtype: String::new(),
+            severity: match msg.severity.as_str() {
+                "critical" => Severity::Critical,
+                "error" => Severity::Error,
+                "warning" => Severity::Warning,
+                "notice" => Severity::Notice,
+                _ => Severity::Info,
+            },
+            title: msg.title.clone(),
+            body: msg.body.clone(),
+            node: None,
+            guest_id: None,
+            guest_tags: Vec::new(),
+            rule_id: None,
+            fields: Default::default(),
+            timestamp: Utc::now(),
+        });
+        let channels = self.targets_for(&ev).await;
+        self.send_to(&channels, msg).await
+    }
+
+    /// Route any event (alert or not) and deliver it.
+    pub async fn dispatch_event(&self, ev: &Event) -> (usize, usize) {
+        self.dispatch(&Message::from_event(ev)).await
+    }
+
+    /// The enabled channels the matchers pick for `ev`.
+    pub async fn targets_for(&self, ev: &Event) -> Vec<NotificationChannel> {
+        let enabled: Vec<NotificationChannel> = self
             .channels
             .read()
             .await
@@ -709,9 +805,19 @@ impl NotificationChannelStore {
             .filter(|c| c.enabled)
             .cloned()
             .collect();
+        let ids: Vec<String> = enabled.iter().map(|c| c.id.clone()).collect();
+        let matchers = self.matchers.read().await;
+        let (targets, _) = crate::notification_matchers::route(&matchers, ev, &ids);
+        targets
+            .iter()
+            .filter_map(|t| enabled.iter().find(|c| &c.id == t).cloned())
+            .collect()
+    }
+
+    async fn send_to(&self, channels: &[NotificationChannel], msg: &Message) -> (usize, usize) {
         let (mut delivered, mut failed) = (0, 0);
         for c in channels {
-            let result = deliver(&self.http, &c, msg).await;
+            let result = deliver(&self.http, c, msg).await;
             if let Err(e) = &result {
                 tracing::warn!("notification via '{}' ({}) failed: {}", c.name, c.id, e);
                 failed += 1;
@@ -801,7 +907,7 @@ pub async fn deliver(
                 "@type": "MessageCard",
                 "@context": "https://schema.org/extensions",
                 "summary": msg.title,
-                "themeColor": match msg.severity.as_str() { "critical" => "D13438", "warning" => "FFB900", _ => "0078D4" },
+                "themeColor": match msg.severity.as_str() { "critical" | "error" => "D13438", "warning" => "FFB900", _ => "0078D4" },
                 "title": msg.title,
                 "text": msg.body.replace('\n', "<br>"),
             });
@@ -837,8 +943,8 @@ pub async fn deliver(
             };
             // Alert severity wins; the channel's severity applies to tests.
             let sev = match msg.event.as_str() {
-                "alert" => pd_severity(&msg.severity).unwrap_or("error"),
-                _ => pd_severity(severity).unwrap_or("info"),
+                "test" => pd_severity(severity).unwrap_or("info"),
+                _ => pd_severity(&msg.severity).unwrap_or("error"),
             };
             let source = hostname::get()
                 .map(|h| h.to_string_lossy().to_string())
@@ -873,6 +979,7 @@ pub async fn deliver(
                 "channel": channel.name,
                 "timestamp": Utc::now().to_rfc3339(),
                 "alert": msg.alert,
+                "details": msg.details,
             });
             let url = url.trim();
             let mut req = match method.to_uppercase().as_str() {

@@ -25,6 +25,7 @@ pub mod metrics;
 pub mod metrics_explorer;
 pub mod monitoring;
 pub mod notification_channels;
+pub mod notification_matchers;
 pub mod observability;
 pub mod prometheus;
 pub mod webhooks;

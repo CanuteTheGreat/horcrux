@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod console;
 pub mod lxc;
+pub mod notify;
 pub mod remote_play;
 
 pub use lxc::{

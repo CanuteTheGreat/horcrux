@@ -299,6 +299,38 @@ async fn audit(
             )
             .await;
     }
+    // Security events for the notification router (opt-in: the default
+    // matcher only routes alerts, backups and tests).
+    {
+        use horcrux_common::notify::{emit, Event, EventKind, Severity};
+        let sec = match &kind {
+            AuditEventType::LoginFailed => Some(("login_failed", Severity::Warning)),
+            AuditEventType::Login if ok => Some(("login_success", Severity::Info)),
+            AuditEventType::PasswordChanged => Some(("password_changed", Severity::Notice)),
+            AuditEventType::TwoFactorEnabled => Some(("two_factor_enabled", Severity::Notice)),
+            AuditEventType::TwoFactorDisabled => Some(("two_factor_disabled", Severity::Notice)),
+            _ => None,
+        };
+        if let Some((sub, sev)) = sec {
+            let mut ev = Event::new(
+                EventKind::Security,
+                sev,
+                format!(
+                    "{}: {}",
+                    sub.replace('_', " "),
+                    user.unwrap_or("unknown user")
+                ),
+            )
+            .subtype(sub)
+            .body(details.clone().unwrap_or_default())
+            .field("user", user.unwrap_or_default())
+            .field("source_ip", ip.clone().unwrap_or_default());
+            ev.node = hostname::get()
+                .ok()
+                .map(|h| h.to_string_lossy().to_string());
+            emit(ev);
+        }
+    }
     state
         .audit_logger
         .log(AuditEvent {

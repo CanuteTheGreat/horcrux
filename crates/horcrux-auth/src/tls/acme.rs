@@ -254,16 +254,72 @@ pub fn start_renewal_task(tls: Arc<TlsManager>, pool: SqlitePool) {
             let Some(cfg) = load_config(&pool).await else {
                 continue;
             };
+            let left = tls.current_info().not_after_unix - chrono::Utc::now().timestamp();
+            if (!cfg.auto_renew || tls.current_info().source != "acme")
+                && left <= cfg.renew_days_before * 86400
+            {
+                // Not renewed by us: tell the operator it is running out.
+                let expired = left <= 0;
+                horcrux_common::notify::emit(
+                    horcrux_common::notify::Event::new(
+                        horcrux_common::notify::EventKind::CertificateExpiry,
+                        if expired {
+                            horcrux_common::notify::Severity::Critical
+                        } else {
+                            horcrux_common::notify::Severity::Warning
+                        },
+                        if expired {
+                            "The node certificate has expired"
+                        } else {
+                            "The node certificate expires soon"
+                        },
+                    )
+                    .subtype(if expired { "expired" } else { "expiring" })
+                    .body(format!(
+                        "{} day(s) of validity left",
+                        left.div_euclid(86400)
+                    )),
+                );
+            }
             if !cfg.auto_renew || tls.current_info().source != "acme" {
                 continue;
             }
-            let left = tls.current_info().not_after_unix - chrono::Utc::now().timestamp();
             if left > cfg.renew_days_before * 86400 {
                 continue;
             }
             match order_certificate(&tls, &pool).await {
-                Ok(i) => tracing::info!("ACME certificate renewed, valid until {}", i.valid_until),
-                Err(e) => tracing::error!("ACME renewal failed: {}", e),
+                Ok(i) => {
+                    tracing::info!("ACME certificate renewed, valid until {}", i.valid_until);
+                    horcrux_common::notify::emit(
+                        horcrux_common::notify::Event::new(
+                            horcrux_common::notify::EventKind::CertificateExpiry,
+                            horcrux_common::notify::Severity::Info,
+                            "ACME certificate renewed",
+                        )
+                        .subtype("renewed")
+                        .body(format!("valid until {}", i.valid_until)),
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("ACME renewal failed: {}", e);
+                    let expired = left <= 0;
+                    horcrux_common::notify::emit(
+                        horcrux_common::notify::Event::new(
+                            horcrux_common::notify::EventKind::CertificateExpiry,
+                            if expired {
+                                horcrux_common::notify::Severity::Critical
+                            } else {
+                                horcrux_common::notify::Severity::Error
+                            },
+                            "ACME certificate renewal failed",
+                        )
+                        .subtype("renewal_failed")
+                        .body(format!(
+                            "{e}; {} day(s) of validity left",
+                            left.div_euclid(86400)
+                        )),
+                    );
+                }
             }
         }
     });
