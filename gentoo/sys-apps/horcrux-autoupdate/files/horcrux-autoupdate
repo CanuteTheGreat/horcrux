@@ -315,6 +315,11 @@ def proc_exe(pid):
     return exe, False
 
 
+# the init system's own process supervisor sits in the service's cgroup (OpenRC supervise-daemon) and is
+# replaced by every restart: it is not something the service started
+SUPERVISORS = ("supervise-daemon", "start-stop-daemon")
+
+
 def service_procs(svc, programs):
     """(program pids, other pids) of a running service: its own program vs. what it started (guests)"""
     cg = service_cgroup(svc)
@@ -323,7 +328,10 @@ def service_procs(svc, programs):
     own, other = [], []
     for pid in cgroup_pids(cg):
         path, _ = proc_exe(pid)
-        (own if path in programs else other).append(pid)
+        if path in programs:
+            own.append(pid)
+        elif os.path.basename(path or "") not in SUPERVISORS:
+            other.append(pid)
     return own, other
 
 
