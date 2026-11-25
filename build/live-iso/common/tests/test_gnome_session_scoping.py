@@ -217,7 +217,7 @@ class SessionScoping(unittest.TestCase):
         # per-app scale variables are not the fix (fixed at app start, double-scale on top of Xft.dpi)
         for v in ("GDK_SCALE=", "QT_SCALE_FACTOR=", "STEAM_FORCE_DESKTOPUI_SCALING="):
             self.assertNotRegex(p3, rf"(?m)^\+[^#\n]*\b{v}")
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             data = self._patched_tree(d)
             hook = data / "Xwayland-session.d" / "20-gnome-session-openrc-xsettings"
             helper = data / "gnome-session-openrc-helper"
