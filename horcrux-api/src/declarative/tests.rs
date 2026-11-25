@@ -32,6 +32,7 @@ fn pool(id: &str, name: &str) -> StoragePool {
         total: 10,
         enabled: true,
         source: None,
+        plugin_config: None,
     }
 }
 
@@ -391,4 +392,86 @@ fn guest_power_rejects_unknown_vms_and_bad_values() {
     assert_eq!(plan(&s, &Live::default(), false).errors.len(), 1);
     assert!(parse("guest_power: {node: {max_parallel: 0}}").is_err());
     assert!(parse("guest_power: {vms: {a: {save_dir: relative}}}").is_err());
+}
+
+#[test]
+fn storage_plugin_settings_are_planned_validated_and_exported() {
+    use horcrux_common::storage_plugins::StoragePluginSettings;
+    let live = Live::default();
+    let mut s = Spec {
+        storage_plugins: Some(StoragePluginSettings::default()),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).in_sync());
+    let mut want = StoragePluginSettings::default();
+    want.timeouts.create_secs = 900;
+    want.plugin_dir = "/opt/hx-plugins".into();
+    s.storage_plugins = Some(want.clone());
+    let p = plan(&s, &live, false);
+    assert_eq!(p.changes.len(), 1);
+    assert_eq!(p.changes[0].kind, "storage_plugins");
+    let d = p.changes[0].details.join("\n");
+    assert!(d.contains("timeouts.create_secs: 600 -> 900"), "{d}");
+    assert!(d.contains("plugin_dir:"), "{d}");
+    // invalid values are plan errors
+    want.timeouts.create_secs = 0;
+    s.storage_plugins = Some(want);
+    let p = plan(&s, &live, false);
+    assert!(p.errors.iter().any(|e| e.contains("storage_plugins")), "{:?}", p.errors);
+    // export carries them and round-trips
+    let y = serde_yaml::to_string(&export(&live)).unwrap();
+    assert!(y.contains("storage_plugins:"), "{y}");
+    let back: Spec = serde_yaml::from_str(&y).unwrap();
+    assert!(plan(&back, &live, false).in_sync());
+}
+
+#[test]
+fn plugin_pools_take_config_and_export_without_secrets() {
+    let y = r#"
+version: 1
+storage_pools:
+  - name: nas
+    type: plugin:sshfs
+    config: {host: nas.example.org, port: 2222}
+"#;
+    let s = parse(y).unwrap();
+    let p = plan(&s, &Live::default(), false);
+    assert!(p.errors.is_empty(), "{:?}", p.errors);
+    assert_eq!(p.changes[0].kind, "storage_pool");
+    assert!(p.changes[0].details[0].contains("plugin:sshfs with host, port"));
+    // a plugin pool takes no path, a built-in pool no config
+    for bad in [
+        "storage_pools: [{name: a, type: 'plugin:sshfs', path: /x}]",
+        "storage_pools: [{name: a, type: directory, path: /x, config: {k: 1}}]",
+        "storage_pools: [{name: a, type: directory}]",
+        "storage_pools: [{name: a, type: 'plugin:Bad Id'}]",
+    ] {
+        let err = parse(&format!("version: 1\n{bad}")).err();
+        assert!(err.is_some(), "{bad} accepted");
+    }
+    // export of a live plugin pool: its validated config, no path, no secret
+    let mut live_pool = pool("p1", "nas");
+    live_pool.storage_type = crate::storage::StorageType::Plugin("sshfs".into());
+    live_pool.path = "/var/lib/horcrux/storage-plugins/p1/mnt".into();
+    let mut cfg = BTreeMap::new();
+    cfg.insert("host".into(), serde_json::json!("nas.example.org"));
+    cfg.insert("port".into(), serde_json::json!(2222));
+    live_pool.plugin_config = Some(cfg);
+    let live = Live {
+        pools: vec![live_pool],
+        ..Default::default()
+    };
+    let e = export(&live);
+    let ps = &e.storage_pools.as_ref().unwrap()[0];
+    assert_eq!(ps.storage_type, "plugin:sshfs");
+    assert!(ps.path.is_empty());
+    assert_eq!(ps.config["port"], 2222);
+    let back: Spec = serde_yaml::from_str(&serde_yaml::to_string(&e).unwrap()).unwrap();
+    assert!(plan(&back, &live, false).in_sync());
+    // a number written as a string in a spec is not drift
+    let s = parse(
+        "version: 1\nstorage_pools: [{name: nas, type: 'plugin:sshfs', config: {port: '2222'}}]",
+    )
+    .unwrap();
+    assert!(plan(&s, &live, false).in_sync(), "{:?}", plan(&s, &live, false).changes);
 }
