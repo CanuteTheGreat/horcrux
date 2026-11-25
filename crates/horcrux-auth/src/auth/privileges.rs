@@ -104,6 +104,7 @@ pub const KNOWN_AREAS: &[&str] = &[
     "cloudinit",
     "templates",
     "audit",
+    "access-log",
     "storage",
     "ceph",
     "pools",
@@ -363,6 +364,7 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "backup-storages" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
 
         "audit" => need(P::SysAudit, "/"),
+        "access-log" => read_write(m, P::SysAudit, P::SysModify, "/"),
 
         "ceph" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
         // Inventory views: the handlers show only what the caller may see.
@@ -822,6 +824,14 @@ mod tests {
             priv_of(requirement("GET", "/api/tls/certificate/info/etc")).0,
             P::SysModify
         );
+    }
+
+    #[test]
+    fn access_log_requires_audit_to_read_and_modify_to_write() {
+        for path in ["/api/access-log", "/api/access-log/stats", "/api/access-log/42"] {
+            assert_eq!(priv_of(requirement("GET", path)), (P::SysAudit, "/".into()));
+            assert_eq!(priv_of(requirement("POST", path)), (P::SysModify, "/".into()));
+        }
     }
 
     #[test]
