@@ -439,6 +439,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                     <div class="resource-tabs">
                         <div class="tab-content">
                             <h3>"Virtual Machines"</h3>
+                            {move || vms.get().is_empty().then(|| view! { <p class="empty-state" id="migration-vm-empty">"No virtual machines to migrate. "<a href="/vms">"Go to the VM list"</a></p> })}
                             <div class="resource-grid" id="migration-vm-grid">
                                 // Reactive: the lists are filled after mount by
                                 // load_data (they used to be read once, empty).
@@ -531,6 +532,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                             })}
 
                             <h3>"Containers"</h3>
+                            {move || containers.get().is_empty().then(|| view! { <p class="empty-state" id="migration-co-empty">"No containers to migrate. "<a href="/containers">"Go to the container list"</a></p> })}
                             <div class="resource-grid" id="migration-ct-grid">
                                 {move || containers.get().into_iter().map(|container| {
                                     let container_clone = container.clone();
