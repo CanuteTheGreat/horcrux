@@ -159,7 +159,7 @@ def supervisors(vm, uid, user):
 
 def syslog_since(vm, marker):
     # sysklogd rotates /var/log/messages by size (-r): read the previous file too
-    return vm.out(f"cat /var/log/messages.0 /var/log/messages 2>/dev/null | sed -n '/{marker}/,$p'")
+    return vm.out(f"{{ cat /var/log/messages.0 /var/log/messages 2>/dev/null; journalctl --no-pager -o short 2>/dev/null; }} | sed -n '/{marker}/,$p'")
 
 
 # ---------------------------------------------------------------- the test
@@ -185,6 +185,10 @@ class Run:
         vm.sh(f"install -d -m700 -o {a.user} -g {a.user} ~{a.user}/.ssh; grep -qxF '{pub}' ~{a.user}/.ssh/authorized_keys 2>/dev/null || "
               f"echo '{pub}' >> ~{a.user}/.ssh/authorized_keys; chown {a.user}: ~{a.user}/.ssh/authorized_keys; chmod 600 ~{a.user}/.ssh/authorized_keys")
         self.uid = uid_of(vm, a.user)
+        # init system of the installed image: the OpenRC-only parts (session-scoped OpenRC user services, the gnome-session-openrc helper,
+        # sysklogd) are checked only there; systemd gets the equivalent checks through logind/journald/processes
+        self.systemd = vm.out("test -d /run/systemd/system && echo yes || echo no").strip() == "yes"
+        print(f"init: {'systemd' if self.systemd else 'openrc'}", flush=True)
         # autostart probes: the first dumps its environment, the second must never start in GNOME (NotShowIn=GNOME, like nm-applet)
         probes = {"gsl-probe": "env > /tmp/gsl-probe.env; exec sleep 100001", "gsl-notshowin": "touch /tmp/gsl-notshowin.ran; exec sleep 100001"}
         vm.sh(f"install -d -o {a.user} -g {a.user} ~{a.user}/.config ~{a.user}/.config/autostart")
@@ -303,8 +307,16 @@ class Run:
         act = active_session(vm)
         self.check(n, "session-is-active-on-seat0", act == sid, f"seat0 ActiveSession={act}, new session={sid}")
         shells = self.wait(lambda: user_shells(vm, self.uid) or None, 30) or {}
-        mine = [p for p, s in shells.items() if s == sid]
-        stale = {p: s for p, s in shells.items() if s != sid}
+        if self.systemd:
+            # gnome-shell is a unit of the user manager here (its environ has no XDG_SESSION_ID): it belongs to the new session when it
+            # started after that session was created, anything older is a leftover of a previous login
+            t0 = vm.out(f"date -d \"$(loginctl show-session {sid} -p Timestamp --value)\" +%s 2>/dev/null || echo 0").strip() or "0"
+            started = {p: int(vm.out(f"stat -c %Y /proc/{p} 2>/dev/null || echo 0").strip() or 0) for p in shells}
+            mine = [p for p in shells if started[p] >= int(t0) - 5]
+            stale = {p: "started before the session" for p in shells if p not in mine}
+        else:
+            mine = [p for p, s in shells.items() if s == sid]
+            stale = {p: s for p, s in shells.items() if s != sid}
         self.check(n, "one-shell-in-new-session", len(mine) == 1, f"gnome-shell of session {sid}: {mine}")
         self.check(n, "no-stale-shell", not stale, f"gnome-shell of other sessions: {stale or 'none'}")
         log = syslog_since(vm, marker)
@@ -361,6 +373,9 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
                  'm = d.get_monitor(0) if d else None; g = m.get_geometry() if m else None; '
                  'print("%d %d %d" % (m.get_scale_factor(), g.width * m.get_scale_factor(), g.height * m.get_scale_factor()) if m else "no-display")')
 
+    XFT_PROBE = ('import gi; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk; '
+                 's = Gtk.Settings.get_default(); print(round(s.get_property("gtk-xft-dpi") / 1024) if s else "no-settings")')
+
     def as_user(self, cmd, timeout=60):
         a = self.a
         env = f"XDG_RUNTIME_DIR=/run/user/{self.uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{self.uid}/bus"
@@ -369,16 +384,25 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
     def verify_x11_ui_scale(self, n):
         vm = self.vm
         hp = "/usr/libexec/gnome-session-openrc-helper"
-        disp = self.wait(lambda: self.as_user(f"{hp} x-display") or None, 40, step=3) or ""
+        if self.systemd:
+            # no helper on systemd: the display is Xwayland's own argument, gsd-xsettings is started by gnome-settings-daemon's unit
+            getdisp = lambda: vm.out(f"tr '\\0' '\\n' </proc/$(pgrep -u {self.uid} -x Xwayland | head -n1)/cmdline 2>/dev/null | grep -m1 '^:[0-9]'").strip() or None  # noqa: E731
+        else:
+            getdisp = lambda: self.as_user(f"{hp} x-display") or None  # noqa: E731
+        disp = self.wait(getdisp, 40, step=3) or ""
         if not self.check(n, "x11-xwayland-display", disp.startswith(":"), f"Xwayland display of the session: {disp!r}"):
             return
         # gnome-settings-daemon wants the gsd-xsettings service: the SERVICE STATE must be started, not only the process
         # alive (seen on a real session: supervise-daemon ran it while rc-service printed "eend: command not found", reported "failed to
         # start" and left no started/ symlink, so `rc-service -U gsd-xsettings status` said stopped and the next restart/stop skipped it)
-        svc = self.wait(lambda: (lambda o: o if "started" in o else None)(self.as_user("rc-service -U gsd-xsettings status")), 40, step=3)
-        svc = svc or self.as_user("rc-service -U gsd-xsettings status")
-        self.check(n, "x11-gsd-xsettings-service-started", "started" in svc and "stopped" not in svc and "crashed" not in svc,
-                   f"rc-service -U gsd-xsettings status: {svc.strip()[-160:]!r}")
+        if self.systemd:
+            svc = self.wait(lambda: vm.out(f"pgrep -u {self.uid} -x gsd-xsettings | head -n1").strip() or None, 40, step=3) or ""
+            self.check(n, "x11-gsd-xsettings-service-started", bool(svc), f"gsd-xsettings process (systemd user manager): {svc or 'none'}")
+        else:
+            svc = self.wait(lambda: (lambda o: o if "started" in o else None)(self.as_user("rc-service -U gsd-xsettings status")), 40, step=3)
+            svc = svc or self.as_user("rc-service -U gsd-xsettings status")
+            self.check(n, "x11-gsd-xsettings-service-started", "started" in svc and "stopped" not in svc and "crashed" not in svc,
+                       f"rc-service -U gsd-xsettings status: {svc.strip()[-160:]!r}")
         auth = vm.out(f"tr '\\0' '\\n' </proc/$(pgrep -u {self.uid} -x Xwayland | head -n1)/cmdline | sed -n '/^-auth$/{{n;p;q}}'")
         xenv = f"DISPLAY={disp} XAUTHORITY={auth}"
         vm.sh(f"cat > /tmp/gsl-scale-probe.py; chmod 644 /tmp/gsl-scale-probe.py", inp=self.SCALE_PROBE)
@@ -396,8 +420,15 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
                 s = st["applied"][0]
                 f = math.ceil(s - 1e-6)
                 time.sleep(4)  # mutter -> UiScalingFactor -> gsd-xsettings -> XSETTINGS/xrdb
-                stat = self.wait(lambda: (lambda o: o if "FAIL" not in o and "OK Xft.dpi" in o else None)(
-                    self.as_user(f"{xenv} {hp} x11-scale-status")), 20, step=2) or self.as_user(f"{xenv} {hp} x11-scale-status")
+                if self.systemd:
+                    # same verdict as the helper's: the X server serves XSETTINGS with Xft.dpi = 96 x factor (read through GTK3 on X11)
+                    xq = lambda: self.as_user(f"{xenv} GDK_BACKEND=x11 python3 -c {shq(self.XFT_PROBE)}").strip().splitlines()  # noqa: E731
+                    want_dpi = 96 * f
+                    stat = self.wait(lambda: (lambda o: f"OK Xft.dpi={want_dpi} (X11 UI scale {f}, text scaling 1.0)" if o and o[-1] == str(want_dpi) else None)(xq()), 20, step=2)
+                    stat = stat or f"FAIL Xft.dpi={(xq() or ['?'])[-1]}"
+                else:
+                    stat = self.wait(lambda: (lambda o: o if "FAIL" not in o and "OK Xft.dpi" in o else None)(
+                        self.as_user(f"{xenv} {hp} x11-scale-status")), 20, step=2) or self.as_user(f"{xenv} {hp} x11-scale-status")
                 self.check(n, f"x11-scale-{want}-xsettings", "FAIL" not in stat and "OK Xft.dpi" in stat and f"X11 UI scale {f}," in stat,
                            f"monitor scale {s:.4f} (want {want}) -> {stat!r}")
                 gdk = self.as_user(f"{xenv} GDK_BACKEND=x11 python3 -c {shq(self.GDK_PROBE)}").strip().splitlines()
