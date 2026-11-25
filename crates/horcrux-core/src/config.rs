@@ -39,6 +39,37 @@ pub struct HorcruxConfig {
     /// declarative spec store changes in `<data_dir>/console.json`.
     #[serde(default)]
     pub console: horcrux_common::console::ConsoleSettings,
+    /// Management link (`[management_network]`): where the installer records
+    /// the node's bond / VLAN layout and the node tool that rewrites it.
+    #[serde(default)]
+    pub management_network: ManagementNetworkConfig,
+}
+
+/// `[management_network]` in config.toml. Env overrides:
+/// `HORCRUX_MGMT_NETWORK_RECORD`, `HORCRUX_MGMT_NETWORK_TOOL`,
+/// `HORCRUX_MGMT_NETWORK_TOOL_TIMEOUT_SECS`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ManagementNetworkConfig {
+    /// JSON record of the management link written by the installer and the
+    /// console menu (interfaces, bond, VLAN, address mode).
+    pub record_path: PathBuf,
+    /// Node tool that validates a new layout, writes it for the running
+    /// init system (netifrc or systemd-networkd + dhcpcd, or
+    /// NetworkManager) and optionally applies it (`--mgmt-apply`).
+    pub tool_path: PathBuf,
+    /// How long one tool run may take (a live apply waits for DHCP).
+    pub tool_timeout_secs: u64,
+}
+
+impl Default for ManagementNetworkConfig {
+    fn default() -> Self {
+        Self {
+            record_path: PathBuf::from("/etc/horcrux/management-network.json"),
+            tool_path: PathBuf::from("/usr/bin/console-menu"),
+            tool_timeout_secs: 120,
+        }
+    }
 }
 
 /// Backup settings (`[backup]` in config.toml). Env overrides:
@@ -447,6 +478,17 @@ impl HorcruxConfig {
         }
 
         // Paths
+        if let Ok(v) = std::env::var("HORCRUX_MGMT_NETWORK_RECORD") {
+            self.management_network.record_path = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("HORCRUX_MGMT_NETWORK_TOOL") {
+            self.management_network.tool_path = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("HORCRUX_MGMT_NETWORK_TOOL_TIMEOUT_SECS") {
+            if let Ok(n) = v.parse() {
+                self.management_network.tool_timeout_secs = n;
+            }
+        }
         if let Ok(data_dir) = std::env::var("HORCRUX_DATA_DIR") {
             let data_dir = PathBuf::from(data_dir);
             self.paths.vm_storage = data_dir.join("vms");

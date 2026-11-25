@@ -248,8 +248,9 @@ class Record(unittest.TestCase):
 class Live(unittest.TestCase):
     def test_commands(self):
         c = NL.live_commands(lacp42())
-        self.assertEqual(c[0], ["modprobe", "bonding"])
-        self.assertEqual(c[1], ["ip", "link", "add", "bond0", "type", "bond", "mode", "802.3ad", "miimon", "100", "xmit_hash_policy", "layer3+4",
+        self.assertEqual(c[0], ["modprobe", "bonding", "max_bonds=0"])     # no auto-created bond0 in the way
+        self.assertEqual(c[1], ["ip", "link", "del", "bond0"])
+        self.assertEqual(c[2], ["ip", "link", "add", "bond0", "type", "bond", "mode", "802.3ad", "miimon", "100", "xmit_hash_policy", "layer3+4",
                                 "lacp_rate", "fast"])
         self.assertIn(["ip", "link", "set", "eth0", "master", "bond0"], c)
         # members go down before they are enslaved
@@ -290,6 +291,9 @@ class Live(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn(["ip", "addr", "replace", "10.0.42.5/24", "dev", "bond0.42"], ran)
         self.assertIn("interface bond0.42\nstatic ip_address=10.0.42.5/24", files["/etc/dhcpcd.conf"])
+        # a leftover delete that fails is fine; a failing add is reported
+        kw["run"] = lambda c, chk: (2, "Cannot find device") if c[:3] == ["ip", "link", "del"] else (0, "")
+        self.assertNotIn("Cannot find device", NL.apply_live(lacp42(), **kw)[1])
         kw["run"] = lambda c, chk: (2, "RTNETLINK answers: Operation not supported") if c[:3] == ["ip", "link", "add"] else (0, "")
         ok, info = NL.apply_live(lacp42(), **kw)
         self.assertFalse(ok)
@@ -471,6 +475,49 @@ class ConsoleMenu(unittest.TestCase):
             self.assertFalse(os.path.lexists(root + "etc/init.d/net.bond0"))
             self.assertIn("interface eth0", open(root + "etc/dhcpcd.conf").read())
             self.assertNotIn("denyinterfaces eth0", open(root + "etc/dhcpcd.conf").read())
+
+    def test_link_local_is_not_a_lease(self):
+        seen = iter(["169.254.77.36/16"] * 3 + ["10.42.0.120/24"])
+        ok, ip = NL.apply_live(lacp42(), run=lambda c, chk: (0, ""), read=lambda p: "", write=lambda p, t: None,
+                               nic_ip=lambda d: next(seen), sleep=lambda s: None, wait_secs=10, log=lambda m: None)
+        self.assertEqual((ok, ip), (True, "10.42.0.120/24"))
+        ok, msg = NL.apply_live(lacp42(), run=lambda c, chk: (0, ""), read=lambda p: "", write=lambda p, t: None,
+                                nic_ip=lambda d: "169.254.1.2/16", sleep=lambda s: None, wait_secs=3, log=lambda m: None)
+        self.assertFalse(ok)
+        self.assertIn("no DHCP address on bond0.42", msg)
+
+    def test_cli_for_the_api(self):
+        import io
+        with tempfile.TemporaryDirectory() as t:
+            root = t + "/"
+            os.makedirs(root + "etc/init.d")
+            os.makedirs(root + "sbin")
+            os.symlink("../usr/lib/systemd/systemd", root + "sbin/init")
+            con = CM.Console(PROFILE, inp=lambda p: "", out=io.StringIO(), root=root)
+            o = io.StringIO()
+            self.assertEqual(CM.mgmt_cli(con, ["--mgmt-show"], out=o), 0)
+            self.assertEqual(json.loads(o.getvalue()), {"recorded": False, "record": None})
+            bad = os.path.join(t, "bad.json")
+            json.dump({"interfaces": ["eth0", "eth1"], "vlan": 9000, "bond": {"mode": "lacp"}, "mode": "static", "address": "nope"}, open(bad, "w"))
+            o = io.StringIO()
+            self.assertEqual(CM.mgmt_cli(con, ["--mgmt-apply", bad], out=o, nics=NICS), 2)
+            errs = " | ".join(json.loads(o.getvalue())["errors"])
+            for want in ("VLAN id", "bond mode", "address:"):
+                self.assertIn(want, errs)
+            good = os.path.join(t, "good.json")
+            json.dump(NL.record(lacp42()), open(good, "w"))
+            o = io.StringIO()
+            con.write_mgmt.__func__  # noqa - exists
+            orig = con.write_mgmt
+            con.write_mgmt = lambda old, new, live=True: orig(old, new, run=lambda c: (0, ""), live=False)
+            self.assertEqual(CM.mgmt_cli(con, ["--mgmt-apply", good], out=o, nics=NICS), 0)
+            res = json.loads(o.getvalue())
+            self.assertTrue(res["ok"])
+            self.assertFalse(res["applied"])
+            self.assertTrue(os.path.exists(root + "etc/systemd/network/10-mgmt-bond0.42.netdev"))
+            o = io.StringIO()
+            CM.mgmt_cli(con, ["--mgmt-show"], out=o)
+            self.assertEqual(json.loads(o.getvalue())["record"]["address_interface"], "bond0.42")
 
     def test_menu_entry_only_for_management_products(self):
         out = []

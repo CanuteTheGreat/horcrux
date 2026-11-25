@@ -7206,6 +7206,106 @@ pub async fn delete_bridge(name: &str) -> Result<(), ApiError> {
     delete_json(&format!("/network/bridges/{}", urlencoding::encode(name))).await
 }
 
+// Management link (Infrastructure > Management Link) - horcrux-api/src/api/mgmt_net.rs.
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MgmtBond {
+    pub name: String,
+    pub mode: String,
+    pub miimon: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmit_hash_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lacp_rate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MgmtRecord {
+    #[serde(default)]
+    pub version: u32,
+    pub interfaces: Vec<String>,
+    #[serde(default)]
+    pub bond: Option<MgmtBond>,
+    #[serde(default)]
+    pub vlan: Option<u16>,
+    #[serde(default)]
+    pub address_interface: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct MgmtMember {
+    pub name: String,
+    #[serde(default)]
+    pub link: String,
+    #[serde(default)]
+    pub aggregator_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct MgmtLive {
+    #[serde(default)]
+    pub bond_mode: Option<String>,
+    #[serde(default)]
+    pub active_member: Option<String>,
+    #[serde(default)]
+    pub lacp_partner: Option<String>,
+    #[serde(default)]
+    pub members: Vec<MgmtMember>,
+    #[serde(default)]
+    pub addresses: Vec<String>,
+    #[serde(default)]
+    pub address_interface_up: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MgmtView {
+    pub record: MgmtRecord,
+    #[serde(default)]
+    pub live: MgmtLive,
+    #[serde(default)]
+    pub bond_modes: Vec<String>,
+    #[serde(default)]
+    pub hash_policies: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MgmtUpdateResult {
+    pub record: MgmtRecord,
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub log: Vec<String>,
+}
+
+/// GET /api/network/management - recorded layout + live state (424 when not recorded).
+pub async fn get_mgmt_link() -> Result<MgmtView, ApiError> {
+    fetch_json("/network/management").await
+}
+
+/// PUT /api/network/management - write the layout for the next boot (or apply now).
+pub async fn set_mgmt_link(
+    record: &MgmtRecord,
+    apply_now: bool,
+) -> Result<MgmtUpdateResult, ApiError> {
+    put_json(
+        "/network/management",
+        &serde_json::json!({ "record": record, "apply_now": apply_now }),
+    )
+    .await
+}
+
 // DHCP + DNS per network (Infrastructure > DHCP & DNS) - horcrux-api/src/api/net_dhcp.rs.
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

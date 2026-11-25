@@ -442,7 +442,9 @@ def live_commands(n):
     vid = n.get("vlan", 0)
     if is_bond(n):
         b = n["bond"]
-        cmds.append(["modprobe", "bonding"])
+        # max_bonds=0: the module would otherwise create an unconfigured "bond0" itself; a bond left by an earlier try is removed
+        cmds.append(["modprobe", "bonding", "max_bonds=0"])
+        cmds.append(["ip", "link", "del", b["name"]])
         opts = ["mode", b["mode"], "miimon", str(int(b["miimon"]))]
         if b["mode"] in HASH_MODES:
             opts += ["xmit_hash_policy", b["xmit_hash_policy"]]
@@ -460,6 +462,7 @@ def live_commands(n):
     cmds.append(["ip", "link", "set", link_parent(n), "up"])
     if vid > 0:
         cmds.append(["modprobe", "8021q"])
+        cmds.append(["ip", "link", "del", vlan_name(n)])
         cmds.append(["ip", "link", "add", "link", link_parent(n), "name", vlan_name(n), "type", "vlan", "id", str(vid)])
         cmds.append(["ip", "link", "set", vlan_name(n), "up"])
     return cmds
@@ -508,8 +511,8 @@ def apply_live(n, run, read=None, write=None, restart_dhcpcd=None, nic_ip=None, 
                 restart_dhcpcd()
         return True, ""
     for c in live_commands(n):
-        rc, out = run(c, True)
-        if rc != 0:
+        rc, out = run(c, c[:3] != ["ip", "link", "del"])
+        if rc != 0 and c[:3] != ["ip", "link", "del"]:            # removing a leftover that is not there is fine
             return False, f"{' '.join(c)}: {out.strip()[-160:]}"
     if read and write:
         path = "/etc/dhcpcd.conf"
@@ -531,7 +534,7 @@ def apply_live(n, run, read=None, write=None, restart_dhcpcd=None, nic_ip=None, 
         return True, ""
     for _ in range(int(wait_secs)):
         ip = nic_ip(l3)
-        if ip:
+        if ip and not ip.startswith("169.254."):          # dhcpcd's IPv4LL fallback is not a lease
             return True, ip
         sleep(1)
     return False, f"no DHCP address on {l3} after {int(wait_secs)} s (is VLAN {n.get('vlan') or 'untagged'} served by a DHCP server " \

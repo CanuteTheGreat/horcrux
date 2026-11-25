@@ -65,6 +65,12 @@ pub struct Spec {
     /// defaults to saving state to encrypted storage).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_power: Option<GuestPowerSpec>,
+    /// The node's management link (NICs, bond, VLAN, address mode) as the
+    /// installer recorded it. A change is written for the node's init system
+    /// and takes effect at the next boot (it can cut the node off, so apply
+    /// never switches it live). Absent = unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub management_network: Option<crate::api::mgmt_net::MgmtRecord>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
@@ -339,6 +345,8 @@ pub struct Live {
     pub power_node: crate::api::guest_state::NodePolicy,
     /// Per-VM power overrides by VM name (only VMs that have one).
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
+    /// Recorded management link (None: not recorded on this node).
+    pub management_network: Option<crate::api::mgmt_net::MgmtRecord>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -670,6 +678,35 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // management link: one node-wide object, written for the next boot
+    if let Some(w) = &spec.management_network {
+        if let Err(e) = crate::api::mgmt_net::validate(w) {
+            p.errors.push(format!("management_network: {e}"));
+        } else if live.management_network.is_none() {
+            p.errors.push(
+                "management_network: this node has no recorded management link; set it once with the \
+                 console menu (option 12) or PUT /api/network/management"
+                    .into(),
+            );
+        } else if !mgmt_same(live.management_network.as_ref(), w) {
+            let a = serde_json::to_value(&live.management_network).unwrap_or_default();
+            let b = serde_json::to_value(w).unwrap_or_default();
+            let mut d = Vec::new();
+            if let (Some(a), Some(b)) = (a.as_object(), b.as_object()) {
+                for (k, bv) in b {
+                    if k != "stack" && k != "address_interface" && a.get(k) != Some(bv) {
+                        d.push(format!(
+                            "{k}: {} -> {bv}",
+                            a.get(k).cloned().unwrap_or_default()
+                        ));
+                    }
+                }
+            }
+            d.push("takes effect at the next boot".into());
+            creates.push(ch("management_network", "management", Action::Update, d));
+        }
+    }
+
     // guest power: node defaults and per-VM overrides (by VM name)
     if let Some(gp) = &spec.guest_power {
         let mut d = Vec::new();
@@ -710,6 +747,7 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         [
             "console",
             "remote_play",
+            "management_network",
             "storage_pool",
             "zone",
             "vnet",
@@ -901,6 +939,21 @@ fn disk_of(d: &VmDisk, pools: &[crate::storage::StoragePool]) -> DiskSpec {
 
 /// The live state as a spec (every section present, so `prune` is
 /// meaningful on the result). Applying it to the same node is a no-op.
+/// Same layout (the derived `address_interface` and the `stack` written by
+/// the node are not part of the desired state).
+fn mgmt_same(
+    live: Option<&crate::api::mgmt_net::MgmtRecord>,
+    want: &crate::api::mgmt_net::MgmtRecord,
+) -> bool {
+    let norm = |r: &crate::api::mgmt_net::MgmtRecord| {
+        let mut r = r.clone();
+        r.stack = None;
+        r.address_interface = String::new();
+        r
+    };
+    live.map(norm) == Some(norm(want))
+}
+
 pub fn export(live: &Live) -> Spec {
     let mut pools: Vec<PoolSpec> = live
         .pools
@@ -957,6 +1010,7 @@ pub fn export(live: &Live) -> Spec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),
         }),
+        management_network: live.management_network.clone(),
         extra: BTreeMap::new(),
     }
 }
