@@ -6,6 +6,8 @@ After=multi-user.target zfs.target
 
 [Service]
 Type=simple
+# the job exits after marking the kernel good: stay "active (exited)" like the OpenRC script, not "stopped"
+RemainAfterExit=yes
 ExecStart=/usr/bin/horcrux-be mark-good --wait
 
 [Install]
