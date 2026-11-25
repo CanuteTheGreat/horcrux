@@ -23,6 +23,8 @@ pub mod store;
 use crate::error::ApiError;
 use crate::middleware::auth::AccessSlot;
 use crate::AppState;
+#[cfg(feature = "cluster")]
+use axum::routing::post;
 use axum::{
     extract::{ConnectInfo, MatchedPath, Path, Query, Request, State},
     middleware::Next,
@@ -362,15 +364,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/access-log/:id", get(detail));
     #[cfg(feature = "cluster")]
     let r = r
-        .route(
-            "/api/ha/peer/access-log/list",
-            axum::routing::post(peer_list),
-        )
-        .route(
-            "/api/ha/peer/access-log/stats",
-            axum::routing::post(peer_stats),
-        )
-        .route("/api/ha/peer/access-log/get", axum::routing::post(peer_get));
+        .route("/api/ha/peer/access-log/list", post(peer_list))
+        .route("/api/ha/peer/access-log/stats", post(peer_stats))
+        .route("/api/ha/peer/access-log/get", post(peer_get));
     r
 }
 
