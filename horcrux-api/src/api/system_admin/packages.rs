@@ -66,11 +66,15 @@ fn need_pm() -> Result<Pm, ApiError> {
     })
 }
 
-const PKG_TASKS: &[&str] = &[
+/// Task types that run the package manager: one at a time.
+pub(crate) const PKG_TASKS: &[&str] = &[
     "package-install",
     "package-remove",
     "package-upgrade",
     "package-sync",
+    "kernel-update",
+    "ceph-install",
+    "ceph-upgrade",
 ];
 
 // ----------------------------------------------------------------- Portage
@@ -453,7 +457,7 @@ struct TaskRef {
     pending: Option<usize>,
 }
 
-fn guard_one_at_a_time() -> Result<(), ApiError> {
+pub(crate) fn guard_one_at_a_time() -> Result<(), ApiError> {
     if let Some(u) = tasks::any_running(PKG_TASKS) {
         return Err(ApiError::Conflict(format!(
             "a package task is already running ({u}); wait for it or stop it from the Tasks page"
@@ -492,7 +496,13 @@ const WORLD_UPDATE_ARGS: [&str; 6] = [
     "@world",
 ];
 
-fn emerge_args(extra: &[&str], atoms: &[String]) -> Vec<String> {
+/// `emerge` arguments of the full world update (what Packages > Upgrade all runs).
+pub(crate) fn world_update_args() -> Vec<String> {
+    emerge_args(&WORLD_UPDATE_ARGS, &[])
+}
+
+/// `emerge` arguments with the options every Horcrux package task uses.
+pub(crate) fn emerge_args(extra: &[&str], atoms: &[String]) -> Vec<String> {
     let mut a: Vec<String> = ["--ask=n", "--color=n", "--nospinner"]
         .iter()
         .map(|s| s.to_string())
