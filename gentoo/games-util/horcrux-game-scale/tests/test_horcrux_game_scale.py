@@ -111,6 +111,17 @@ class Decide(unittest.TestCase):
         self.assertEqual(opts[-1], "--mangoapp")
         self.assertEqual(gs.render_size(self.cfg(render="1920x1200"), MON), (1920, 1200))
 
+    def test_auto_vk_device(self):
+        hybrid = [("8086:7d67", True), ("10de:2c58", False)]
+        self.assertEqual(gs.auto_vk_device({}, hybrid), "10de:2c58")                     # discrete GPU of a hybrid machine
+        self.assertEqual(gs.auto_vk_device({"__NV_PRIME_RENDER_OFFLOAD": "1"}, hybrid), "10de:2c58")
+        self.assertIsNone(gs.auto_vk_device({"DRI_PRIME": "1"}, hybrid))                  # Mesa picks: leave gamescope's choice
+        self.assertIsNone(gs.auto_vk_device({}, [("1002:73bf", True)]))                    # one GPU
+        wrap, argv, _, _ = gs.decide(CHAIN, env=ENV, cfg=self.cfg(), monitors=[MON], which=which, gpus=hybrid)
+        self.assertEqual(argv[argv.index("--prefer-vk-device") + 1], "10de:2c58")
+        wrap, argv, _, _ = gs.decide(CHAIN, env=ENV, cfg=self.cfg(vk_device="default"), monitors=[MON], which=which, gpus=hybrid)
+        self.assertNotIn("--prefer-vk-device", argv)
+
     def test_config_file_keys_and_errors(self):
         with tempfile.TemporaryDirectory() as d:
             sysc = os.path.join(d, "sys.toml")

@@ -14,7 +14,8 @@ render = "native"
 # "" (gamescope default), linear, nearest, fsr, nis, pixel
 filter = ""
 grab_cursor = false
-# auto = the GPU the game is PRIME-offloaded to; default = gamescope's choice; or "VENDOR:DEVICE" (lspci -nn ids)
+# auto = the GPU the game renders on (PRIME offload target, else the discrete GPU of a two-GPU machine); default = gamescope's
+# choice; or "VENDOR:DEVICE" (lspci -nn ids)
 vk_device = "auto"
 # primary, or a connector name (eDP-1, DP-2, ...)
 monitor = "primary"

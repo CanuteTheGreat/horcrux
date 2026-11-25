@@ -51,7 +51,8 @@ DEFAULTS = {
     "filter": "",
     # pass --force-grab-cursor (some games need it for mouse look inside nested gamescope)
     "grab_cursor": False,
-    # Vulkan device for gamescope's compositing: "auto" (the GPU the game is offloaded to, when the environment says so), "default"
+    # Vulkan device for gamescope's compositing: "auto" (the GPU the game renders on: the PRIME offload target, else the discrete
+    # GPU of a two-GPU machine), "default"
     # (gamescope's choice) or "VENDOR:DEVICE" hex ids as in lspci -nn
     "vk_device": "auto",
     # which monitor's size to use: "primary" or a connector name (eDP-1, DP-2, ...)
@@ -152,29 +153,49 @@ def render_size(cfg, mon):
     return max(1, round(w * f)), max(1, round(h * f))
 
 
-def nvidia_offload_device():
-    """VENDOR:DEVICE of the NVIDIA GPU when the game is PRIME-offloaded to it, else None."""
-    if os.environ.get("__NV_PRIME_RENDER_OFFLOAD") != "1":
-        return None
-    base = "/sys/bus/pci/devices"
+def _sysfs(p):
     try:
-        for d in sorted(os.listdir(base)):
-            p = os.path.join(base, d)
-            try:
-                cls = open(os.path.join(p, "class")).read().strip()
-                ven = open(os.path.join(p, "vendor")).read().strip()
-                dev = open(os.path.join(p, "device")).read().strip()
-            except OSError:
-                continue
-            if cls.startswith("0x03") and ven == "0x10de":
-                return f"10de:{dev[2:]}"
+        with open(p) as f:
+            return f.read().strip()
     except OSError:
-        pass
+        return ""
+
+
+def display_gpus(base="/sys/bus/pci/devices"):
+    """[(vendor:device, boot_vga)] of the PCI display controllers (class 0x03xxxx)."""
+    out = []
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return out
+    for d in names:
+        p = os.path.join(base, d)
+        if not _sysfs(os.path.join(p, "class")).startswith("0x03"):
+            continue
+        ven, dev = _sysfs(os.path.join(p, "vendor"))[2:], _sysfs(os.path.join(p, "device"))[2:]
+        if ven and dev:
+            out.append((f"{ven}:{dev}", _sysfs(os.path.join(p, "boot_vga")) == "1"))
+    return out
+
+
+def auto_vk_device(env, gpus):
+    """The GPU gamescope should composite on: the one the game renders on, so frames are not copied between GPUs.
+    PRIME offload to NVIDIA (__NV_PRIME_RENDER_OFFLOAD=1) -> that GPU; DRI_PRIME set -> Mesa decides, leave gamescope's choice;
+    a hybrid laptop/desktop (one boot GPU + one other) -> the other (discrete) GPU, where DXVK/VKD3D-Proton render by default;
+    a single GPU -> None (gamescope's choice)."""
+    if env.get("__NV_PRIME_RENDER_OFFLOAD") == "1":
+        nv = [g for g, _b in gpus if g.startswith("10de:")]
+        return nv[0] if nv else None
+    if env.get("DRI_PRIME"):
+        return None
+    others = [g for g, boot in gpus if not boot]
+    if len(gpus) == 2 and len(others) == 1:
+        return others[0]
     return None
 
 
 # ------------------------------------------------------------------ decision
-def decide(cmd, env=None, cfg=None, monitors=None, which=shutil.which):
+def decide(cmd, env=None, cfg=None, monitors=None, which=shutil.which, gpus=None):
     """(wrap: bool, argv: list, reason: str, info: dict). monitors=None queries mutter."""
     env = os.environ if env is None else env
     cfg = cfg or load_config()[0]
@@ -224,7 +245,7 @@ def decide(cmd, env=None, cfg=None, monitors=None, which=shutil.which):
         argv.append("--force-grab-cursor")
     vk = cfg["vk_device"]
     if vk == "auto":
-        vk = nvidia_offload_device()
+        vk = auto_vk_device(env, display_gpus() if gpus is None else gpus)
     elif vk == "default":
         vk = None
     if vk:

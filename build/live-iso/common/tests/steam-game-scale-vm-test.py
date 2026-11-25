@@ -112,6 +112,10 @@ def ppm_bbox(path, rgb, tol=40):
 
 
 class Run(gsl.Run):
+    # method 1 = temporary: gnome-shell asks "Keep these display settings?" for a persistent (2) change and reverts it after
+    # ~20 s, which is shorter than one control + wrapped measurement
+    SCALE_PROBE = gsl.Run.SCALE_PROBE.replace("(serial, 2, lm_out, {})", "(serial, 1, lm_out, {})")
+    assert SCALE_PROBE != gsl.Run.SCALE_PROBE
     def __init__(self, a):
         super().__init__(a)
         self.cycle_no = 1
@@ -178,7 +182,7 @@ class Run(gsl.Run):
 
     def launch(self, line, tag):
         log = f"/tmp/hx-scale-{tag}.log"
-        self.vm.sh(f"su - {self.a.user} -c {shq(self.env_line() + ' setsid ' + line + f' >{log} 2>&1 </dev/null &')}", timeout=30)
+        self.vm.sh(f"su - {self.a.user} -c {shq('setsid env ' + self.env_line() + ' ' + line + f' >{log} 2>&1 </dev/null &')}", timeout=30)
         return log
 
     def stop_game(self):
@@ -186,6 +190,8 @@ class Run(gsl.Run):
                    f"pkill -u {self.uid} -f '[g]amescope-wl'; sleep 2; pkill -9 -u {self.uid} -x gamescope; true")
 
     def measure(self, tag):
+        self.vm.key("shift")  # keep the output awake
+        time.sleep(0.5)
         path = os.path.join(self.a.vm_out or self.a.out, f"{tag}.ppm")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         self.vm.qmp("screendump", filename=path)
@@ -210,10 +216,21 @@ class Run(gsl.Run):
         print("versions:\n  " + vers.replace("\n", "\n  "), flush=True)
         if not self.check(0, "packages-installed", "horcrux-game-scale" in vers and "gamescope" in vers, vers.replace("\n", ", ")):
             return self.finish()
-        sid = self.login(1)
-        if not sid:
-            return self.finish()
-        time.sleep(20)
+        # an earlier test of the same gate may have left the user logged in at the greeter: use that session
+        act = gsl.active_session(vm)
+        sid = next((s[0] for s in gsl.seat_sessions(vm, self.uid) if s[0] == act and s[1] == "active" and s[2] == "user"), None)
+        if sid:
+            print(f"  using the user's active session {sid}", flush=True)
+        else:
+            sid = self.login(1)
+            if not sid:
+                return self.finish()
+            time.sleep(20)
+        # no screen blanking during the measurements (a blanked virtio-vga output dumps as "Display output is not active")
+        self.as_user("gsettings set org.gnome.desktop.session idle-delay 0; gsettings set org.gnome.settings-daemon.plugins.power "
+                     "idle-dim false; gsettings set org.gnome.desktop.screensaver lock-enabled false")
+        vm.key("shift")
+        time.sleep(2)
         vm.key("esc")  # leave the overview GNOME opens at login
         time.sleep(2)
         vk = vm.out("vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName' | head -4")
