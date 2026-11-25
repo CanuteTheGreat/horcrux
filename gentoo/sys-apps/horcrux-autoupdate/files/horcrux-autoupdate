@@ -6,10 +6,12 @@
   horcrux-autoupdate status   print the last result (--json for status.json)
   horcrux-autoupdate check    exit 0 ok / 1 warning / 2 critical, one line of text: for health checks and monitoring agents
   horcrux-autoupdate pending  list the world updates still pending
+  horcrux-autoupdate restart-services [--now]  restart a Horcrux service whose program an update replaced (guests keep running)
 
 One run: lock, `emaint sync -a`, boot-environment snapshot (ZFS root), `emerge --update --changed-use --newuse --deep @world` (--with-bdeps=y, the default; WITH_BDEPS=no selects --with-bdeps=n; CHANGED_USE=no drops --changed-use) (binary packages from the
 binhost preferred, source build as the fallback), a guarded `emerge --depclean`, `@preserved-rebuild`, `etc-update --preen`. Low CPU and I/O priority.
-Results land in STATE_DIR (status.json, failed, reboot-required) and LOG_DIR (one log per run). A new kernel, microcode or other package that
+After the update, a Horcrux service whose program was replaced (horcrux-api) is restarted so the new code runs; its guests keep running,
+and it waits while a client is connected (checked again hourly). Results land in STATE_DIR (status.json, failed, reboot-required) and LOG_DIR (one log per run). A new kernel, microcode or other package that
 needs a reboot is recorded in `reboot-required` (also /run/reboot-required); nothing is rebooted and nothing pops up.
 Policy and knobs: /etc/horcrux/autoupdate.conf (docs/design/autoupdate.md in the repository).
 """
@@ -62,6 +64,11 @@ DEFAULTS = {
     "STALE_DAYS": "3",            # `check` warns after this many days without a successful run, critical after twice that
     "MAX_RUNTIME_HOURS": "12",
     "EXTRA_EMERGE_OPTS": "",
+    "RESTART_SERVICES_ENABLED": "yes",  # restart the services below once an update replaced their program (guests keep running)
+    "RESTART_SERVICES": "horcrux-ha-fence horcrux-api",  # in this order
+    "RESTART_PROGRAMS": "/usr/bin/horcrux-api",  # what counts as the service's own program (everything else in its cgroup = its guests)
+    "RESTART_IDLE": "yes",        # yes: wait while a client (web UI, API, console viewer) is connected; the hourly trigger retries
+    "RESTART_WAIT_SECS": "90",    # how long the restarted service may take to run again
     "REBOOT_PACKAGES": "sys-kernel/gentoo-kernel sys-kernel/gentoo-kernel-bin sys-kernel/vanilla-kernel sys-kernel/vanilla-kernel-bin "
                        "sys-kernel/linux-firmware sys-firmware/intel-microcode sys-fs/zfs-kmod x11-drivers/nvidia-drivers sys-apps/systemd",
 }
@@ -261,6 +268,235 @@ def other_emerge_running():
         if exe in ("emerge",) or (exe.startswith("python") and len(cmd) > 1 and os.path.basename(cmd[1].decode(errors="replace")) == "emerge"):
             return True
     return False
+
+
+# ---------------------------------------------------------------- restarting replaced services
+#
+# A package upgrade replaces /usr/bin/horcrux-api on disk, but the running manager keeps executing the old (now deleted) file until it
+# is restarted, so an installed fix is not running. After an update, every service in RESTART_SERVICES whose own program was replaced is
+# restarted. That never ends a guest: QEMU and the container runtimes are not the manager's processes to kill (OpenRC script and systemd
+# unit, KillMode=process), and dependents are left alone (OpenRC --nodeps; the guests unit only Wants= the manager). A restart waits
+# while somebody uses the manager (an open web UI, API or console connection) or a guest power pass runs; it is retried by the hourly
+# trigger and shown in `status`/`check` until it happened. Nothing pops up, nothing reboots.
+
+PROC = os.environ.get("HX_AU_PROC", "/proc")
+CGROUP = os.environ.get("HX_AU_CGROUP", "/sys/fs/cgroup")
+
+
+def init_system():
+    return "systemd" if os.path.isdir("/run/systemd/system") else "openrc"
+
+
+def service_cgroup(svc):
+    """the cgroup v2 directory of a service, or None (cgroup v1 hosts, service not running)"""
+    for rel in (f"openrc.{svc}", f"system.slice/{svc}.service"):
+        p = os.path.join(CGROUP, rel)
+        if os.path.exists(os.path.join(p, "cgroup.procs")):
+            return p
+    return None
+
+
+def cgroup_pids(cg):
+    try:
+        with open(os.path.join(cg, "cgroup.procs")) as f:
+            return [int(x) for x in f.read().split()]
+    except (OSError, ValueError):
+        return []
+
+
+def proc_exe(pid):
+    """(path, replaced): the program a process runs and whether that file was replaced or removed since it started"""
+    try:
+        exe = os.readlink(os.path.join(PROC, str(pid), "exe"))
+    except OSError:
+        return None, False
+    if exe.endswith(" (deleted)"):
+        return exe[:-len(" (deleted)")], True
+    return exe, False
+
+
+def service_procs(svc, programs):
+    """(program pids, other pids) of a running service: its own program vs. what it started (guests)"""
+    cg = service_cgroup(svc)
+    if not cg:
+        return [], []
+    own, other = [], []
+    for pid in cgroup_pids(cg):
+        path, _ = proc_exe(pid)
+        (own if path in programs else other).append(pid)
+    return own, other
+
+
+def socket_inodes(pid):
+    out = set()
+    for fd in glob.glob(os.path.join(PROC, str(pid), "fd", "*")):
+        try:
+            t = os.readlink(fd)
+        except OSError:
+            continue
+        if t.startswith("socket:["):
+            out.add(t[8:-1])
+    return out
+
+
+def client_connections(pid):
+    """open client connections to a process's own listening sockets: TCP (web UI, API, console relay) and unix (local viewers)"""
+    inodes = socket_inodes(pid)
+    if not inodes:
+        return 0
+    n = 0
+    for name in ("tcp", "tcp6"):
+        listen, est = set(), []
+        try:
+            with open(os.path.join(PROC, str(pid), "net", name)) as f:
+                next(f, None)
+                for ln in f:
+                    p = ln.split()
+                    if len(p) < 10 or p[9] not in inodes:
+                        continue
+                    port = p[1].rsplit(":", 1)[-1]
+                    if p[3] == "0A":
+                        listen.add(port)
+                    elif p[3] == "01":
+                        est.append(port)
+        except OSError:
+            continue
+        n += sum(1 for port in est if port in listen)
+    try:
+        with open(os.path.join(PROC, str(pid), "net", "unix")) as f:
+            next(f, None)
+            rows = [ln.split() for ln in f]
+        mine = [r for r in rows if len(r) >= 7 and r[6] in inodes]
+        listening = {r[7] for r in mine if len(r) >= 8 and int(r[3], 16) & 0x10000}
+        n += sum(1 for r in mine if len(r) >= 8 and r[5] == "03" and r[7] in listening and not int(r[3], 16) & 0x10000)
+    except (OSError, ValueError):
+        pass
+    return n
+
+
+def guest_power_pass_running():
+    """a `horcrux-api guests boot|stop` pass (it talks to the manager)"""
+    for d in glob.glob(os.path.join(PROC, "[0-9]*")):
+        try:
+            cmd = open(os.path.join(d, "cmdline"), "rb").read().split(b"\0")
+        except OSError:
+            continue
+        if len(cmd) > 1 and os.path.basename(cmd[0].decode(errors="replace")) == "horcrux-api" and cmd[1] == b"guests":
+            return True
+    return False
+
+
+def alive(pid):
+    return os.path.exists(os.path.join(PROC, str(pid)))
+
+
+RC_CONF = os.environ.get("HX_AU_RC_CONF", "/etc/rc.conf")
+
+
+def guests_survive_restart(svc, init=None, runner=None):
+    """None when stopping the service leaves the processes it started running, else the reason it would not"""
+    runner = runner or sh
+    if (init or init_system()) == "systemd":
+        rc, out = runner(["systemctl", "show", "-p", "KillMode", "--value", f"{svc}.service"], None)
+        mode = (out[-1] if out else "").strip()
+        if rc != 0 or mode not in ("process", "none"):
+            return f"{svc}.service has KillMode={mode or '?'}: a restart would end the guests it started"
+        return None
+    for path in (RC_CONF, f"/etc/conf.d/{svc}"):
+        try:
+            for ln in open(path):
+                k, _, v = ln.strip().partition("=")
+                if k.strip() == "rc_cgroup_cleanup" and yes(v.strip().strip("\"'")):
+                    return f"rc_cgroup_cleanup is on in {path}: stopping {svc} would end the guests it started"
+        except OSError:
+            pass
+    return None
+
+
+def restart_argv(svc, init=None):
+    if (init or init_system()) == "systemd":
+        return ["systemctl", "restart", f"{svc}.service"]
+    # --nodeps: services that `use` the manager (horcrux-guests) are not stopped with it
+    return [f"/etc/init.d/{svc}", "--nodeps", "restart"]
+
+
+def restart_replaced(conf, log=None, runner=None, force=False, wait=None):
+    """restart every RESTART_SERVICES service whose own program was replaced. Returns (summary, pending reason or None)"""
+    runner = runner or sh
+    if not yes(conf["RESTART_SERVICES_ENABLED"]):
+        return "disabled", None
+    programs = set(conf["RESTART_PROGRAMS"].split())
+    wait = int(conf["RESTART_WAIT_SECS"]) if wait is None else wait
+    stale = []
+    for svc in conf["RESTART_SERVICES"].split():
+        own, other = service_procs(svc, programs)
+        if any(proc_exe(p)[1] for p in own):
+            stale.append((svc, own, other))
+    if not stale:
+        return "nothing to restart", None
+    names = " ".join(s for s, _, _ in stale)
+    if not force:
+        if guest_power_pass_running():
+            return f"waiting: {names} (a guest power pass is running)", "a guest power pass is running"
+        if yes(conf["RESTART_IDLE"]):
+            busy = sum(client_connections(p) for _, own, _ in stale for p in own)
+            if busy:
+                why = f"{busy} open client connection(s) to the manager (web UI, API or console)"
+                return f"waiting: {names} ({why})", why
+    done, failed = [], []
+    for svc, own, other in stale:
+        unsafe = guests_survive_restart(svc, runner=runner) if other else None
+        if unsafe:
+            failed.append(f"{svc} not restarted: {unsafe}")
+            continue
+        if log:
+            log.write(f"restart {svc}: its program was replaced by the update (pids {own}); {len(other)} guest process(es) keep running\n")
+        rc, tail = runner(restart_argv(svc), log, timeout=wait + 60)
+        new = []
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            new, _ = service_procs(svc, programs)
+            if new and not any(proc_exe(p)[1] for p in new) and not set(new) & set(own):
+                break
+            SLEEP(1)
+        lost = [p for p in other if not alive(p)]
+        ok = rc == 0 and new and not any(proc_exe(p)[1] for p in new)
+        if lost and log:
+            log.write(f"restart {svc}: processes gone after the restart: {lost}\n")
+        if ok:
+            done.append(f"{svc} (guests kept {len(other) - len(lost)}/{len(other)})")
+        else:
+            failed.append(f"{svc} rc={rc}: {' | '.join(tail[-2:])}")
+    if failed:
+        return "restart failed: " + "; ".join(failed), "restart failed: " + "; ".join(failed)
+    return "restarted " + ", ".join(done), None
+
+
+def record_restart(summary, pending):
+    p = state_path("restart-pending")
+    if pending:
+        since = None
+        try:
+            with open(p) as f:
+                since = int(f.readline().split()[0])
+        except (OSError, ValueError, IndexError):
+            pass
+        write_atomic(p, f"{since or now()} {pending}\n")
+    else:
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+
+
+def restart_pending():
+    """(since, reason) or (None, None)"""
+    try:
+        with open(state_path("restart-pending")) as f:
+            t, _, why = f.readline().strip().partition(" ")
+            return int(t), why
+    except (OSError, ValueError):
+        return None, None
 
 
 def root_zfs():
@@ -580,6 +816,11 @@ def do_run(conf, reason="manual", runner=sh):
                     fail("etc-update", "etc-update failed: " + " | ".join(tail[-3:]))
             if failed_step is None:
                 st["config_updates_pending"] = count_config_updates()
+            # the update replaced the manager's program: run the new one (guests keep running; waits while somebody uses it)
+            summary, pending = restart_replaced(conf, log, runner)
+            st["steps"]["restart"] = summary
+            record_restart(summary, pending)
+            log.write(f"restart: {summary}\n")
         # a package that needs a reboot counts even when a later step failed
         reasons = reboot_reasons(merged, conf)
         if reasons:
@@ -627,6 +868,37 @@ def due(conf, st):
     return now() - last >= float(conf["INTERVAL_HOURS"]) * 3600
 
 
+def restart_only(conf, force=False, quiet=True):
+    """the hourly trigger between updates (and `restart-services`): restart a manager whose program an update - or an emerge by hand -
+    replaced; a cheap /proc + cgroup scan when there is nothing to do"""
+    try:
+        fd = take_lock()
+    except Locked:
+        return 0
+    try:
+        if other_emerge_running():
+            return 0  # a merge may be replacing the program right now
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(os.path.join(LOG_DIR, "restart.log"), "a") as log:
+            summary, pending = restart_replaced(conf, log, force=force)
+            if summary != "nothing to restart" or restart_pending()[0]:
+                log.write(f"{iso(now())} {summary}\n")
+        record_restart(summary, pending)
+        if summary not in ("nothing to restart", "disabled"):
+            st = read_status()
+            changed = (st.get("restart") or {}).get("result") != summary
+            if st:
+                st["restart"] = {"at": now(), "at_iso": iso(now()), "result": summary}
+                write_atomic(state_path("status.json"), json.dumps(st, indent=2, sort_keys=True) + "\n")
+            if changed:
+                sh(["logger", "-t", "horcrux-autoupdate", f"restart: {summary}"])
+        if not quiet:  # cron/timer runs stay silent: the result is in restart.log, status and syslog
+            print(summary)
+        return 1 if summary.startswith("restart failed") else 0
+    finally:
+        os.close(fd)
+
+
 def cmd_run(a, only_if_due):
     conf = read_conf()
     if not yes(conf["ENABLED"]):
@@ -636,7 +908,7 @@ def cmd_run(a, only_if_due):
         return 0
     st0 = read_status()
     if only_if_due and not due(conf, st0):
-        return 0
+        return restart_only(conf)
     try:
         fd = take_lock()
     except Locked:
@@ -679,6 +951,11 @@ def check_result(conf, st, rb=None):
     needed = st.get("reboot_required") if rb is None else rb
     if needed:
         msg += ", reboot required: " + "; ".join(st.get("reboot_reasons", []))
+    since, why = restart_pending()
+    if since:
+        msg += f", service restart waiting since {iso(since)}: {why}"
+        if why.startswith("restart failed") or t - since > stale:
+            return 1, msg
     if st.get("warnings"):
         return 1, msg + ", warning: " + "; ".join(st["warnings"])[:200]
     return 0, msg
@@ -693,10 +970,14 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     sub.add_parser("check")
     sub.add_parser("pending")
+    p = sub.add_parser("restart-services", help="restart a Horcrux service whose program an update replaced (guests keep running)")
+    p.add_argument("--now", action="store_true", help="do not wait for open client connections")
     a = ap.parse_args(argv)
-    if a.cmd in ("cron", "run") and os.geteuid() != 0:
+    if a.cmd in ("cron", "run", "restart-services") and os.geteuid() != 0:
         print("horcrux-autoupdate: must run as root", file=sys.stderr)
         return 2
+    if a.cmd == "restart-services":
+        return restart_only(read_conf(), force=a.now, quiet=False)
     if a.cmd == "cron":
         return cmd_run(a, True)
     if a.cmd == "run":
