@@ -24,6 +24,21 @@ One run (`horcrux-autoupdate run`), at nice 19 / ionice idle, under `flock` and 
    from the world file: nothing is removed.
 5. `@preserved-rebuild` when Portage preserved libraries.
 6. `etc-update --preen` (trivial changes only; `ETC_UPDATE=all` selects `--automode -5`). Pending config files are counted in the status.
+7. Restart of replaced services (below).
+
+## Restarting the manager after an update
+A merge replaces `/usr/bin/horcrux-api` on disk, but the running manager keeps executing the old, deleted file: an installed fix does not
+run until the manager is restarted. After every update, and on every hourly trigger in between (an emerge by hand counts too), each
+service in `RESTART_SERVICES` (`horcrux-ha-fence horcrux-api`) whose own program (`RESTART_PROGRAMS`) was replaced - its process's
+`/proc/PID/exe` ends in `(deleted)` - is restarted: OpenRC `/etc/init.d/<svc> --nodeps restart` (services that `use` it, such as
+`horcrux-guests`, are not stopped with it), systemd `systemctl restart <svc>.service` (`horcrux-guests` only `Wants=` it).
+Guests keep running: QEMU and the container runtimes are not the manager's processes to kill. The step checks that before acting and
+refuses with the reason when a restart would end them (a systemd unit without `KillMode=process`, OpenRC `rc_cgroup_cleanup=YES`), and
+afterwards counts the guest processes of the service's cgroup that are still alive (`restarted horcrux-api (guests kept 3/3)`).
+It waits, and the hourly trigger tries again, while somebody uses the manager (an accepted TCP connection on one of its listening ports:
+web UI, API, console relay; or a client on one of its unix sockets: local viewer) or while a `horcrux-api guests` power pass runs.
+`RESTART_IDLE=no` drops the wait, `horcrux-autoupdate restart-services [--now]` runs the step by hand, `RESTART_SERVICES_ENABLED=no`
+turns it off. A waiting restart is in `restart-pending`, `status` and `check` (warning after `STALE_DAYS`, or when a restart failed).
 
 ## Reboots
 Never executed. A new kernel, microcode, ZFS module, NVIDIA driver or systemd update is written to
@@ -40,4 +55,4 @@ wire it into a health check or a Rustinion custom check. Nothing is mailed.
 `/etc/horcrux/autoupdate.conf` (all optional; see the file). `ENABLED=no` turns it off. Machine-specific values belong in a private overlay, not here.
 
 ## Tests
-`gentoo/sys-apps/horcrux-autoupdate/tests` (unit, no Portage) and `tools/vmtest/scenarios/autoupdate_openrc.py` (OpenRC guest, real KVM: run, lock, failed marker, reboot marker, crond trigger, with stand-in portage tools). The systemd units are checked by `gentoo/ci/check-init-parity.py` and `systemd-analyze`.
+`gentoo/sys-apps/horcrux-autoupdate/tests` (unit, no Portage; fake /proc + cgroup trees for the restart step) and `tools/vmtest/scenarios/autoupdate_openrc.py` (OpenRC guest, real KVM: run, lock, failed marker, reboot marker, crond trigger, with stand-in portage tools). The restart step is also exercised on a real installed host in `tools/vmtest/scenarios/host_shutdown_save.py` (a running VM keeps its QEMU process and memory across the restart, OpenRC and systemd). The systemd units are checked by `gentoo/ci/check-init-parity.py` and `systemd-analyze`.

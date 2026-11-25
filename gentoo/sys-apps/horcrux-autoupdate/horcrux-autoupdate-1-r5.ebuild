@@ -21,6 +21,8 @@ IUSE="systemd"
 # -r2: a repository whose sync fails (an rsync mirror caught mid-update fails Manifest verification) is synced again on its own before the
 # run counts as failed, the error names the repository and the reason, a post-sync hook failure with a fresh tree is a warning, protected
 # packages (old kernels) no longer block the whole depclean, and the repo.postsync.d md5-cache hook.
+# -r5: after an update (and hourly in between), a Horcrux service whose program was replaced (horcrux-api) is restarted so the installed
+# code runs; guests keep running, the restart waits while a web UI/API/console client is connected (`restart-services`, RESTART_* keys).
 RDEPEND="
 	dev-lang/python
 	sys-apps/portage
