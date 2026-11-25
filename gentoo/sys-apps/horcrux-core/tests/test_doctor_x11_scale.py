@@ -132,11 +132,31 @@ class X11Scale(unittest.TestCase):
         self.fake_helper("exit 0")
         self.proc_entry(100, "gnome-shell", 0)
         r = self.doctor()
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("SKIP needs root", r.stdout)
+        self.assertEqual(r.returncode, 1)  # an unchecked logged-in user must not look healthy
+        self.assertIn("FAIL not checked: needs root", r.stdout)
         self.assertEqual(self.calls(), [])
         r = self.doctor("--user", "root")
-        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("FAIL not checked", r.stdout)
+        self.assertEqual(self.doctor("--json").returncode, 1)
+
+    def test_other_user_unchecked_even_when_own_session_is_ok(self):
+        if ME == 0:
+            self.skipTest("root can run as anyone")
+        self.fake_helper('echo "OK a"')
+        self.proc_entry(100, "gnome-shell", ME)
+        self.proc_entry(101, "gnome-shell", 0)
+        r = self.doctor()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("OK a", r.stdout)
+        self.assertIn("FAIL not checked", r.stdout)
+
+    def test_exit_zero_without_ok_line_is_failure(self):
+        self.fake_helper("true")
+        self.proc_entry(100, "gnome-shell", ME)
+        r = self.doctor()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("nothing was verified", r.stdout)
 
     def test_json(self):
         self.fake_helper('echo "OK a"')

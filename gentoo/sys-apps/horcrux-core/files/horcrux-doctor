@@ -33,7 +33,8 @@ x11-scale
   only --user U) with XDG_RUNTIME_DIR=/run/user/UID, and prints the helper's OK/FAIL lines prefixed with the user. Read-only: the
   helper only queries mutter, gsettings and the X server. Exit 1 when any line is FAIL or the helper fails. Skips cleanly (exit 0,
   one "skipped" line) on systemd, without the helper (no GNOME OpenRC session package) or with no GNOME user logged in. Running as
-  another user needs root; an unprivileged caller can only check itself. Not part of the default run: it needs a live session.
+  another user needs root; an unprivileged caller can only check itself, and a logged-in GNOME user it cannot check is a FAIL
+  ("not checked", exit 1), never a pass. A helper that exits 0 without printing any OK line is a FAIL too. Not part of the default run: it needs a live session.
 
 Exit status: 0 healthy, 1 warnings found (after --fix: warnings that remain), 2 usage/internal error.
 """
@@ -420,9 +421,10 @@ def run_x11_scale(a):
         ent = dict(user=name, uid=uid, rc=None, lines=[])
         res["users"].append(ent)
         if uid != me and me != 0:
-            ent["lines"] = ["SKIP needs root to run the check as %s" % name]
-            if a.user:
-                res["ok"], res["error"] = False, "running as another user needs root"
+            # Not checked is not healthy: never report success for a user we could not look at.
+            ent["rc"] = 77
+            ent["lines"] = ["FAIL not checked: needs root to run the check as %s" % name]
+            res["ok"] = False
             continue
         env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "XDG_RUNTIME_DIR": "/run/user/%d" % uid,
                "LANG": "C", "USER": name, "LOGNAME": name}
@@ -442,6 +444,8 @@ def run_x11_scale(a):
         except OSError as e:
             ent["rc"] = 126
             ent["lines"] = ["FAIL cannot run helper: %s" % e]
+        if ent["rc"] == 0 and not any(l.startswith("OK") for l in ent["lines"]):
+            ent["lines"].append("FAIL helper printed no OK line (nothing was verified)")
         if ent["rc"] != 0 or any(l.startswith("FAIL") for l in ent["lines"]):
             res["ok"] = False
     return res
