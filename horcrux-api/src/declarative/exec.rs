@@ -140,17 +140,21 @@ async fn run_change(
                 .as_ref()
                 .and_then(|s| s.kernel_line)
                 .ok_or("not in spec")?;
-            let st = kl::save(&kl::KernelLineSettings { line })?;
+            let st = kl::save(&kl::KernelLineSettings { line, ..kl::load() })?;
             Ok(Some(match (line, st.held_back) {
                 (kl::KernelLine::Newest, Some(h)) => format!("kernel line saved; {h}"),
-                _ => "kernel line saved; the kernel arrives with the next update (reboot when ready)".into(),
+                _ => {
+                    "kernel line saved; the kernel arrives with the next update (reboot when ready)"
+                        .into()
+                }
             }))
         }
 
         ("ceph", Action::Create | Action::Update) => {
             let c = spec.ceph.as_ref().ok_or("not in spec")?;
             let major = crate::api::ceph_install::parse_release(&c.release)?;
-            let upid = crate::api::ceph_install::start_packages(major, "declarative").map_err(api)?;
+            let upid =
+                crate::api::ceph_install::start_packages(major, "declarative").map_err(api)?;
             Ok(Some(format!("package task {upid} started")))
         }
 

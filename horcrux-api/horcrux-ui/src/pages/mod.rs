@@ -3,6 +3,7 @@ pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod ceph;
+pub mod ceph_install;
 mod clone_list;
 mod console;
 mod container_console;

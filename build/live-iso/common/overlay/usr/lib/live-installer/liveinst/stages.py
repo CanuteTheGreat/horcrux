@@ -665,6 +665,32 @@ class HardeningStage(Stage):
         return out
 
 
+class KernelStage(Stage):
+    """kernel line (backend: kernelline.py, key kernel_line): offered when the profile sets kernel_line_choice"""
+    id, title, short = "kernel", "Kernel", "Kernel"
+    intro = ("Default follows the distribution's stable kernel. Newest is an opt-in: the newest kernel the package repositories carry, "
+             "held at the newest line the installed OpenZFS module supports. The kernel switches with the first update of the installed "
+             "system; the previous kernel stays in the boot menu, and the choice can be changed later (System > Packages > Kernel line).")
+
+    def applies(self, ctx):
+        from . import kernelline
+        return kernelline.offered(ctx.p)
+
+    def fields(self, ctx):
+        from . import kernelline
+        return [Field("line", "Kernel line", "choice", ctx.c.get("kernel_line", "default"), kernelline.LINES,
+                      hint="Default is recommended; Newest gets new hardware support sooner")]
+
+    def commit(self, ctx, v):
+        ctx.c["kernel_line"] = v["line"]
+
+    def plan(self, ctx):
+        line = ctx.c.get("kernel_line", "default")
+        if line == "newest":
+            return ["Kernel line: newest (opt-in) - Portage pins written; the newest kernel OpenZFS supports arrives with the first update"]
+        return ["Kernel line: default (the distribution's stable kernel)"]
+
+
 class UseFlagsStage(Stage):
     id, title, short = "use_flags", "Software (USE flags)", "Software"
     ui = "custom"
@@ -826,11 +852,11 @@ class GnomeStage(Stage):
 
 
 STAGES = [KeymapStage(), HostnameStage(), DiskStage(), ExtractStage(), RootpassStage(), DesktopStage(), T2Stage(), GnomeStage(), NetconfigStage(), NetAdvStage(),
-          ServicesStage(), HardeningStage(), UseFlagsStage(), MachineStage(), FinishStage()]
+          ServicesStage(), HardeningStage(), KernelStage(), UseFlagsStage(), MachineStage(), FinishStage()]
 BY_ID = {s.id: s for s in STAGES}
 UI_ORDER = [s.id for s in STAGES]
 # disks must exist and be extracted before anything is written into the new system
-APPLY_ORDER = ["disk", "extract", "keymap", "hostname", "rootpass", "desktop", "t2", "gnome", "netconfig", "netadv", "services", "hardening", "use_flags", "machine", "finish"]
+APPLY_ORDER = ["disk", "extract", "keymap", "hostname", "rootpass", "desktop", "t2", "gnome", "netconfig", "netadv", "services", "hardening", "kernel", "use_flags", "machine", "finish"]
 
 
 def stage_list(ctx, ui_only=False):

@@ -309,6 +309,8 @@ pub fn PackageManagerPage() -> impl IntoView {
                 </div>
             </div>
 
+            <super::kernel_line::KernelLineCard/>
+
             {move || error_message.get().map(|msg| {
                 clear_messages();
                 view! {

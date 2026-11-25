@@ -28,6 +28,7 @@ pub fn AboutPage() -> impl IntoView {
             <p class="help-text">
                 "Horcrux is free software (GPL-3.0). This is web UI version " <strong>{UI_VERSION}</strong> "."
             </p>
+            <VersionsCard/>
             <div class="card">
                 <h2>"Policies and licenses"</h2>
                 <ul class="about-links">
@@ -58,6 +59,44 @@ pub fn AboutPage() -> impl IntoView {
                     </li>
                 </ul>
             </div>
+        </div>
+    }
+}
+
+/// What this node runs: kernel, QEMU, Incus/LXC, OpenZFS, Ceph (from the node's package database).
+#[component]
+fn VersionsCard() -> impl IntoView {
+    let (v, set_v) = create_signal(None::<crate::api::platform::Versions>);
+    let (err, set_err) = create_signal(None::<String>);
+    spawn_local(async move {
+        match crate::api::platform::versions().await {
+            Ok(x) => set_v.set(Some(x)),
+            Err(e) => set_err.set(Some(e.message)),
+        }
+    });
+    view! {
+        <div class="card" id="about-versions">
+            <h2>"This node"</h2>
+            {move || err.get().map(|e| view! { <div class="alert alert-error">{format!("Could not read the versions: {e}")}</div> })}
+            {move || v.get().map(|v| view! {
+                <p class="help-text">{format!("Horcrux {} - versions from the {} package database.", v.horcrux, v.package_db)}</p>
+                <table class="vm-table" id="about-versions-table">
+                    <thead><tr><th>"Component"</th><th>"Version"</th><th>"Running"</th><th>"Notes"</th></tr></thead>
+                    <tbody>
+                        {v.components.into_iter().map(|c| {
+                            let id = format!("about-version-{}", c.id);
+                            view! {
+                                <tr id=id>
+                                    <td>{c.name}</td>
+                                    <td>{c.version.unwrap_or_else(|| "not installed".into())}</td>
+                                    <td>{c.running.unwrap_or_default()}</td>
+                                    <td>{c.note.unwrap_or_default()}</td>
+                                </tr>
+                            }
+                        }).collect_view()}
+                    </tbody>
+                </table>
+            })}
         </div>
     }
 }

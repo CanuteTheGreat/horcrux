@@ -480,6 +480,9 @@ pub async fn run() -> anyhow::Result<()> {
     // VMs half-received from a migration whose source went quiet.
     api::migration_peer::spawn_reaper(state.clone());
 
+    // The kernel line's Portage pins follow the setting and the ZFS module's cap.
+    api::system_admin::kernel_line::spawn_reconcile();
+
     // Running Docker/Podman containers with firewall rules: give their
     // host-side veths the stable names the rules match (the runtime gave
     // them random ones when it started them, e.g. at boot).
