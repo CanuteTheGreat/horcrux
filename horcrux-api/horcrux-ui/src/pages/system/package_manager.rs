@@ -314,6 +314,19 @@ pub fn PackageManagerPage() -> impl IntoView {
                 }
             })}
 
+            <p class="package-summary">{move || {
+                let list = packages.get();
+                let pending = list.iter().filter(|p| p.status == "upgradeable").count();
+                let installed = list.iter().filter(|p| p.status != "not-installed").count();
+                if loading.get() && list.is_empty() {
+                    "Loading packages...".to_string()
+                } else if pending == 0 {
+                    format!("{} installed - no updates pending", installed)
+                } else {
+                    format!("{} installed - {} update{} pending (use the Upgradeable filter or Upgrade All)", installed, pending, if pending == 1 { "" } else { "s" })
+                }
+            }}</p>
+
             <div class="package-controls">
                 <div class="controls-row">
                     <div class="search-box">
