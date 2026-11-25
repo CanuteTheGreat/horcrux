@@ -385,13 +385,28 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
         vm = self.vm
         hp = "/usr/libexec/gnome-session-openrc-helper"
         if self.systemd:
-            # no helper on systemd: the display is Xwayland's own argument, gsd-xsettings is started by gnome-settings-daemon's unit
-            getdisp = lambda: vm.out(f"tr '\\0' '\\n' </proc/$(pgrep -u {self.uid} -x Xwayland | head -n1)/cmdline 2>/dev/null | grep -m1 '^:[0-9]'").strip() or None  # noqa: E731
+            # no helper on systemd: mutter starts Xwayland on demand (first X11 client), so there may be no Xwayland process yet.
+            # The display name is in the user manager's environment (gnome-shell imports DISPLAY); an X client then starts Xwayland.
+            def getdisp():
+                o = self.as_user("systemctl --user show-environment | grep -m1 '^DISPLAY='").strip().splitlines()
+                d = o[-1].split("=", 1)[1].strip() if o and "=" in o[-1] else ""
+                if not d.startswith(":"):
+                    d = vm.out(f"tr '\\0' '\\n' </proc/$(pgrep -u {self.uid} -x Xwayland | head -n1)/cmdline 2>/dev/null | grep -m1 '^:[0-9]'").strip()
+                if not d and vm.out(f"pgrep -u {self.uid} -x gnome-shell | head -n1").strip():
+                    d = ":0"  # mutter's default socket, Xwayland not started yet
+                if not d.startswith(":"):
+                    # mutter listens on the X socket even while no Xwayland runs
+                    d = vm.out(f"for f in /tmp/.X11-unix/X*; do [ -S \"$f\" ] && [ \"$(stat -c %u \"$f\")\" = {self.uid} ] && {{ echo \":${{f##*/X}}\"; break; }}; done").strip()
+                return d or None
         else:
             getdisp = lambda: self.as_user(f"{hp} x-display") or None  # noqa: E731
         disp = self.wait(getdisp, 40, step=3) or ""
-        if not self.check(n, "x11-xwayland-display", disp.startswith(":"), f"Xwayland display of the session: {disp!r}"):
+        if not self.check(n, "x11-xwayland-display", disp.startswith(":"), f"Xwayland display of the session: {disp!r} (X sockets: {vm.out('ls -l /tmp/.X11-unix 2>&1').strip()[:200]!r}; user env: {self.as_user('systemctl --user show-environment | grep -E ^DISPLAY')[:80]!r})"):
             return
+        if self.systemd:
+            # start Xwayland by connecting an X11 client (GTK3 on the X11 backend), then wait for the process
+            self.as_user(f"GDK_BACKEND=x11 DISPLAY={disp} python3 -c {shq(self.GDK_PROBE)}")
+            self.wait(lambda: vm.out(f"pgrep -u {self.uid} -x Xwayland | head -n1").strip() or None, 40, step=2)
         # gnome-settings-daemon wants the gsd-xsettings service: the SERVICE STATE must be started, not only the process
         # alive (seen on a real session: supervise-daemon ran it while rc-service printed "eend: command not found", reported "failed to
         # start" and left no started/ symlink, so `rc-service -U gsd-xsettings status` said stopped and the next restart/stop skipped it)
