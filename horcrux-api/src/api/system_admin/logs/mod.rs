@@ -112,9 +112,11 @@ pub enum Source {
     File(PathBuf),
 }
 
+/// journald is RUNNING: its socket (or its volatile directory) exists. A
+/// leftover /var/log/journal on an OpenRC host does not make it the source.
 fn journald_present() -> bool {
     which("journalctl").is_some()
-        && (rooted("run/log/journal").is_dir() || rooted("var/log/journal").is_dir())
+        && (rooted("run/systemd/journal/socket").exists() || rooted("run/log/journal").is_dir())
 }
 
 pub fn detect(s: &LogSettings) -> Option<Source> {
@@ -177,6 +179,71 @@ fn boot_start_of_machine() -> Option<i64> {
         .find_map(|l| l.strip_prefix("btime "))
         .and_then(|v| v.trim().parse::<i64>().ok())
         .map(|s| s * 1_000_000)
+}
+
+/// Kernel messages of the CURRENT boot from the kernel ring buffer
+/// (`/dev/kmsg`): sysklogd and others do not write them to their file.
+fn kmsg_entries(s: &LogSettings) -> Vec<LogEntry> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    if s.kmsg_path.is_empty() {
+        return vec![];
+    }
+    let uptime = std::fs::read_to_string(rooted("proc/uptime"))
+        .ok()
+        .and_then(|t| t.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()));
+    let Some(boot_us) = uptime
+        .map(|u| now_us() - (u * 1_000_000.0) as i64)
+        .or_else(boot_start_of_machine)
+    else {
+        return vec![];
+    };
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NONBLOCK)
+        .open(rooted(&s.kmsg_path))
+    else {
+        return vec![];
+    };
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; 16384];
+    // one read = one record; EAGAIN = the end of the buffer
+    loop {
+        match f.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if let Some(e) = parse_kmsg(&String::from_utf8_lossy(&buf[..n]), boot_us) {
+                    out.push(e);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => continue, // EPIPE: a record was overwritten, the next read goes on
+        }
+        if out.len() >= s.max_scan_lines {
+            break;
+        }
+    }
+    out
+}
+
+/// The syslog file's entries plus, when its logger writes no kernel lines
+/// for the current boot, the kernel ring buffer's.
+fn file_entries_with_kernel(file: &std::path::Path, s: &LogSettings) -> Vec<LogEntry> {
+    let mut all = file_entries(file, s);
+    let boots = file_boots(&all, s);
+    let since = boots.last().and_then(|b| b.first_us).unwrap_or(0);
+    let logged = all
+        .iter()
+        .any(|e| e.kernel && e.ts_us.is_some_and(|t| t >= since));
+    if !logged {
+        let ring = kmsg_entries(s);
+        if !ring.is_empty() {
+            all.extend(ring);
+            all.sort_by_key(|e| e.ts_us.unwrap_or(0));
+        }
+    }
+    all
 }
 
 /// Reboots of a host without journald: login records, kernel boot lines,
@@ -276,7 +343,7 @@ pub async fn read_local(f: &Filters, s: &LogSettings) -> Result<Vec<LogEntry>, A
             out
         }
         Source::File(file) => {
-            let mut all = file_entries(&file, s);
+            let mut all = file_entries_with_kernel(&file, s);
             let boots = file_boots(&all, s);
             for e in &mut all {
                 e.boot_id = e
@@ -414,6 +481,10 @@ async fn info_local(s: &LogSettings) -> Result<LogInfo, ApiError> {
                     .to_string(),
                 "Reboots are found from the login records (wtmp), kernel boot lines and the \
                  kernel's boot time; older boots have synthetic ids (boot-<time>)."
+                    .to_string(),
+                "Kernel messages of the current boot are read from the kernel ring buffer when the \
+                 logger does not write them to its file; earlier boots' kernel messages exist \
+                 only if the logger recorded them."
                     .to_string(),
                 format!(
                     "Only the last {} MiB of the file are searched.",

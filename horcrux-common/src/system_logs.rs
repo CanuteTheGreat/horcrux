@@ -24,6 +24,9 @@ pub struct LogSettings {
     pub syslog_files: Vec<String>,
     /// Login records used to find reboots on hosts without journald boots.
     pub wtmp_path: String,
+    /// Kernel ring buffer read for kernel messages of the current boot when
+    /// the syslog daemon does not write them to its file ("" = never).
+    pub kmsg_path: String,
     /// Live mode: milliseconds between two looks for new entries.
     pub follow_poll_ms: u64,
     /// Live mode: the stream closes after this many seconds without a new
@@ -51,6 +54,7 @@ impl Default for LogSettings {
                 "/var/log/everything/current".into(),
             ],
             wtmp_path: "/var/log/wtmp".into(),
+            kmsg_path: "/dev/kmsg".into(),
             follow_poll_ms: 1000,
             follow_idle_secs: 600,
             follow_max_secs: 3600,
@@ -96,6 +100,9 @@ impl LogSettings {
         range("follow_max_streams", self.follow_max_streams, 1, 64)?;
         if self.syslog_files.is_empty() {
             return Err("syslog_files must name at least one file".into());
+        }
+        if !self.kmsg_path.is_empty() && !self.kmsg_path.starts_with('/') {
+            return Err("kmsg_path must be an absolute path (or empty)".into());
         }
         for p in self.syslog_files.iter().chain([&self.wtmp_path]) {
             if !p.starts_with('/') || p.contains("..") {

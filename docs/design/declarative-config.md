@@ -73,6 +73,7 @@ logs:                 # System Log viewer limits (docs/SYSTEM-LOGS.md); every ke
   syslog_tail_bytes: 8388608    # how much of the end of a syslog file is searched
   syslog_files: [/var/log/messages, /var/log/syslog, /var/log/everything/current]
   wtmp_path: /var/log/wtmp
+  kmsg_path: /dev/kmsg          # kernel ring buffer for kernel messages when the logger writes none
   follow_poll_ms: 1000          # live mode: how often new entries are looked for
   follow_idle_secs: 600         # live mode: closes after this long without a new entry
   follow_max_secs: 3600
