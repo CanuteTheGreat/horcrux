@@ -5365,6 +5365,85 @@ fn pool_volumes_path(pool_id: &str) -> String {
     format!("/storage/pools/{}/volumes", urlencoding::encode(pool_id))
 }
 
+// ---- storage plugins (GET /api/storage/plugins) ----
+
+pub use horcrux_storage_plugin_sdk::{
+    Field as PluginField, FieldType as PluginFieldType, PluginDescription,
+};
+
+/// One executable in the node's plugin directory.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StoragePluginInfo {
+    pub id: String,
+    pub path: String,
+    pub usable: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub description: Option<PluginDescription>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StoragePluginList {
+    pub plugin_dir: String,
+    pub plugin_dir_exists: bool,
+    #[serde(default)]
+    pub supported_api_versions: Vec<u32>,
+    pub plugins: Vec<StoragePluginInfo>,
+}
+
+pub async fn list_storage_plugins() -> Result<StoragePluginList, ApiError> {
+    fetch_json("/api/storage/plugins").await
+}
+
+pub use horcrux_common::storage_plugins::StoragePluginSettings;
+
+pub async fn get_storage_plugin_settings() -> Result<StoragePluginSettings, ApiError> {
+    fetch_json("/api/storage/plugin-settings").await
+}
+
+pub async fn put_storage_plugin_settings(
+    s: &StoragePluginSettings,
+) -> Result<StoragePluginSettings, ApiError> {
+    put_json("/api/storage/plugin-settings", s).await
+}
+
+/// A pool volume snapshot (plugin pools).
+#[derive(Debug, Clone, Deserialize)]
+pub struct PoolVolumeSnapshot {
+    pub name: String,
+    #[serde(default)]
+    pub created: Option<i64>,
+}
+
+pub async fn list_volume_snapshots(
+    pool_id: &str,
+    volume: &str,
+) -> Result<Vec<PoolVolumeSnapshot>, ApiError> {
+    fetch_json(&format!(
+        "{}/{}/snapshots",
+        pool_volumes_path(pool_id),
+        urlencoding::encode(volume)
+    ))
+    .await
+}
+
+pub async fn create_volume_snapshot(
+    pool_id: &str,
+    volume: &str,
+    name: &str,
+) -> Result<serde_json::Value, ApiError> {
+    post_json(
+        &format!(
+            "{}/{}/snapshots",
+            pool_volumes_path(pool_id),
+            urlencoding::encode(volume)
+        ),
+        &serde_json::json!({ "name": name }),
+    )
+    .await
+}
+
 pub async fn list_pool_volumes(pool_id: &str) -> Result<Vec<PoolVolume>, ApiError> {
     fetch_json(&pool_volumes_path(pool_id)).await
 }

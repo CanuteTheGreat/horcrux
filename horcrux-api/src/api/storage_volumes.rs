@@ -5,6 +5,10 @@
 //! - `POST   /api/storage/pools/:pool_id/volumes`              create `{name, size}` (GB)
 //! - `DELETE /api/storage/pools/:pool_id/volumes/:name`        delete (409 while a VM uses it)
 //! - `POST   /api/storage/pools/:pool_id/volumes/:name/resize` grow `{size}` (GB)
+//! - `GET    /api/storage/pools/:pool_id/volumes/:name/snapshots`  list (plugin pools)
+//! - `POST   /api/storage/pools/:pool_id/volumes/:name/snapshots`  create `{name}`
+//! - `DELETE /api/storage/pools/:pool_id/volumes/:name/snapshots/:snap` delete
+//! - `POST   /api/storage/pools/:pool_id/volumes/:name/snapshots/:snap/rollback`
 //!
 //! Every volume name goes through `validation::validate_volume_name` here
 //! (400 for `../x`, `a/b`, `/abs`, `.`, ...) and again inside each storage
@@ -33,6 +37,18 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/api/storage/pools/:pool_id/volumes/:name/resize",
             post(resize_volume),
+        )
+        .route(
+            "/api/storage/pools/:pool_id/volumes/:name/snapshots",
+            get(list_snapshots).post(create_snapshot),
+        )
+        .route(
+            "/api/storage/pools/:pool_id/volumes/:name/snapshots/:snap",
+            axum::routing::delete(delete_snapshot),
+        )
+        .route(
+            "/api/storage/pools/:pool_id/volumes/:name/snapshots/:snap/rollback",
+            post(rollback_snapshot),
         )
 }
 
@@ -151,7 +167,11 @@ async fn delete_volume(
         .get_pool(&pool_id)
         .await
         .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
-    let location = crate::storage::StorageManager::volume_location(&pool, &name).map_err(err)?;
+    let location = state
+        .storage_manager
+        .volume_location_of(&pool, &name)
+        .await
+        .map_err(err)?;
     refuse_in_use(&state, &name, &location, "detach it from the VM first").await?;
     state
         .storage_manager
@@ -178,7 +198,11 @@ async fn resize_volume(
         .get_pool(&pool_id)
         .await
         .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
-    let location = crate::storage::StorageManager::volume_location(&pool, &name).map_err(err)?;
+    let location = state
+        .storage_manager
+        .volume_location_of(&pool, &name)
+        .await
+        .map_err(err)?;
     refuse_in_use(
         &state,
         &name,
@@ -202,6 +226,89 @@ async fn resize_volume(
         .ok_or_else(|| ApiError::NotFound(format!("Volume {name} not found")))
 }
 
+// ---- volume snapshots (plugin pools) --------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSnapshotRequest {
+    pub name: String,
+}
+
+async fn list_snapshots(
+    State(state): State<Arc<AppState>>,
+    Path((pool_id, name)): Path<(String, String)>,
+) -> Result<Json<Vec<crate::storage::VolumeSnapshot>>, ApiError> {
+    check_name(&name)?;
+    state
+        .storage_manager
+        .list_snapshots(&pool_id, &name)
+        .await
+        .map(Json)
+        .map_err(err)
+}
+
+async fn create_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path((pool_id, name)): Path<(String, String)>,
+    Json(req): Json<CreateSnapshotRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check_name(&name)?;
+    check_name(&req.name)?;
+    state
+        .storage_manager
+        .create_snapshot(&pool_id, &name, &req.name)
+        .await
+        .map_err(err)?;
+    Ok(Json(
+        serde_json::json!({ "volume": name, "snapshot": req.name }),
+    ))
+}
+
+async fn delete_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path((pool_id, name, snap)): Path<(String, String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check_name(&name)?;
+    check_name(&snap)?;
+    state
+        .storage_manager
+        .delete_snapshot(&pool_id, &name, &snap)
+        .await
+        .map_err(err)?;
+    Ok(Json(serde_json::json!({ "deleted": snap })))
+}
+
+/// Roll a volume back; refused (409) while a VM uses it, like a delete.
+async fn rollback_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path((pool_id, name, snap)): Path<(String, String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check_name(&name)?;
+    check_name(&snap)?;
+    let pool = state
+        .storage_manager
+        .get_pool(&pool_id)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
+    let location = state
+        .storage_manager
+        .volume_location_of(&pool, &name)
+        .await
+        .map_err(err)?;
+    if let Some(vm) = used_by(&state, &location).await {
+        return Err(ApiError::Conflict(format!(
+            "Volume {name} is a disk of VM {vm}; stop and detach it before a rollback"
+        )));
+    }
+    state
+        .storage_manager
+        .restore_snapshot(&pool_id, &name, &snap)
+        .await
+        .map_err(err)?;
+    Ok(Json(
+        serde_json::json!({ "volume": name, "rolled_back_to": snap }),
+    ))
+}
+
 // ---- VM disks on storage pools ------------------------------------------
 
 /// A pool a VM disk can be created in (`GET /api/vms/host-options`).
@@ -223,28 +330,34 @@ fn holds_vm_disks(p: &crate::storage::StoragePool) -> bool {
     p.enabled
         && matches!(
             p.storage_type,
-            T::Directory | T::Nfs | T::Cifs | T::GlusterFs | T::CephFs
+            T::Directory | T::Nfs | T::Cifs | T::GlusterFs | T::CephFs | T::Plugin(_)
         )
         && std::path::Path::new(&p.path).is_absolute()
         && std::path::Path::new(&p.path).is_dir()
 }
 
+/// [`holds_vm_disks`], plus for plugin pools: the plugin declares
+/// `vm_disk_dir` (its activated directory may hold VM disk files).
+async fn holds_vm_disks_now(state: &AppState, p: &crate::storage::StoragePool) -> bool {
+    holds_vm_disks(p)
+        && (p.storage_type.plugin_id().is_none()
+            || state.storage_manager.plugin_holds_vm_disks(p).await)
+}
+
 /// Pools offered by the Create VM / Add disk pool selector.
 pub async fn vm_disk_pools(state: &AppState) -> Vec<VmDiskPool> {
-    let mut out: Vec<VmDiskPool> = state
-        .storage_manager
-        .list_pools()
-        .await
-        .into_iter()
-        .filter(holds_vm_disks)
-        .map(|p| VmDiskPool {
-            id: p.id,
-            name: p.name,
-            storage_type: p.storage_type,
-            path: p.path,
-            available: p.available,
-        })
-        .collect();
+    let mut out: Vec<VmDiskPool> = Vec::new();
+    for p in state.storage_manager.list_pools().await {
+        if holds_vm_disks_now(state, &p).await {
+            out.push(VmDiskPool {
+                id: p.id,
+                name: p.name,
+                storage_type: p.storage_type,
+                path: p.path,
+                available: p.available,
+            });
+        }
+    }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
@@ -261,11 +374,12 @@ pub async fn vm_disk_dir(
         .get_pool(pool_id)
         .await
         .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
-    if !holds_vm_disks(&pool) {
+    if !holds_vm_disks_now(state, &pool).await {
         return Err(ApiError::BadRequest(format!(
-            "Storage pool {} ({:?}) can't hold VM disks: use an enabled directory, NFS, \
-             CIFS or GlusterFS pool",
-            pool.name, pool.storage_type
+            "Storage pool {} ({}) can't hold VM disks: use an enabled directory, NFS, \
+             CIFS, GlusterFS pool or a plugin pool whose plugin keeps VM disks",
+            pool.name,
+            pool.storage_type.name()
         )));
     }
     if size_gb > pool.available {

@@ -1,0 +1,24 @@
+[package]
+name = "horcrux-storage-plugin-sshfs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Horcrux Contributors"]
+license = "GPL-3.0"
+repository = "https://github.com/CanuteTheGreat/horcrux"
+description = "Reference Horcrux storage plugin: a remote directory over SSHFS holding qcow2/raw volumes"
+
+# Its own workspace and lock file: the package builds from a few crates
+# (serde, serde_json and their proc-macro deps), not the manager's tree.
+[workspace]
+
+[dependencies]
+horcrux-storage-plugin-sdk = { path = "../horcrux-storage-plugin-sdk" }
+serde_json = "1.0"
+
+[[bin]]
+name = "horcrux-storage-plugin-sshfs"
+path = "src/main.rs"
+
+[profile.release]
+strip = true
+lto = true
