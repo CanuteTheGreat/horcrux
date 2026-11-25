@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, initsys, luksroot, portageperms, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
+from . import arch, hwprofile, initsys, luksroot, netlayout, portageperms, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -519,6 +519,7 @@ def _default_fs(profile):
 def default_config(profile):
     fs, fs_why = _default_fs(profile)
     c = _default_config(profile, fs, fs_why)
+    netlayout.ensure(c["mgmt"], profile)    # bond / VLAN keys of the management link (one untagged NIC by default)
     apply_encryption_policy(profile, c)
     return c
 
@@ -643,6 +644,12 @@ def config_from_answers(profile, path):
         if "dns" in src:
             v = src["dns"]
             c[sect]["dns"] = " ".join(v) if isinstance(v, list) else v
+        if sect == "mgmt":
+            # link aggregation + VLAN tag: interfaces = [..] (more than one = a bond), [network.management.bond], vlan = <id>
+            c["answer_errors"] = netlayout.from_answers(src, c["mgmt"], profile)
+            if "interfaces" not in src and "iface" in src:
+                c["mgmt"]["ifaces"] = [src["iface"]] if src["iface"] not in ("", "auto") else []
+            netlayout.ensure(c["mgmt"], profile)
     return c
 
 
@@ -724,6 +731,9 @@ def validate_config(profile, c, unattended=False, require_secret=True):
     if c["email"] and email_problem(c["email"]):
         errs.append("email: " + email_problem(c["email"]))
     nets = ["wan", "lan"] if profile["network_mode"] == "wan-lan" else ["mgmt"]
+    errs += list(c.get("answer_errors") or [])
+    if "mgmt" in nets:
+        errs += netlayout.problems(netlayout.ensure(c["mgmt"], profile))
     for s in nets:
         n = c[s]
         if n.get("mode") == "static":
@@ -1313,8 +1323,14 @@ class Installer:
             n = c[key]
             if not n.get("iface"):
                 continue
+            ifc = n["iface"]
+            if key == "mgmt":
+                netlayout.ensure(n, p)
+                ifc = netlayout.l3_iface(n) or ifc
+                self.configure_mgmt_link(n)
+                dh += [l for l in netlayout.render_dhcpcd(n).splitlines()]
             if n.get("mode") == "static":
-                dh += ["", f"interface {n['iface']}", f"static ip_address={n['address']}"]
+                dh += ["", f"interface {ifc}", f"static ip_address={n['address']}"]
                 if n.get("gateway"):
                     dh.append(f"static routers={n['gateway']}")
                 if n.get("dns"):
@@ -1336,6 +1352,18 @@ class Installer:
             self.log(f"removed the pinned interface-name from {n_pinned} NetworkManager profile(s)")
         if p["network_mode"] == "wan-lan":
             self.write_roles()
+
+    def configure_mgmt_link(self, n):
+        """bond / VLAN of the management link for the target's own network stack (layer 3 stays with dhcpcd, see netlayout.py);
+        desktop installs hand the whole link to NetworkManager. Also records the layout for the product (API, declarative export)."""
+        p = self.p
+        if not netlayout.is_plain(n):
+            self.log("management link: " + netlayout.describe(n))
+        for line in netlayout.write_target(self.target, n, initsys.target_init(self.target),
+                                           lambda cmd: self.run(cmd, chroot=True, check=False),
+                                           netlayout.default(p, "record").format(name=p.get("name", "horcrux")),
+                                           nm=self.c.get("install_type") == "desktop"):
+            self.log("management link: " + line)
 
     def write_roles(self):
         c = self.c
