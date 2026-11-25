@@ -1,7 +1,7 @@
 # Horcrux desktop gaming: games at the right size on a scaled GNOME desktop
 
-Status: implemented (games-util/horcrux-game-scale-1, Horcrux overlay). QEMU: the problem (control) and the wrapper's
-decisions are proven; the wrapped-size measurement needs a GL virtual GPU and is still open (section 6). Opt-in package: any Horcrux desktop
+Status: implemented (games-util/horcrux-game-scale-1, Horcrux overlay). QEMU: the problem (control), the wrapper's
+decisions and the wrapped size are proven at 1.25/1.333/1.5/2.0 (section 6). Opt-in package: any Horcrux desktop
 edition that has Steam installs it (machine profile or machine layer); no edition pulls it by default.
 
 ## 1. The problem
@@ -55,8 +55,12 @@ the whole monitor in physical pixels. The nested (game) size `-w/-h` defaults to
 3. Runs the game directly when nothing needs fixing: monitor scale 1 (mode `auto`), an X11 session, already
    inside gamescope (`GAMESCOPE_WAYLAND_DISPLAY`, a Steam Deck-style session, or a launch option that already
    runs gamescope), `mode = "off"`, `HORCRUX_GAME_SCALE=0`, an excluded app id, gamescope missing, no mutter.
-4. Never leaves the user without the game: gamescope runs as a child; a non-zero exit within
-   `fallback_seconds` (it could not start on this GPU/compositor) runs the game directly. Every decision is
+4. Never leaves the user without the game: gamescope runs as a child and starts the game through a second
+   copy of the wrapper, which only marks (a file named in `HORCRUX_GAME_SCALE_MARKER`) that gamescope got as
+   far as starting it. Within `fallback_seconds` the game is run directly when gamescope exits non-zero
+   before that mark (it could not start on this GPU/compositor) or dies of a crash signal (it takes the
+   game with it); a game that itself fails fast inside a working gamescope keeps its exit code and is never
+   started twice, and a stop signal the wrapper forwarded (Steam stopping the game) never restarts it. Every decision is
    one line in `$XDG_STATE_HOME/horcrux/game-scale.log`; `horcrux-game-scale --explain -- CMD` prints it as
    JSON without starting anything.
 5. Hybrid GPUs: `vk_device = "auto"` makes gamescope composite on the NVIDIA GPU when the game is
@@ -105,24 +109,42 @@ display, mesa lavapipe for Vulkan (no GPU in the VM), gamescope 3.17.0. No Steam
 the test uses Steam's real launch-command shape with shell stand-ins (`reaper SteamLaunch AppId=N --
 steam-launch-wrapper -- <launch option with %command% = Steam Linux Runtime entry point -- proton
 waitforexitandrun game.exe>`); the launch option is the one the real horcrux-steam-launch-options wrote.
-The "game" is a fixed 1280x720 X11 window that ignores XSETTINGS, measured in QMP screendumps:
+The "game" is a fixed 1280x720 X11 window that ignores XSETTINGS and reports what it sees (its display, the X
+screen size, its own window geometry).
 
-Measured so far (gnome-light OpenRC, mutter 50.6, virtio-vga 2D + lavapipe, 2026-11-25):
+Control (2D virtio-vga + lavapipe, QMP screendumps, pixel bounding box of the game's colour):
 
-| scale (mutter) | control: game covers | expected for the scaled desktop | wrapper decision |
-|---|---|---|---|
-| 1.25 | 799x449 | 1600x900 | wrap, gamescope -W 2560 -H 1600 -w 2560 -h 1600 -f |
-| 1.333 | 853x479 | 1707x960 | wrap, same (from mutter's mode) |
-| 1.5 requested | mutter offers 1.333 for this mode | | |
-| 2.0 | 1279x719 | 2560x1440 | wrap |
-| 1.0 | | | game run directly |
+| scale (mutter) | control: game covers | expected for the scaled desktop |
+|---|---|---|
+| 1.25 | 799x449 | 1600x900 |
+| 1.333 | 853x479 | 1707x960 |
+| 2.0 | 1279x719 | 2560x1440 |
 
-On a 2D virtual GPU with lavapipe, mutter rejects gamescope's buffers (zwp_linux_buffer_params_v1 error 7,
-invalid_wl_buffer: mutter renders in software and cannot import them) and gamescope aborts within 0.6 s; the
-wrapper's fallback then ran the game directly, as designed. The wrapped measurement therefore runs on a
-GL virtual GPU (virtio-vga-gl with Venus Vulkan; gamescope starts and runs there), captured with `--vnc` or
-the compositor's own ScreenCast (tests/data/mutter-monitor-capture.py) because QMP screendump cannot read a
-GL scanout.
+On that 2D virtual GPU mutter rejects gamescope's buffers (zwp_linux_buffer_params_v1 error 7, invalid_wl_buffer:
+mutter renders in software and cannot import them) and gamescope aborts within 0.6 s; the wrapper's fallback ran
+the game directly, as designed.
+
+Wrapped (2026-11-25, `--measure protocol`): GL virtual GPU (QEMU 10.0 virtio-vga-gl, blob + Venus, virglrenderer
+1.2 with Venus; the host has no GPU, so everything is llvmpipe). Frames of that scanout cannot be captured (QMP
+screendump has no surface, VNC and mutter's ScreenCast are black), so the test measures geometry instead of
+pixels: the game's own report of its X screen and window, and what gamescope (a Wayland client of mutter, run
+with `WAYLAND_DEBUG=client`) is told and asks for: mutter's `xdg_toplevel.configure` size and
+`wp_fractional_scale_v1.preferred_scale`, and the `wp_viewport` destination of the subsurface carrying the game's
+1280x720 buffer. Control the same way: the game's window in mutter's Xwayland, whose X screen is ceil(scale) x
+the logical size. The test VM needs `XWAYLAND_NO_GLAMOR=1` (test-only): Venus on llvmpipe cannot import the
+nested Xwayland's glamor buffers (host: `vkr: failed to import resource`) and gamescope aborts after one frame.
+
+| scale | mode | control: X screen / game covers | wrapped: game's X screen | mutter sizes gamescope | game presented at |
+|---|---|---|---|---|---|
+| 1.25 | 2560x1600 | 4096x2560 / 800x450 | 2560x1600 | 2048x1280 @1.25 = 2560x1600 | 2048x1152 logical = 2560x1440 |
+| 1.333 | 2560x1600 | 3840x2400 / 853x480 | 2560x1600 | 1920x1200 @1.333 = 2560x1600 | 1920x1080 logical = 2560x1440 |
+| 1.5 | 1920x1200 | 2560x1600 / 960x540 | 1920x1200 | 1280x800 @1.5 = 1920x1200 | 1280x720 logical = 1920x1080 |
+| 2.0 | 2560x1600 | 2560x1600 / 1280x720 | 2560x1600 | 1280x800 @2 = 2560x1600 | 1280x720 logical = 2560x1440 |
+| 1.0 | | | game run directly | | |
+
+(mutter offers 1.5 only where the logical size stays whole, so 1.5 runs on the 1920x1200 mode: `--scales
+1.5@1920x1200`.) Wrapped, the game covers the panel's width at its aspect ratio (2560x1440 on 2560x1600), at
+least the size the desktop implies, in every case; without the wrapper it covers half of it.
 
 ## 7. Limits
 

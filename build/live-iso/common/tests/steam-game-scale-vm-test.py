@@ -33,6 +33,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import shlex
 import sys
 import time
@@ -45,6 +46,7 @@ _l.exec_module(gsl)
 shq = shlex.quote
 
 GAME_W, GAME_H = 1280, 720
+READY_RE = re.compile(r"^(\S+) (\d+) root=(\d+)x(\d+) win=(-?\d+),(-?\d+)\+(\d+)x(\d+)$")
 MAGENTA = (255, 0, 255)
 APPID = "4242420"
 
@@ -54,7 +56,7 @@ GAME_PY = r'''
 import os, sys, gi
 os.environ["GDK_BACKEND"] = "x11"; os.environ["GDK_SCALE"] = "1"; os.environ["GDK_DPI_SCALE"] = "1"
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk
+from gi.repository import Gtk, Gdk, GLib
 w = Gtk.Window(title="hx-scale-game")
 w.set_decorated(False)
 w.set_default_size(%d, %d)
@@ -64,7 +66,20 @@ css = Gtk.CssProvider(); css.load_from_data(b"window { background-color: #ff00ff
 Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css, 800)
 w.connect("destroy", Gtk.main_quit)
 w.show_all()
-open(os.environ.get("HX_GAME_READY", "/dev/null"), "w").write("%%s %%s\n" %% (os.environ.get("DISPLAY"), os.getpid()))
+
+
+def report():
+    # what the game sees, in X pixels: the X screen (root window) and its own window
+    gw, root = w.get_window(), w.get_screen().get_root_window()
+    _r, ox, oy = gw.get_origin()
+    g = gw.get_geometry()
+    with open(os.environ.get("HX_GAME_READY", "/dev/null"), "w") as f:
+        f.write("%%s %%s root=%%dx%%d win=%%d,%%d+%%dx%%d\n" %% (os.environ.get("DISPLAY"), os.getpid(), root.get_width(), root.get_height(),
+                                                            ox, oy, g.width, g.height))
+    return False
+
+
+GLib.timeout_add(1500, report)
 Gtk.main()
 ''' % (GAME_W, GAME_H, GAME_W, GAME_H)
 
@@ -174,11 +189,34 @@ def ppm_bbox(path, rgb, tol=40):
     return min(xs), min(ys), max(xs) + 1, max(ys) + 1, n * 4, (w, h)
 
 
+def wl_presented(log_text, buf_w, buf_h):
+    """From a WAYLAND_DEBUG=client log of gamescope's wayland backend: (fullscreen logical size from mutter's last non-zero
+    xdg_toplevel.configure, preferred fractional scale, [(dest_w, dest_h)] of every wp_viewport whose source is the game's
+    buf_w x buf_h buffer) - the size mutter is asked to present the game at, in logical px of the monitor."""
+    conf = re.findall(r"xdg_toplevel#\d+\.configure\((\d+), (\d+), array", log_text)
+    conf = [(int(a), int(b)) for a, b in conf if int(a) > 0]
+    sc = re.findall(r"wp_fractional_scale_v1#\d+\.preferred_scale\((\d+)\)", log_text)
+    vp = {}
+    dests = []
+    for m in re.finditer(r"-> wp_viewport#(\d+)\.set_(source|destination)\(([^)]*)\)", log_text):
+        vid, kind, args = m.group(1), m.group(2), [float(x) for x in m.group(3).split(",")]
+        if kind == "source":
+            vp[vid] = (round(args[2]), round(args[3]))
+        elif vp.get(vid) == (buf_w, buf_h):
+            dests.append((round(args[0]), round(args[1])))
+    return (conf[-1] if conf else None), (int(sc[-1]) / 120 if sc else None), dests
+
+
 class Run(gsl.Run):
     # method 1 = temporary: gnome-shell asks "Keep these display settings?" for a persistent (2) change and reverts it after
     # ~20 s, which is shorter than one control + wrapped measurement
     SCALE_PROBE = gsl.Run.SCALE_PROBE.replace("(serial, 2, lm_out, {})", "(serial, 1, lm_out, {})")
     assert SCALE_PROBE != gsl.Run.SCALE_PROBE
+    _cur = 'if mp.get("is-current"):'
+    assert _cur in SCALE_PROBE and "want = float(sys.argv[1])" in SCALE_PROBE
+    SCALE_PROBE = SCALE_PROBE.replace("want = float(sys.argv[1])", "want = float(sys.argv[1]); want_mode = sys.argv[2] if len(sys.argv) > 2 else ''")
+    SCALE_PROBE = SCALE_PROBE.replace(_cur, 'if ((f"{w}x{h}" == want_mode and (conn not in mode_of or mp.get("is-current"))) if want_mode '
+                                            'else mp.get("is-current")):')
     def __init__(self, a):
         super().__init__(a)
         self.cycle_no = 1
@@ -265,6 +303,18 @@ class Run(gsl.Run):
             time.sleep(1)
         return ppm_bbox(os.path.join(self.a.out, f"{tag}.ppm"), MAGENTA)
 
+    def ready(self, path, pred, timeout=45):
+        """the game's own report (display, X screen size, window geometry) once it satisfies pred"""
+        end, got = time.time() + timeout, None
+        while time.time() < end:
+            m = READY_RE.match(self.vm.out(f"cat {path} 2>/dev/null").strip())
+            if m:
+                got = (m.group(1),) + tuple(int(x) for x in m.groups()[1:])
+                if pred(got):
+                    return got
+            time.sleep(2)
+        return got
+
     def wait_bbox(self, tag, pred, timeout=45):
         end, bb = time.time() + timeout, None
         while time.time() < end:
@@ -312,14 +362,17 @@ class Run(gsl.Run):
             return self.finish()
         orig = None
         try:
-            for want in a.scales:
-                o = self.as_user(f"python3 /tmp/gsl-scale-probe.py {want}")
+            base_mode = ""  # the monitor's mode before the test: scales without @WxH use it, and it is restored at the end
+            for want, want_mode in a.scales:
+                o = self.as_user(f"python3 /tmp/gsl-scale-probe.py {want} {want_mode or base_mode}")
                 try:
                     st = json.loads(o.strip().splitlines()[-1])
                 except (ValueError, IndexError):
                     self.check(0, f"scale-{want}-apply", False, f"ApplyMonitorsConfig failed: {o[-300:]}")
                     continue
                 orig = st["was"] if orig is None else orig
+                if not base_mode and not want_mode:
+                    base_mode = "%dx%d" % tuple(st["mode"])
                 s = st["applied"][0]
                 pw, ph = st["mode"]
                 f = math.ceil(s - 1e-6)
@@ -336,9 +389,17 @@ class Run(gsl.Run):
                 self.check(0, f"scale-{want}-explain-uses-mutter-mode", ok, f"scale {s:.4f}, mode {pw}x{ph}: gamescope -W -H -w -h = {got}")
                 # control: Steam's chain without the wrapper
                 self.stop_game()
+                self.vm.sh("rm -f /tmp/hx-ready-ctl /tmp/hx-ready-wrap")
                 line = self.chain("HX_TEST_MARK=1 %command%", "/tmp/hx-ready-ctl")
                 self.launch(line, f"ctl-{want}")
-                bb = self.wait_bbox(f"scale-{want}-control", lambda b: b[4] > 1000, 40)
+                if a.measure == "protocol":
+                    # the game's X window in mutter's Xwayland, whose X screen is ceil(scale) x the logical size: it covers
+                    # win * panel / X screen physical px
+                    r = self.ready("/tmp/hx-ready-ctl", lambda g: g[3] > 0)
+                    bb = (0, 0, round(r[6] * pw / r[2]), round(r[7] * ph / r[3]), 1) if r and r[2] else None
+                    print(f"  control: game reports {r}; mutter X screen {r[2] if r else '?'}x{r[3] if r else '?'} for a {pw}x{ph} panel", flush=True)
+                else:
+                    bb = self.wait_bbox(f"scale-{want}-control", lambda b: b[4] > 1000, 40)
                 cw, ch = (bb[2] - bb[0], bb[3] - bb[1]) if bb else (0, 0)
                 small_w, small_h = GAME_W / f * s, GAME_H / f * s
                 self.check(0, f"scale-{want}-control-without-wrapper-is-small",
@@ -347,9 +408,28 @@ class Run(gsl.Run):
                 self.stop_game()
                 time.sleep(2)
                 # wrapped: the stamped launch option, expanded like Steam
-                line = self.chain(opt, "/tmp/hx-ready-wrap")
+                line = self.chain(("WAYLAND_DEBUG=client " if a.measure == "protocol" else "") + opt, "/tmp/hx-ready-wrap")
                 log = self.launch(line, f"wrap-{want}")
-                bb = self.wait_bbox(f"scale-{want}-wrapped", lambda b: b[2] - b[0] >= exp_w, 60)
+                if a.measure == "protocol":
+                    # inside gamescope the game sees an X screen of the panel's physical size; gamescope (a Wayland client of
+                    # mutter) asks mutter to present the game's buffer at a viewport destination in the monitor's logical px
+                    r = self.ready("/tmp/hx-ready-wrap", lambda g: g[0] != self.disp, 60)
+                    time.sleep(8)  # gamescope must still be up (no fallback) after the game showed
+                    alive = vm.out(f"pgrep -u {self.uid} -f '^/[^ ]*gamescope --backend' | head -n1")  # comm is gamescope-wl
+                    conf, fs, dests = wl_presented(vm.out(f"grep -a -E 'configure\\(|preferred_scale|wp_viewport' {log}"), GAME_W, GAME_H)
+                    print(f"  wrapped: game reports {r}; gamescope pid {alive or '-'}; mutter configure {conf}, preferred scale {fs}, "
+                          f"game viewport destinations {dests[-3:]}", flush=True)
+                    self.check(0, f"scale-{want}-wrapped-game-inside-gamescope",
+                               bool(r) and r[0] != self.disp and (r[2], r[3]) == (pw, ph) and bool(alive),
+                               f"game on X display {r[0] if r else '?'} (session Xwayland {self.disp}), X screen "
+                               f"{r[2] if r else '?'}x{r[3] if r else '?'} (panel {pw}x{ph}), gamescope running: {bool(alive)}")
+                    self.check(0, f"scale-{want}-wrapped-gamescope-fullscreen-on-monitor",
+                               conf is not None and fs is not None and abs(conf[0] * fs - pw) <= 2 and abs(conf[1] * fs - ph) <= 2,
+                               f"mutter sized gamescope {conf} logical px at preferred scale {fs} = "
+                               f"{(round(conf[0] * fs), round(conf[1] * fs)) if conf and fs else '?'} physical (panel {pw}x{ph})")
+                    bb = (0, 0, round(dests[-1][0] * s), round(dests[-1][1] * s), 1) if dests else None
+                else:
+                    bb = self.wait_bbox(f"scale-{want}-wrapped", lambda b: b[2] - b[0] >= exp_w, 60)
                 ww, wh = (bb[2] - bb[0], bb[3] - bb[1]) if bb else (0, 0)
                 fit = min(pw / GAME_W, ph / GAME_H)
                 gsps = vm.out(f"pgrep -u {self.uid} -a gamescope | head -2")
@@ -363,7 +443,7 @@ class Run(gsl.Run):
                     print("  wrapper log:\n    " + vm.out(f"tail -n 30 {log}; tail -n 5 ~{a.user}/.local/state/horcrux/game-scale.log").replace("\n", "\n    "), flush=True)
                 self.stop_game()
             # scale 1: nothing to fix, the game runs directly
-            o = self.as_user("python3 /tmp/gsl-scale-probe.py 1.0")
+            o = self.as_user(f"python3 /tmp/gsl-scale-probe.py 1.0 {base_mode}")
             time.sleep(4)
             ex = self.as_user(f"{self.env_line()} horcrux-game-scale --explain -- true")
             try:
@@ -374,7 +454,7 @@ class Run(gsl.Run):
         finally:
             self.stop_game()
             if orig is not None:
-                self.as_user(f"python3 /tmp/gsl-scale-probe.py {orig}")
+                self.as_user(f"python3 /tmp/gsl-scale-probe.py {orig} {base_mode}")
         return self.finish()
 
     def finish(self):
@@ -396,14 +476,20 @@ def main():
     ap.add_argument("--user", default="owner")
     ap.add_argument("--out", default="gss-out")
     ap.add_argument("--vm-out", default=None)
-    ap.add_argument("--scales", default="1.25,1.333,1.5,2.0")
+    ap.add_argument("--scales", default="1.25,1.333,1.5@1920x1200,2.0",
+                    help="comma list; SCALE@WxH also switches the monitor to that mode (mutter offers 1.5 only where the logical "
+                         "size stays whole)")
     ap.add_argument("--vnc", default=None, metavar="HOST:PORT",
                     help="capture frames from QEMU's VNC server instead of QMP screendump (needed with a GL virtual GPU)")
     ap.add_argument("--env", action="append", default=[], metavar="VAR=VALUE",
                     help="extra environment for the game launch, e.g. VK_DRIVER_FILES=... to pick the guest's Vulkan driver")
+    ap.add_argument("--measure", choices=("pixels", "protocol"), default="pixels",
+                    help="pixels: screendump/VNC bounding box of the game's colour; protocol: the game's own X geometry plus the "
+                         "size gamescope asks mutter to present it at (WAYLAND_DEBUG of gamescope's wayland backend), for virtual GPUs "
+                         "whose frames cannot be captured (virgl/venus on a host without a GPU)")
     ap.add_argument("--cycles", type=int, default=1, help="ignored (gnome-vm-gate passes it to every test)")
     a = ap.parse_args()
-    a.scales = [float(x) for x in a.scales.split(",") if x]
+    a.scales = [(float(x.split("@")[0]), (x.split("@") + [""])[1]) for x in a.scales.split(",") if x]
     a.out = os.path.abspath(a.out)
     return Run(a).main()
 
