@@ -1036,11 +1036,18 @@ jobs:
         # Not yet checked whether our builds use the vendored C SQLite or the
         # system one (the ebuild has no sqlite dependency) - follow up. Drop
         # this --ignore when sqlx moves to libsqlite3-sys >= 0.39.
+        # RUSTSEC-2026-0600 (kube-client < 4.2.1: its `openssl-tls` feature
+        # trusts OpenSSL's default CA store besides the cluster CA). We build
+        # kube with rustls only; the check below fails the job if the openssl
+        # TLS path (hyper-openssl) ever enters Cargo.lock. Drop this --ignore
+        # when kube moves to >= 4.2.1.
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run security audit"
+          ! grep -q '^name = "hyper-openssl"$' Cargo.lock \
+            || { echo "hyper-openssl is in Cargo.lock: kube's openssl-tls path is built (RUSTSEC-2026-0600 applies)"; exit 1; }
           grep -A1 '^name = "webpki-roots"$' Cargo.lock | grep -q '^version = "1\.0\.\([1-9][0-9]\)"' \
             || { echo "webpki-roots 1.x in Cargo.lock is older than 1.0.10 (RUSTSEC-2026-0381)"; exit 1; }
-          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0381 --ignore RUSTSEC-2026-0387 --ignore RUSTSEC-2026-0459
+          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0381 --ignore RUSTSEC-2026-0387 --ignore RUSTSEC-2026-0459 --ignore RUSTSEC-2026-0600
 
       - name: Memory probe report
         if: always()
