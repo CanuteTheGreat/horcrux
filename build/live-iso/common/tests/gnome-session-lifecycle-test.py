@@ -356,8 +356,10 @@ dc.call_sync("ApplyMonitorsConfig", GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", 
 w, h = mode_of[logical[0][5][0][0]][1:]
 print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
 '''
+    # GTK3 on the X11 backend: its scale factor (from XSETTINGS) and the monitor size in X pixels (geometry x scale)
     GDK_PROBE = ('import gi; gi.require_version("Gdk", "3.0"); from gi.repository import Gdk; d = Gdk.Display.get_default(); '
-                 'print(d.get_monitor(0).get_scale_factor() if d else "no-display")')
+                 'm = d.get_monitor(0) if d else None; g = m.get_geometry() if m else None; '
+                 'print("%d %d %d" % (m.get_scale_factor(), g.width * m.get_scale_factor(), g.height * m.get_scale_factor()) if m else "no-display")')
 
     def as_user(self, cmd, timeout=60):
         a = self.a
@@ -370,6 +372,13 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
         disp = self.wait(lambda: self.as_user(f"{hp} x-display") or None, 40, step=3) or ""
         if not self.check(n, "x11-xwayland-display", disp.startswith(":"), f"Xwayland display of the session: {disp!r}"):
             return
+        # gnome-settings-daemon wants the gsd-xsettings service: the SERVICE STATE must be started, not only the process
+        # alive (seen on a real session: supervise-daemon ran it while rc-service printed "eend: command not found", reported "failed to
+        # start" and left no started/ symlink, so `rc-service -U gsd-xsettings status` said stopped and the next restart/stop skipped it)
+        svc = self.wait(lambda: (lambda o: o if "started" in o else None)(self.as_user("rc-service -U gsd-xsettings status")), 40, step=3)
+        svc = svc or self.as_user("rc-service -U gsd-xsettings status")
+        self.check(n, "x11-gsd-xsettings-service-started", "started" in svc and "stopped" not in svc and "crashed" not in svc,
+                   f"rc-service -U gsd-xsettings status: {svc.strip()[-160:]!r}")
         auth = vm.out(f"tr '\\0' '\\n' </proc/$(pgrep -u {self.uid} -x Xwayland | head -n1)/cmdline | sed -n '/^-auth$/{{n;p;q}}'")
         xenv = f"DISPLAY={disp} XAUTHORITY={auth}"
         vm.sh(f"cat > /tmp/gsl-scale-probe.py; chmod 644 /tmp/gsl-scale-probe.py", inp=self.SCALE_PROBE)
@@ -392,16 +401,15 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
                 self.check(n, f"x11-scale-{want}-xsettings", "FAIL" not in stat and "OK Xft.dpi" in stat and f"X11 UI scale {f}," in stat,
                            f"monitor scale {s:.4f} (want {want}) -> {stat!r}")
                 gdk = self.as_user(f"{xenv} GDK_BACKEND=x11 python3 -c {shq(self.GDK_PROBE)}").strip().splitlines()
-                self.check(n, f"x11-scale-{want}-gtk3-x11-client", bool(gdk) and gdk[-1] == str(f),
-                           f"GTK3 X11 client scale factor {gdk[-1] if gdk else '?'} (expected {f})")
-                xr = self.as_user(f"{xenv} xrandr --current 2>/dev/null | sed -n 's/.* current \\([0-9]*\\) x \\([0-9]*\\),.*/\\1 \\2/p'")
-                lw, lh = (round(st["mode"][0] / s), round(st["mode"][1] / s))
                 try:
-                    xw, xh = (int(v) for v in xr.split()[-2:])
-                except ValueError:
-                    xw = xh = 0
+                    gf, xw, xh = (int(v) for v in gdk[-1].split())
+                except (ValueError, IndexError):
+                    gf = xw = xh = 0
+                self.check(n, f"x11-scale-{want}-gtk3-x11-client", gf == f, f"GTK3 X11 client scale factor {gf or (gdk[-1] if gdk else '?')} (expected {f})")
+                # mutter 50 scales Xwayland natively: the X screen is the logical size x ceil(scale)
+                lw, lh = (round(st["mode"][0] / s), round(st["mode"][1] / s))
                 self.check(n, f"x11-scale-{want}-x-screen", abs(xw - lw * f) <= f * 2 and abs(xh - lh * f) <= f * 2,
-                           f"X screen {xw}x{xh}, logical {lw}x{lh} x factor {f}")
+                           f"X monitor {xw}x{xh}, logical {lw}x{lh} x factor {f}")
         finally:
             # back to the scale the session started with
             if orig is not None:

@@ -39,6 +39,12 @@ KEYWORDS="~alpha amd64 ~arm arm64 ~loong ~ppc ~ppc64 ~riscv ~sparc x86"
 #    starts gsd-xsettings for it (guarded like gnome-shell, torn down with the session); `gnome-session-openrc-helper x11-scale-status`
 #    checks it (0003). Per-app scale variables (GDK_SCALE, QT_SCALE_FACTOR, STEAM_FORCE_DESKTOPUI_SCALING) are deliberately NOT set:
 #    they are fixed at app start, ignore scale changes and double-scale on top of Xft.dpi.
+#  - -r4: the -r3 hook never worked on a real session. mutter does not run /etc/xdg/Xwayland-session.d (gsd-xsettings does, after it
+#    started), so nothing ever started gsd-xsettings; started by hand it ran under supervise-daemon but the SERVICE ended up
+#    stopped/failed because the session leader's PATH (no /usr/libexec/rc/bin) was loaded into openrc-run ("eend: command not found").
+#    Now gnome-settings-daemon wants gsd-xsettings (mutter reserves the X display and launches Xwayland on demand when the first X11
+#    client connects), the service keeps OpenRC's PATH/RC_* variables, and the helper finds Xwayland's X authority without the hook
+#    (x-authority). The QEMU lifecycle test checks the service state (started) and the X screen size at 1.25/1.333/1.5/2.0 (0004).
 COMMON_DEPEND="
 	>=dev-libs/glib-2.82.0:2
 	>=sys-auth/elogind-242
@@ -58,18 +64,20 @@ PATCHES=(
 	"${FILESDIR}"/0001-horcrux-session-scoped-user-services.patch
 	"${FILESDIR}"/0002-greeter-shell-session-mode.patch
 	"${FILESDIR}"/0003-xwayland-gsd-xsettings.patch
+	"${FILESDIR}"/0004-xsettings-from-session-not-hook.patch
 )
 
 src_prepare() {
 	default
 	# the session-scoping helper must be in place (the image build gates and the QEMU lifecycle test look for it)
 	[[ -f data/gnome-session-openrc-helper ]] || die "session-scoping patch not applied"
-	[[ -f data/Xwayland-session.d/20-gnome-session-openrc-xsettings ]] || die "Xwayland gsd-xsettings patch not applied"
+	[[ -f data/Xwayland-session.d/20-gnome-session-openrc-xsettings ]] && die "the Xwayland-session.d hook (never run by mutter) is still there"
+	grep -q '^[[:space:]]*want gsd-xsettings' data/openrc/gnome-settings-daemon || die "gnome-settings-daemon does not want gsd-xsettings"
 	! grep -q '^DISPLAY=:' data/openrc/gsd-xsettings || die "gsd-xsettings still has a hard-coded DISPLAY"
 }
 
 pkg_postinst() {
-	# a running session started its Xwayland before this hook existed: X11 apps get the UI scale from the next login (or start
-	# gsd-xsettings in the session: rc-service -U gsd-xsettings start), then restart the X11 app
+	# a running session did not start gsd-xsettings: X11 apps get the UI scale from the next login (or start it in the session:
+	# rc-service -U gsd-xsettings start), then restart the X11 app
 	elog "X11 apps get the GNOME UI scale through gsd-xsettings from the next login on."
 }

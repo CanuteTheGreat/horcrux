@@ -8,6 +8,7 @@ root_password_hash = "$6$gsltest2$ZkhXS461f6yZ8ATwdsi4x0Xa3kHuONZyiKipi1qbcQ3aof
 ssh_keys = ["__HX_TEST_PUBKEY__"]
 ssh_password_auth = false
 install_type = "desktop"
+swap = "none"
 
 [disk]
 filesystem = "ext4"
