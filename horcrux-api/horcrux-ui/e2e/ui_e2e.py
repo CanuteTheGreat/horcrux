@@ -258,7 +258,7 @@ def main():
 
         # ---- dashboard reads node metrics (was: missing field cpu_usage) ---
         page.goto(f"{BASE}/")
-        cpu = page.locator(".stat-card", has_text="CPU Usage").locator(".stat-value")
+        cpu = page.locator("#stat-cpu .stat-value")
         expect(cpu).to_have_text(re.compile(r"^\d+(\.\d)?%$"), timeout=45000)
         expect(page.get_by_text("Could not reach the backend")).to_have_count(0)
         theme_checks(page)
@@ -1854,6 +1854,7 @@ def ui_login(page, user, password):
 
 
 def ui_logout(page):
+    page.locator("#user-menu-toggle").click()  # Log out lives in the header's user menu
     page.locator("#logout-button").click()
     page.wait_for_url(f"{BASE}/login")
 
