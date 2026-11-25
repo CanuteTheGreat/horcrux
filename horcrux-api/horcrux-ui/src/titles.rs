@@ -79,6 +79,7 @@ fn exact(path: &str) -> Option<&'static str> {
         "/system/licenses" => "Open-source licenses",
         "/system/certificates" => "Certificates",
         "/audit" => "Audit Log",
+        "/access-log" => "Access Log",
         "/tasks" => "Tasks",
         "/gpu" => "GPU / PCI Passthrough",
         "/containers" => "Containers",

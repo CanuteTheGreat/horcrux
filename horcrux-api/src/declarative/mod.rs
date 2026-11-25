@@ -60,6 +60,11 @@ pub struct Spec {
     /// docs/design/gaming-vm.md section 16). Absent = unmanaged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_play: Option<horcrux_common::remote_play::RemotePlaySettings>,
+    /// API access log settings (retention, trusted proxies, queue and page
+    /// sizes; `horcrux_common::access_log::AccessLogSettings`). Absent =
+    /// unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_log: Option<horcrux_common::access_log::AccessLogSettings>,
     /// What happens to guests when the host goes down and restarts: node
     /// defaults plus per-VM overrides (the stop action `host_shutdown_action`
     /// defaults to saving state to encrypted storage).
@@ -207,7 +212,7 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
     }
     if let Some(k) = spec.extra.keys().next() {
         return Err(format!(
-            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms and guest_power)"
+            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms, console, remote_play, access_log and guest_power)"
         ));
     }
     if let Some(gp) = &spec.guest_power {
@@ -336,6 +341,7 @@ pub struct Live {
     pub vms: Vec<VmConfig>,
     pub console: horcrux_common::console::ConsoleSettings,
     pub remote_play: horcrux_common::remote_play::RemotePlaySettings,
+    pub access_log: horcrux_common::access_log::AccessLogSettings,
     pub power_node: crate::api::guest_state::NodePolicy,
     /// Per-VM power overrides by VM name (only VMs that have one).
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
@@ -670,6 +676,28 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // API access log settings: one node-wide object.
+    if let Some(w) = &spec.access_log {
+        if let Err(e) = w.validate() {
+            p.errors.push(e);
+        } else if *w != live.access_log {
+            let a = serde_json::to_value(&live.access_log).unwrap_or_default();
+            let b = serde_json::to_value(w).unwrap_or_default();
+            let mut d = Vec::new();
+            if let (Some(a), Some(b)) = (a.as_object(), b.as_object()) {
+                for (k, bv) in b {
+                    if a.get(k) != Some(bv) {
+                        d.push(format!(
+                            "{k}: {} -> {bv}",
+                            a.get(k).cloned().unwrap_or_default()
+                        ));
+                    }
+                }
+            }
+            creates.push(ch("access_log", "settings", Action::Update, d));
+        }
+    }
+
     // guest power: node defaults and per-VM overrides (by VM name)
     if let Some(gp) = &spec.guest_power {
         let mut d = Vec::new();
@@ -710,6 +738,7 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         [
             "console",
             "remote_play",
+            "access_log",
             "storage_pool",
             "zone",
             "vnet",
@@ -983,6 +1012,7 @@ pub fn export(live: &Live) -> Spec {
         vms: Some(vms),
         console: Some(live.console.clone()),
         remote_play: Some(live.remote_play.clone()),
+        access_log: Some(live.access_log.clone()),
         guest_power: Some(GuestPowerSpec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),

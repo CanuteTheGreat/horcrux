@@ -1,5 +1,6 @@
 //! Common types and utilities shared between horcrux-api and horcrux-ui
 
+pub mod access_log;
 pub mod auth;
 pub mod console;
 pub mod lxc;

@@ -1329,3 +1329,32 @@ td .actions { flex-wrap: nowrap; }
 .navbar.login-page .menu-toggle {
     display: none;
 }
+
+/* API access log */
+.access-log .al-muted { color: var(--secondary); }
+.access-log .al-actions { align-items: center; margin-bottom: 1rem; }
+.access-log .al-ranges { display: inline-flex; gap: .35rem; align-items: center; flex-wrap: wrap; }
+.access-log .al-stats, .access-log .al-detail, .access-log .al-settings { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+.access-log .al-chart { display: flex; align-items: flex-end; gap: 2px; height: 110px; margin: .75rem 0; border-bottom: 1px solid var(--border); }
+.access-log .al-bar { flex: 1 1 0; min-width: 3px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; text-decoration: none; }
+.access-log .al-bar:hover { outline: 1px solid var(--primary); }
+.access-log .al-bar span { display: block; width: 100%; }
+.access-log .al-bar .al-s2 { background: var(--success-solid); }
+.access-log .al-bar .al-s3 { background: var(--info); }
+.access-log .al-bar .al-s4 { background: var(--warning); }
+.access-log .al-bar .al-s5 { background: var(--danger-solid); }
+.access-log a.al-s2 { color: var(--success); }
+.access-log a.al-s3 { color: var(--info); }
+.access-log a.al-s4 { color: var(--warning-text); }
+.access-log a.al-s5 { color: var(--danger); font-weight: 600; }
+.access-log .al-tops { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; }
+.access-log .al-top h3 { font-size: .95rem; margin-bottom: .35rem; }
+.access-log .al-top ul { list-style: none; }
+.access-log .al-top li { display: flex; justify-content: space-between; gap: .5rem; padding: .15rem 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.access-log .al-count { color: var(--secondary); font-variant-numeric: tabular-nums; }
+.access-log .al-detail dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin-bottom: .75rem; }
+.access-log .al-detail dt { color: var(--secondary); }
+.access-log .al-detail dd { overflow-wrap: anywhere; }
+.access-log #al-table { width: 100%; }
+.access-log #al-table td { overflow-wrap: anywhere; }
+.access-log .al-settings textarea { width: 100%; }
