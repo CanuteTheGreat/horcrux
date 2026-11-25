@@ -392,3 +392,57 @@ fn guest_power_rejects_unknown_vms_and_bad_values() {
     assert!(parse("guest_power: {node: {max_parallel: 0}}").is_err());
     assert!(parse("guest_power: {vms: {a: {save_dir: relative}}}").is_err());
 }
+
+#[test]
+fn management_network_is_exported_planned_for_next_boot_and_validated() {
+    let rec: crate::api::mgmt_net::MgmtRecord = serde_json::from_str(
+        r#"{"interfaces":["eth0","eth1"],"vlan":42,"address_interface":"bond0.42","mode":"dhcp","stack":"dhcpcd",
+            "bond":{"name":"bond0","mode":"802.3ad","miimon":100,"xmit_hash_policy":"layer3+4","lacp_rate":"fast"}}"#,
+    )
+    .unwrap();
+    let live = Live {
+        management_network: Some(rec.clone()),
+        ..Default::default()
+    };
+    let y = serde_yaml::to_string(&export(&live)).unwrap();
+    assert!(y.contains("management_network:"), "{y}");
+    assert!(y.contains("802.3ad"), "{y}");
+    let back: Spec = serde_yaml::from_str(&y).unwrap();
+    assert!(plan(&back, &live, false).in_sync());
+    // stack / address_interface are the node's bookkeeping, not desired state
+    let mut same = rec.clone();
+    same.stack = None;
+    same.address_interface = String::new();
+    let s = Spec {
+        management_network: Some(same),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).in_sync());
+    let mut want = rec.clone();
+    want.vlan = Some(7);
+    let s = Spec {
+        management_network: Some(want),
+        ..Default::default()
+    };
+    let p = plan(&s, &live, false);
+    assert_eq!(p.changes.len(), 1);
+    assert_eq!(p.changes[0].kind, "management_network");
+    let d = p.changes[0].details.join("\n");
+    assert!(
+        d.contains("vlan: 42 -> 7") && d.contains("next boot"),
+        "{d}"
+    );
+    let mut bad = rec.clone();
+    bad.vlan = Some(5000);
+    let s = Spec {
+        management_network: Some(bad),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).errors[0].contains("management_network"));
+    // a node without a record cannot take one from a spec
+    let s = Spec {
+        management_network: Some(rec),
+        ..Default::default()
+    };
+    assert!(plan(&s, &Live::default(), false).errors[0].contains("no recorded management link"));
+}

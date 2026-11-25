@@ -32,6 +32,7 @@ class Network:
     kind: str = "hub"             # hub: user-space switch with fault injection; bridge: host bridge (root, no faults)
     bridge: Optional[str] = None
     pcap: bool = True
+    vlans: tuple = ()             # hub only: carry only these 802.1Q VLAN ids (+ LACP/STP control frames); untagged frames dropped
 
 
 @dataclass

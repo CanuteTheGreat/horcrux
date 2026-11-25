@@ -34,15 +34,18 @@ class _Port:
 
 
 class Hub:
-    def __init__(self, name: str, outdir: str, pcap: bool = True):
+    def __init__(self, name: str, outdir: str, pcap: bool = True, vlans: tuple = ()):
         self.name = name
+        # trunk port that only carries these 802.1Q VLAN ids (plus link-local control frames: LACP, STP): every untagged frame and
+        # every other VLAN is dropped, like a switch port configured "tagged VLAN 42 only". Empty = forward everything.
+        self.vlans = frozenset(int(v) for v in vlans)
         self.macs: dict[bytes, str] = {}          # registered MAC -> node name
         self.table: dict[bytes, _Port] = {}       # learned MAC -> port
         self.ports: list[_Port] = []
         self.blocked: set[tuple[str, str]] = set()  # (src node, dst node): frames dropped
         self.loss: dict = {}
         self.delay: dict = {}
-        self.stats = {"forwarded": 0, "dropped": 0}
+        self.stats = {"forwarded": 0, "dropped": 0, "vlan_dropped": 0}
         self.events: list[str] = []
         self.lock = threading.Lock()
         self._stop = False
@@ -146,8 +149,26 @@ class Hub:
                 self._switch(p, frame)
         p.alive = False
 
+    def vlan_allowed(self, frame: bytes) -> bool:
+        if not self.vlans:
+            return True
+        if frame[0:5] == b"\x01\x80\xc2\x00\x00":          # 01:80:c2:00:00:0x link-local (LACP / slow protocols, STP, LLDP)
+            return True
+        if frame[12:14] == b"\x81\x00" and len(frame) >= 16:
+            return (struct.unpack(">H", frame[14:16])[0] & 0x0FFF) in self.vlans
+        return False
+
     def _switch(self, src: _Port, frame: bytes):
         dst_mac, src_mac = frame[0:6], frame[6:12]
+        if not self.vlan_allowed(frame):
+            with self.lock:
+                self.stats["vlan_dropped"] += 1
+                if self.stats["vlan_dropped"] <= 20:      # evidence: who sent what the trunk refused
+                    tag = frame[12:14].hex()
+                    if tag == "8100" and len(frame) >= 18:
+                        tag += f" vid {struct.unpack('>H', frame[14:16])[0] & 0x0FFF} inner {frame[16:18].hex()}"
+                    self.events.append(f"vlan-drop {frame[6:12].hex(':')} -> {frame[0:6].hex(':')} type {tag} len {len(frame)}")
+            return
         with self.lock:
             self.table[src_mac] = src
             if src.node is None:

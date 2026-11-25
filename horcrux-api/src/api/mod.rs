@@ -39,6 +39,7 @@ pub mod libvirt_import;
 pub mod mdev;
 pub mod metric_servers;
 pub mod metrics;
+pub mod mgmt_net;
 pub mod migration_jobs;
 pub mod migration_peer;
 pub mod net_dhcp;

@@ -832,10 +832,44 @@ class Console:
         self.say("Configuration restored; web service restarted.")
 
 
+def mgmt_cli(con, args, out=sys.stdout, nics=None):
+    """non-interactive management link tool for the product's API (horcrux-api PUT /api/network/management):
+    --mgmt-show prints the recorded layout; --mgmt-apply FILE (or - for stdin) validates a record, writes it for this init and, with
+    --live, applies it now. Prints one JSON object; exit 0 = written, 2 = refused (errors listed)."""
+    if args[0] == "--mgmt-show":
+        m = con.mgmt()
+        out.write(json.dumps({"recorded": m is not None, "record": NL.record(m) if m else None}) + "\n")
+        return 0
+    src = args[1] if len(args) > 1 else "-"
+    rec = json.load(sys.stdin if src == "-" else open(src))
+    new = NL.from_record(rec, con.p)
+    nics = S.list_nics() if nics is None else nics
+    errs = NL.problems(new, nics)
+    if new.get("mode") == "static":
+        for k, fn in (("address", S.cidr_problem), ("gateway", lambda v: S.ip_problem(v, new["address"]) if v else None),
+                      ("dns", lambda v: S.dns_problem(v) if v else None)):
+            e = fn(new.get(k, ""))
+            if e:
+                errs.append(f"{k}: {e}")
+    if not new["ifaces"]:
+        errs.append("interfaces: at least one NIC")
+    if errs:
+        out.write(json.dumps({"ok": False, "errors": errs}) + "\n")
+        return 2
+    old = con.mgmt() or NL.ensure({"iface": new["iface"], "ifaces": [new["iface"]], "mode": "dhcp", "address": "", "gateway": "", "dns": ""}, con.p)
+    con.out = sys.stderr                    # progress lines; stdout stays one JSON object
+    con.write_mgmt(old, new, live="--live" in args)
+    out.write(json.dumps({"ok": True, "applied": "--live" in args, "record": NL.record(new)}) + "\n")
+    return 0
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
     if os.geteuid() != 0:
         print("The console menu must run as root.")
         return 1
-    os.environ["CONSOLE_MENU_INNER"] = "1"
     p = S.load_profile()
+    if argv and argv[0] in ("--mgmt-show", "--mgmt-apply"):
+        return mgmt_cli(Console(p, out=sys.stderr), argv)
+    os.environ["CONSOLE_MENU_INNER"] = "1"
     return Console(p).loop()
