@@ -161,7 +161,7 @@ def define(args):
         _, st = agent("--hibernate-status")
         m.check("restart-needed-after-enable", st.get("ready") is False and "restart" in (st.get("reason") or ""), json.dumps(st))
         try:
-            gexec("sync; systemctl poweroff", 60)
+            gexec("sync; poweroff", 60)
         except Exception:      # noqa: BLE001  the guest may go down before it reports the exit of its own poweroff
             pass
         wait_status("stopped", 300)

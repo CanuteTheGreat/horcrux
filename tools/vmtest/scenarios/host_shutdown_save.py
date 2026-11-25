@@ -124,6 +124,27 @@ def define(args):
             out = n.succeed(f"{env}python3 /root/hx_node.py serial {sock} \"{cmd}\"", timeout=900).strip().splitlines()
             return out[-1] if out else ""
 
+        def serial_num(cfg, cmd, conv=int, tries=8):
+            # the CirrOS serial console sometimes answers a command with nothing (getty restarting,
+            # boot messages still scrolling): ask again rather than fail on an empty line
+            last = ""
+            for _ in range(tries):
+                last = serial(cfg, cmd)
+                try:
+                    return conv(last.split()[-1])
+                except (IndexError, ValueError):
+                    time.sleep(5)
+            raise AssertionError(f"guest gave no number for {cmd!r} (last line {last!r})")
+
+        def serial_word(cfg, cmd, tries=8):
+            # last word of a guest answer, asking again on an empty answer ("" if the guest never answers)
+            for _ in range(tries):
+                out = serial(cfg, cmd).split()
+                if out:
+                    return out[-1]
+                time.sleep(5)
+            return ""
+
         def create(vm):
             hx("DELETE", f"/vms/{vm}", ok=False)
             hx("POST", "/vms", {"id": vm, "name": vm, "hypervisor": "qemu", "architecture": "x86_64", "cpus": 1, "memory": 256, "disk_size": 1,
@@ -149,11 +170,18 @@ def define(args):
         create("vmP")
         cfgA = hx("GET", "/vms/vmA")["body"]
         marker = f"hx-ram-{int(time.time())}"
-        serial(cfgA, f"echo {marker} > /dev/shm/m; nohup sh -c 'i=0; while :; do i=\\$((i+1)); echo \\$i > /dev/shm/cnt; sleep 1; done' >/dev/null 2>&1 & echo \\$! > /dev/shm/pid")
-        pid = serial(cfgA, "cat /dev/shm/pid").split()[-1]
+        pid = None
+        for _ in range(3):  # the start command itself can be swallowed the same way: start it until it runs
+            serial(cfgA, f"echo {marker} > /dev/shm/m; nohup sh -c 'i=0; while :; do i=\\$((i+1)); echo \\$i > /dev/shm/cnt; sleep 1; done' >/dev/null 2>&1 & echo \\$! > /dev/shm/pid")
+            try:
+                pid = str(serial_num(cfgA, "cat /dev/shm/pid", tries=4))
+                break
+            except AssertionError:
+                continue
+        assert pid, "the guest counter process did not start"
         time.sleep(20)
-        c0 = int(serial(cfgA, "cat /dev/shm/cnt").split()[-1])
-        up0 = float(serial(cfgA, "cut -d' ' -f1 /proc/uptime").split()[-1])
+        c0 = serial_num(cfgA, "cat /dev/shm/cnt")
+        up0 = serial_num(cfgA, "cut -d' ' -f1 /proc/uptime", float)
         m.note("counter-before", True, f"{c0} (uptime {up0}s, pid {pid})")
         n.succeed("python3 - <<'EOF'\nimport sqlite3, glob\np = [x for x in glob.glob('/var/lib/horcrux/*.db') if sqlite3.connect(x).execute(\"select count(*) from sqlite_master where name='vms'\").fetchone()[0]][0]\nc = sqlite3.connect(p)\n"
                   "c.execute(\"UPDATE vms SET hardware = json_set(coalesce(hardware,'{}'), '$.hostpci', json('[{\\\"device\\\":\\\"0000:ff:ff.0\\\"}]')) WHERE id='vmP'\")\nc.commit()\nEOF")
@@ -184,7 +212,7 @@ def define(args):
         q0, a0 = qemu_pid(), api_pid()
         r = n.succeed(f"{au}; echo rc=$?", timeout=300)
         # (the fence agent still runs the image's program, replaced above: it may be restarted here; the manager is current)
-        m.check("au-current-manager-left-alone", "restarted horcrux-api" not in r and "rc=0" in r and api_pid() == a0, r.strip()[-200:])
+        m.check("au-current-manager-left-alone", "horcrux-api (guests kept" not in r and "rc=0" in r and api_pid() == a0, r.strip()[-200:])
         # what a package merge does: a new file replaces the program, the running manager keeps the old (deleted) inode
         n.succeed("cp -p /usr/bin/horcrux-api /usr/bin/.horcrux-api.new && mv -f /usr/bin/.horcrux-api.new /usr/bin/horcrux-api")
         m.check("au-running-manager-runs-a-replaced-file", "(deleted)" in n.succeed(f"readlink /proc/{a0}/exe"), a0)
@@ -197,12 +225,12 @@ def define(args):
         time.sleep(2)
         r = n.succeed(f"{au}; echo rc=$?", timeout=300)
         a1 = api_pid()
-        m.check("au-restarted-the-replaced-manager", "restarted horcrux-api" in r and "rc=0" in r and a1 and a1 != a0, r.strip()[-300:])
+        m.check("au-restarted-the-replaced-manager", re.search(r"restarted .*horcrux-api \(guests kept (\d+)/\1\)", r) is not None and "rc=0" in r and a1 and a1 != a0, r.strip()[-300:])
         m.check("au-new-manager-runs-the-new-file", "(deleted)" not in n.succeed(f"readlink /proc/{a1}/exe"), a1)
         n.wait_until(lambda: n.http("web", "/api/health")[0] == 200, 180, 3, "api health after the restart")
         m.check("au-vm-qemu-process-kept", qemu_pid() == q0, f"{q0} -> {qemu_pid()}")
         m.check("au-vm-still-running", hx("GET", "/vms/vmA")["body"]["status"] == "running", "")
-        m.check("au-guest-counter-process-alive", serial(cfgA, f"test -d /proc/{pid} && echo alive").split()[-1] == "alive", pid)
+        m.check("au-guest-counter-process-alive", serial_word(cfgA, f"test -d /proc/{pid} && echo alive") == "alive", pid)
         m.check("au-guests-service-not-stopped", n.unit_active("horcrux-guests"), "")
         m.check("au-no-saved-state-written", n.succeed("ls /var/lib/horcrux/saved-state/data 2>/dev/null | wc -l").strip() == "0", "")
 
@@ -219,11 +247,11 @@ def define(args):
         n.wait_until(lambda: n.http("web", "/api/health")[0] == 200, 300, 3, "api health after reboot")
         wait_status("vmA", "running", 600)
         cfgA = hx("GET", "/vms/vmA")["body"]
-        mark = serial(cfgA, "cat /dev/shm/m").split()[-1]
+        mark = serial_word(cfgA, "cat /dev/shm/m")
         m.check("ram-marker-survived-host-reboot", mark == marker, mark)
-        m.check("same-process-still-running", serial(cfgA, f"test -d /proc/{pid} && echo alive").split()[-1] == "alive", pid)
-        c1 = int(serial(cfgA, "cat /dev/shm/cnt").split()[-1])
-        up1 = float(serial(cfgA, "cut -d' ' -f1 /proc/uptime").split()[-1])
+        m.check("same-process-still-running", serial_word(cfgA, f"test -d /proc/{pid} && echo alive") == "alive", pid)
+        c1 = serial_num(cfgA, "cat /dev/shm/cnt")
+        up1 = serial_num(cfgA, "cut -d' ' -f1 /proc/uptime", float)
         m.check("counter-continued-not-restarted", c1 >= c0 and up1 >= up0 and up1 < up0 + 900, f"counter {c0} -> {c1}, uptime {up0} -> {up1}")
         outc = {o["id"]: o for o in (hx("GET", "/nodes/guest-power")["body"].get("last_stop") or {}).get("outcomes", [])}
         m.check("manifest-vmA-saved", outc.get("vmA", {}).get("action") == "saved", json.dumps(outc.get("vmA")))
