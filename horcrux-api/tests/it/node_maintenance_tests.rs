@@ -132,10 +132,11 @@ async fn per_node_maintenance_routes_settings_and_rbac() {
     grant(other, "/nodes/somewhere-else".into(), "SysAdmin").await;
     let ops = mk("nm-ops").await;
     grant(ops, format!("/nodes/{me}"), "SysAdmin").await;
-    let login = |n: &'static str| Api::login_with(srv.client(), &srv.base(), n, "node-maint-pass-1");
-    let auditor = login("nm-auditor").await;
-    let outsider = login("nm-other").await;
-    let operator = login("nm-ops").await;
+    let base = srv.base();
+    let pw = "node-maint-pass-1";
+    let auditor = Api::login_with(srv.client(), &base, "nm-auditor", pw).await;
+    let outsider = Api::login_with(srv.client(), &base, "nm-other", pw).await;
+    let operator = Api::login_with(srv.client(), &base, "nm-ops", pw).await;
     let path = format!("/nodes/{me}/maintenance");
     assert_eq!(auditor.get(&path).await.0, 200, "Sys.Audit on the node reads it");
     assert_eq!(
