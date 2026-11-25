@@ -366,6 +366,14 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
     color: var(--danger);
 }
 
+/* SMART disk cards: an unknown disk is neutral, not red, and label/value are spaced */
+.smart-disk-card.status-unknown { color: inherit; }
+.smart-disk-card .disk-info-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.25rem 1rem; }
+.smart-disk-card .info-item { display: flex; gap: 0.5rem; }
+.smart-disk-card .info-item .label { color: var(--secondary); }
+.smart-disk-card .info-item .label::after { content: ":"; }
+.status-indicator.status-unknown { color: var(--secondary); }
+
 .actions {
     display: flex;
     flex-wrap: wrap;   /* a VM row's ten buttons wrap inside the cell instead of widening the page */

@@ -326,7 +326,7 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                                         </div>
                                         <div class="info-item">
                                             <span class="label">Serial</span>
-                                            <span class="value">{disk.serial.clone()}</span>
+                                            <span class="value">{if disk.serial.trim().is_empty() { "-".to_string() } else { disk.serial.clone() }}</span>
                                         </div>
                                         <div class="info-item">
                                             <span class="label">Type</span>
@@ -426,7 +426,7 @@ pub fn SmartMonitoringPage() -> impl IntoView {
                                             <table class="info-table">
                                                 <tbody>
                                                     <tr><td>Model</td><td>{disk.model.clone()}</td></tr>
-                                                    <tr><td>Serial</td><td>{disk.serial.clone()}</td></tr>
+                                                    <tr><td>Serial</td><td>{if disk.serial.trim().is_empty() { "-".to_string() } else { disk.serial.clone() }}</td></tr>
                                                     <tr><td>Firmware</td><td>{disk.firmware.clone()}</td></tr>
                                                     <tr><td>Type</td><td>{disk.disk_type.to_uppercase()}</td></tr>
                                                     <tr><td>Interface</td><td>{disk.interface.clone()}</td></tr>
