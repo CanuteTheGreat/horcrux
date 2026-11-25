@@ -14,6 +14,10 @@ use std::sync::Arc;
 static APPLY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub async fn gather(state: &Arc<AppState>) -> Live {
+    let ceph = crate::api::ceph_install::catalog(
+        &crate::api::system_admin::sysroot(),
+        crate::api::system_admin::portage_tree::portage_arch(),
+    );
     Live {
         pools: state.storage_manager.list_pools().await,
         zones: sdn::list_zones(State(state.clone())).await.0,
@@ -24,6 +28,10 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         remote_play: crate::api::remote_play::load_settings(state).await,
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
+        kernel_line: crate::api::system_admin::kernel_line::load().line,
+        ceph_major: ceph.installed_major,
+        ceph_pinned: ceph.pinned,
+        ceph_available: ceph.releases.iter().map(|r| r.major).collect(),
     }
 }
 
@@ -119,6 +127,27 @@ async fn run_change(
     let api = api_msg;
     match (c.kind.as_str(), c.action) {
         (_, Action::Blocked) => Err(c.details.join("; ")),
+
+        ("system", Action::Update) => {
+            use crate::api::system_admin::kernel_line as kl;
+            let line = spec
+                .system
+                .as_ref()
+                .and_then(|s| s.kernel_line)
+                .ok_or("not in spec")?;
+            let st = kl::save(&kl::KernelLineSettings { line })?;
+            Ok(Some(match (line, st.held_back) {
+                (kl::KernelLine::Newest, Some(h)) => format!("kernel line saved; {h}"),
+                _ => "kernel line saved; the kernel arrives with the next update (reboot when ready)".into(),
+            }))
+        }
+
+        ("ceph", Action::Create | Action::Update) => {
+            let c = spec.ceph.as_ref().ok_or("not in spec")?;
+            let major = crate::api::ceph_install::parse_release(&c.release)?;
+            let upid = crate::api::ceph_install::start_packages(major, "declarative").map_err(api)?;
+            Ok(Some(format!("package task {upid} started")))
+        }
 
         ("console", Action::Update) => {
             let w = spec.console.clone().ok_or("not in spec")?;
