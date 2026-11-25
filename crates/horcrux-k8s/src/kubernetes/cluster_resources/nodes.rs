@@ -238,7 +238,7 @@ fn node_to_info(node: k8s_openapi::api::core::v1::Node) -> NodeInfo {
         capacity_memory: capacity_of("memory"),
         capacity_pods: capacity_of("pods"),
         conditions: node_conditions,
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 

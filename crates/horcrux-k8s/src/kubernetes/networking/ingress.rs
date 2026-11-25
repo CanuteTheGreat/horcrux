@@ -311,7 +311,7 @@ fn ingress_to_info(ingress: k8s_openapi::api::networking::v1::Ingress) -> Ingres
         labels: metadata.labels.unwrap_or_default(),
         annotations: metadata.annotations.unwrap_or_default(),
         load_balancer_ips,
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 

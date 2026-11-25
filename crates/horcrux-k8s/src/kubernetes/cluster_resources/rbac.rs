@@ -123,7 +123,7 @@ fn sa_to_info(sa: k8s_openapi::api::core::v1::ServiceAccount) -> ServiceAccountI
         secrets,
         image_pull_secrets,
         labels: metadata.labels.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 
@@ -217,7 +217,7 @@ fn role_to_info(role: k8s_openapi::api::rbac::v1::Role) -> RoleInfo {
         namespace: metadata.namespace.unwrap_or_default(),
         rules,
         labels: metadata.labels.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 
@@ -313,7 +313,7 @@ fn cluster_role_to_info(role: k8s_openapi::api::rbac::v1::ClusterRole) -> Cluste
         name: metadata.name.unwrap_or_default(),
         rules,
         labels: metadata.labels.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 
@@ -378,7 +378,7 @@ pub async fn create_role_binding(
             ..Default::default()
         },
         role_ref: K8sRoleRef {
-            api_group: request.role_ref.api_group.clone(),
+            api_group: Some(request.role_ref.api_group.clone()),
             kind: request.role_ref.kind.clone(),
             name: request.role_ref.name.clone(),
         },
@@ -406,7 +406,7 @@ fn role_binding_to_info(binding: k8s_openapi::api::rbac::v1::RoleBinding) -> Rol
     let metadata = binding.metadata;
 
     let role_ref = RoleRef {
-        api_group: binding.role_ref.api_group,
+        api_group: binding.role_ref.api_group.unwrap_or_default(),
         kind: binding.role_ref.kind,
         name: binding.role_ref.name,
     };
@@ -429,7 +429,7 @@ fn role_binding_to_info(binding: k8s_openapi::api::rbac::v1::RoleBinding) -> Rol
         role_ref,
         subjects,
         labels: metadata.labels.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 
@@ -497,7 +497,7 @@ pub async fn create_cluster_role_binding(
             ..Default::default()
         },
         role_ref: K8sRoleRef {
-            api_group: request.role_ref.api_group.clone(),
+            api_group: Some(request.role_ref.api_group.clone()),
             kind: request.role_ref.kind.clone(),
             name: request.role_ref.name.clone(),
         },
@@ -527,7 +527,7 @@ fn cluster_role_binding_to_info(
     let metadata = binding.metadata;
 
     let role_ref = RoleRef {
-        api_group: binding.role_ref.api_group,
+        api_group: binding.role_ref.api_group.unwrap_or_default(),
         kind: binding.role_ref.kind,
         name: binding.role_ref.name,
     };
@@ -549,7 +549,7 @@ fn cluster_role_binding_to_info(
         role_ref,
         subjects,
         labels: metadata.labels.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 

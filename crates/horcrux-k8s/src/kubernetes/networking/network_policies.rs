@@ -102,14 +102,14 @@ pub async fn create_network_policy(
             ..Default::default()
         },
         spec: Some(NetworkPolicySpec {
-            pod_selector: LabelSelector {
+            pod_selector: Some(LabelSelector {
                 match_labels: if request.pod_selector.is_empty() {
                     None
                 } else {
                     Some(request.pod_selector.clone())
                 },
                 match_expressions: None,
-            },
+            }),
             policy_types: request.policy_types.clone(),
             ingress,
             egress,
@@ -190,7 +190,10 @@ fn network_policy_to_info(
     let spec = policy.spec.unwrap_or_default();
 
     // Get pod selector
-    let pod_selector = spec.pod_selector.match_labels.unwrap_or_default();
+    let pod_selector = spec
+        .pod_selector
+        .and_then(|s| s.match_labels)
+        .unwrap_or_default();
 
     // Get policy types
     let policy_types = spec.policy_types.unwrap_or_default();
@@ -207,7 +210,7 @@ fn network_policy_to_info(
         ingress_rules_count,
         egress_rules_count,
         labels: metadata.labels.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 

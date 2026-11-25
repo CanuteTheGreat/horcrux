@@ -113,7 +113,7 @@ fn pod_to_info(pod: k8s_openapi::api::core::v1::Pod) -> PodInfo {
                         }
                     } else if let Some(ref running) = s.running {
                         ContainerState::Running {
-                            started_at: running.started_at.as_ref().map(|t| t.0.to_rfc3339()),
+                            started_at: running.started_at.as_ref().map(|t| t.0.to_string()),
                         }
                     } else if let Some(ref terminated) = s.terminated {
                         ContainerState::Terminated {
@@ -154,7 +154,7 @@ fn pod_to_info(pod: k8s_openapi::api::core::v1::Pod) -> PodInfo {
         containers,
         labels: metadata.labels.unwrap_or_default(),
         annotations: metadata.annotations.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
         restart_count,
     }
 }

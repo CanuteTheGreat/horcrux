@@ -195,8 +195,8 @@ fn event_to_info(event: k8s_openapi::api::core::v1::Event) -> K8sEvent {
             name: involved.name.unwrap_or_default(),
             namespace: involved.namespace,
         },
-        first_timestamp: event.first_timestamp.map(|t| t.0.to_rfc3339()),
-        last_timestamp: event.last_timestamp.map(|t| t.0.to_rfc3339()),
+        first_timestamp: event.first_timestamp.map(|t| t.0.to_string()),
+        last_timestamp: event.last_timestamp.map(|t| t.0.to_string()),
         count: event.count.unwrap_or(1),
     }
 }

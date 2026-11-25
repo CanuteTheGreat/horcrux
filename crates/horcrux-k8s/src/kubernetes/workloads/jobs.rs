@@ -190,9 +190,9 @@ fn job_to_info(job: k8s_openapi::api::batch::v1::Job) -> JobInfo {
         parallelism: spec.parallelism,
         backoff_limit: spec.backoff_limit,
         labels: metadata.labels.unwrap_or_default(),
-        start_time: status.start_time.map(|t| t.0.to_rfc3339()),
-        completion_time: status.completion_time.map(|t| t.0.to_rfc3339()),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        start_time: status.start_time.map(|t| t.0.to_string()),
+        completion_time: status.completion_time.map(|t| t.0.to_string()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 
@@ -292,7 +292,7 @@ pub async fn create_cronjob(
             },
             ..Default::default()
         },
-        spec: Some(CronJobSpec {
+        spec: CronJobSpec {
             schedule: request.schedule.clone(),
             suspend: Some(request.suspend),
             concurrency_policy: request.concurrency_policy.clone(),
@@ -324,7 +324,7 @@ pub async fn create_cronjob(
                 }),
             },
             ..Default::default()
-        }),
+        },
         ..Default::default()
     };
 
@@ -386,9 +386,7 @@ pub async fn trigger_cronjob(
 
     // Get the cronjob
     let cronjob = cronjobs.get(name).await?;
-    let spec = cronjob.spec.ok_or_else(|| {
-        crate::kubernetes::error::K8sError::Internal("CronJob has no spec".to_string())
-    })?;
+    let spec = cronjob.spec;
 
     // Create a job from the cronjob template
     let job_name = format!("{}-manual-{}", name, chrono::Utc::now().timestamp());
@@ -434,7 +432,7 @@ pub async fn trigger_cronjob(
 #[cfg(feature = "kubernetes")]
 fn cronjob_to_info(cronjob: k8s_openapi::api::batch::v1::CronJob) -> CronJobInfo {
     let metadata = cronjob.metadata;
-    let spec = cronjob.spec.unwrap_or_default();
+    let spec = cronjob.spec;
     let status = cronjob.status.unwrap_or_default();
 
     CronJobInfo {
@@ -448,10 +446,10 @@ fn cronjob_to_info(cronjob: k8s_openapi::api::batch::v1::CronJob) -> CronJobInfo
         successful_jobs_history_limit: spec.successful_jobs_history_limit,
         failed_jobs_history_limit: spec.failed_jobs_history_limit,
         active_jobs: status.active.map(|a| a.len() as i32).unwrap_or(0),
-        last_schedule_time: status.last_schedule_time.map(|t| t.0.to_rfc3339()),
-        last_successful_time: status.last_successful_time.map(|t| t.0.to_rfc3339()),
+        last_schedule_time: status.last_schedule_time.map(|t| t.0.to_string()),
+        last_successful_time: status.last_successful_time.map(|t| t.0.to_string()),
         labels: metadata.labels.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 

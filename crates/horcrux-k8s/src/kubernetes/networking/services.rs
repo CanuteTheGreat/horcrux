@@ -221,7 +221,7 @@ fn service_to_info(service: k8s_openapi::api::core::v1::Service) -> ServiceInfo 
         ports,
         selector: spec.selector.unwrap_or_default(),
         labels: metadata.labels.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 

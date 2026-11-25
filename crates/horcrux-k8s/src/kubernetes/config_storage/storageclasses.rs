@@ -165,7 +165,7 @@ fn storage_class_to_info(sc: k8s_openapi::api::storage::v1::StorageClass) -> Sto
         parameters: sc.parameters.unwrap_or_default(),
         labels: metadata.labels.unwrap_or_default(),
         is_default,
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 

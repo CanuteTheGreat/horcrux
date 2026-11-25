@@ -210,7 +210,7 @@ fn deployment_to_info(deployment: k8s_openapi::api::apps::v1::Deployment) -> Dep
         labels: metadata.labels.unwrap_or_default(),
         selector,
         strategy,
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 

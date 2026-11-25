@@ -131,7 +131,7 @@ fn pvc_to_info(pvc: k8s_openapi::api::core::v1::PersistentVolumeClaim) -> PvcInf
         capacity,
         requested_capacity,
         labels: metadata.labels.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 
@@ -256,7 +256,7 @@ fn pv_to_info(pv: k8s_openapi::api::core::v1::PersistentVolume) -> PvInfo {
         volume_mode: spec.volume_mode,
         claim_ref,
         labels: metadata.labels.unwrap_or_default(),
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 

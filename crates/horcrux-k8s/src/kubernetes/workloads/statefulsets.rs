@@ -139,10 +139,10 @@ fn statefulset_to_info(sts: k8s_openapi::api::apps::v1::StatefulSet) -> Stateful
         updated_replicas: status.updated_replicas.unwrap_or(0),
         labels: metadata.labels.unwrap_or_default(),
         selector,
-        service_name: spec.service_name,
+        service_name: spec.service_name.unwrap_or_default(),
         pod_management_policy,
         update_strategy,
-        created_at: metadata.creation_timestamp.map(|t| t.0.to_rfc3339()),
+        created_at: metadata.creation_timestamp.map(|t| t.0.to_string()),
     }
 }
 
