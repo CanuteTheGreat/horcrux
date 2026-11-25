@@ -117,7 +117,7 @@ async fn records_session_and_token_requests_and_answers_every_filter() {
     assert_eq!(jwt["client"], "127.0.0.1");
     assert!(jwt["duration_ms"].as_f64().unwrap() >= 0.0);
     assert!(jwt["time"].as_str().unwrap().ends_with('Z'));
-    assert!(jwt["node"].as_str().unwrap().len() > 0);
+    assert!(!jwt["node"].as_str().unwrap().is_empty());
 
     // API token: by name and by id
     let (_, by_tok) = q(&srv, &api.token, "/access-log?token=audit-ci&limit=1000").await;
@@ -145,7 +145,7 @@ async fn records_session_and_token_requests_and_answers_every_filter() {
         .any(|e| e["auth_method"] == "jwt" && e["user"].is_null()));
     assert!(entries(&f401).iter().any(|e| e["auth_method"].is_null()));
     let (_, c4) = q(&srv, &api.token, "/access-log?status=4xx&limit=1000").await;
-    assert!(total(&c4) >= total(&f401) + 1);
+    assert!(total(&c4) > total(&f401));
     let (_, c2) = q(&srv, &api.token, "/access-log?status=2xx&limit=1000").await;
     assert!(entries(&c2)
         .iter()
