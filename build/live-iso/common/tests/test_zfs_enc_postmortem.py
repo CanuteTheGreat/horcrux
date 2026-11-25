@@ -4,6 +4,7 @@ import importlib.util
 import os
 import sys
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
@@ -23,8 +24,10 @@ class PostMortem(unittest.TestCase):
         h = CLS.__new__(CLS)
         h.res = {}
         h.z = type("Z", (), {"out": "/nonexistent"})()
-        zet.time.sleep = lambda *_: None
-        zet.qt.pflash_vars = lambda *_: (_ for _ in ()).throw(RuntimeError("boom"))
+        for target, name, fn in ((zet.time, "sleep", lambda *_: None), (zet.qt, "pflash_vars", lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))):
+            p = mock.patch.object(target, name, fn)
+            p.start()
+            self.addCleanup(p.stop)
         h.resume_postmortem("vars")          # must not raise
         self.assertNotIn("resume_postmortem", h.res)
 

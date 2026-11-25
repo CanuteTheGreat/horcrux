@@ -4,6 +4,7 @@ import importlib.util
 import os
 import sys
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
@@ -27,11 +28,14 @@ def harness(results):
         return q.pop(0) if q else (0, DONE)
     h.sh = sh
     h.wait_ssh = lambda t=0: True
-    zet.time.sleep = lambda s: None
+    mock.patch.object(zet.time, "sleep", lambda s: None).start()  # stopped by ScrubWait.tearDown
     return h
 
 
 class ScrubWait(unittest.TestCase):
+    def tearDown(self):
+        mock.patch.stopall()
+
     def test_progress_polled_until_finished(self):
         h = harness([(0, RUN), (0, RUN), (0, RUN2), (0, DONE), (0, "  scan: scrub repaired 0B with 0 errors\nerrors: No known data errors\n state: ONLINE")])
         rc, o = h.scrub_wait(None, "b1", poll=0)
