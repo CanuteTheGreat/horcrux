@@ -213,6 +213,18 @@ def main():
     expect(400, "PUT", "/system/logs/settings", st)
     st["max_lines"] = 5000
     expect(200, "PUT", "/system/logs/settings", st)
+    # live mode: a WebSocket that sends a line appended to the file after it connected
+    env = dict(os.environ, HX_API="https://127.0.0.1:8006", HX_USER="admin", HX_PASS=os.environ.get("ADMIN_PASSWORD", "admin"))
+    live = subprocess.Popen(["python3", "/tmp/hx_logws.py", "follow", "identifier=hxlive", "12"], env=env, stdout=subprocess.PIPE, text=True)
+    time.sleep(4)
+    with open("/var/log/messages", "a") as f:
+        f.write(time.strftime("%b %e %H:%M:%S") + " gw hxlive[7]: live marker one\n")
+        f.write(time.strftime("%b %e %H:%M:%S") + " gw other[8]: not for this stream\n")
+    out = live.communicate(timeout=60)[0]
+    frames = [json.loads(l) for l in out.splitlines() if l.startswith("{")]
+    got = [e for fr in frames if fr.get("type") == "entries" for e in fr["entries"]]
+    ok(frames and frames[0].get("type") == "hello" and frames[0]["idle_secs"] == 600, "live stream says hello with its bounds")
+    ok([e["message"] for e in got] == ["live marker one"], "live stream sends only the new line that matches the filter: " + out[-300:])
     expect(200, "DELETE", "/system/logs")
     ok(os.path.getsize("/var/log/messages") == 0 and expect(200, "GET", "/system/logs") == [], "clear truncated the log file")
 
