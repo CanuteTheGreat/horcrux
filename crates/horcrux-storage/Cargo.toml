@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 horcrux-common = { path = "../../horcrux-common" }
 horcrux-core = { path = "../horcrux-core" }
+horcrux-storage-plugin-sdk = { path = "../horcrux-storage-plugin-sdk", features = ["pattern"] }
 chrono = { workspace = true }
 nix = { workspace = true }
 reqwest = { workspace = true }

@@ -575,6 +575,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::import_cleanup::routes())
         .merge(api::esxi::routes())
         .merge(api::storage_volumes::routes())
+        .merge(api::storage_plugins::routes())
         .merge(api::storage_content::routes())
         .merge(api::resource_pools::routes())
         .merge(api::inventory::routes())
@@ -5358,34 +5359,54 @@ async fn get_storage_pool(
 #[derive(serde::Deserialize)]
 struct AddStoragePoolRequest {
     name: String,
+    /// Built-in type name (`directory`, `nfs`, ...) or `plugin:<id>`.
     storage_type: String,
+    /// Built-in pools: the path/target. Unused by plugin pools.
+    #[serde(default)]
     path: String,
+    /// Plugin pools: the settings the plugin's schema declares (secrets
+    /// included; they go to the secrets store, never back to clients).
+    #[serde(default)]
+    config: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 async fn add_storage_pool(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AddStoragePoolRequest>,
 ) -> Result<Json<storage::StoragePool>, ApiError> {
-    // Parse storage type
-    let storage_type = match req.storage_type.to_lowercase().as_str() {
-        "zfs" => storage::StorageType::Zfs,
-        "ceph" => storage::StorageType::Ceph,
-        "lvm" => storage::StorageType::Lvm,
-        "iscsi" => storage::StorageType::Iscsi,
-        "directory" | "dir" => storage::StorageType::Directory,
-        "cifs" => storage::StorageType::Cifs,
-        "nfs" => storage::StorageType::Nfs,
-        "glusterfs" => storage::StorageType::GlusterFs,
-        "cephfs" => storage::StorageType::CephFs,
-        "btrfs" => storage::StorageType::BtrFs,
-        "s3" => storage::StorageType::S3,
-        _ => {
-            return Err(ApiError::Internal(format!(
-                "Unknown storage type: {}",
-                req.storage_type
-            )))
-        }
+    let Some(storage_type) = storage::StorageType::from_name(&req.storage_type) else {
+        return Err(ApiError::BadRequest(format!(
+            "Unknown storage type: {} (a built-in type or plugin:<id>, see GET \
+             /api/storage/plugins)",
+            req.storage_type
+        )));
     };
+    if let storage::StorageType::Plugin(id) = &storage_type {
+        let pool = state
+            .storage_manager
+            .add_plugin_pool(&req.name, id, req.config, true)
+            .await
+            .map_err(|e| match e {
+                horcrux_common::Error::InvalidConfig(m) => ApiError::BadRequest(m),
+                other => ApiError::from(other),
+            })?;
+        let _ = state
+            .webhook_manager
+            .trigger_event(
+                webhooks::WebhookEventType::StoragePoolAdded,
+                serde_json::json!({
+                    "pool_id": pool.id, "name": pool.name, "path": pool.path,
+                    "storage_type": pool.storage_type.name(),
+                }),
+            )
+            .await;
+        return Ok(Json(pool));
+    }
+    if !req.config.is_empty() {
+        return Err(ApiError::BadRequest(
+            "config is only used by plugin pools; built-in pools take a path".into(),
+        ));
+    }
 
     let pool = storage::StoragePool {
         id: uuid::Uuid::new_v4().to_string(),
@@ -5396,6 +5417,7 @@ async fn add_storage_pool(
         total: 0,     // Will be updated by backend
         enabled: true,
         source: None,
+        plugin_config: None,
     };
 
     let pool = state

@@ -17,7 +17,7 @@ const HOOK_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Host end of extra serial port / virtiofsd socket `i`.
 pub fn sock(disk: &Path, kind: &str, i: usize) -> PathBuf {
-    disk.with_extension(format!("{kind}{i}.sock"))
+    super::runtime_files::socket_path(disk, &format!("{kind}{i}.sock"))
 }
 
 fn virtiofsd_pidfile(disk: &Path, i: usize) -> PathBuf {

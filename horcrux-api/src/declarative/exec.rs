@@ -24,6 +24,7 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         remote_play: crate::api::remote_play::load_settings(state).await,
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
+        storage_plugins: crate::storage::plugin::settings::get(),
     }
 }
 
@@ -142,6 +143,12 @@ async fn run_change(
             ))
         }
 
+        ("storage_plugins", Action::Update) => {
+            let w = spec.storage_plugins.clone().ok_or("not in spec")?;
+            crate::storage::plugin::settings::set(w)?;
+            Ok(Some("applies to the next plugin call".into()))
+        }
+
         ("storage_pool", Action::Create) => {
             let w = spec
                 .storage_pools
@@ -149,6 +156,14 @@ async fn run_change(
                 .flatten()
                 .find(|p| p.name == c.name)
                 .ok_or("not in spec")?;
+            if let crate::storage::StorageType::Plugin(id) = pool_type(&w.storage_type)? {
+                state
+                    .storage_manager
+                    .add_plugin_pool(&w.name, &id, w.config.clone(), w.enabled)
+                    .await
+                    .map_err(|x| e(&x))?;
+                return Ok(None);
+            }
             let pool = crate::storage::StoragePool {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: w.name.clone(),
@@ -158,6 +173,7 @@ async fn run_change(
                 total: 0,
                 enabled: w.enabled,
                 source: None,
+                plugin_config: None,
             };
             state
                 .storage_manager

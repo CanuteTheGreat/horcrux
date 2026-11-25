@@ -173,6 +173,7 @@ tmpfs /mnt/cephfs/sub tmpfs rw 0 0
             total: 0,
             enabled: true,
             source: None,
+            plugin_config: None,
         };
         let m = CephFsManager::new();
         assert!(m.validate_pool(&mk("rel/path")).await.is_err());

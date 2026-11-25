@@ -72,7 +72,7 @@ impl DisplayRuntime {
     }
 
     pub fn serial_socket(disk: &Path) -> PathBuf {
-        disk.with_extension("serial.sock")
+        super::runtime_files::socket_path(disk, "serial.sock")
     }
 
     pub fn serial_log(disk: &Path) -> PathBuf {
@@ -80,17 +80,17 @@ impl DisplayRuntime {
     }
 
     pub fn qmp_socket(disk: &Path) -> PathBuf {
-        disk.with_extension("qmp.sock")
+        super::runtime_files::socket_path(disk, "qmp.sock")
     }
 
     /// Host end of the Horcrux guest tools' virtio-serial port.
     pub fn guest_tools_socket_path(disk: &Path) -> PathBuf {
-        disk.with_extension("hxgt.sock")
+        super::runtime_files::socket_path(disk, "hxgt.sock")
     }
 
     /// Host end of the guest agent's virtio-serial channel.
     pub fn qga_socket(disk: &Path) -> PathBuf {
-        disk.with_extension("qga.sock")
+        super::runtime_files::socket_path(disk, "qga.sock")
     }
 
     /// Plan the consoles for a VM about to start (allocates free ports).
