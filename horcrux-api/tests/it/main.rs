@@ -32,6 +32,8 @@ mod k8s_restart_tests;
 mod mdev_tests;
 mod metric_servers_tests;
 mod migration_tests;
+#[cfg(feature = "cluster")]
+mod node_maintenance_tests;
 mod nightly_stress_tests;
 mod oidc_integration_tests;
 mod ovf_import_tests;
