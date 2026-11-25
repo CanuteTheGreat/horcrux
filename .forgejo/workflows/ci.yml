@@ -1449,6 +1449,22 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Dashboard links e2e"
           /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/dashboard_links_e2e.py
 
+      - name: Access Log page filters, statistics and click-through (Firefox, desktop + phone)
+        env:
+          BASE_URL: https://localhost:8006
+          HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Access Log e2e"
+          /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/access_log_e2e.py
+
+      - name: Access log does not slow requests (10k requests, log off vs on)
+        env:
+          BASE_URL: https://localhost:8006
+          HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Access log load check"
+          python3 horcrux-api/tests/access_log_load.py
+
       - name: Failed backup shows its error and keeps it (Firefox)
         env:
           BASE_URL: https://localhost:8006
