@@ -371,6 +371,11 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         // Vulnerability scans and the host hardening baseline.
         "security" => read_write(m, P::SysAudit, P::SysModify, "/"),
 
+        // installing / upgrading Ceph runs the package manager as root, and the
+        // join material is the cluster's admin keyring: node administrators only
+        "ceph" if matches!(arg(1), "install" | "upgrade" | "join-material") && !is_read(m) => {
+            need(P::SysModify, "/nodes")
+        }
         "ceph" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
         // SAN targets, multipath settings, shared VGs, path views: storage
         // administration (discovery also writes iscsiadm node records).
@@ -687,6 +692,34 @@ mod tests {
                 (P::DatastoreAllocate, "/storage".into()),
                 "{m} {p}"
             );
+        }
+    }
+
+    #[test]
+    fn ceph_install_and_kernel_line_routes_map_to_privileges() {
+        for (m, p) in [
+            ("POST", "/api/ceph/install"),
+            ("POST", "/api/ceph/upgrade"),
+            ("POST", "/api/ceph/join-material"),
+            ("PUT", "/api/system/kernel-line"),
+            ("POST", "/api/system/kernel-line/apply"),
+        ] {
+            assert_eq!(priv_of(requirement(m, p)), (P::SysModify, "/nodes".into()), "{m} {p}");
+        }
+        assert_eq!(
+            priv_of(requirement("GET", "/api/ceph/releases")),
+            (P::DatastoreAudit, "/storage".into())
+        );
+        assert_eq!(
+            priv_of(requirement("GET", "/api/ceph/upgrade")),
+            (P::DatastoreAudit, "/storage".into())
+        );
+        assert_eq!(
+            priv_of(requirement("POST", "/api/ceph/pools")),
+            (P::DatastoreAllocate, "/storage".into())
+        );
+        for p in ["/api/system/kernel-line", "/api/system/versions"] {
+            assert_eq!(priv_of(requirement("GET", p)), (P::SysAudit, "/nodes".into()), "{p}");
         }
     }
 

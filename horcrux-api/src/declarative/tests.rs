@@ -484,3 +484,56 @@ fn san_section_plans_creates_updates_and_prunes() {
     );
     assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
 }
+
+#[test]
+fn kernel_line_is_planned_and_exported() {
+    use crate::api::system_admin::kernel_line::KernelLine;
+    let live = Live::default();
+    assert!(plan(&parse("system: {}").unwrap(), &live, false).in_sync());
+    assert!(plan(&parse("system: {kernel_line: default}").unwrap(), &live, false).in_sync());
+    let p = plan(&parse("system: {kernel_line: newest}").unwrap(), &live, false);
+    assert_eq!(actions(&p), ["Update system kernel_line"]);
+    assert!(p.changes[0].details[0].contains("default -> newest"));
+    assert!(parse("system: {kernel_line: lts}").is_err());
+    let live2 = Live {
+        kernel_line: KernelLine::Newest,
+        ..Default::default()
+    };
+    let back = parse(&serde_yaml::to_string(&export(&live2)).unwrap()).unwrap();
+    assert_eq!(back.system.unwrap().kernel_line, Some(KernelLine::Newest));
+}
+
+#[test]
+fn ceph_release_is_installed_upgraded_never_downgraded() {
+    let live = Live {
+        ceph_available: vec![21, 20],
+        ..Default::default()
+    };
+    let p = plan(&parse("ceph: {release: umbrella}").unwrap(), &live, false);
+    assert_eq!(actions(&p), ["Create ceph release"]);
+    assert!(p.changes[0].details[0].contains("Umbrella (21)"));
+    // not carried for this architecture / not a release
+    assert_eq!(plan(&parse("ceph: {release: squid}").unwrap(), &live, false).errors.len(), 1);
+    assert_eq!(plan(&parse("ceph: {release: newest}").unwrap(), &live, false).errors.len(), 1);
+    let on20 = Live {
+        ceph_major: Some(20),
+        ceph_pinned: Some(20),
+        ..live.clone()
+    };
+    assert!(plan(&parse("ceph: {release: '20'}").unwrap(), &on20, false).in_sync());
+    let p = plan(&parse("ceph: {release: '21'}").unwrap(), &on20, false);
+    assert_eq!(actions(&p), ["Update ceph release"]);
+    assert!(p.changes[0].details[0].contains("upgrade Ceph Tentacle (20) -> Umbrella (21)"));
+    let on21 = Live {
+        ceph_major: Some(21),
+        ceph_pinned: None,
+        ..live.clone()
+    };
+    assert!(plan(&parse("ceph: {release: tentacle}").unwrap(), &on21, false).errors[0].contains("downgraded"));
+    assert!(plan(&parse("ceph: {release: umbrella}").unwrap(), &on21, false).changes[0].details[0].contains("pin"));
+    // export: the installed release by name, round trip in sync
+    let back = parse(&serde_yaml::to_string(&export(&on20)).unwrap()).unwrap();
+    assert_eq!(back.ceph.as_ref().unwrap().release, "tentacle");
+    assert!(plan(&back, &on20, false).in_sync());
+    assert!(export(&Live::default()).ceph.is_none());
+}
