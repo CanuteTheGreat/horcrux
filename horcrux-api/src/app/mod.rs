@@ -587,6 +587,8 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::dashboards::routes(&state));
     #[cfg(feature = "s3-gateway")]
     let protected_routes = protected_routes.merge(api::s3_gateway::routes(&state));
+    #[cfg(feature = "san")]
+    let protected_routes = protected_routes.merge(api::san::routes(&state));
 
     // USE-flag gated route groups (see src/features.rs): a feature that was
     // not compiled in has no routes, so its endpoints answer 404.
@@ -5360,6 +5362,9 @@ struct AddStoragePoolRequest {
     name: String,
     storage_type: String,
     path: String,
+    /// LVM pools: `wipe_removed` / `discard_removed` / `shared`.
+    #[serde(default)]
+    lvm: Option<storage::lvm::LvmPoolOptions>,
 }
 
 async fn add_storage_pool(
@@ -5396,6 +5401,7 @@ async fn add_storage_pool(
         total: 0,     // Will be updated by backend
         enabled: true,
         source: None,
+        lvm: req.lvm,
     };
 
     let pool = state

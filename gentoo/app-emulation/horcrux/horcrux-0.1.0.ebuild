@@ -37,7 +37,7 @@ KEYWORDS="~amd64 ~arm64 ~riscv"  # not yet stabilized; promote once field-tested
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
 # NAS storage: nas-zfs, nas-btrfs, nas-mdraid, nas-lvm
 IUSE="
-	+backup cli +cluster docker incus kubernetes ldap lxc lxd +monitoring +pam +podman +qemu systemd +webui
+	+backup cli +cluster docker incus kubernetes ldap lxc lxd +monitoring +pam +podman +qemu san systemd +webui
 	nas smb nfs-server afp webdav ftp
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
@@ -126,6 +126,13 @@ RDEPEND="
 	nas-btrfs? ( sys-fs/btrfs-progs )
 	nas-mdraid? ( sys-fs/mdadm )
 	nas-lvm? ( sys-fs/lvm2 )
+	san? (
+		sys-apps/util-linux
+		sys-block/open-iscsi
+		sys-cluster/sanlock
+		sys-fs/lvm2[lvm,sanlock]
+		sys-fs/multipath-tools
+	)
 
 	nas? ( sys-apps/acl )
 "
@@ -187,6 +194,7 @@ src_configure() {
 		$(usex podman "podman" "")
 		# Additional features
 		$(usex cluster "cluster" "")
+		$(usex san "san" "")
 		$(usex pam "pam" "")
 		$(usex backup "backup" "")
 		$(usex kubernetes "kubernetes" "")

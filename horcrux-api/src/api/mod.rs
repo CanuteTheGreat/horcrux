@@ -55,6 +55,8 @@ pub mod remote_play;
 pub mod resource_pools;
 #[cfg(feature = "s3-gateway")]
 pub mod s3_gateway;
+#[cfg(feature = "san")]
+pub mod san;
 pub mod sdn_cni;
 pub mod sdn_ovs;
 pub mod sdn_zones;

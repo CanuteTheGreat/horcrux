@@ -45,6 +45,7 @@ feature_table!(
     "pam",
     "cluster",
     "backup",
+    "san",
     "kubernetes",
     // NAS
     "nas",

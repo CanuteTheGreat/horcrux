@@ -57,6 +57,10 @@ pub struct StoragePool {
     /// the same directory code as a directory pool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// LVM pools only: shared-VG locking and what happens to removed
+    /// volumes (absent = defaults: local VG, plain `lvremove`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lvm: Option<lvm::LvmPoolOptions>,
 }
 
 /// (total, available) GB of the filesystem holding `path`, via statvfs(2).
@@ -518,6 +522,39 @@ impl StorageManager {
             )));
         }
 
+        if let Some(o) = &pool.lvm {
+            if pool.storage_type != StorageType::Lvm {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "lvm options only apply to LVM pools".into(),
+                ));
+            }
+            o.validate()?;
+            let tools = crate::san::tools::ToolStatus::probe();
+            if o.wipe_removed || o.discard_removed {
+                crate::san::tools::Need::Discard.check(&tools)?;
+            }
+            if o.shared {
+                crate::san::tools::Need::SharedLvm.check(&tools)?;
+                let t = std::time::Duration::from_secs(o.command_timeout_secs.into());
+                match crate::san::lvm_shared::vg_lock_type(&pool.path, t).await {
+                    Ok(Some(l)) if l == "sanlock" => {}
+                    Ok(Some(l)) => {
+                        return Err(horcrux_common::Error::InvalidConfig(format!(
+                            "volume group {} is not shared (lock type {l}); create it through /api/san/lvm",
+                            pool.path
+                        )))
+                    }
+                    Ok(None) => {
+                        return Err(horcrux_common::Error::NotFound(format!(
+                            "volume group {} is not visible on this node",
+                            pool.path
+                        )))
+                    }
+                    Err(e) => return Err(horcrux_common::Error::System(e)),
+                }
+            }
+        }
+
         // Validate the pool based on type
         match pool.storage_type {
             StorageType::Zfs => self.zfs.validate_pool(&pool).await?,
@@ -965,7 +1002,14 @@ impl StorageManager {
         match pool.storage_type {
             StorageType::Zfs => self.zfs.delete_volume(&pool.path, volume_name).await,
             StorageType::Ceph => self.ceph.delete_volume(&pool.path, volume_name).await,
-            StorageType::Lvm => self.lvm.delete_volume(&pool.path, volume_name).await,
+            StorageType::Lvm => match &pool.lvm {
+                Some(o) => {
+                    self.lvm
+                        .delete_volume_with(&pool.path, volume_name, o)
+                        .await
+                }
+                None => self.lvm.delete_volume(&pool.path, volume_name).await,
+            },
             ref t => Err(unsupported("Deleting volumes", t)),
         }
     }
@@ -1222,6 +1266,7 @@ mod tests {
             total: 0,
             enabled: true,
             source: None,
+            lvm: None,
         }
     }
 

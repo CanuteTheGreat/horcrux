@@ -158,6 +158,7 @@ async fn run_change(
                 total: 0,
                 enabled: w.enabled,
                 source: None,
+                lvm: None,
             };
             state
                 .storage_manager

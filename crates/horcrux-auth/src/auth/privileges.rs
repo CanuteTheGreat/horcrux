@@ -109,6 +109,7 @@ pub const KNOWN_AREAS: &[&str] = &[
     "access-log",
     "storage",
     "ceph",
+    "san",
     "pools",
     "tags",
     "search",
@@ -368,6 +369,9 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "audit" | "access-log" => need(P::SysAudit, "/"),
 
         "ceph" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
+        // SAN targets, multipath settings, shared VGs, path views: storage
+        // administration (discovery also writes iscsiadm node records).
+        "san" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
         // Inventory views: the handlers show only what the caller may see.
         "tags" | "search" | "tree" => Requirement::Authenticated,
         // Resource pools: seeing a pool takes Pool.Audit on it (or anywhere
@@ -646,6 +650,41 @@ mod tests {
             priv_of(requirement("GET", "/api/vms/g1/hibernate-status")),
             (P::VmAudit, "/vms/g1".into())
         );
+    }
+
+    #[test]
+    fn san_routes_map_to_storage_privileges() {
+        for p in [
+            "/api/san/settings",
+            "/api/san/targets",
+            "/api/san/targets/a1",
+            "/api/san/status",
+            "/api/san/paths",
+            "/api/san/nodes/n2/paths",
+            "/api/san/lvm",
+        ] {
+            assert_eq!(
+                priv_of(requirement("GET", p)),
+                (P::DatastoreAudit, "/storage".into()),
+                "GET {p}"
+            );
+        }
+        for (m, p) in [
+            ("PUT", "/api/san/settings"),
+            ("POST", "/api/san/targets"),
+            ("PUT", "/api/san/targets/a1"),
+            ("DELETE", "/api/san/targets/a1"),
+            ("POST", "/api/san/discover"),
+            ("POST", "/api/san/apply"),
+            ("POST", "/api/san/lvm"),
+            ("DELETE", "/api/san/lvm/x"),
+        ] {
+            assert_eq!(
+                priv_of(requirement(m, p)),
+                (P::DatastoreAllocate, "/storage".into()),
+                "{m} {p}"
+            );
+        }
     }
 
     #[test]

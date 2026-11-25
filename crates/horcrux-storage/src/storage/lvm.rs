@@ -5,6 +5,7 @@
 
 use super::StoragePool;
 use horcrux_common::Result;
+use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tracing::{error, info};
 
@@ -81,6 +82,41 @@ impl LvmManager {
         }
 
         Ok(format!("/dev/{}/{}", vg_name, volume_name))
+    }
+
+    /// Delete a logical volume the way the pool's options say: on a shared
+    /// VG take the LV exclusively first (refused while another node uses
+    /// it), zero it (`wipe_removed`) and/or discard its extents
+    /// (`discard_removed`), then `lvremove`.
+    pub async fn delete_volume_with(
+        &self,
+        vg_name: &str,
+        volume_name: &str,
+        opts: &LvmPoolOptions,
+    ) -> Result<()> {
+        super::check_names(&[volume_name])?;
+        let t = std::time::Duration::from_secs(opts.command_timeout_secs.into());
+        let sys = |e: String| horcrux_common::Error::System(e);
+        if opts.shared || opts.wipe_removed || opts.discard_removed {
+            if opts.wipe_removed || opts.discard_removed {
+                crate::san::tools::Need::Discard.check(&crate::san::tools::ToolStatus::probe())?;
+            }
+            crate::san::lvm_shared::activate_exclusive(vg_name, volume_name, t)
+                .await
+                .map_err(sys)?;
+            let dev = format!("/dev/{vg_name}/{volume_name}");
+            // Scrubbing a big LV takes a while: give it its own budget.
+            let scrub_t = std::time::Duration::from_secs(opts.scrub_timeout_secs.into());
+            crate::san::lvm_shared::scrub_before_remove(
+                &dev,
+                opts.wipe_removed,
+                opts.discard_removed,
+                scrub_t,
+            )
+            .await
+            .map_err(sys)?;
+        }
+        self.delete_volume(vg_name, volume_name).await
     }
 
     /// Delete an LVM logical volume
@@ -307,4 +343,78 @@ impl LvmManager {
 pub struct SnapshotChain {
     pub origin: String,
     pub snapshots: Vec<String>,
+}
+
+/// Per-pool LVM options (`StoragePool::lvm`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LvmPoolOptions {
+    /// The VG is a shared (lvmlockd/sanlock) VG on SAN storage: LVs are
+    /// activated exclusively on the node that uses them.
+    #[serde(default)]
+    pub shared: bool,
+    /// Zero volumes before removal (`blkdiscard --zeroout`). Default false.
+    #[serde(default)]
+    pub wipe_removed: bool,
+    /// Discard volumes' extents on removal (UNMAP/TRIM). Default false.
+    #[serde(default)]
+    pub discard_removed: bool,
+    /// Deadline for one LVM command (default 60 s).
+    #[serde(default = "default_cmd_timeout")]
+    pub command_timeout_secs: u32,
+    /// Deadline for wiping/discarding one volume (default 3600 s).
+    #[serde(default = "default_scrub_timeout")]
+    pub scrub_timeout_secs: u32,
+}
+
+fn default_cmd_timeout() -> u32 {
+    60
+}
+fn default_scrub_timeout() -> u32 {
+    3600
+}
+
+impl Default for LvmPoolOptions {
+    fn default() -> Self {
+        Self {
+            shared: false,
+            wipe_removed: false,
+            discard_removed: false,
+            command_timeout_secs: default_cmd_timeout(),
+            scrub_timeout_secs: default_scrub_timeout(),
+        }
+    }
+}
+
+impl LvmPoolOptions {
+    pub fn validate(&self) -> Result<()> {
+        if !(5..=3600).contains(&self.command_timeout_secs) {
+            return Err(horcrux_common::Error::InvalidConfig(
+                "lvm.command_timeout_secs must be 5..3600".into(),
+            ));
+        }
+        if !(10..=86_400).contains(&self.scrub_timeout_secs) {
+            return Err(horcrux_common::Error::InvalidConfig(
+                "lvm.scrub_timeout_secs must be 10..86400".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod pool_options_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_and_validation() {
+        let o: LvmPoolOptions = serde_json::from_str("{}").unwrap();
+        assert_eq!(o, LvmPoolOptions::default());
+        assert!(!o.shared && !o.wipe_removed && !o.discard_removed);
+        assert!(o.validate().is_ok());
+        let bad = LvmPoolOptions {
+            command_timeout_secs: 1,
+            ..Default::default()
+        };
+        assert!(bad.validate().is_err());
+    }
 }

@@ -32,6 +32,7 @@ fn pool(id: &str, name: &str) -> StoragePool {
         total: 10,
         enabled: true,
         source: None,
+        lvm: None,
     }
 }
 
