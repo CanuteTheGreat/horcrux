@@ -290,6 +290,10 @@ class Packaging(unittest.TestCase):
         self.assertIn("openrc-run", open(os.path.join(PKG, "files", "horcrux-be-good.initd")).read())
         self.assertIn("mark-good", open(os.path.join(PKG, "files", "horcrux-be-good.service")).read())
 
+    def test_systemd_good_service_stays_active_after_its_one_job(self):
+        u = open(os.path.join(PKG, "files", "horcrux-be-good.service")).read()
+        self.assertRegex(u, r"(?m)^RemainAfterExit=yes$")
+
     def test_core_depends_on_it_and_tools_no_longer_ships_the_wrapper(self):
         core = sorted(f for f in os.listdir(os.path.join(REPO, "gentoo", "sys-apps", "horcrux-core")) if f.endswith(".ebuild"))
         self.assertIn("sys-apps/horcrux-be", open(os.path.join(REPO, "gentoo", "sys-apps", "horcrux-core", core[-1])).read())

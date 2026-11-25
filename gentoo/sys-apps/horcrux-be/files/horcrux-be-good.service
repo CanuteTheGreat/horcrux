@@ -6,6 +6,9 @@ After=multi-user.target zfs.target
 
 [Service]
 Type=simple
+# the process ends after its one job (GOOD_DELAY, then the mark): without RemainAfterExit the unit turns inactive and the gates' enabled-but-not-running
+# check reports it as `stopped` (aarch64 systemd daily 6099); exited-but-active is the right state, a failed mark-good still shows as failed
+RemainAfterExit=yes
 ExecStart=/usr/bin/horcrux-be mark-good --wait
 
 [Install]
