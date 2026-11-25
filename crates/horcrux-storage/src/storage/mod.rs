@@ -9,11 +9,15 @@ pub mod lvm;
 pub mod lvm_chain;
 pub mod migration;
 pub mod nfs;
+pub mod plugin;
+mod plugin_pools;
 pub mod s3;
 pub mod thin_provision;
 /// Storage backend management
 /// Supports ZFS, Ceph, LVM, iSCSI, directory-based, GlusterFS, BtrFS, and S3 storage
 pub mod zfs;
+
+pub use plugin_pools::VolumeSnapshot;
 
 use crate::db::config_store::{self, kinds, ConfigStore};
 use crate::db::Database;
@@ -24,9 +28,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Storage backend type
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// Storage backend type. On the wire a lower-case name (`zfs`, `nfs`, ...)
+/// or `plugin:<id>` for a third-party storage plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageType {
     Zfs,
     Ceph,
@@ -40,6 +44,72 @@ pub enum StorageType {
     GlusterFs,
     BtrFs,
     S3,
+    /// A pool served by the storage plugin with this id (docs/storage-plugins.md).
+    Plugin(String),
+}
+
+impl StorageType {
+    /// Wire name: `zfs`, `directory`, ..., `plugin:<id>`.
+    pub fn name(&self) -> String {
+        match self {
+            StorageType::Zfs => "zfs".into(),
+            StorageType::Ceph => "ceph".into(),
+            StorageType::CephFs => "cephfs".into(),
+            StorageType::Lvm => "lvm".into(),
+            StorageType::Iscsi => "iscsi".into(),
+            StorageType::Directory => "directory".into(),
+            StorageType::Cifs => "cifs".into(),
+            StorageType::Nfs => "nfs".into(),
+            StorageType::GlusterFs => "glusterfs".into(),
+            StorageType::BtrFs => "btrfs".into(),
+            StorageType::S3 => "s3".into(),
+            StorageType::Plugin(id) => format!("plugin:{id}"),
+        }
+    }
+
+    /// Parse a wire name (built-in names case-insensitively, `dir` for
+    /// `directory`; `plugin:<id>` with a valid plugin id).
+    pub fn from_name(s: &str) -> Option<Self> {
+        if let Some(id) = s.strip_prefix("plugin:") {
+            return plugin::sdk::valid_plugin_id(id).then(|| StorageType::Plugin(id.to_string()));
+        }
+        Some(match s.to_lowercase().as_str() {
+            "zfs" => StorageType::Zfs,
+            "ceph" => StorageType::Ceph,
+            "cephfs" => StorageType::CephFs,
+            "lvm" => StorageType::Lvm,
+            "iscsi" => StorageType::Iscsi,
+            "directory" | "dir" => StorageType::Directory,
+            "cifs" => StorageType::Cifs,
+            "nfs" => StorageType::Nfs,
+            "glusterfs" => StorageType::GlusterFs,
+            "btrfs" => StorageType::BtrFs,
+            "s3" => StorageType::S3,
+            _ => return None,
+        })
+    }
+
+    /// The plugin id of a plugin pool.
+    pub fn plugin_id(&self) -> Option<&str> {
+        match self {
+            StorageType::Plugin(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for StorageType {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(&self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for StorageType {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        StorageType::from_name(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown storage type {s:?}")))
+    }
 }
 
 /// Storage pool configuration
@@ -62,6 +132,10 @@ pub struct StoragePool {
     /// volumes (absent = defaults: local VG, plain `lvremove`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lvm: Option<lvm::LvmPoolOptions>,
+    /// Plugin pools: the validated, non-secret config (secret fields are kept
+    /// in the secrets store, never here).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_config: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 /// (total, available) GB of the filesystem holding `path`, via statvfs(2).
@@ -349,6 +423,10 @@ pub struct StorageManager {
     /// Pools whose last measurement hasn't returned yet (hung mount): not
     /// probed again until it does, so blocked threads don't pile up.
     measuring: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// Third-party storage plugins (plugin pools).
+    plugins: Arc<plugin::PluginHost>,
+    /// Secret config fields of plugin pools, by pool id.
+    plugin_secrets: Arc<RwLock<HashMap<String, std::collections::BTreeMap<String, String>>>>,
 }
 
 /// Combined size of an iSCSI target's LUNs in whole GB.
@@ -385,7 +463,15 @@ impl StorageManager {
             ceph_probe: ceph_capacity_gb,
             lvm_probe: lvm_capacity_gb,
             measuring: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            plugins: Arc::new(plugin::PluginHost::new()),
+            plugin_secrets: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Use a plugin host with fixed settings (tests).
+    pub fn with_plugin_host(mut self, host: plugin::PluginHost) -> Self {
+        self.plugins = Arc::new(host);
+        self
     }
 
     /// Storage manager backed by the database: loads the persisted pool
@@ -401,7 +487,9 @@ impl StorageManager {
                 .load_values::<StoragePool>(kinds::STORAGE_POOL)
                 .await?
             {
-                if let Some(src) = pool.source.clone() {
+                if pool.storage_type.plugin_id().is_some() {
+                    // activated below, once the secrets are loaded
+                } else if let Some(src) = pool.source.clone() {
                     // Remount in the background (the server may be briefly
                     // down at boot); a pool that isn't mounted is never
                     // measured: statvfs of the empty mount point would
@@ -436,6 +524,8 @@ impl StorageManager {
             tracing::info!("Loaded {} storage pool(s) from database", pools.len());
         }
         mgr.store = Some(store);
+        mgr.load_plugin_secrets().await?;
+        mgr.spawn_plugin_activation().await;
         Ok(mgr)
     }
 
@@ -546,6 +636,7 @@ impl StorageManager {
     /// List all storage pools (filesystem pools freshly measured)
     pub async fn list_pools(&self) -> Vec<StoragePool> {
         self.refresh_pools(None).await;
+        self.refresh_plugin_pools(None).await;
         let pools = self.pools.read().await;
         pools.values().cloned().collect()
     }
@@ -553,6 +644,7 @@ impl StorageManager {
     /// Get a specific storage pool (freshly measured)
     pub async fn get_pool(&self, id: &str) -> Result<StoragePool> {
         self.refresh_pools(Some(id)).await;
+        self.refresh_plugin_pools(Some(id)).await;
         let pools = self.pools.read().await;
         pools
             .get(id)
@@ -650,6 +742,11 @@ impl StorageManager {
                 // Delegate detailed validation to S3 manager
                 self.s3.validate_pool(&pool).await?;
             }
+            StorageType::Plugin(_) => {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "plugin pools are added with their plugin config (add_plugin_pool)".into(),
+                ))
+            }
         }
 
         // Filesystem-backed pools: measure real capacity. The API used to
@@ -694,6 +791,11 @@ impl StorageManager {
         }
         config_store::delete_opt(&self.store, kinds::STORAGE_POOL, id).await?;
         if let Some(p) = pools.remove(id) {
+            if p.storage_type.plugin_id().is_some() {
+                drop(pools);
+                self.plugin_remove(&p).await;
+                return Ok(());
+            }
             if p.source.is_some() && p.storage_type == StorageType::Nfs {
                 if let Err(e) = self.nfs.unmount_export(&p.path).await {
                     tracing::warn!("Storage pool {}: unmounting {}: {}", id, p.path, e);
@@ -721,6 +823,15 @@ impl StorageManager {
         size_gb: u64,
     ) -> Result<String> {
         check_names(&[volume_name])?;
+        if let Some(p) = self.pools.read().await.get(pool_id).cloned() {
+            if let Some(id) = p.storage_type.plugin_id() {
+                self.refresh_plugin_pools(Some(pool_id)).await;
+                let p = self.get_pool_or_404(pool_id).await?;
+                return self
+                    .plugin_create_volume(id, &p, volume_name, size_gb)
+                    .await;
+            }
+        }
         // A network pool whose mount was lost (reboot, server restart)
         // is mounted again before anything is measured or written.
         let remote = {
@@ -853,6 +964,8 @@ impl StorageManager {
                     "S3 storage is for backups/objects only, not for VM volumes".to_string(),
                 ));
             }
+            // dispatched to the plugin above
+            ref t @ StorageType::Plugin(_) => return Err(unsupported("This operation", t)),
         };
 
         Ok(volume_path)
@@ -904,6 +1017,9 @@ impl StorageManager {
     /// Volumes currently in a pool.
     pub async fn list_volumes(&self, pool_id: &str) -> Result<Vec<VolumeInfo>> {
         let pool = self.get_pool_or_404(pool_id).await?;
+        if let Some(id) = pool.storage_type.plugin_id() {
+            return self.plugin_list_volumes(id, &pool).await;
+        }
         let mut out = Vec::new();
         match pool.storage_type {
             StorageType::Directory
@@ -1042,6 +1158,9 @@ impl StorageManager {
     pub async fn delete_volume(&self, pool_id: &str, volume_name: &str) -> Result<()> {
         check_names(&[volume_name])?;
         let pool = self.get_pool_or_404(pool_id).await?;
+        if let Some(id) = pool.storage_type.plugin_id() {
+            return self.plugin_delete_volume(id, &pool, volume_name).await;
+        }
 
         if let Some(path) = Self::file_volume_path(&pool, volume_name)? {
             if !path.is_file() {
@@ -1094,7 +1213,13 @@ impl StorageManager {
         check_names(&[volume_name])?;
         // The grow check below must see the space free now.
         self.refresh_pools(Some(pool_id)).await;
+        self.refresh_plugin_pools(Some(pool_id)).await;
         let pool = self.get_pool_or_404(pool_id).await?;
+        if let Some(id) = pool.storage_type.plugin_id() {
+            return self
+                .plugin_resize_volume(id, &pool, volume_name, new_size_gb)
+                .await;
+        }
         let gb = 1024 * 1024 * 1024;
         let size_arg = format!("{new_size_gb}G");
 
@@ -1164,6 +1289,19 @@ impl StorageManager {
         snapshot_name: &str,
     ) -> Result<()> {
         check_names(&[volume_name, snapshot_name])?;
+        let plugin_pool = self.pools.read().await.get(pool_id).cloned();
+        if let Some(p) = plugin_pool.filter(|p| p.storage_type.plugin_id().is_some()) {
+            let id = p.storage_type.plugin_id().unwrap_or_default();
+            return self
+                .plugin_snapshot(
+                    id,
+                    &p,
+                    plugin::sdk::Op::CreateSnapshot,
+                    volume_name,
+                    snapshot_name,
+                )
+                .await;
+        }
         let pools = self.pools.read().await;
         let pool = pools.get(pool_id).ok_or_else(|| {
             horcrux_common::Error::System(format!("Storage pool {} not found", pool_id))
@@ -1236,6 +1374,7 @@ impl StorageManager {
                     "S3 does not support snapshots".to_string(),
                 ))
             }
+            ref t @ StorageType::Plugin(_) => return Err(unsupported("This operation", t)),
         }
 
         Ok(())
@@ -1256,13 +1395,32 @@ impl StorageManager {
         }
     }
 
-    /// A volume's snapshot chain (volume-chain LVM pools).
+    /// Whether `pool_id` is a plugin pool (false for an unknown pool).
+    async fn is_plugin_pool(&self, pool_id: &str) -> bool {
+        self.pools
+            .read()
+            .await
+            .get(pool_id)
+            .is_some_and(|p| p.storage_type.plugin_id().is_some())
+    }
+
+    /// A volume's snapshot chain (volume-chain LVM pools and plugin pools).
     pub async fn volume_snapshots(
         &self,
         pool_id: &str,
         volume_name: &str,
     ) -> Result<lvm_chain::ChainView> {
         check_names(&[volume_name])?;
+        if self.is_plugin_pool(pool_id).await {
+            let mut snaps = self.list_snapshots(pool_id, volume_name).await?;
+            // Oldest first, like a volume chain (undated ones keep their order).
+            snaps.sort_by_key(|s| s.created.unwrap_or(i64::MIN));
+            return Ok(lvm_chain::ChainView {
+                volume: volume_name.to_string(),
+                snapshots: snaps.into_iter().map(|s| s.name).collect(),
+                virtual_size_bytes: None,
+            });
+        }
         let (vg, o) = self.chain_pool(pool_id).await?;
         self.lvm.chain_info(&vg, volume_name, &o).await
     }
@@ -1275,6 +1433,11 @@ impl StorageManager {
         snapshot_name: &str,
     ) -> Result<()> {
         check_names(&[volume_name, snapshot_name])?;
+        if self.is_plugin_pool(pool_id).await {
+            return self
+                .delete_snapshot(pool_id, volume_name, snapshot_name)
+                .await;
+        }
         let (vg, o) = self.chain_pool(pool_id).await?;
         self.lvm
             .chain_delete_snapshot(&vg, volume_name, snapshot_name, &o)
@@ -1289,6 +1452,19 @@ impl StorageManager {
         snapshot_name: &str,
     ) -> Result<()> {
         check_names(&[volume_name, snapshot_name])?;
+        let plugin_pool = self.pools.read().await.get(pool_id).cloned();
+        if let Some(p) = plugin_pool.filter(|p| p.storage_type.plugin_id().is_some()) {
+            let id = p.storage_type.plugin_id().unwrap_or_default();
+            return self
+                .plugin_snapshot(
+                    id,
+                    &p,
+                    plugin::sdk::Op::RollbackSnapshot,
+                    volume_name,
+                    snapshot_name,
+                )
+                .await;
+        }
         let pools = self.pools.read().await;
         let pool = pools.get(pool_id).ok_or_else(|| {
             horcrux_common::Error::System(format!("Storage pool {} not found", pool_id))
@@ -1362,6 +1538,7 @@ impl StorageManager {
                     "S3 does not support snapshots".to_string(),
                 ))
             }
+            ref t @ StorageType::Plugin(_) => return Err(unsupported("This operation", t)),
         }
 
         Ok(())
@@ -1390,6 +1567,7 @@ mod tests {
             enabled: true,
             source: None,
             lvm: None,
+            plugin_config: None,
         }
     }
 

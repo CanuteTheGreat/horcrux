@@ -62,6 +62,7 @@ pub mod sdn_ovs;
 pub mod sdn_zones;
 pub mod security;
 pub mod storage_content;
+pub mod storage_plugins;
 pub mod storage_volumes;
 pub mod system_admin;
 pub mod tasks;

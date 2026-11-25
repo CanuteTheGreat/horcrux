@@ -11,8 +11,9 @@
 //! - `POST   /api/storage/pools/:pool_id/volumes/:name/snapshots/:snap/rollback`  back to the newest
 //!
 //!   The snapshot routes work on LVM pools with `snapshot_as_volume_chain`
-//!   (qcow2 volume chain on thick LVs, e.g. a shared VG on a SAN LUN); a
-//!   volume a VM uses is refused (409), like delete and resize.
+//!   (qcow2 volume chain on thick LVs, e.g. a shared VG on a SAN LUN) and on
+//!   plugin pools whose plugin declares snapshots; a volume a VM uses is
+//!   refused (409), like delete and resize.
 //!
 //! Every volume name goes through `validation::validate_volume_name` here
 //! (400 for `../x`, `a/b`, `/abs`, `.`, ...) and again inside each storage
@@ -171,7 +172,11 @@ async fn delete_volume(
         .get_pool(&pool_id)
         .await
         .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
-    let location = crate::storage::StorageManager::volume_location(&pool, &name).map_err(err)?;
+    let location = state
+        .storage_manager
+        .volume_location_of(&pool, &name)
+        .await
+        .map_err(err)?;
     refuse_in_use(&state, &name, &location, "detach it from the VM first").await?;
     state
         .storage_manager
@@ -198,7 +203,11 @@ async fn resize_volume(
         .get_pool(&pool_id)
         .await
         .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
-    let location = crate::storage::StorageManager::volume_location(&pool, &name).map_err(err)?;
+    let location = state
+        .storage_manager
+        .volume_location_of(&pool, &name)
+        .await
+        .map_err(err)?;
     refuse_in_use(
         &state,
         &name,
@@ -243,28 +252,34 @@ fn holds_vm_disks(p: &crate::storage::StoragePool) -> bool {
     p.enabled
         && matches!(
             p.storage_type,
-            T::Directory | T::Nfs | T::Cifs | T::GlusterFs | T::CephFs
+            T::Directory | T::Nfs | T::Cifs | T::GlusterFs | T::CephFs | T::Plugin(_)
         )
         && std::path::Path::new(&p.path).is_absolute()
         && std::path::Path::new(&p.path).is_dir()
 }
 
+/// [`holds_vm_disks`], plus for plugin pools: the plugin declares
+/// `vm_disk_dir` (its activated directory may hold VM disk files).
+async fn holds_vm_disks_now(state: &AppState, p: &crate::storage::StoragePool) -> bool {
+    holds_vm_disks(p)
+        && (p.storage_type.plugin_id().is_none()
+            || state.storage_manager.plugin_holds_vm_disks(p).await)
+}
+
 /// Pools offered by the Create VM / Add disk pool selector.
 pub async fn vm_disk_pools(state: &AppState) -> Vec<VmDiskPool> {
-    let mut out: Vec<VmDiskPool> = state
-        .storage_manager
-        .list_pools()
-        .await
-        .into_iter()
-        .filter(holds_vm_disks)
-        .map(|p| VmDiskPool {
-            id: p.id,
-            name: p.name,
-            storage_type: p.storage_type,
-            path: p.path,
-            available: p.available,
-        })
-        .collect();
+    let mut out: Vec<VmDiskPool> = Vec::new();
+    for p in state.storage_manager.list_pools().await {
+        if holds_vm_disks_now(state, &p).await {
+            out.push(VmDiskPool {
+                id: p.id,
+                name: p.name,
+                storage_type: p.storage_type,
+                path: p.path,
+                available: p.available,
+            });
+        }
+    }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
@@ -281,11 +296,12 @@ pub async fn vm_disk_dir(
         .get_pool(pool_id)
         .await
         .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
-    if !holds_vm_disks(&pool) {
+    if !holds_vm_disks_now(state, &pool).await {
         return Err(ApiError::BadRequest(format!(
-            "Storage pool {} ({:?}) can't hold VM disks: use an enabled directory, NFS, \
-             CIFS or GlusterFS pool",
-            pool.name, pool.storage_type
+            "Storage pool {} ({}) can't hold VM disks: use an enabled directory, NFS, \
+             CIFS, GlusterFS pool or a plugin pool whose plugin keeps VM disks",
+            pool.name,
+            pool.storage_type.name()
         )));
     }
     if size_gb > pool.available {
@@ -345,7 +361,11 @@ async fn pool_location(state: &AppState, pool_id: &str, name: &str) -> Result<St
         .get_pool(pool_id)
         .await
         .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
-    crate::storage::StorageManager::volume_location(&pool, name).map_err(err)
+    state
+        .storage_manager
+        .volume_location_of(&pool, name)
+        .await
+        .map_err(err)
 }
 
 async fn list_snapshots(

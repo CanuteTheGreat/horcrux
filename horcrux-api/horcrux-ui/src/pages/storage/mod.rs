@@ -8,6 +8,7 @@
 //! - SAN (iSCSI / NVMe-oF / FC targets, path view, add-storage wizard)
 
 mod disk_management;
+mod plugin_form;
 mod pool_management;
 mod san;
 mod smart_monitoring;

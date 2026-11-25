@@ -259,6 +259,17 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Run clippy"
           cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: "Reference storage plugin (own workspace): fmt, clippy, tests"
+        # crates/horcrux-storage-plugin-sshfs is excluded from the root
+        # workspace (its package builds from its own small Cargo.lock), so
+        # the workspace fmt/clippy above do not cover it.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Reference storage plugin"
+          m=crates/horcrux-storage-plugin-sshfs/Cargo.toml
+          cargo fmt --manifest-path $m -- --check
+          cargo clippy --manifest-path $m --locked --all-targets --target-dir target/sshfs-plugin -- -D warnings
+          cargo test --manifest-path $m --locked --target-dir target/sshfs-plugin
+
       - name: Memory probe report
         if: always()
         run: bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" report
@@ -594,6 +605,17 @@ jobs:
         run: |
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Snapshot schedules"
           bash horcrux-api/tests/snapshot_schedule_e2e.sh target/debug/horcrux-api
+
+      - name: "Storage plugin (reference SSHFS plugin, real SSH server, VM boots from the plugin pool)"
+        # storage_plugin_e2e.sh installs the plugin like its package does,
+        # creates a pool through the API (schema-validated), creates / grows /
+        # snapshots / rolls back / deletes a volume and checks each on the SSH
+        # server's disk, boots a VM whose first disk is on the pool, and checks
+        # that removing the pool unmounts it.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Storage plugin"
+          cargo build --manifest-path crates/horcrux-storage-plugin-sshfs/Cargo.toml --locked --target-dir target/sshfs-plugin
+          bash horcrux-api/tests/storage_plugin_e2e.sh target/debug/horcrux-api target/sshfs-plugin/debug/horcrux-storage-plugin-sshfs
 
       - name: "NFS storage pool (real NFSv4 server, kernel client, volume on the export)"
         # nfs_storage_e2e.sh adds a pool by server:/export against nfs-ganesha

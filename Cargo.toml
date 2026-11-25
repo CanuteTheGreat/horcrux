@@ -8,6 +8,7 @@ members = [
     "crates/horcrux-cluster",
     "crates/horcrux-auth",
     "crates/horcrux-storage",
+    "crates/horcrux-storage-plugin-sdk",
     "crates/horcrux-monitoring",
     "crates/horcrux-sdn",
     "crates/horcrux-k8s",
@@ -25,6 +26,9 @@ members = [
     "horcrux-cli",
     "terraform-provider-horcrux",
 ]
+# The reference SSHFS storage plugin is its own workspace (own Cargo.lock):
+# its package builds from a handful of crates, not this tree.
+exclude = ["crates/horcrux-storage-plugin-sshfs"]
 
 [workspace.package]
 version = "0.1.5"

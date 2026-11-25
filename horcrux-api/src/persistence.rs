@@ -65,6 +65,7 @@ pub async fn ensure_default_storage(
             enabled: true,
             source: None,
             lvm: None,
+            plugin_config: None,
         };
         match mgr.add_pool(pool).await {
             Ok(p) => tracing::info!("created default storage pool {} at {}", p.name, p.path),

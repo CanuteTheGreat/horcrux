@@ -831,6 +831,7 @@ async fn ensure_pool(state: &AppState, l: &SharedLvmSpec, rep: &mut ApplyReport)
         enabled: true,
         source: None,
         lvm: Some(pool_options(l)),
+        plugin_config: None,
     };
     match state.storage_manager.add_pool(pool).await {
         Ok(_) => rep

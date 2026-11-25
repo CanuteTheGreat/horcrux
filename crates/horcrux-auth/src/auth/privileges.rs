@@ -390,6 +390,18 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             (id, _) => need(P::PoolAllocate, format!("/pool/{id}")),
         },
         "storage" => match (arg(1), arg(2), arg(3)) {
+            // The plugin directory decides which executables the manager runs
+            // as root: changing it is a whole-node administrator action.
+            ("plugin-settings", _, _) | ("plugins", _, _) => {
+                if is_read(m) {
+                    Requirement::AnyBelow {
+                        privilege: P::DatastoreAudit,
+                        prefix: "/storage".into(),
+                    }
+                } else {
+                    need(P::SysModify, "/")
+                }
+            }
             ("pools", "", _) => {
                 if is_read(m) {
                     Requirement::AnyBelow {
@@ -713,6 +725,60 @@ mod tests {
             assert_eq!(
                 priv_of(requirement(m, p)),
                 (want, "/vms/g1".into()),
+                "{m} {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn storage_plugin_routes_map_to_privileges() {
+        // the plugin directory decides what runs as root: whole-node admin
+        assert_eq!(
+            priv_of(requirement("PUT", "/api/storage/plugin-settings")),
+            (P::SysModify, "/".into())
+        );
+        for path in [
+            "/api/storage/plugin-settings",
+            "/api/storage/plugins",
+            "/api/storage/plugins/sshfs",
+        ] {
+            assert!(
+                matches!(
+                    requirement("GET", path),
+                    Requirement::AnyBelow {
+                        privilege: P::DatastoreAudit,
+                        ..
+                    }
+                ),
+                "{path}"
+            );
+        }
+        // plugin pool volumes and snapshots: like any pool's volumes
+        for (m, p, want) in [
+            (
+                "GET",
+                "/api/storage/pools/p1/volumes/v/snapshots",
+                P::DatastoreAudit,
+            ),
+            (
+                "POST",
+                "/api/storage/pools/p1/volumes/v/snapshots",
+                P::DatastoreAllocateSpace,
+            ),
+            (
+                "DELETE",
+                "/api/storage/pools/p1/volumes/v/snapshots/s1",
+                P::DatastoreAllocateSpace,
+            ),
+            (
+                "POST",
+                "/api/storage/pools/p1/volumes/v/snapshots/s1/rollback",
+                P::DatastoreAllocateSpace,
+            ),
+        ] {
+            assert_eq!(
+                priv_of(requirement(m, p)),
+                (want, "/storage/p1".into()),
                 "{m} {p}"
             );
         }

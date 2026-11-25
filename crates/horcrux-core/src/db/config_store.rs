@@ -24,6 +24,9 @@ use sqlx::{Row, SqlitePool};
 /// Object kinds. One constant per persisted collection.
 pub mod kinds {
     pub const STORAGE_POOL: &str = "storage_pool";
+    /// Secret config fields of a plugin storage pool, keyed by pool id (kept
+    /// apart from the pool record; never returned by the API).
+    pub const STORAGE_PLUGIN_SECRET: &str = "storage_plugin_secret";
     pub const FIREWALL_RULE: &str = "firewall_rule";
     pub const SECURITY_GROUP: &str = "firewall_security_group";
     pub const FIREWALL_IPSET: &str = "firewall_ipset";
