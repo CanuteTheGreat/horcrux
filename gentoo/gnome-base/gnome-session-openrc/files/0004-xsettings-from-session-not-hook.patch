@@ -1,0 +1,193 @@
+diff --git a/data/Xwayland-session.d/20-gnome-session-openrc-xsettings b/data/Xwayland-session.d/20-gnome-session-openrc-xsettings
+deleted file mode 100755
+index a6ca566..0000000
+--- a/data/Xwayland-session.d/20-gnome-session-openrc-xsettings
++++ /dev/null
+@@ -1,7 +0,0 @@
+-#!/bin/sh
+-# mutter runs the scripts in Xwayland-session.d when it starts Xwayland (at login, or on demand), with DISPLAY set to the new X display.
+-# On OpenRC this starts gsd-xsettings for that display: X11 apps get the session's UI scale (XSETTINGS Gdk/WindowScalingFactor, Xft.dpi)
+-# and are not tiny on a scaled monitor. Under systemd gnome-session starts gsd-xsettings itself, so this does nothing there.
+-[ -d /run/systemd/system ] && exit 0
+-[ -n "$XDG_RUNTIME_DIR" ] && [ -n "$DISPLAY" ] || exit 0
+-exec /usr/libexec/gnome-session-openrc-helper xsettings-start "$DISPLAY"
+diff --git a/data/gnome-session-openrc-helper b/data/gnome-session-openrc-helper
+index 8aa88ac..9785591 100755
+--- a/data/gnome-session-openrc-helper
++++ b/data/gnome-session-openrc-helper
+@@ -32,10 +32,11 @@
+ #              NotShowIn=GNOME, autostarts and shows a second network icon) and apps pick non-GNOME defaults (the Nextcloud tray icon is the
+ #              monochrome one). Under systemd the apps get them from the systemd user manager.
+ #
+-#   x-display | xsettings-start DISPLAY | x11-scale-status
+-#              X11 apps under Xwayland: mutter's Xwayland-session.d hook records the X display and starts gsd-xsettings for it (the UI
+-#              scale for X11 apps: XSETTINGS Gdk/WindowScalingFactor, Xft.dpi); x-display prints it, x11-scale-status checks it. mutter 50
+-#              always scales Xwayland natively, so without gsd-xsettings X11 apps (Steam, Qt apps) render at factor 1 and are tiny.
++#   x-display | x-authority | x11-scale-status
++#              X11 apps under Xwayland: the gsd-xsettings service (the UI scale for X11 apps: XSETTINGS Gdk/WindowScalingFactor,
++#              Xft.dpi) needs the session's X display and Xwayland's X authority: x-display and x-authority print them, x11-scale-status
++#              checks the result. mutter 50 always scales Xwayland natively, so without gsd-xsettings X11 apps (Steam, Qt apps) render
++#              at factor 1 and are tiny.
+ #
+ # Everything works on the caller's own XDG_RUNTIME_DIR and uid; nothing here touches another user's or another session's
+ # services.
+@@ -288,72 +289,28 @@ cmd_activation_env() {
+ 
+ # ---- X11 apps under Xwayland: gsd-xsettings (the UI scale for X11 apps)
+ # Since mutter 50 Xwayland always runs natively scaled (the X screen is ceil(monitor scale) x the logical size) and X11 apps only render at
+-# the right size when gsd-xsettings tells them the factor (XSETTINGS Gdk/WindowScalingFactor, Xft.dpi). Under systemd gnome-session starts
+-# it with Xwayland; here mutter's Xwayland-session.d hook calls xsettings-start.
+-xdisplay_file() { echo "${XDG_RUNTIME_DIR}/gnome-session-openrc-xwayland-display"; }
+-xauth_file() { echo "${XDG_RUNTIME_DIR}/gnome-session-openrc-xwayland-xauthority"; }
++# the right size when gsd-xsettings tells them the factor (XSETTINGS Gdk/WindowScalingFactor, Xft.dpi = 96 x factor x text-scaling-factor).
++# Under systemd gnome-shell starts it through gnome-session-x11-services.target; here gnome-settings-daemon wants the gsd-xsettings service.
++# mutter reserves the session's X display (lock file of the compositor + socket) when it starts and runs Xwayland on demand, when the first
++# X11 client (gsd-xsettings itself) connects.
+ 
+ # the X authority file of this session's Xwayland: Xwayland refuses clients without its cookie (gsd-xsettings then cannot open the
+-# display: "Could not initialize xsettings manager"). Recorded by xsettings-start (mutter hands it to the hook), else Xwayland's -auth.
++# display: "Could not initialize xsettings manager"). Xwayland's own -auth when it runs, else the file mutter prepared for it in the
++# runtime dir (.mutter-Xwaylandauth.XXXXXX, our own, created with the display before Xwayland is launched).
+ cmd_x_authority() {
+ 	local a p
+-	a=$(cat "$(xauth_file)" 2>/dev/null)
+-	if [ -z "$a" ] || [ ! -O "$a" ]; then
+-		a=""
+-		for p in $(pgrep -u "$(id -u)" -x Xwayland 2>/dev/null); do
+-			a=$(tr '\0' '\n' <"/proc/$p/cmdline" 2>/dev/null | sed -n '/^-auth$/{n;p;q}')
+-			[ -n "$a" ] && break
+-		done
+-	fi
+-	[ -n "$a" ] && [ -O "$a" ] && echo "$a"
++	for p in $(pgrep -u "$(id -u)" -x Xwayland 2>/dev/null); do
++		a=$(tr '\0' '\n' <"/proc/$p/cmdline" 2>/dev/null | sed -n '/^-auth$/{n;p;q}')
++		[ -n "$a" ] && [ -O "$a" ] && { echo "$a"; return 0; }
++	done
++	for a in "${XDG_RUNTIME_DIR}"/.mutter-Xwaylandauth.*; do
++		[ -f "$a" ] && [ -O "$a" ] && { echo "$a"; return 0; }
++	done
+ 	return 0
+ }
+ 
+-# $1 (":N" or ":N.S") is a display whose lock belongs to a live process of this user (mutter/Xwayland)
+-display_live() {
+-	local n p
+-	n=${1#:}; n=${n%%.*}
+-	case "$n" in ""|*[!0-9]*) return 1 ;; esac
+-	p=$(tr -d ' \n' <"/tmp/.X${n}-lock" 2>/dev/null)
+-	[ -n "$p" ] && [ -d "/proc/$p" ] && [ "$(stat -c %u "/proc/$p" 2>/dev/null)" = "$(id -u)" ]
+-}
+-
+-# the X display mutter started for this session (recorded by xsettings-start), else the first live X display of this user
+-cmd_x_display() {
+-	local d
+-	d=$(cat "$(xdisplay_file)" 2>/dev/null)
+-	if [ -n "$d" ] && display_live "$d"; then
+-		echo "$d"
+-	else
+-		x_display
+-	fi
+-}
+-
+-cmd_xsettings_start() {
+-	local d="$1" f
+-	[ -n "$XDG_RUNTIME_DIR" ] || exit 0
+-	case "$d" in :[0-9]*) ;; *) log "xsettings-start: not an X display: '$d'"; exit 0 ;; esac
+-	case "${d#:}" in *[!0-9.]*) log "xsettings-start: not an X display: '$d'"; exit 0 ;; esac
+-	# the login screen has no X11 apps of a user
+-	[ "$(session_var XDG_SESSION_CLASS)" = greeter ] && exit 0
+-	f=$(xdisplay_file)
+-	printf '%s\n' "$d" >"$f.tmp" && mv -f "$f.tmp" "$f"
+-	# the X authority mutter gave Xwayland (its own file, in our runtime dir)
+-	case "$XAUTHORITY" in
+-	"${XDG_RUNTIME_DIR}"/*) [ -O "$XAUTHORITY" ] && { printf '%s\n' "$XAUTHORITY" >"$(xauth_file).tmp" && mv -f "$(xauth_file).tmp" "$(xauth_file)"; } ;;
+-	esac
+-	log "xsettings-start: Xwayland on $d, starting gsd-xsettings"
+-	# detached: mutter runs this hook while it brings Xwayland up. A started gsd-xsettings belongs to an earlier Xwayland (mutter only runs
+-	# the hook for a new X server): restart it onto the new display.
+-	(
+-		if rc-service -U gsd-xsettings status >/dev/null 2>&1; then
+-			rc-service -U gsd-xsettings restart
+-		else
+-			rc-service -U gsd-xsettings start
+-		fi
+-	) </dev/null >/dev/null 2>&1 &
+-	exit 0
+-}
++# the X display mutter reserved for this session: the first live X display of this user
++cmd_x_display() { x_display; }
+ 
+ # report-only check (desktop QEMU tests, device health checks): do X11 apps of this session get the session's UI scale?
+ # prints one "OK ..." or "FAIL ..." line per check; exit 1 when one failed
+@@ -397,7 +354,6 @@ cmd_x11_scale_status() {
+ case "$1" in
+ 	x-display) cmd_x_display ;;
+ 	x-authority) cmd_x_authority ;;
+-	xsettings-start) shift; cmd_xsettings_start "$@" ;;
+ 	x11-scale-status) cmd_x11_scale_status ;;
+ 	teardown) shift; cmd_teardown "$@" ;;
+ 	preclean) shift; cmd_preclean "$@" ;;
+@@ -405,5 +361,5 @@ case "$1" in
+ 	alive)    session_alive "$2" ;;
+ 	activation-env) cmd_activation_env ;;
+ 	session-env) cmd_session_env ;;
+-	*) echo "usage: ${0##*/} teardown|preclean [SESSION_ID] | guard CMD... | alive SESSION_ID | activation-env | session-env | x-display | xsettings-start DISPLAY | x11-scale-status" >&2; exit 2 ;;
++	*) echo "usage: ${0##*/} teardown|preclean [SESSION_ID] | guard CMD... | alive SESSION_ID | activation-env | session-env | x-display | x-authority | x11-scale-status" >&2; exit 2 ;;
+ esac
+diff --git a/data/meson.build b/data/meson.build
+index 3c7ebe7..a093364 100644
+--- a/data/meson.build
++++ b/data/meson.build
+@@ -74,10 +74,3 @@ foreach session : gnome_sessions
+     )
+   endforeach
+ endforeach
+-
+-# mutter runs these when it starts Xwayland: gsd-xsettings for X11 apps (their UI scale), see the script
+-install_data(
+-  'Xwayland-session.d/20-gnome-session-openrc-xsettings',
+-  install_dir: '/etc/xdg/Xwayland-session.d',
+-  install_mode: 'rwxr-xr-x'
+-)
+diff --git a/data/openrc/gnome-settings-daemon b/data/openrc/gnome-settings-daemon
+index f64c7ca..f2bdec4 100755
+--- a/data/openrc/gnome-settings-daemon
++++ b/data/openrc/gnome-settings-daemon
+@@ -21,4 +21,6 @@ depend() {
+ #	need gsd-wacom
+ #	need gsd-wwan
+ #	need gsd-xsettings
++	# X11 apps (Xwayland) get the UI scale from it; no hard need: a session without it still works
++	want gsd-xsettings
+ }
+diff --git a/data/openrc/gsd-xsettings b/data/openrc/gsd-xsettings
+index 7448c89..1c13db2 100755
+--- a/data/openrc/gsd-xsettings
++++ b/data/openrc/gsd-xsettings
+@@ -8,9 +8,12 @@
+ # Chromium/Electron on X11 and Java read it and follow changes live. Without it Steam, the Nextcloud client, terminator ... render at
+ # factor 1 and come out tiny.
+ #
+-# Under systemd gnome-session starts it when Xwayland comes up. Here mutter runs /etc/xdg/Xwayland-session.d/20-gnome-session-openrc-xsettings
+-# when it starts Xwayland; that records the display and starts this service. Nothing is hard-coded: the display is the one mutter started
+-# (upstream had DISPLAY=:2 here), the factor comes from mutter at runtime.
++# Under systemd gnome-session starts it when Xwayland comes up (gnome-shell starts gnome-session-x11-services.target). On OpenRC the
++# GNOME session starts it with the other settings daemons (gnome-settings-daemon wants it): mutter reserves the session's X display
++# (lock + socket) when it starts and launches Xwayland on demand, when the first X11 client (this daemon) connects, so the display
++# is there as soon as gnome-shell runs. Nothing is hard-coded: the display is the one mutter reserved (upstream had DISPLAY=:2 here),
++# the factor comes from mutter at runtime. (mutter does not run /etc/xdg/Xwayland-session.d itself: gsd-xsettings does, after it
++# started, so a hook there cannot start gsd-xsettings.)
+ 
+ DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+ export DBUS_SESSION_BUS_ADDRESS
+@@ -36,7 +39,10 @@ start_pre() {
+ 		return 1
+ 	fi
+ 	# the session environment (XDG_SESSION_ID for the guard, the desktop identity) comes from the session leader, as for gnome-shell
++	# PATH and OpenRC's own variables stay OpenRC's: with the leader's PATH, openrc-run loses /usr/libexec/rc/bin and its eend/einfo
++	# helpers ("functions.sh: eend: command not found"), the service ends up failed/stopped although supervise-daemon runs the daemon
+ 	while read -d $'\0' line; do
++		case "${line}" in PATH=*|RC_*|EINFO_*|EERROR_*|SVCNAME=*|IN_BACKGROUND=*|IN_DRYRUN=*) continue ;; esac
+ 		export "${line}"
+ 	done < /proc/$(cat "${_gsl_file}")/environ
+ 	export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
