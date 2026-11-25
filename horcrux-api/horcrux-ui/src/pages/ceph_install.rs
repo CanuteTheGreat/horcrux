@@ -117,7 +117,15 @@ pub fn CephInstallCard() -> impl IntoView {
             })}
             {move || rel.get().map(|r| {
                 let names: Vec<(u64, String)> = r.releases.iter().map(|x| (x.major, p::release_label(x.major, &x.name))).collect();
-                if r.releases.is_empty() {
+                if !r.package_manager && r.installed.is_none() {
+                    return view! {
+                        <div class="empty-state" id="ceph-no-portage">
+                            <p class="empty-title">"Ceph is installed through Portage, which this node does not have."</p>
+                            <p class="empty-todo">"Install Ceph with the distribution's own packages; Horcrux then manages the cluster on this page."</p>
+                        </div>
+                    }.into_view();
+                }
+                if r.releases.is_empty() && r.installed.is_none() {
                     return view! {
                         <div class="empty-state" id="ceph-no-release">
                             <p class="empty-title">{format!("The package repositories of this node carry no Ceph release for {}.", r.arch)}</p>
