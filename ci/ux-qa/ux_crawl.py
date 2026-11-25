@@ -115,6 +115,29 @@ FACTS_JS = r"""() => {
   const navProblems = [];
   const nav = document.querySelector('nav.navbar');
   const menu = nav && nav.querySelector('.navbar-menu');
+  // app shell (docs/design/ui-system.md): header parts never overlap or overflow; sidebar items stay on one line
+  if (nav && vis(nav) && !menu) {
+    if (nav.scrollWidth > nav.clientWidth + 1) navProblems.push('header overflows by ' + (nav.scrollWidth - nav.clientWidth) + 'px');
+    const parts = [...nav.querySelectorAll(':scope > .navbar-brand, :scope > .global-search, :scope > .header-actions-bar > *, :scope > .navbar-user')].filter(vis);
+    for (let x = 0; x < parts.length; x++) for (let y = x + 1; y < parts.length; y++) {
+      if (parts[x].contains(parts[y]) || parts[y].contains(parts[x])) continue;
+      const a = parts[x].getBoundingClientRect(), b = parts[y].getBoundingClientRect();
+      if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1)
+        navProblems.push("header: '" + (parts[x].innerText || parts[x].className).trim().split('\n')[0] + "' overlaps '" + (parts[y].innerText || parts[y].className).trim().split('\n')[0] + "'");
+      if (a.right > window.innerWidth + 0.5) navProblems.push("header: '" + (parts[x].innerText || parts[x].className).trim().split('\n')[0] + "' is clipped off the right edge");
+    }
+    const side = document.querySelector('nav.sidebar');
+    if (side && vis(side)) {
+      const sr = side.getBoundingClientRect();
+      for (const i of side.querySelectorAll('.side-item, .side-group > summary')) {
+        if (!vis(i)) continue;
+        const r = i.getBoundingClientRect();
+        if (r.height > 46) navProblems.push("sidebar: '" + i.innerText.trim().slice(0, 30) + "' wraps onto 2 lines");
+        if (r.right > sr.right + 1) navProblems.push("sidebar: '" + i.innerText.trim().slice(0, 30) + "' sticks out of the sidebar");
+      }
+      if (side.scrollWidth > side.clientWidth + 1) navProblems.push('sidebar scrolls sideways by ' + (side.scrollWidth - side.clientWidth) + 'px');
+    }
+  }
   if (menu && vis(menu)) {
     const items = [...menu.querySelectorAll(':scope > .navbar-item, :scope > .navbar-dropdown > .navbar-item')].filter(vis);
     // rows by vertical centre: an inline trigger and a flex-item link differ in top by their padding, not in row
