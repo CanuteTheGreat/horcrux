@@ -38,6 +38,8 @@ SYSTEM_CONF = os.environ.get("HORCRUX_GAME_SCALE_SYSCONF", "/etc/horcrux/game-sc
 # set by the outer wrapper for the copy of itself that gamescope starts in front of the game; that copy creates the file, which
 # tells the outer one that gamescope did start the game (so a game that itself fails fast is never started a second time)
 MARKER_ENV = "HORCRUX_GAME_SCALE_MARKER"
+# SIGILL, SIGTRAP, SIGABRT, SIGBUS, SIGFPE, SIGSEGV
+CRASH_SIGNALS = (4, 5, 6, 7, 8, 11)
 
 DEFAULTS = {
     # auto: wrap in gamescope when the monitor is scaled; gamescope: always wrap (on a Wayland session); off: never wrap
@@ -331,8 +333,14 @@ def main(argv):
     except OSError as e:
         log(cfg, f"gamescope could not be started ({e}); running the game directly")
         os.execvp(args[0], args)
+    forwarded = []
+
+    def forward(n, _f):
+        forwarded.append(n)
+        p.send_signal(n)
+
     for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(s, lambda n, _f: p.send_signal(n))
+        signal.signal(s, forward)
     rc = p.wait()
     started = os.path.exists(marker)
     try:
@@ -340,8 +348,12 @@ def main(argv):
     except OSError:
         pass
     dt = time.monotonic() - t0
-    if rc != 0 and not started and dt < float(cfg["fallback_seconds"]):
-        log(cfg, f"gamescope exited {rc} after {dt:.1f} s before starting the game; running the game directly")
+    # gamescope killed by a crash signal takes the game with it (gamescopereaper), so that is a gamescope failure even after the
+    # game started; a signal we forwarded (Steam stopping the game) never restarts anything
+    crashed = rc < 0 and -rc in CRASH_SIGNALS
+    if not forwarded and dt < float(cfg["fallback_seconds"]) and (crashed or (rc != 0 and not started)):
+        why = f"crashed (signal {-rc})" if crashed else f"exited {rc} before starting the game"
+        log(cfg, f"gamescope {why} after {dt:.1f} s; running the game directly")
         os.execvp(args[0], args)
     if rc != 0:
         log(cfg, f"exit {rc} after {dt:.1f} s (game {'started' if started else 'not started'} inside gamescope)")

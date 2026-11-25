@@ -224,7 +224,16 @@ class Decide(unittest.TestCase):
             r = self.run_wrapped(d, "exit 1\n", ["sh", "-c", f"echo x >> {runs}; exit 0"])
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(slo.read(runs), "x\n")
-            self.assertIn("before starting the game; running the game directly", slo.read(os.path.join(d, "horcrux", "game-scale.log")))
+            self.assertIn("before starting the game after", slo.read(os.path.join(d, "horcrux", "game-scale.log")))
+
+    def test_gamescope_crash_after_the_game_started_falls_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            runs = os.path.join(d, "runs")
+            # gamescope starts the game (inner copy marks it), then aborts and takes the game with it
+            body = 'while [ "$1" != "--" ]; do shift; done\nshift\n"$@" &\nsleep 1\nkill -ABRT $$\n'
+            r = self.run_wrapped(d, body, ["sh", "-c", f"echo x >> {runs}; sleep 3; exit 0"])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("crashed (signal 6)", slo.read(os.path.join(d, "horcrux", "game-scale.log")))
 
 
 LOCALCONFIG = '''"UserLocalConfigStore"
