@@ -14,6 +14,7 @@ Screenshots (desktop 1280 and phone 390, light and dark) go to SHOTS (default /t
 import json
 import os
 import sys
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -50,6 +51,14 @@ def check(cond, what):
 
 
 def login(page):
+    """Log in unless this browser context already holds a session (one login per context)."""
+    page.goto(f"{BASE}/")
+    pw = page.locator("input[type=password]")
+    try:
+        pw.wait_for(timeout=8000)
+    except Exception:
+        if "/login" not in page.url:
+            return
     page.goto(f"{BASE}/login")
     page.locator("input[type=text], input:not([type])").first.fill("admin")
     page.locator("input[type=password]").fill(os.environ.get("ADMIN_PASSWORD", "admin"))
@@ -75,16 +84,18 @@ def ceph_flow(ctx, shot):
         route.fulfill(status=200, content_type="application/json", body=json.dumps({"upid": UPID}))
     page.route("**/api/ceph/install", install)
 
+    full = ["Writing Portage pins for Ceph 21", ">>> Emerging sys-cluster/ceph-21.2.0",
+            "Bootstrapping monitor and manager", "Ceph 21 installed"]
+
     def log(route):
+        # like the server: lines from ?start=N; the first answer is mid-run, later ones finish the task
         state["log_calls"] += 1
-        n = state["log_calls"]
-        if n == 1:
-            body = {"lines": ["Writing Portage pins for Ceph 20", ">>> Emerging sys-cluster/ceph-20.2.0"], "total": 2,
-                    "running": True}
-        else:
+        q = parse_qs(urlparse(route.request.url).query)
+        start = int(q.get("start", ["0"])[0])
+        have = 2 if state["log_calls"] == 1 else len(full)
+        if have == len(full):
             state["installed"] = True
-            body = {"lines": ["Bootstrapping monitor and manager", "Ceph 20 installed"] if n == 2 else [],
-                    "total": 4, "running": False}
+        body = {"lines": full[start:have], "total": have, "running": have < len(full)}
         route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
     page.route("**/api/tasks/*/log*", log)
     page.route("**/api/tasks/UPID*", json_route({"upid": UPID, "node": "node1", "task_type": "ceph-install",
@@ -107,13 +118,16 @@ def ceph_flow(ctx, shot):
     check("10.0.0.0/24" in summary and "same as public" in summary and "21" in summary, "review lists the choices")
     shot(page, "ceph-3-review")
     card.locator("#ceph-install-submit").click()
-    expect(card.locator(".hx-tasklog [data-status=ok]")).to_be_visible(timeout=20000)
-    body = card.locator(".hx-tasklog-body").inner_text()
-    check("Emerging" in body and "Ceph 20 installed" in body, "task log shows the lines as they arrive")
-    p = state["posts"][0] if state["posts"] else {}
-    check(p.get("release") == 21 and p.get("mode") == "new" and p.get("public_network") == "10.0.0.0/24",
-          f"install request carries the choices ({p})")
+    log_body = card.locator(".hx-tasklog-body")
+    expect(log_body).to_contain_text("Emerging", timeout=20000)
     expect(card.locator("#ceph-installed")).to_be_visible(timeout=20000)
+    expect(card.locator(".hx-tasklog [data-status=ok]")).to_be_visible(timeout=20000)
+    expect(log_body).to_contain_text("Ceph 21 installed", timeout=20000)
+    check("Emerging" in log_body.inner_text(), "task log shows the lines as they arrive")
+    p = state["posts"][0] if state["posts"] else {}
+    b = p.get("bootstrap") or {}
+    check(str(p.get("release")) == "21" and b.get("mode") == "new" and b.get("public_network") == "10.0.0.0/24",
+          f"install request carries the choices ({p})")
     expect(card.locator("#ceph-daemon-versions tbody tr")).to_have_count(3)
     shot(page, "ceph-4-installed")
     check(not errors, f"no page errors on the Ceph page ({errors[:3]})")

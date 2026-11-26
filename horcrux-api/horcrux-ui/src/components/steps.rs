@@ -24,7 +24,7 @@ pub fn StepHeader(
                 let cur = move || (current.get() == i).then_some("step");
                 view! {
                     <li class=cls aria-current=cur>
-                        <button type="button" class="hx-step-btn" disabled=move || i >= current.get()
+                        <button type="button" class="hx-step-btn" disabled=move || { i >= current.get() }
                             on:click=move |_| { if let Some(cb) = on_select { cb.call(i) } }>
                             <span class="hx-step-num">{(i + 1).to_string()}</span>
                             <span class="hx-step-title">{t}</span>
