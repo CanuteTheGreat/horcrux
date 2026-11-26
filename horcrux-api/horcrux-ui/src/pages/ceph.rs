@@ -175,6 +175,8 @@ pub fn CephPage() -> impl IntoView {
         });
     };
 
+    // Flags, OSDs, pools, monitors and CRUSH rules need a running cluster, so they stay hidden until one
+    // answers; the release card installs Ceph and creates or joins one. Placement is shown before that.
     view! {
         <div class="ceph-page">
             <div class="page-header"><h1>"Ceph"</h1></div>
@@ -220,6 +222,7 @@ pub fn CephPage() -> impl IntoView {
                 })}
             </div>
 
+            <Show when=move || status.get().is_some_and(|s| s.reachable)>
             <h2>"Maintenance flags"</h2>
             <div id="ceph-flags">
                 {move || flags.get().into_iter().map(|f| {
@@ -313,6 +316,7 @@ pub fn CephPage() -> impl IntoView {
                 <button id="ceph-rule-create" type="submit" class="btn btn-primary">"Create rule"</button>
             </form>
             <ul id="ceph-rules">{move || rules.get().into_iter().map(|r| view! { <li>{format!("{} (id {}): from {} spread over {}", r.name, r.id, r.root.clone().unwrap_or_default(), r.failure_domain.clone().unwrap_or_default())}</li> }).collect_view()}</ul>
+            </Show>
         </div>
     }
 }

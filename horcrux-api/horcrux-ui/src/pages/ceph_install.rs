@@ -271,7 +271,7 @@ pub fn CephInstallCard() -> impl IntoView {
                     <Show when=move || step.get() == 1>
                         {move || cluster_missing().map(|m| view! { <span class="form-help" id="ceph-install-missing">{m}</span> })}
                     </Show>
-                    <Show when=move || step.get() < 2>
+                    <Show when=move || { step.get() < 2 }>
                         <button type="button" class="btn btn-primary" id="ceph-install-next"
                             disabled=move || (step.get() == 0 && choice.get().is_empty()) || (step.get() == 1 && cluster_missing().is_some())
                             on:click=move |_| step.update(|s| *s += 1)>"Next"</button>
@@ -350,7 +350,7 @@ pub fn CephInstallCard() -> impl IntoView {
                                         </table>
                                         <p class="form-help">"To release"</p>
                                         <ChoiceCards name="ceph-upgrade-target" choices=targets selected=up_target/>
-                                        <div class="form-actions">
+                                        <div class="form-actions hx-actions">
                                             <button id="ceph-upgrade-next" class="btn btn-primary" type="button" on:click=move |_| upgrade(vec![next2.clone()])>{format!("Run next step: {next}")}</button>
                                             <button id="ceph-upgrade-all" class="btn btn-secondary" type="button" on:click=move |_| upgrade(vec![])>"All steps (single-node cluster)"</button>
                                         </div>
