@@ -198,6 +198,7 @@ async fn lan_nic(
             mac: None,
             vlan: None,
             rate_mbps: None,
+            macvtap_multicast: Default::default(),
         }),
     }
     crate::api::vm_hw::check_host_hardware(&state, &hw).await?;
