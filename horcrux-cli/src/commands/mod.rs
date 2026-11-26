@@ -10,6 +10,7 @@ pub mod ha;
 pub mod migrate;
 pub mod monitor;
 pub mod nas;
+pub mod node;
 pub mod power;
 pub mod replication;
 pub mod snapshot;

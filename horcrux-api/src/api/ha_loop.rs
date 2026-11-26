@@ -477,6 +477,7 @@ pub async fn broadcast_group(state: &Arc<AppState>, change: GroupChange) {
         hung_reported: Default::default(),
         mgr_silent_since: HashMap::new(),
         synced_with_peer: true,
+        maint_known: Default::default(),
     };
     for n in state.cluster_manager.list_nodes().await {
         if n.name == local || n.is_local || n.status != NodeStatus::Online {
@@ -789,6 +790,41 @@ struct LoopState {
     /// This manager process has completed a placement sync with at least one
     /// peer (see [`may_restart_local_guests`]).
     synced_with_peer: bool,
+    /// Nodes last seen in maintenance while online. A node that goes down
+    /// while in maintenance was taken down on purpose (it was emptied for
+    /// service): it is not reported as a failed node.
+    maint_known: std::collections::HashSet<String>,
+}
+
+/// A node just went offline: report it as failed unless it was in
+/// maintenance (emptied by an administrator, so a shutdown is expected).
+pub(crate) fn report_offline_as_failure(
+    node: &str,
+    maint_known: &std::collections::HashSet<String>,
+) -> bool {
+    !maint_known.contains(node)
+}
+
+/// Fold one round of maintenance answers into the remembered set: a node
+/// that answered is in it exactly when it said so; one that did not answer
+/// (`None`: shutting down, unreachable) keeps what it last said. A node in
+/// maintenance that is being shut down stops answering before the cluster
+/// sees it offline, and must still count as in maintenance then.
+pub(crate) fn update_maint_known(
+    maint_known: &mut std::collections::HashSet<String>,
+    flags: &HashMap<String, Option<bool>>,
+) {
+    for (n, f) in flags {
+        match f {
+            Some(true) => {
+                maint_known.insert(n.clone());
+            }
+            Some(false) => {
+                maint_known.remove(n);
+            }
+            None => {}
+        }
+    }
 }
 
 /// May this node (re)start HA guests that its own records say belong here?
@@ -1004,6 +1040,7 @@ pub fn spawn(state: Arc<AppState>) {
             hung_reported: Default::default(),
             mgr_silent_since: HashMap::new(),
             synced_with_peer: false,
+            maint_known: Default::default(),
         };
         let mut ticker = tokio::time::interval(Duration::from_secs(tick_secs()));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1082,13 +1119,19 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
     let quorum = online.len() * 2 > total;
 
     // Nodes in maintenance are online but take no guests: HA never picks
-    // them as a recovery or relocation target.
-    let maintenance = if online.len() > 1 {
-        super::drain::maintenance_nodes(state, &nodes, &local).await
+    // them as a recovery or relocation target. (A peer that does not answer
+    // in time counts as not in maintenance for placement: HA's own online
+    // view already decides if it is up.)
+    let flags = if online.len() > 1 {
+        super::drain::maintenance_flags(state, &nodes, &local).await
     } else {
         Default::default()
     };
+    let maintenance = super::drain::in_maintenance(&flags);
     let targets = crate::cluster::drain::recovery_targets(&online, &maintenance);
+    // Remember who is in maintenance; a node that does not answer (going
+    // down, offline) keeps its last known state.
+    update_maint_known(&mut ls.maint_known, &flags);
 
     // Feed live node figures to placement.
     let all = state.ha_manager.list_resources().await;
@@ -1178,12 +1221,19 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
             ls.mgr_silent_since.remove(&n.name);
         } else if n.status == NodeStatus::Offline && !ls.offline_since.contains_key(&n.name) {
             ls.offline_since.insert(n.name.clone(), now);
-            notify(
-                state,
-                "node_failed",
-                serde_json::json!({"node": n.name, "detected_by": local}),
-            )
-            .await;
+            if report_offline_as_failure(&n.name, &ls.maint_known) {
+                notify(
+                    state,
+                    "node_failed",
+                    serde_json::json!({"node": n.name, "detected_by": local}),
+                )
+                .await;
+            } else {
+                tracing::warn!(
+                    "HA: {} went offline while in maintenance (expected): not a node failure",
+                    n.name
+                );
+            }
         }
     }
     let leader = online.iter().min().cloned();
@@ -1581,6 +1631,38 @@ async fn move_vm(
                 .await;
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod maintenance_offline_tests {
+    use super::*;
+
+    #[test]
+    fn a_node_down_in_maintenance_is_no_failure() {
+        let known: std::collections::HashSet<String> = ["b".to_string()].into();
+        assert!(!report_offline_as_failure("b", &known));
+        assert!(report_offline_as_failure("a", &known));
+        assert!(report_offline_as_failure("b", &Default::default()));
+    }
+
+    #[test]
+    fn a_node_that_stops_answering_keeps_its_maintenance() {
+        let mut known = std::collections::HashSet::new();
+        let f = |v: &[(&str, Option<bool>)]| -> HashMap<String, Option<bool>> {
+            v.iter().map(|(n, f)| (n.to_string(), *f)).collect()
+        };
+        update_maint_known(&mut known, &f(&[("a", Some(false)), ("b", Some(true))]));
+        assert!(known.contains("b") && !known.contains("a"));
+        // b is shutting down: no answer, still known in maintenance
+        update_maint_known(&mut known, &f(&[("a", Some(false)), ("b", None)]));
+        assert!(!report_offline_as_failure("b", &known));
+        // b answers again, out of maintenance: forgotten
+        update_maint_known(&mut known, &f(&[("b", Some(false))]));
+        assert!(report_offline_as_failure("b", &known));
+        // a node that never said it was in maintenance and stops answering
+        update_maint_known(&mut known, &f(&[("c", None)]));
+        assert!(report_offline_as_failure("c", &known));
     }
 }
 
@@ -2188,6 +2270,7 @@ mod sync_stall_tests {
             hung_reported: Default::default(),
             mgr_silent_since: HashMap::new(),
             synced_with_peer: true,
+            maint_known: Default::default(),
         };
         let t = std::time::Instant::now();
         let r: Result<(), String> = peer_post_for(
