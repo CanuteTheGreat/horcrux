@@ -20,6 +20,7 @@ hx_sibling_apt_prep "$NAME"
 bash "$(dirname "$0")/../../ci/sysctl-guard.sh" harden "$NAME"
 docker cp "$BIN" "$NAME":/usr/local/bin/horcrux-api
 docker cp "$(dirname "$0")/system_admin_e2e.py" "$NAME":/tmp/system_admin_e2e.py
+docker cp "$(dirname "$0")/hx_logws.py" "$NAME":/tmp/hx_logws.py
 docker cp "$(dirname "$0")/fixtures/ceph" "$NAME":/tmp/ceph-fx
 # `apt-get update` exits 0 even when a mirror index failed to download (then
 # universe packages like openrc have "no installation candidate"): retry until

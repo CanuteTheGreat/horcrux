@@ -23,6 +23,7 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         console: crate::console::hxc_settings::get(),
         remote_play: crate::api::remote_play::load_settings(state).await,
         security: crate::api::security::load_settings(state).await,
+        logs: crate::api::system_admin::logs::load_settings(state).await,
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
         #[cfg(feature = "san")]
@@ -161,6 +162,14 @@ async fn run_change(
             crate::api::security::set_settings(state, w).await?;
             Ok(Some(
                 "applied at once; the next scheduled scan and check use it".into(),
+            ))
+        }
+
+        ("logs", Action::Update) => {
+            let w = spec.logs.clone().ok_or("not in spec")?;
+            crate::api::system_admin::logs::set_settings(state, w).await?;
+            Ok(Some(
+                "applied at once (new requests and new live streams)".into(),
             ))
         }
 

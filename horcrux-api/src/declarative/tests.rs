@@ -336,6 +336,37 @@ fn remote_play_settings_are_planned_validated_and_exported() {
     assert!(plan(&back, &live, false).in_sync());
 }
 
+#[test]
+fn log_settings_are_planned_validated_and_exported() {
+    use horcrux_common::system_logs::LogSettings;
+    let live = Live::default();
+    let mut s = Spec {
+        logs: Some(LogSettings::default()),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).in_sync());
+    s.logs = Some(LogSettings {
+        max_lines: 1000,
+        follow_idle_secs: 120,
+        ..Default::default()
+    });
+    let p = plan(&s, &live, false);
+    assert_eq!(p.changes.len(), 1);
+    assert_eq!(p.changes[0].kind, "logs");
+    let d = p.changes[0].details.join("\n");
+    assert!(d.contains("max_lines: 5000 -> 1000"), "{d}");
+    assert!(d.contains("follow_idle_secs: 600 -> 120"), "{d}");
+    s.logs = Some(LogSettings {
+        max_lines: 5,
+        ..Default::default()
+    });
+    assert!(plan(&s, &live, false).errors[0].contains("max_lines"));
+    let y = serde_yaml::to_string(&export(&live)).unwrap();
+    assert!(y.contains("logs:"), "{y}");
+    let back: Spec = serde_yaml::from_str(&y).unwrap();
+    assert!(plan(&back, &live, false).in_sync());
+}
+
 fn gp_actions(p: &Plan) -> Vec<String> {
     actions(p)
         .into_iter()
