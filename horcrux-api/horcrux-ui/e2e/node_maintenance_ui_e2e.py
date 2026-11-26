@@ -12,6 +12,7 @@ nb holds two guests. The flow an admin follows:
 """
 import json
 import os
+import re
 import sys
 
 from playwright.sync_api import expect, sync_playwright
@@ -84,7 +85,8 @@ def main():
                 c.posts.append((node, body))
                 c.enabled = bool(body.get("enabled"))
             return fulfil(route, c.view(node))
-        page.route("**/api/nodes/n[abc]/maintenance**", node_route)
+        # a regex: Playwright globs have no character classes
+        page.route(re.compile(r".*/api/nodes/n[abc]/maintenance.*"), node_route)
 
         page.goto(f"{BASE}/login")
         page.locator("input[type=text], input:not([type])").first.fill("admin")
@@ -100,7 +102,13 @@ def main():
         toggle.click()
         panel = page.locator("#node-maint-dialog .node-maint-panel[data-node=nb]")
         expect(panel).to_be_visible(timeout=10000)
-        expect(panel.locator("#node-maint-plan tbody tr")).to_have_count(2, timeout=10000)
+        try:
+            expect(panel.locator("#node-maint-plan tbody tr")).to_have_count(2, timeout=10000)
+        except AssertionError:
+            err = page.locator("#node-maint-error")
+            print("panel error:", err.inner_text() if err.count() else "-", flush=True)
+            page.screenshot(path=os.environ.get("SHOT", "/tmp/node-maint-fail.png"), full_page=True)
+            raise
         moves = panel.locator(".plan-moves-count")
         check("plan-count-is-a-link", moves.get_attribute("href") == "#node-maint-plan" and "2 guest(s)" in moves.inner_text(),
               moves.inner_text())
