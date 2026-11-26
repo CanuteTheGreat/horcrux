@@ -1,0 +1,10 @@
+Nov 20 09:00:00 gw kernel: Linux version 6.12.0-gentoo (builder) #1 SMP
+Nov 20 09:00:03 gw syslog-ng[300]: syslog-ng starting up; version='4.8'
+Nov 20 09:00:10 gw sshd[411]: Server listening on 0.0.0.0 port 22.
+Nov 20 09:05:00 gw sshd[411]: Failed password for root from 192.0.2.7
+Nov 20 09:06:00 gw cron[12]: job started
+Nov 20 18:30:00 gw kernel: Linux version 6.12.0-gentoo (builder) #1 SMP
+Nov 20 18:30:20 gw kernel: warning: low memory
+Nov 20 18:31:00 gw sshd[880]: Server listening on 0.0.0.0 port 22.
+<11>Nov 20 18:32:00 gw metalog[5]: logged with a priority
+Nov 20 18:33:00 gw dhcpcd[77]: eth0: leased 192.0.2.9
