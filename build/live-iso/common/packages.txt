@@ -5,6 +5,14 @@ sys-kernel/linux-firmware
 sys-kernel/dracut
 sys-boot/grub
 sys-boot/efibootmgr
+# UEFI Secure Boot (boot/secureboot-sign.sh): Microsoft-signed shim + MokManager, mokutil (enrol the machine key), sbsign
+# (sign kernels updated later). riscv64 has no signed shim.
+x86_64? sys-boot/shim
+aarch64? sys-boot/shim
+x86_64? sys-boot/mokutil
+aarch64? sys-boot/mokutil
+x86_64? app-crypt/sbsigntools
+aarch64? app-crypt/sbsigntools
 sys-fs/dosfstools
 sys-fs/e2fsprogs
 sys-fs/xfsprogs

@@ -3,3 +3,5 @@
 net-firewall/conntrack-tools ~arm64
 net-libs/libnetfilter_cthelper ~arm64
 net-libs/libnetfilter_cttimeout ~arm64
+# mokutil has no arm64 keyword in ::gentoo (plain C, builds and works on arm64 shim systems)
+sys-boot/mokutil **

@@ -141,7 +141,12 @@ lap "stage 4: export rootfs + assemble ISO (no bind mounts: works from a job con
 ISO_NAME=$ISO_PREFIX${HW_PROFILE:+-$HW_PROFILE}-${ISO_VNAME:-${IMG_HW}$IMG-}$SUFFIX-$ARCH.iso   # owner rule: horcrux-surface-xfce-openrc-<date>-x86_64.iso (ISO_VNAME=surface-xfce-openrc-)
 docker rm -f $TAG-asm >/dev/null 2>&1 || true
 cid=$(docker create $ROOTFS_IMG /bin/true)
-docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH -e "SQUASH_COMP=${SQUASH_COMP:-}" --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \
+# Secure Boot signing (common/boot/secureboot-sign.sh): the key travels as an environment variable (no bind mounts here);
+# a key FILE on the build host (bring your own key) is read into it. Neither is ever written into the image.
+if [ -n "${SECUREBOOT_KEY_FILE:-}" ] && [ -z "${SECUREBOOT_SIGNING_KEY:-}" ]; then SECUREBOOT_SIGNING_KEY=$(cat "$SECUREBOOT_KEY_FILE"); fi
+if [ -n "${SECUREBOOT_CERT_FILE:-}" ] && [ -z "${SECUREBOOT_CERT:-}" ]; then SECUREBOOT_CERT=$(cat "$SECUREBOOT_CERT_FILE"); fi
+export SECUREBOOT=${SECUREBOOT:-auto} SECUREBOOT_SIGNING_KEY=${SECUREBOOT_SIGNING_KEY:-} SECUREBOOT_CERT=${SECUREBOOT_CERT:-}
+docker export "$cid" | docker run -i $PLAT -e ARCH=$ARCH -e "SQUASH_COMP=${SQUASH_COMP:-}" -e SECUREBOOT -e SECUREBOOT_SIGNING_KEY -e SECUREBOOT_CERT --name $TAG-asm --memory=8g --cpus=$JOBS $TAG-tools \
     sh -c "mkdir -p /work/root /out && tar -x -C /work/root --anchored --exclude='dev/*' && assemble-iso.sh /work/root /out/$ISO_NAME '$ISO_LABEL' '$PROJECT_TITLE' '$PROJECT'"
 docker rm -v "$cid" >/dev/null; cid=
 docker cp $TAG-asm:/out/$ISO_NAME "$OUT/$ISO_NAME"
