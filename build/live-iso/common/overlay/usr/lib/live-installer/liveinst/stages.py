@@ -16,6 +16,7 @@ stack, skip the server sysctl lock-down and use the desktop USE preset.
 """
 import re
 
+from . import netlayout as NL
 from . import portableswap, secretcheck
 from . import system as S
 
@@ -436,9 +437,10 @@ class NetconfigStage(Stage):
             out.append(f"WAN {w['iface'] or '-'}: " + (w["address"] if w["mode"] == "static" else "DHCP") + (" (Wi-Fi)" if c["wifi"] else ""))
             out.append(f"LAN {l['iface'] or '-'}: {l['address'] if l['iface'] else '-'}")
         else:
-            n = c["mgmt"]
-            out.append(f"Management NIC {n['iface'] or '-'}: " + (f"{n['address']} gw {n['gateway']} dns {n['dns']}" if n["mode"] == "static" else "DHCP")
-                       + (" (Wi-Fi)" if c["wifi"] else ""))
+            n = NL.ensure(c["mgmt"], ctx.p)
+            link = NL.describe(n) if not NL.is_plain(n) else (n["iface"] or "-")
+            out.append(f"Management {link}: " + (f"{n['address']} gw {n['gateway']} dns {n['dns']}" if n["mode"] == "static" else "DHCP")
+                       + (f" on {NL.l3_iface(n)}" if not NL.is_plain(n) else "") + (" (Wi-Fi)" if c["wifi"] else ""))
         return out
 
 
@@ -555,6 +557,55 @@ class NetAdvStage(Stage):
 
     def apply(self, inst):
         pass                # written by the netconfig stage (Installer.write_roles -> netvirt.apply_bootstrap)
+
+
+# --------------------------------------------------------------------------
+# management link: bond (link aggregation) + VLAN tag - the same fields in the text and the graphical installer
+# --------------------------------------------------------------------------
+def _bonded(v):
+    return bool([x for x in (v.get("bond_with") or []) if x != v.get("iface")])
+
+
+def mgmt_link_fields(n, nics, profile=None):
+    """Fields after the NIC choice (key 'iface' in the same form, or the GUI's radio rows): extra NICs to bond, bond options, VLAN id"""
+    NL.ensure(n, profile)
+    b = n["bond"]
+    wired = [x for x in nics if not x.get("wifi")]
+    f = []
+    if len(wired) > 1:
+        f.append(Field("bond_with", "Bond with (link aggregation)", "multi", [x for x in n["ifaces"][1:]],
+                       [(x["name"], x["name"] + "  " + x.get("mac", "")) for x in wired], optional=True,
+                       hint="Tick more NICs to combine them with the management NIC into one bond (failover or LACP)"))
+        f.append(Field("bond_mode", "Bond mode", "list", b["mode"], [(m, NL.BOND_MODE_TEXT[m]) for m in NL.BOND_MODES], width=60,
+                       visible=_bonded, hint="802.3ad needs an LACP group on the switch; active-backup works everywhere"))
+        f.append(Field("bond_hash", "Transmit hash policy", "choice", b["xmit_hash_policy"], [(h, h) for h in NL.HASH_POLICIES],
+                       visible=lambda v: _bonded(v) and v.get("bond_mode") in NL.HASH_MODES, advanced=True))
+        f.append(Field("bond_lacp", "LACP rate", "choice", b["lacp_rate"], [("fast", "fast (1 s)"), ("slow", "slow (30 s)")],
+                       visible=lambda v: _bonded(v) and v.get("bond_mode") == "802.3ad", advanced=True))
+        f.append(Field("bond_miimon", "Link check interval (ms)", "text", str(b["miimon"]), width=8, visible=_bonded, advanced=True,
+                       validate=lambda v, a: None if str(v).strip().isdigit() and 1 <= int(v) <= NL.MIIMON_MAX
+                       else f"A number of milliseconds, 1-{NL.MIIMON_MAX}"))
+    f.append(Field("vlan", "VLAN tag", "text", str(n["vlan"]) if n["vlan"] else "", width=6, optional=True,
+                   hint="802.1Q VLAN id 1-4094 when the switch port only carries tagged frames; empty = untagged",
+                   validate=lambda v, a: None if not str(v).strip() or (str(v).strip().isdigit() and 1 <= int(v) <= 4094)
+                   else "VLAN id: a number 1-4094, or empty for untagged"))
+    return f
+
+
+def commit_mgmt_link(n, v, first, profile=None):
+    """form values -> management section (first = the chosen management NIC); returns the problems (empty = ok)"""
+    NL.ensure(n, profile)
+    members = [first] + [x for x in (v.get("bond_with") or []) if x != first] if first else []
+    n["iface"], n["ifaces"] = first, members
+    b = n["bond"]
+    if len(members) > 1:
+        b["mode"] = v.get("bond_mode") or b["mode"]
+        b["xmit_hash_policy"] = v.get("bond_hash") or b["xmit_hash_policy"]
+        b["lacp_rate"] = v.get("bond_lacp") or b["lacp_rate"]
+        if str(v.get("bond_miimon", "")).strip().isdigit():
+            b["miimon"] = int(v["bond_miimon"])
+    n["vlan"] = NL.vlan_int(str(v.get("vlan", "") or "").strip())
+    return NL.problems(n)
 
 
 class ServicesStage(Stage):
