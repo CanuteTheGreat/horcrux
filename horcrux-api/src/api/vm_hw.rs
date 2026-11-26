@@ -857,7 +857,7 @@ pub struct TpmStatus {
 }
 
 pub fn tpm_status_of(vm: &VmConfig) -> TpmStatus {
-    let disk0 = vm.disks.first().map(|d| PathBuf::from(&d.path));
+    let disk0 = crate::vm::rbd::vm_anchor(vm);
     let (present, bytes) = match &disk0 {
         Some(d) => (
             crate::vm::firmware::tpm_state_present(d),

@@ -56,9 +56,25 @@ pub async fn handle_vm_command(
             memory,
             cpus,
             disk,
+            storage,
         } => {
             use horcrux_common::{VmArchitecture, VmHypervisor, VmStatus};
 
+            // A pool chosen for the first disk: the API places the image there
+            // (file in a pool directory, or an RBD image on a Ceph pool).
+            let first_disk: Vec<horcrux_common::VmDisk> = match storage {
+                Some(pool) => vec![horcrux_common::VmDisk {
+                    path: String::new(),
+                    size_gb: disk,
+                    disk_type: "virtio".to_string(),
+                    cache: String::new(),
+                    discard: false,
+                    ssd: false,
+                    iothread: false,
+                    storage: Some(pool),
+                }],
+                None => Vec::new(),
+            };
             let vm_config = VmConfig {
                 id: format!("vm-{}", chrono::Utc::now().timestamp()),
                 name: name.clone(),
@@ -68,13 +84,43 @@ pub async fn handle_vm_command(
                 disk_size: disk,
                 architecture: VmArchitecture::X86_64,
                 status: VmStatus::Stopped,
-                disks: Vec::new(), // Empty disk list, will be populated by API
+                disks: first_disk, // empty = the API populates it
                 display: Default::default(),
                 hardware: Default::default(),
             };
 
             let vm: VmConfig = api.post("/api/vms", &vm_config).await?;
             output::print_created("VM", &vm.name, &vm.id);
+        }
+
+        VmCommands::AddDisk {
+            id,
+            size_gb,
+            storage,
+        } => {
+            let vm: VmConfig = api
+                .post(
+                    &format!("/api/vms/{}/disks", id),
+                    &serde_json::json!({ "size_gb": size_gb, "storage": storage }),
+                )
+                .await?;
+            output::print_success(&format!(
+                "VM '{}' now has {} disk(s)",
+                vm.name,
+                vm.disks.len()
+            ));
+        }
+
+        VmCommands::ResizeDisk { id, index, size_gb } => {
+            api.put::<VmConfig, _>(
+                &format!("/api/vms/{}/disks/{}", id, index),
+                &serde_json::json!({ "size_gb": size_gb }),
+            )
+            .await?;
+            output::print_success(&format!(
+                "disk {} of VM {} resized to {} GB",
+                index, id, size_gb
+            ));
         }
 
         VmCommands::Start { id } => {

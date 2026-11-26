@@ -337,12 +337,20 @@ async fn import_disk(
             "VM {id} is running; stop it before importing a disk"
         )));
     }
-    let disk = PathBuf::from(
-        &vm.disks
-            .first()
-            .ok_or_else(|| ApiError::BadRequest(format!("VM {id} has no disk")))?
-            .path,
-    );
+    let disk0 = vm
+        .disks
+        .first()
+        .ok_or_else(|| ApiError::BadRequest(format!("VM {id} has no disk")))?
+        .path
+        .clone();
+    // A first disk on RBD: the converted image goes straight into the RBD
+    // image; scratch files live in the VM storage directory.
+    let rbd_disk = crate::vm::rbd::is_rbd(&disk0).then(|| disk0.clone());
+    let disk = if rbd_disk.is_some() {
+        crate::vm::rbd::anchor_path(&state.config.paths.vm_storage, &id)
+    } else {
+        PathBuf::from(&disk0)
+    };
     let dir = disk
         .parent()
         .ok_or_else(|| ApiError::Internal("disk has no directory".into()))?;
@@ -382,6 +390,34 @@ async fn import_disk(
             .map_err(|e| ApiError::Internal(format!("qemu-img info: {e}")))?;
     let fmt = checked_format(&info).map_err(ApiError::BadRequest)?;
     let out = tmp_out.to_string_lossy().to_string();
+    if let Some(rbd_path) = rbd_disk {
+        crate::vm::rbd::check_client()?;
+        let virtual_size = info["virtual-size"].as_u64().unwrap_or(0);
+        let bytes = virtual_size.max(vm.disk_size.saturating_mul(1024 * 1024 * 1024));
+        let mib = bytes.div_ceil(1 << 20);
+        let spec = crate::vm::rbd::cli_spec(&rbd_path).unwrap_or_default();
+        let r = tokio::process::Command::new("rbd")
+            .args(crate::vm::rbd::base_args())
+            .args([
+                "resize",
+                "--allow-shrink",
+                "--size",
+                &format!("{mib}M"),
+                &spec,
+            ])
+            .output()
+            .await?;
+        if !r.status.success() {
+            return Err(ApiError::Internal(format!(
+                "rbd resize {spec}: {}",
+                String::from_utf8_lossy(&r.stderr).trim()
+            )));
+        }
+        let dst = crate::vm::rbd::qemu_file(&rbd_path).unwrap_or_default();
+        qemu_img(&["convert", "-n", "-f", &fmt, "-O", "raw", &src, &dst]).await?;
+        tracing::info!("VM {id}: imported disk from {} into {rbd_path}", req.source);
+        return Ok(Json(state.vm_manager.get_vm(&id).await?));
+    }
     qemu_img(&["convert", "-f", &fmt, "-O", "qcow2", &src, &out]).await?;
     let virtual_size = info["virtual-size"].as_u64().unwrap_or(0);
     let wanted = vm.disk_size.saturating_mul(1024 * 1024 * 1024);

@@ -260,6 +260,29 @@ enum VmCommands {
         /// Disk size in GB
         #[arg(short, long)]
         disk: u64,
+        /// Storage pool (id) for the first disk: a directory, NFS, CIFS,
+        /// GlusterFS or Ceph RBD pool (default: the node's VM storage)
+        #[arg(short, long)]
+        storage: Option<String>,
+    },
+    /// Add a new empty disk to a stopped VM
+    AddDisk {
+        id: String,
+        /// Disk size in GB
+        #[arg(long)]
+        size_gb: u64,
+        /// Storage pool (id); an RBD pool creates an RBD image
+        #[arg(short, long)]
+        storage: Option<String>,
+    },
+    /// Grow a VM disk (shrinking is refused)
+    ResizeDisk {
+        id: String,
+        /// Disk index (0 = first disk)
+        index: usize,
+        /// New size in GB
+        #[arg(long)]
+        size_gb: u64,
     },
     /// Start a VM
     Start { id: String },

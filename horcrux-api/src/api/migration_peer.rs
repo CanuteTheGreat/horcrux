@@ -249,7 +249,7 @@ async fn discard(state: &AppState, job: &str, inc: &Incoming) {
     if !inc.shared.iter().any(|k| k == "disk0") {
         // Files the incoming QEMU/swtpm created next to the (removed)
         // disk: serial log, console state, TPM state.
-        let disk0 = PathBuf::from(&inc.vm.disks[0].path);
+        let disk0 = crate::vm::rbd::anchor_of(&inc.vm.disks[0].path, &inc.vm.id);
         for ext in ["serial.log", "display.json", "hold.json"] {
             let _ = tokio::fs::remove_file(disk0.with_extension(ext)).await;
         }
@@ -521,12 +521,32 @@ async fn prepare(
 
     let storage = state.vm_manager.storage_dir();
     tokio::fs::create_dir_all(&storage).await?;
-    let disk0_plan = req
-        .files
-        .iter()
-        .find(|f| f.kind == "disk0")
-        .ok_or_else(|| ApiError::BadRequest("no disk0 in the plan".into()))?;
-    let disk0 = target_path(&storage, &storage, disk0_plan)?;
+    // An RBD disk0 isn't copied: the VM's side files sit next to a local
+    // anchor and this node needs the Ceph client to open the image.
+    let disk0 = if vm.disks.iter().any(|d| crate::vm::rbd::is_rbd(&d.path)) {
+        crate::vm::rbd::check_client()?;
+        if vm
+            .disks
+            .first()
+            .is_some_and(|d| crate::vm::rbd::is_rbd(&d.path))
+        {
+            crate::vm::rbd::anchor_path(&storage, &vm.id)
+        } else {
+            let p = req
+                .files
+                .iter()
+                .find(|f| f.kind == "disk0")
+                .ok_or_else(|| ApiError::BadRequest("no disk0 in the plan".into()))?;
+            target_path(&storage, &storage, p)?
+        }
+    } else {
+        let p = req
+            .files
+            .iter()
+            .find(|f| f.kind == "disk0")
+            .ok_or_else(|| ApiError::BadRequest("no disk0 in the plan".into()))?;
+        target_path(&storage, &storage, p)?
+    };
 
     let mut files = HashMap::new();
     let mut created: Vec<PathBuf> = Vec::new();
@@ -798,7 +818,7 @@ async fn start_incoming(
     if let Some(inc) = record {
         persist(&state, &job, &inc).await;
     }
-    let disk0 = PathBuf::from(&vm.disks[0].path);
+    let disk0 = crate::vm::rbd::anchor_of(&vm.disks[0].path, &vm.id);
     let sock = DisplayRuntime::qmp_socket(&disk0);
     let nbd_port = free_port(&host)?;
     qmp_command(
@@ -904,7 +924,7 @@ async fn commit(
             incoming().lock().await.insert(j, inc);
         }
     };
-    let disk0 = PathBuf::from(&inc.vm.disks[0].path);
+    let disk0 = crate::vm::rbd::anchor_of(&inc.vm.disks[0].path, &inc.vm.id);
     if inc.live {
         let sock = DisplayRuntime::qmp_socket(&disk0);
         // The state has arrived once QEMU leaves "inmigrate"; it waits

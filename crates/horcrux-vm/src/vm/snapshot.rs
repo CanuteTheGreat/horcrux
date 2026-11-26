@@ -176,7 +176,8 @@ impl VmSnapshotManager {
         // moment the TPM did not know about would break the guest's keys.
         if vm_config.hardware.tpm && snapshot.vm_state != VmSnapshotState::Running {
             if let Some(d0) = vm_config.disks.first() {
-                let from = super::firmware::tpm_state_dir(std::path::Path::new(&d0.path));
+                let from =
+                    super::firmware::tpm_state_dir(&super::rbd::anchor_of(&d0.path, &vm_config.id));
                 if from.join(super::firmware::TPM_PERMALL).is_file() {
                     let to = self.tpm_copy_dir(&snapshot.id);
                     let (f, t) = (from.clone(), to.clone());
@@ -320,8 +321,7 @@ impl VmSnapshotManager {
 
     /// Create Ceph RBD snapshot
     async fn create_ceph_snapshot(&self, rbd_path: &str, snapshot_name: &str) -> Result<()> {
-        // RBD path format: pool/image
-        let spec = format!("{}@{}", rbd_path, snapshot_name);
+        let spec = ceph_snapshot_spec(rbd_path, snapshot_name);
         run_tool(
             "rbd",
             &["snap", "create", spec.as_str()],
@@ -338,7 +338,7 @@ impl VmSnapshotManager {
             horcrux_common::Error::InvalidConfig(format!("VM {} has no disk", vm.id))
         })?;
         Ok(crate::vm::display::DisplayRuntime::qmp_socket(
-            std::path::Path::new(&disk.path),
+            &super::rbd::anchor_of(&disk.path, &vm.id),
         ))
     }
 
@@ -374,7 +374,7 @@ impl VmSnapshotManager {
             }
             return Ok((VmSnapshotState::Running, disks));
         }
-        let disk0 = std::path::PathBuf::from(&vm.disks[0].path);
+        let disk0 = super::rbd::anchor_of(&vm.disks[0].path, &vm.id);
         crate::vm::hold::set(&disk0, crate::vm::hold::HoldAction::Resume, "live snapshot").await?;
         if let Err(e) = qmp_exec(&sock, "stop", None).await {
             crate::vm::hold::clear(&disk0).await;
@@ -530,15 +530,8 @@ impl VmSnapshotManager {
                     .await?;
             }
             StorageType::Ceph => {
-                Command::new("rbd")
-                    .arg("snap")
-                    .arg("rm")
-                    .arg(format!(
-                        "{}@{}",
-                        disk_snap.snapshot_path, disk_snap.snapshot_name
-                    ))
-                    .output()
-                    .await?;
+                let spec = ceph_snapshot_spec(&disk_snap.snapshot_path, &disk_snap.snapshot_name);
+                run_tool("rbd", &["snap", "rm", &spec], "delete Ceph snapshot").await?;
             }
         }
 
@@ -576,8 +569,9 @@ impl VmSnapshotManager {
             let saved = self.tpm_copy_dir(&snapshot.id);
             if saved.join(super::firmware::TPM_PERMALL).is_file() {
                 if let Some(d0) = snapshot.config_backup.disks.first() {
-                    let to = super::firmware::tpm_state_dir(std::path::Path::new(&d0.path));
-                    super::firmware::stop_swtpm(std::path::Path::new(&d0.path)).await;
+                    let anchor = super::rbd::anchor_of(&d0.path, &snapshot.config_backup.id);
+                    let to = super::firmware::tpm_state_dir(&anchor);
+                    super::firmware::stop_swtpm(&anchor).await;
                     tokio::task::spawn_blocking(move || {
                         super::firmware::copy_tpm_state_verified(&saved, &to)
                     })
@@ -627,15 +621,8 @@ impl VmSnapshotManager {
                 tracing::warn!("Btrfs snapshot restoration not fully implemented");
             }
             StorageType::Ceph => {
-                Command::new("rbd")
-                    .arg("snap")
-                    .arg("rollback")
-                    .arg(format!(
-                        "{}@{}",
-                        disk_snap.snapshot_path, disk_snap.snapshot_name
-                    ))
-                    .output()
-                    .await?;
+                let spec = ceph_snapshot_spec(&disk_snap.snapshot_path, &disk_snap.snapshot_name);
+                run_tool("rbd", &["snap", "rollback", &spec], "restore Ceph snapshot").await?;
             }
         }
 
@@ -771,6 +758,10 @@ pub fn validate_snapshot_name(name: &str) -> Result<()> {
             "invalid snapshot name {name:?}: use 1-64 letters, digits, '-', '_' or '.'"
         )))
     }
+}
+
+fn ceph_snapshot_spec(path: &str, snapshot: &str) -> String {
+    format!("{}@{}", path.strip_prefix("rbd:").unwrap_or(path), snapshot)
 }
 
 /// Run a storage tool (zfs, lvcreate, btrfs, rbd). A tool that can't be
@@ -996,6 +987,15 @@ mod tests {
         let manager = VmSnapshotManager::new("/tmp/snapshots".to_string());
         assert_eq!(manager.snapshot_dir, "/tmp/snapshots");
         assert_eq!(manager.snapshots.len(), 0);
+    }
+
+    #[test]
+    fn ceph_snapshot_spec_accepts_qemu_and_cli_paths() {
+        assert_eq!(
+            ceph_snapshot_spec("rbd:pool/image", "snap"),
+            "pool/image@snap"
+        );
+        assert_eq!(ceph_snapshot_spec("pool/image", "snap"), "pool/image@snap");
     }
 
     #[test]

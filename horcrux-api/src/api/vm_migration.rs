@@ -281,7 +281,7 @@ pub async fn start(
     };
     let was_running = crate::vm::QemuManager::process_running(&vm.id);
     if was_running {
-        let disk0 = PathBuf::from(&vm.disks.first().map(|d| d.path.clone()).unwrap_or_default());
+        let disk0 = crate::vm::rbd::vm_anchor(&vm).unwrap_or_default();
         let left = migration_block_jobs(&DisplayRuntime::qmp_socket(&disk0)).await;
         if !left.is_empty() {
             return Err(ApiError::Conflict(format!(
@@ -338,7 +338,8 @@ pub async fn start(
 
 impl Plan {
     fn disk0(&self) -> PathBuf {
-        PathBuf::from(&self.job_vm.disks[0].path)
+        // The anchor: disk0 itself, or the local stand-in of an RBD disk0.
+        crate::vm::rbd::anchor_of(&self.job_vm.disks[0].path, &self.job_vm.id)
     }
 
     fn qmp(&self) -> PathBuf {
@@ -494,6 +495,12 @@ impl Plan {
     async fn collect_files(&self) -> Result<Vec<(String, PathBuf, u64)>> {
         let mut out = Vec::new();
         for (i, d) in self.job_vm.disks.iter().enumerate() {
+            // An RBD image is reachable from every node with the cluster
+            // client: nothing to copy, the target opens the same image.
+            if crate::vm::rbd::is_rbd(&d.path) {
+                crate::vm::rbd::check_client()?;
+                continue;
+            }
             let p = PathBuf::from(&d.path);
             if !p.is_file() {
                 return Err(Error::Validation(format!(
@@ -561,7 +568,9 @@ impl Plan {
         }
         let mut shared = result?;
         // The seed and TPM state live next to disk0 and share its fate.
-        let disk0_shared = shared.first().copied().unwrap_or(false);
+        // (An RBD disk0 has no plan entry: its side files stay local.)
+        let disk0_shared = files.first().map(|f| f.0 == "disk0").unwrap_or(false)
+            && shared.first().copied().unwrap_or(false);
         for (i, (kind, _, _)) in files.iter().enumerate() {
             if kind == "cidata" || kind.starts_with("tpm-") {
                 shared[i] = disk0_shared;

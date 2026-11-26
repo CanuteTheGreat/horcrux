@@ -1,4 +1,5 @@
 //! QEMU/KVM integration
+use super::rbd;
 use horcrux_common::{Result, VmConfig, VmHypervisor, VmStatus};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -42,7 +43,9 @@ impl QemuVm {
                 disk_type: "default".to_string(),
                 ..Default::default()
             });
-        } else {
+        } else if !rbd::is_rbd(&disks[0].path) {
+            // An RBD first disk keeps its own path; `disk_path` is then the
+            // local anchor for the VM's side files.
             disks[0].path = self.disk_path.to_string_lossy().to_string();
         }
         disks
@@ -620,6 +623,23 @@ pub fn disk_drive_id(index: usize) -> String {
     format!("drive-disk{index}")
 }
 
+/// Delete a disk's backing store: an RBD image (with its snapshots) or a file.
+pub async fn remove_disk_file(path: &str) {
+    if rbd::is_rbd(path) {
+        if let Err(e) = rbd::remove(path).await {
+            tracing::warn!("removing RBD disk {path}: {e}");
+        }
+    } else {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+}
+
+/// QEMU `file=` value of a disk path: an RBD path becomes the librbd
+/// spelling with the node's Ceph conf, anything else is the path itself.
+pub fn drive_file(path: &str) -> String {
+    rbd::qemu_file(path).unwrap_or_else(|| path.to_string())
+}
+
 /// Image format of a disk file, from its name (Horcrux creates qcow2).
 pub fn disk_format(path: &str) -> &'static str {
     if path.ends_with(".qcow2") {
@@ -705,11 +725,14 @@ fn disk_args(vm: &QemuVm, boot: &BootIndex) -> Vec<String> {
             // default interface), plus a stable id.
             args.extend([
                 "-drive".into(),
-                format!("file={},format={fmt},id={id}", escape(&d.path)),
+                format!("file={},format={fmt},id={id}", escape(&drive_file(&d.path))),
             ]);
             continue;
         }
-        let mut drive = format!("if=none,id={id},file={},format={fmt}", escape(&d.path));
+        let mut drive = format!(
+            "if=none,id={id},file={},format={fmt}",
+            escape(&drive_file(&d.path))
+        );
         if !d.cache.is_empty() {
             drive.push_str(&format!(",cache={}", d.cache));
         }
@@ -1165,6 +1188,7 @@ impl QemuManager {
     /// honor `HORCRUX_DATA_DIR`/`HORCRUX_VM_STORAGE` instead of always
     /// requiring `/var/lib/horcrux/vms` to exist and be writable.
     pub fn with_storage_path(storage_path: PathBuf) -> Self {
+        rbd::set_anchor_dir(&storage_path);
         Self { storage_path }
     }
 
@@ -1288,6 +1312,12 @@ impl QemuManager {
             // directory of the `path` it set); any other disk goes to the
             // VM storage directory, whatever path the request carried.
             let file = self.disk_file(&config.id, i);
+            if let (Some(_), Some((pool, _))) = (&d.storage, rbd::parse(&d.path)) {
+                // A disk on a Ceph pool is an RBD image named after the VM
+                // and the disk index.
+                d.path = rbd::path_of(&pool, &rbd::image_name(&config.id, i));
+                continue;
+            }
             d.path = match &d.storage {
                 None => file.to_string_lossy().to_string(),
                 Some(pool) => {
@@ -1325,29 +1355,39 @@ impl QemuManager {
             })?;
 
         let disks = self.planned_disks(config)?;
-        let mut created: Vec<PathBuf> = Vec::new();
+        let mut created: Vec<String> = Vec::new();
         for d in &disks {
-            let path = PathBuf::from(&d.path);
-            // A pool may already hold a volume of that name: never truncate it.
-            let taken = d.storage.is_some() && path.exists();
-            let made = if taken {
-                Err(horcrux_common::Error::AlreadyExists(format!(
-                    "{} already exists in storage pool {}",
-                    path.display(),
-                    d.storage.as_deref().unwrap_or_default()
-                )))
+            let made = if rbd::is_rbd(&d.path) {
+                // `rbd::create` refuses an existing image (409): never reuse one.
+                rbd::create(&d.path, d.size_gb).await
             } else {
-                Self::create_disk_image(&path, d.size_gb).await
+                let path = PathBuf::from(&d.path);
+                // A pool may already hold a volume of that name: never overwrite it.
+                if d.storage.is_some() && path.exists() {
+                    Err(horcrux_common::Error::AlreadyExists(format!(
+                        "{} already exists in storage pool {}",
+                        path.display(),
+                        d.storage.as_deref().unwrap_or_default()
+                    )))
+                } else {
+                    Self::create_disk_image(&path, d.size_gb).await
+                }
             };
             if let Err(e) = made {
                 for c in &created {
-                    let _ = tokio::fs::remove_file(c).await;
+                    remove_disk_file(c).await;
                 }
                 return Err(e);
             }
-            created.push(path);
+            created.push(d.path.clone());
         }
-        let disk_path = created[0].clone();
+        // The VM's side files (sockets, EFI vars, TPM, seed) sit next to a
+        // local anchor when the first disk is an RBD image.
+        let disk_path = if rbd::is_rbd(&created[0]) {
+            rbd::anchor_path(&self.storage_path, &config.id)
+        } else {
+            PathBuf::from(&created[0])
+        };
 
         info!("VM {} created successfully", config.id);
 
@@ -1375,8 +1415,9 @@ impl QemuManager {
         let disk_path = config
             .disks
             .first()
+            .filter(|d| !rbd::is_rbd(&d.path))
             .map(|d| PathBuf::from(&d.path))
-            .unwrap_or_else(|| self.storage_path.join(format!("{}.qcow2", config.id)));
+            .unwrap_or_else(|| rbd::anchor_path(&self.storage_path, &config.id));
         let status = if Self::process_running(&config.id) {
             VmStatus::Running
         } else {
@@ -1460,7 +1501,12 @@ impl QemuManager {
             }
         }
         for (i, d) in vm.all_disks().iter().enumerate() {
-            if !std::path::Path::new(&d.path).exists() {
+            let present = if rbd::is_rbd(&d.path) {
+                rbd::exists(&d.path).await?
+            } else {
+                std::path::Path::new(&d.path).exists()
+            };
+            if !present {
                 return Err(horcrux_common::Error::Validation(format!(
                     "disk{i} of VM {} is missing: {}",
                     vm.id, d.path
@@ -1747,13 +1793,14 @@ impl QemuManager {
         // Delete the disk images (already gone is fine: the rest is
         // cleaned). The first disk last, since the others' side files
         // are found through it.
-        let mut disks: Vec<PathBuf> = vm
-            .all_disks()
-            .iter()
-            .map(|d| PathBuf::from(&d.path))
-            .collect();
+        let mut disks: Vec<String> = vm.all_disks().iter().map(|d| d.path.clone()).collect();
         disks.rotate_left(1);
         for disk in disks {
+            if rbd::is_rbd(&disk) {
+                rbd::remove(&disk).await?;
+                continue;
+            }
+            let disk = PathBuf::from(&disk);
             match tokio::fs::remove_file(&disk).await {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

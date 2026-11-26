@@ -1973,7 +1973,7 @@ pub(crate) async fn start_vm_by_id(state: &Arc<AppState>, id: &str) -> Result<Vm
     emit_vm_state(&state, &vm, &old_status).await;
     // A gaming VM still installing Windows: its answer disc goes once the
     // installed guest's agent answers.
-    if let Some(d) = vm.disks.first().map(|d| std::path::PathBuf::from(&d.path)) {
+    if let Some(d) = crate::vm::rbd::vm_anchor(&vm) {
         if crate::vm::qemu::unattend_iso(&d).exists() {
             let poll = api::gaming::load_settings(&state).await.unattend_poll_secs;
             api::gaming::spawn_unattend_cleanup(state.clone(), id.clone(), d, poll);
@@ -2436,9 +2436,10 @@ async fn clone_vm(
             .clone_vm(&source_vm, clone_options)
             .await
             .map_err(|e| match e {
-                horcrux_common::Error::Conflict(_) | horcrux_common::Error::Validation(_) => {
-                    ApiError::from(e)
-                }
+                horcrux_common::Error::Conflict(_)
+                | horcrux_common::Error::Validation(_)
+                | horcrux_common::Error::AlreadyExists(_)
+                | horcrux_common::Error::NodeLacks { .. } => ApiError::from(e),
                 e => ApiError::Internal(format!("Failed to clone VM: {}", e)),
             })?;
         let _ = jobs
@@ -3356,7 +3357,7 @@ async fn generate_cloudinit(
         .await?;
     let attached = match vm.disks.first() {
         Some(d) => {
-            let seed = vm::qemu::cloudinit_seed(std::path::Path::new(&d.path));
+            let seed = vm::qemu::cloudinit_seed(&vm::rbd::anchor_of(&d.path, &vm_id));
             tokio::fs::copy(&iso_path, &seed).await?;
             Some(seed.to_string_lossy().to_string())
         }
@@ -3376,8 +3377,10 @@ async fn delete_cloudinit(
     state.cloudinit_manager.delete_iso(&vm_id).await?;
     if let Ok(vm) = state.vm_manager.get_vm(&vm_id).await {
         if let Some(d) = vm.disks.first() {
-            let _ = tokio::fs::remove_file(vm::qemu::cloudinit_seed(std::path::Path::new(&d.path)))
-                .await;
+            let _ = tokio::fs::remove_file(vm::qemu::cloudinit_seed(&vm::rbd::anchor_of(
+                &d.path, &vm_id,
+            )))
+            .await;
         }
     }
     Ok(StatusCode::NO_CONTENT)

@@ -364,24 +364,34 @@ impl VmManager {
         }
         // The first free <id>-disk<N>.qcow2 (a removed disk's number may
         // be reused once its file is gone).
-        if spec.storage.is_some() != spec.dir.is_some() {
+        if spec.storage.is_some() != (spec.dir.is_some() || spec.rbd_pool.is_some()) {
             return Err(Error::Validation(
                 "a disk on a storage pool needs the pool's directory".into(),
             ));
         }
         let mut n = disks.len();
-        let path = loop {
-            let mut p = self.qemu.disk_file(id, n);
-            if let (Some(dir), Some(file)) = (&spec.dir, p.file_name()) {
-                p = dir.join(file);
-            }
-            if !p.exists() && !disks.iter().any(|d| d.path == p.to_string_lossy()) {
-                break p;
+        let path: String = loop {
+            let cand = if let Some(pool) = &spec.rbd_pool {
+                let p = super::rbd::path_of(pool, &super::rbd::image_name(id, n));
+                if !super::rbd::exists(&p).await? && !disks.iter().any(|d| d.path == p) {
+                    break p;
+                }
+                n += 1;
+                continue;
+            } else {
+                let mut p = self.qemu.disk_file(id, n);
+                if let (Some(dir), Some(file)) = (&spec.dir, p.file_name()) {
+                    p = dir.join(file);
+                }
+                p
+            };
+            if !cand.exists() && !disks.iter().any(|d| d.path == cand.to_string_lossy()) {
+                break cand.to_string_lossy().to_string();
             }
             n += 1;
         };
         let disk = horcrux_common::VmDisk {
-            path: path.to_string_lossy().to_string(),
+            path: path.clone(),
             size_gb: spec.size_gb,
             disk_type: spec.bus.clone(),
             cache: spec.cache.clone(),
@@ -393,12 +403,16 @@ impl VmManager {
         disk.validate(disks.len()).map_err(Error::Validation)?;
         disks.push(disk);
         qemu::validate_disk_set(&disks).map_err(Error::Validation)?;
-        QemuManager::create_disk_image(&path, spec.size_gb).await?;
+        if super::rbd::is_rbd(&path) {
+            super::rbd::create(&path, spec.size_gb).await?;
+        } else {
+            QemuManager::create_disk_image(std::path::Path::new(&path), spec.size_gb).await?;
+        }
         vm.disks = disks;
         let config = vm.to_config();
         if let Some(db) = &self.db {
             if let Err(e) = db.update_vm(&config).await {
-                let _ = tokio::fs::remove_file(&path).await;
+                qemu::remove_disk_file(&path).await;
                 vm.disks.pop();
                 return Err(e);
             }
@@ -472,7 +486,11 @@ impl VmManager {
             qemu::validate_disk_set(&disks).map_err(Error::Validation)?;
             if let Some(s) = grow {
                 if !running {
-                    resize_image(&next.path, s).await?;
+                    if super::rbd::is_rbd(&next.path) {
+                        super::rbd::resize(&next.path, s, false).await?;
+                    } else {
+                        resize_image(&next.path, s).await?;
+                    }
                     disks[index].size_gb = s;
                 }
             }
@@ -569,7 +587,11 @@ impl VmManager {
             db.update_vm(&config).await?;
         }
         if delete_file {
-            if let Err(e) = tokio::fs::remove_file(&removed.path).await {
+            if super::rbd::is_rbd(&removed.path) {
+                if let Err(e) = super::rbd::remove(&removed.path).await {
+                    tracing::warn!("VM {id}: could not delete {}: {e}", removed.path);
+                }
+            } else if let Err(e) = tokio::fs::remove_file(&removed.path).await {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     tracing::warn!("VM {id}: could not delete {}: {e}", removed.path);
                 }
@@ -627,6 +649,10 @@ pub struct DiskSpec {
     pub storage: Option<String>,
     #[serde(skip)]
     pub dir: Option<std::path::PathBuf>,
+    /// Ceph (RBD) pool name when `storage` is a Ceph pool (set by the API
+    /// instead of `dir`).
+    #[serde(skip)]
+    pub rbd_pool: Option<String>,
 }
 
 fn default_bus() -> String {

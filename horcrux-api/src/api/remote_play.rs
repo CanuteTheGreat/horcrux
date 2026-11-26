@@ -450,8 +450,9 @@ async fn nft_apply(table: &str, body: &str) -> Result<(), String> {
 
 fn qga_socket(vm: &VmConfig) -> Option<PathBuf> {
     let d = vm.disks.first()?.path.clone();
-    (!d.is_empty())
-        .then(|| crate::vm::display::DisplayRuntime::qga_socket(std::path::Path::new(&d)))
+    (!d.is_empty()).then(|| {
+        crate::vm::display::DisplayRuntime::qga_socket(&crate::vm::rbd::anchor_of(&d, &vm.id))
+    })
 }
 
 async fn guest_addresses(vm: &VmConfig) -> Vec<(Ipv4Addr, String)> {

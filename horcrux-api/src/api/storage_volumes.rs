@@ -235,11 +235,15 @@ pub struct VmDiskPool {
     pub available: u64,
 }
 
-/// File-based pools hold VM disks as `<pool dir>/<vm>[-diskN].qcow2`;
-/// block pools (ZFS/LVM/Ceph/iSCSI), btrfs (subvolume per volume) and S3
+/// File-based pools hold VM disks as `<pool dir>/<vm>[-diskN].qcow2`; Ceph
+/// pools as RBD images `vm-<id>-disk-N`; other block pools (ZFS/LVM/iSCSI), btrfs (subvolume per volume) and S3
 /// are not offered for VM disks.
 fn holds_vm_disks(p: &crate::storage::StoragePool) -> bool {
     use crate::storage::StorageType as T;
+    if p.storage_type == T::Ceph {
+        // Ceph RBD: the pool's `path` is the RBD pool name; disks are images.
+        return p.enabled && is_rbd_pool_name(&p.path);
+    }
     p.enabled
         && matches!(
             p.storage_type,
@@ -247,6 +251,21 @@ fn holds_vm_disks(p: &crate::storage::StoragePool) -> bool {
         )
         && std::path::Path::new(&p.path).is_absolute()
         && std::path::Path::new(&p.path).is_dir()
+}
+
+fn is_rbd_pool_name(n: &str) -> bool {
+    !n.is_empty()
+        && n.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// Where a new VM disk goes.
+#[derive(Debug, Clone)]
+pub enum DiskPlace {
+    /// A directory of a file-based pool.
+    Dir(std::path::PathBuf),
+    /// An RBD image in this Ceph pool.
+    Rbd(String),
 }
 
 /// Pools offered by the Create VM / Add disk pool selector.
@@ -276,6 +295,23 @@ pub async fn vm_disk_dir(
     pool_id: &str,
     size_gb: u64,
 ) -> Result<std::path::PathBuf, ApiError> {
+    match vm_disk_place(state, pool_id, size_gb).await? {
+        DiskPlace::Dir(d) => Ok(d),
+        DiskPlace::Rbd(_) => Err(ApiError::BadRequest(
+            "this operation can't place a disk on a Ceph pool; use a directory, NFS, CIFS \
+             or GlusterFS pool"
+                .into(),
+        )),
+    }
+}
+
+/// Where to create a `size_gb` VM disk for pool `pool_id`: a directory, or
+/// an RBD pool (424 when this node has no Ceph client or keyring).
+pub async fn vm_disk_place(
+    state: &AppState,
+    pool_id: &str,
+    size_gb: u64,
+) -> Result<DiskPlace, ApiError> {
     let pool = state
         .storage_manager
         .get_pool(pool_id)
@@ -284,7 +320,7 @@ pub async fn vm_disk_dir(
     if !holds_vm_disks(&pool) {
         return Err(ApiError::BadRequest(format!(
             "Storage pool {} ({:?}) can't hold VM disks: use an enabled directory, NFS, \
-             CIFS or GlusterFS pool",
+             CIFS, GlusterFS or Ceph pool",
             pool.name, pool.storage_type
         )));
     }
@@ -294,7 +330,11 @@ pub async fn vm_disk_dir(
             pool.name, size_gb, pool.available
         )));
     }
-    Ok(std::path::PathBuf::from(&pool.path))
+    if pool.storage_type == crate::storage::StorageType::Ceph {
+        crate::vm::rbd::check_client()?;
+        return Ok(DiskPlace::Rbd(pool.path));
+    }
+    Ok(DiskPlace::Dir(std::path::PathBuf::from(&pool.path)))
 }
 
 /// Create VM: resolve each disk's `storage` pool to its directory (the VM
@@ -314,11 +354,10 @@ pub async fn place_vm_disks(
                 } else {
                     d.size_gb
                 };
-                vm_disk_dir(state, pool, size)
-                    .await?
-                    .join("pending.qcow2")
-                    .to_string_lossy()
-                    .to_string()
+                match vm_disk_place(state, pool, size).await? {
+                    DiskPlace::Dir(d) => d.join("pending.qcow2").to_string_lossy().to_string(),
+                    DiskPlace::Rbd(rbd_pool) => crate::vm::rbd::path_of(&rbd_pool, "pending"),
+                }
             }
         };
     }
@@ -331,10 +370,14 @@ pub async fn place_new_disk(
     spec: &mut crate::vm::hardware::DiskSpec,
 ) -> Result<(), ApiError> {
     spec.storage = spec.storage.take().filter(|s| !s.trim().is_empty());
-    spec.dir = match &spec.storage {
-        None => None,
-        Some(pool) => Some(vm_disk_dir(state, pool, spec.size_gb).await?),
-    };
+    spec.dir = None;
+    spec.rbd_pool = None;
+    if let Some(pool) = &spec.storage {
+        match vm_disk_place(state, pool, spec.size_gb).await? {
+            DiskPlace::Dir(d) => spec.dir = Some(d),
+            DiskPlace::Rbd(p) => spec.rbd_pool = Some(p),
+        }
+    }
     Ok(())
 }
 

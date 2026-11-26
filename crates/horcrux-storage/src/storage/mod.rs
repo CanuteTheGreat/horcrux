@@ -7,7 +7,6 @@ pub mod glusterfs;
 pub mod iscsi;
 pub mod lvm;
 pub mod lvm_chain;
-pub mod migration;
 pub mod nfs;
 pub mod s3;
 pub mod thin_provision;

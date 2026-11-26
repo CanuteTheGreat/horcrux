@@ -64,7 +64,7 @@ pub async fn recover(vms: &super::VmManager) -> Vec<String> {
         if vm.hypervisor != VmHypervisor::Qemu {
             continue;
         }
-        let Some(disk) = vm.disks.first().map(|d| PathBuf::from(&d.path)) else {
+        let Some(disk) = super::rbd::vm_anchor(&vm) else {
             continue;
         };
         let Some(hold) = read(&disk) else { continue };

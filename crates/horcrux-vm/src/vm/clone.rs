@@ -186,8 +186,8 @@ impl VmCloneManager {
         if pairs.is_empty() {
             return Ok(());
         }
-        let sock =
-            crate::vm::display::DisplayRuntime::qmp_socket(Path::new(&source_vm.disks[0].path));
+        let anchor = super::rbd::anchor_of(&source_vm.disks[0].path, &source_vm.id);
+        let sock = crate::vm::display::DisplayRuntime::qmp_socket(&anchor);
         info!(
             "Live clone of running VM {}: copying {} disk(s) with blockdev-backup",
             source_vm.id,
@@ -253,6 +253,11 @@ impl VmCloneManager {
         mode: CloneMode,
         precopied: bool,
     ) -> Result<VmDisk> {
+        if super::rbd::is_rbd(&source_disk.path) {
+            return self
+                .clone_rbd_disk(source_disk, new_vm_id, disk_index, mode)
+                .await;
+        }
         let source_path = Path::new(&source_disk.path);
         let new_disk_path = self.disk_dest(source_disk, new_vm_id, disk_index);
 
@@ -298,10 +303,8 @@ impl VmCloneManager {
                 self.clone_btrfs_disk(&source_disk.path, new_vm_id, disk_index)
                     .await?
             }
-            StorageType::Ceph => {
-                self.clone_ceph_disk(&source_disk.path, new_vm_id, disk_index)
-                    .await?
-            }
+            // RBD disks are handled by `clone_rbd_disk` above.
+            StorageType::Ceph => unreachable!("RBD disks return early"),
         }
 
         Ok(VmDisk {
@@ -311,6 +314,39 @@ impl VmCloneManager {
             cache: source_disk.cache.clone(),
             // Clones are created in the VM storage directory.
             storage: None,
+            ..source_disk.clone()
+        })
+    }
+
+    /// Clone a disk that lives on RBD, inside the same Ceph pool: a full
+    /// clone is an independent copy of a consistent point in time (also of
+    /// a running guest's disk), a linked clone a copy-on-write child of a
+    /// protected snapshot (the parent can't be deleted while it exists).
+    async fn clone_rbd_disk(
+        &self,
+        source_disk: &VmDisk,
+        new_vm_id: &str,
+        disk_index: usize,
+        mode: CloneMode,
+    ) -> Result<VmDisk> {
+        use super::rbd;
+        let (pool, _) = rbd::parse(&source_disk.path).ok_or_else(|| {
+            horcrux_common::Error::InvalidConfig(format!("bad RBD path {}", source_disk.path))
+        })?;
+        let dest = rbd::path_of(&pool, &rbd::image_name(new_vm_id, disk_index));
+        match mode {
+            CloneMode::Full => rbd::copy_consistent(&source_disk.path, &dest).await?,
+            CloneMode::Linked => {
+                let snap = format!("hx-clone-{new_vm_id}-{disk_index}");
+                rbd::snap_create(&source_disk.path, &snap).await?;
+                if let Err(e) = rbd::clone_snapshot(&source_disk.path, &snap, &dest).await {
+                    let _ = rbd::snap_remove(&source_disk.path, &snap).await;
+                    return Err(e);
+                }
+            }
+        }
+        Ok(VmDisk {
+            path: dest,
             ..source_disk.clone()
         })
     }
@@ -637,83 +673,6 @@ impl VmCloneManager {
         Ok(())
     }
 
-    /// Clone Ceph RBD volume
-    async fn clone_ceph_disk(
-        &self,
-        source_rbd: &str,
-        new_vm_id: &str,
-        disk_index: usize,
-    ) -> Result<()> {
-        info!("Cloning Ceph RBD volume: {}", source_rbd);
-
-        // Parse RBD path like pool/image
-        let parts: Vec<&str> = source_rbd.split('/').collect();
-        if parts.len() != 2 {
-            return Err(horcrux_common::Error::InvalidConfig(
-                "Invalid RBD path format".to_string(),
-            ));
-        }
-
-        let pool = parts[0];
-        let image = parts[1];
-
-        // Create snapshot
-        let snapshot_name = format!("clone-{}", Uuid::new_v4());
-        let output = Command::new("rbd")
-            .arg("snap")
-            .arg("create")
-            .arg(format!("{}/{}@{}", pool, image, snapshot_name))
-            .output()
-            .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to run rbd snap create: {}", e))
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to create RBD snapshot: {}",
-                stderr
-            )));
-        }
-
-        // Protect snapshot (required for cloning)
-        Command::new("rbd")
-            .arg("snap")
-            .arg("protect")
-            .arg(format!("{}/{}@{}", pool, image, snapshot_name))
-            .output()
-            .await
-            .ok();
-
-        // Clone from snapshot
-        let clone_image = if disk_index == 0 {
-            format!("vm-{}", new_vm_id)
-        } else {
-            format!("vm-{}-disk{}", new_vm_id, disk_index)
-        };
-
-        let output = Command::new("rbd")
-            .arg("clone")
-            .arg(format!("{}/{}@{}", pool, image, snapshot_name))
-            .arg(format!("{}/{}", pool, clone_image))
-            .output()
-            .await
-            .map_err(|e| {
-                horcrux_common::Error::System(format!("Failed to run rbd clone: {}", e))
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(horcrux_common::Error::System(format!(
-                "Failed to clone RBD volume: {}",
-                stderr
-            )));
-        }
-
-        Ok(())
-    }
-
     /// Detect storage type from disk path
     fn detect_storage_type(&self, disk_path: &str) -> Result<StorageType> {
         if disk_path.starts_with("/dev/zvol/") {
@@ -784,12 +743,7 @@ impl VmCloneManager {
                         .ok();
                 }
                 StorageType::Ceph => {
-                    Command::new("rbd")
-                        .arg("rm")
-                        .arg(&disk.path)
-                        .output()
-                        .await
-                        .ok();
+                    super::rbd::remove(&disk.path).await?;
                 }
             }
         }
