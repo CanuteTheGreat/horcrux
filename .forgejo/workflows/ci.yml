@@ -631,6 +631,24 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Open vSwitch"
           bash horcrux-api/tests/ovs_e2e.sh target/debug/horcrux-api
 
+      - name: "macvtap NICs (MAC kept while udev's persistent-MAC policy is active)"
+        # macvtap_e2e.sh makes real macvtap devices with the product's own
+        # HostNet code in a privileged sibling's own network namespace, with
+        # systemd's persistent-MAC udev policy active (real udev or a stand-in
+        # that rewrites random MACs), and checks the NIC keeps its MAC.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "macvtap NICs"
+          vmtest=$(CARGO_BUILD_JOBS=1 cargo test -p horcrux-vm --lib --no-run --message-format=json 2>/tmp/vmtest-build.err \
+            | python3 -c 'import json,sys
+          for l in sys.stdin:
+              m = json.loads(l)
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] in ("horcrux-vm", "horcrux_vm") and m["profile"]["test"]:
+                  print(m["executable"])' | tail -1) \
+            || { echo "horcrux-vm test build failed; cargo stderr tail:"; tail -60 /tmp/vmtest-build.err; false; }
+          echo "horcrux-vm lib test binary: ${vmtest:-<none>}"
+          test -n "$vmtest"
+          bash horcrux-api/tests/macvtap_e2e.sh "$vmtest"
+
       - name: "VM advanced hardware (serial, virtiofs, ivshmem, SMBIOS, NUMA, hotplug, hookscript, real QEMU)"
         # vm_advanced_e2e.sh boots a VM with two extra serial ports (a socket
         # and a host tty), a real virtiofsd share, ivshmem, SMBIOS strings, a

@@ -817,6 +817,8 @@ pub struct HostNet {
     bridge: Vec<String>,
     /// argv prefix that runs `tc` (NIC rate limits).
     tc: Vec<String>,
+    /// How many 50 ms looks `ensure_mac` takes at a new device's address.
+    mac_settle_checks: u32,
 }
 
 impl HostNet {
@@ -828,6 +830,7 @@ impl HostNet {
             ip: vec!["ip".into()],
             bridge: vec!["bridge".into()],
             tc: vec!["tc".into()],
+            mac_settle_checks: 8,
         }
     }
 
@@ -866,6 +869,47 @@ impl HostNet {
         let mut argv: Vec<&str> = tool[1..].iter().map(String::as_str).collect();
         argv.extend_from_slice(args);
         run_ip(&tool[0], &argv).await
+    }
+
+    /// Check that `tap` carries `mac` and keeps it while udev handles the
+    /// new device: a changed address is set back once, a second change is an
+    /// error naming both addresses. A device without a readable address
+    /// (a test tree) is accepted.
+    async fn ensure_mac(&self, tap: &str, mac: &str) -> std::result::Result<(), String> {
+        let path = self.sys_class_net.join(tap).join("address");
+        let current = || {
+            std::fs::read_to_string(&path)
+                .ok()
+                .map(|s| s.trim().to_lowercase())
+        };
+        let want = mac.to_lowercase();
+        let mut reset = false;
+        let mut stable = 0;
+        // udev acts a few ms after the device appears: watch it settle.
+        for _ in 0..=self.mac_settle_checks {
+            match current() {
+                None => return Ok(()),
+                Some(c) if c == want => stable += 1,
+                Some(c) => {
+                    if reset {
+                        return Err(format!(
+                            "{tap} has MAC {c} instead of {mac}: something (udev MACAddressPolicy?) keeps changing it; install the horcrux link file for macvtap/tap devices"
+                        ));
+                    }
+                    reset = true;
+                    stable = 0;
+                    tracing::warn!("{tap}: MAC became {c}, setting {mac} again");
+                    Self::run(&self.ip, &["link", "set", tap, "address", mac])
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            if stable > self.mac_settle_checks / 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        Ok(())
     }
 
     fn exists(&self, ifname: &str) -> bool {
@@ -1003,6 +1047,10 @@ impl HostNet {
         if self.exists(&tap) {
             let _ = Self::run(&self.ip, &["link", "del", &tap]).await;
         }
+        // The MAC is part of the creation request. Setting it afterwards
+        // lets udev (systemd's 99-default.link, MACAddressPolicy=persistent)
+        // rewrite the device's random MAC to a "persistent" one in between,
+        // and the host then drops every frame meant for the guest.
         Self::run(
             &self.ip,
             &[
@@ -1012,6 +1060,8 @@ impl HostNet {
                 &nic.bridge,
                 "name",
                 &tap,
+                "address",
+                mac,
                 "type",
                 "macvtap",
                 "mode",
@@ -1019,8 +1069,11 @@ impl HostNet {
             ],
         )
         .await?;
-        Self::run(&self.ip, &["link", "set", &tap, "address", mac]).await?;
         Self::run(&self.ip, &["link", "set", &tap, "up"]).await?;
+        if let Err(e) = self.ensure_mac(&tap, mac).await {
+            let _ = Self::run(&self.ip, &["link", "del", &tap]).await;
+            return Err(horcrux_common::Error::System(format!("net{i}: {e}")));
+        }
         if let Some(mbps) = nic.rate_mbps {
             self.limit_rate(&tap, mbps).await?;
         }
@@ -2743,8 +2796,9 @@ echo "$(basename "$0") $*" >> "$d/calls"
 if [ -f "$d/fail" ] && [ "$*" = "$(cat "$d/fail")" ]; then echo "RTNETLINK answers: busy" >&2; exit 2; fi
 case "$*" in
   "tuntap add dev "*" mode tap") mkdir "$d/net/$4" ;;
-  "link add link "*" type macvtap mode bridge") mkdir "$d/net/$6" ;;
-  "link del "*) rmdir "$d/net/$3" ;;
+  "link add link "*" type macvtap mode bridge") mkdir "$d/net/$6"; if [ -f "$d/racer" ]; then echo 96:ba:38:df:23:ae > "$d/net/$6/address"; else echo "$8" > "$d/net/$6/address"; fi ;;
+  "link set "*" address "*) if [ -f "$d/racer2" ]; then echo 96:ba:38:df:23:ae > "$d/net/$3/address"; else echo "$5" > "$d/net/$3/address"; fi ;;
+  "link del "*) rm -rf "$d/net/$3" ;;
 esac
 "#;
             for tool in ["ip", "bridge", "tc"] {
@@ -2757,6 +2811,7 @@ esac
                 ip: sh("ip"),
                 bridge: sh("bridge"),
                 tc: sh("tc"),
+                mac_settle_checks: 2,
             };
             FakeNet { root, host }
         }
@@ -2993,8 +3048,9 @@ esac
                 format!("ip tuntap add dev {t0} mode tap"),
                 format!("ip link set {t0} master vmbr0"),
                 format!("ip link set {t0} up"),
-                format!("ip link add link eth0 name {t1} type macvtap mode bridge"),
-                format!("ip link set {t1} address 02:00:00:5e:10:01"),
+                format!(
+                    "ip link add link eth0 name {t1} address 02:00:00:5e:10:01 type macvtap mode bridge"
+                ),
                 format!("ip link set {t1} up"),
             ]
         );
@@ -3022,6 +3078,72 @@ esac
         let fds = f.host.open_macvtaps(&v).await.expect("opened");
         assert_eq!(fds.len(), 1);
         assert_eq!(fds[0].1, macvtap_fd(1));
+    }
+
+    #[tokio::test]
+    async fn macvtap_is_created_with_its_mac_and_a_rewrite_by_udev_is_undone() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = FakeNet::new();
+        f.add_dev("eth0");
+        let mut v = temp_vm(dir.path(), "mvr");
+        v.hardware.nets = vec![macvtap_nic("eth0", Some("9A:05:6D:B7:63:65"))];
+        let t = tap_name(&v.id, 0);
+        // The race seen on a host with MACAddressPolicy=persistent: the new
+        // device's address is rewritten behind our back.
+        std::fs::write(f.root.path().join("racer"), "").unwrap();
+        f.host.setup_taps(&v).await.expect("set up");
+        let calls = f.calls();
+        assert_eq!(
+            calls[0],
+            format!(
+                "ip link add link eth0 name {t} address 9A:05:6D:B7:63:65 type macvtap mode bridge"
+            )
+        );
+        assert!(
+            calls.contains(&format!("ip link set {t} address 9A:05:6D:B7:63:65")),
+            "{calls:?}"
+        );
+        let got = std::fs::read_to_string(f.net().join(&t).join("address")).unwrap();
+        assert_eq!(got.trim(), "9A:05:6D:B7:63:65");
+    }
+
+    #[tokio::test]
+    async fn macvtap_whose_mac_keeps_changing_fails_the_start_and_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = FakeNet::new();
+        f.add_dev("eth0");
+        let mut v = temp_vm(dir.path(), "mvf");
+        v.hardware.nets = vec![macvtap_nic("eth0", Some("02:00:00:5e:10:02"))];
+        std::fs::write(f.root.path().join("racer"), "").unwrap();
+        std::fs::write(f.root.path().join("racer2"), "").unwrap();
+        let err = f.host.setup_taps(&v).await.unwrap_err().to_string();
+        assert!(
+            err.contains("96:ba:38:df:23:ae") && err.contains("02:00:00:5e:10:02"),
+            "{err}"
+        );
+        assert!(!f.host.exists(&tap_name(&v.id, 0)), "device left behind");
+    }
+
+    /// Real devices for horcrux-api/tests/macvtap_e2e.sh (root + a network
+    /// namespace): makes the macvtap NIC from the env on the real host with
+    /// the product's own code and holds it until the script is done.
+    #[tokio::test]
+    #[ignore = "needs root and real devices: run by horcrux-api/tests/macvtap_e2e.sh"]
+    async fn macvtap_real_setup_for_e2e() {
+        let env = |k: &str| std::env::var(k).unwrap_or_default();
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = temp_vm(dir.path(), "e2e");
+        v.hardware.nets = vec![macvtap_nic(&env("HX_E2E_PARENT"), Some(&env("HX_E2E_MAC")))];
+        let host = HostNet::system();
+        let tap = tap_name(&v.id, 0);
+        let res = host.setup_taps(&v).await;
+        std::fs::write(env("HX_E2E_READY"), format!("{tap} {res:?}\n")).unwrap();
+        if res.is_ok() {
+            while !std::path::Path::new(&env("HX_E2E_DONE")).exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            host.remove_taps(&v.id).await;
+        }
     }
 
     #[tokio::test]
