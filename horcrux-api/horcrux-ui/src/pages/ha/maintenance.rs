@@ -248,14 +248,14 @@ pub fn MaintenancePage() -> impl IntoView {
             })}
 
             <h2>"Placement rules"</h2>
-            <table class="vm-table" id="placement-table">
+            <div class="table-container"><table class="vm-table" id="placement-table">
                 <thead><tr><th>"VM"</th><th>"Pin to node"</th><th>"Affinity group (stay together)"</th><th>"Anti-affinity group (spread)"</th><th>"Never migrate"</th><th>"Required node labels (comma-separated)"</th><th></th></tr></thead>
                 <tbody>
                     {move || vms.get().into_iter().map(|(id, name, rules)| view! {
                         <PlacementRow id name rules set_notice set_error/>
                     }).collect_view()}
                 </tbody>
-            </table>
+            </table></div>
 
             <h2>"Guest location history"</h2>
             <table class="vm-table" id="moves-table">
@@ -321,7 +321,7 @@ fn PlacementRow(
     view! {
         <tr class="placement-row" data-vm=id.clone()>
             <td>{format!("{name} ({id})")}</td>
-            <td><input class="pl-pin" type="text" placeholder="any node" prop:value=pin on:input=move |ev| pin.set(event_target_value(&ev))/></td>
+            <td><input class="pl-pin" type="text" aria-label="Pin to node" placeholder="any node" prop:value=pin on:input=move |ev| pin.set(event_target_value(&ev))/></td>
             <td><input class="pl-aff" type="text" prop:value=aff on:input=move |ev| aff.set(event_target_value(&ev))/></td>
             <td><input class="pl-anti" type="text" prop:value=anti on:input=move |ev| anti.set(event_target_value(&ev))/></td>
             <td><input class="pl-nomig" type="checkbox" prop:checked=nomig on:change=move |ev| nomig.set(event_target_checked(&ev))/></td>

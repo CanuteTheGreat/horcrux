@@ -8,8 +8,22 @@ hundreds of guests must see state at a glance, act without hunting, and never wo
 is live. The look is our own (calm graphite neutrals, a verdigris accent, the Horcrux crest in gold);
 no other product's assets, icons or branding are used.
 
-Sources: `style/ui-system.css` (tokens + components), `src/components/ui.rs` (Leptos components),
-`style/main.css` (legacy page styles, being folded into the system page by page).
+Sources:
+- `ui-kit/` at the repo root: the **shared, framework-neutral kit** (`tokens.css`, `components.css` with
+  `ui-`-prefixed classes, optional `ui.js`, `gallery.html`, `check.py`, markup contract in `ui-kit/README.md`).
+  Patronus (askama templates, no build step) consumes the same files; Horcrux links them from `index.html`.
+- `horcrux-api/horcrux-ui/style/ui-system.css`: the Horcrux layer on top of the kit (bundled IBM Plex type,
+  app shell, and the mapping of the older page classes onto the tokens).
+- `horcrux-api/horcrux-ui/src/components/{ui,shell}.rs`: Leptos components (state tones, badges, usage bars,
+  gauges, panels, sortable grid headers, column chooser, row menus, step tabs, Appearance preferences,
+  resource tree, header).
+- `style/main.css`: legacy page styles, being folded into the system page by page.
+
+Why the kit lives in this repo for now (and not in its own repo yet): the tokens and components are still
+moving with the Horcrux migration, and one repo keeps a token change and every page it affects in one
+reviewed commit. The kit has no Horcrux dependency (no Leptos, no fonts, no branding, only `ui-` classes and
+CSS variables), so it can move to its own repo unchanged; Patronus vendors a pinned copy (`ui-kit.pin` =
+commit + sha256 of the files) until then.
 
 ## What "polished" means here (measured against current consoles)
 

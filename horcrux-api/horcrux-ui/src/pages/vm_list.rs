@@ -1,4 +1,5 @@
 use crate::api;
+use crate::components::ui;
 use horcrux_common::VmConfig;
 use leptos::*;
 use leptos_router::*;
@@ -14,6 +15,30 @@ pub fn vm_state_matches(filter: &str, status: &horcrux_common::VmStatus) -> bool
         "paused" => matches!(status, Paused),
         _ => true,
     }
+}
+
+/// Display name of a hypervisor enum value ("Qemu" -> "QEMU").
+fn hypervisor_label(h: &str) -> String {
+    match h {
+        "Qemu" => "QEMU".into(),
+        "Lxd" => "LXD".into(),
+        "Incus" => "Incus".into(),
+        o => o.to_string(),
+    }
+}
+
+/// "vm-12" sorts after "vm-9": compare the numeric tail, then the text.
+fn natural_id(id: &str) -> (String, u64) {
+    let digits: String = id
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let head = id[..id.len() - digits.len()].to_string();
+    (head, digits.parse().unwrap_or(0))
 }
 
 #[component]
@@ -187,25 +212,100 @@ pub fn VmList() -> impl IntoView {
         }
     };
 
+    // Grid state: text filter, sort, hidden columns (kept per browser).
+    let (text, set_text) = create_signal(String::new());
+    let (sort, set_sort) = create_signal(("id".to_string(), true));
+    let hidden = ui::hidden_columns("vm-grid");
+    let rows = move || {
+        let filter = state_filter();
+        let t = text.get().to_lowercase();
+        let mut list: Vec<VmConfig> = vms
+            .get()
+            .into_iter()
+            .filter(|v| vm_state_matches(&filter, &v.status))
+            .filter(|v| {
+                t.is_empty()
+                    || v.name.to_lowercase().contains(&t)
+                    || v.id.to_lowercase().contains(&t)
+            })
+            .collect();
+        let (key, asc) = sort.get();
+        list.sort_by(|x, y| {
+            let o = match key.as_str() {
+                "name" => x.name.to_lowercase().cmp(&y.name.to_lowercase()),
+                "status" => x.status.to_string().cmp(&y.status.to_string()),
+                "cpus" => x.cpus.cmp(&y.cpus),
+                "memory" => x.memory.cmp(&y.memory),
+                "hypervisor" => format!("{:?}", x.hypervisor).cmp(&format!("{:?}", y.hypervisor)),
+                "arch" => format!("{:?}", x.architecture).cmp(&format!("{:?}", y.architecture)),
+                _ => natural_id(&x.id).cmp(&natural_id(&y.id)),
+            };
+            if asc {
+                o
+            } else {
+                o.reverse()
+            }
+        });
+        list
+    };
+    let filter_link = move |state: &'static str, label: &'static str, id: &'static str| {
+        let href = if state.is_empty() {
+            "/vms".to_string()
+        } else {
+            format!("/vms?state={state}")
+        };
+        view! {
+            <a href=href id=id class="filter-link" class:active=move || state_filter() == state
+                aria-current=move || (state_filter() == state).then_some("page")>{label}</a>
+        }
+    };
+
     view! {
         <div class="vm-list">
             <div class="page-header">
-                <h1>"Virtual Machines"</h1>
-                <A href="/vms/create" class="btn btn-primary">"Create VM"</A>
-                <A href="/vms/gaming/new" class="btn" id="vm-new-gaming">"New Gaming VM"</A>
-                <A href="/vms/import-ovf" class="btn">"Import OVF / OVA"</A>
-                <A href="/vms/import-esxi" class="btn">"Import from ESXi"</A>
-                <A href="/vms/import-libvirt" class="btn">"Import from libvirt"</A>
+                <div>
+                    <h1>"Virtual Machines"</h1>
+                    <p class="page-subtitle">{move || {
+                        let v = vms.get();
+                        let run = v.iter().filter(|x| matches!(x.status, horcrux_common::VmStatus::Running)).count();
+                        format!("{} VMs \u{b7} {} running", v.len(), run)
+                    }}</p>
+                </div>
+                <div class="page-actions">
+                    <A href="/vms/create" class="btn btn-primary">"Create VM"</A>
+                    <A href="/vms/gaming/new" class="btn" id="vm-new-gaming">"New Gaming VM"</A>
+                    <details class="row-more">
+                        <summary class="btn">"Import"<span class="caret-dn" aria-hidden="true"></span></summary>
+                        <div class="menu">
+                            <A href="/vms/import-ovf" class="btn">"Import OVF / OVA"</A>
+                            <A href="/vms/import-esxi" class="btn">"Import from ESXi"</A>
+                            <A href="/vms/import-libvirt" class="btn">"Import from libvirt"</A>
+                        </div>
+                    </details>
+                </div>
             </div>
             <crate::pages::UnmanagedLibvirtBanner/>
-            <nav class="filter-links" id="vm-state-filter" aria-label="Filter by state">
-                <A href="/vms" class="filter-link" attr:id="vm-filter-all">"All"</A>
-                <A href="/vms?state=running" class="filter-link" attr:id="vm-filter-running">"Running"</A>
-                <A href="/vms?state=stopped" class="filter-link" attr:id="vm-filter-stopped">"Stopped"</A>
-                <A href="/vms?state=paused" class="filter-link" attr:id="vm-filter-paused">"Paused"</A>
-            </nav>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="vm-notice">{n}</div> })}
 
+            <div class="toolbar">
+                <div class="toolbar-start">
+                    <nav class="seg-links filter-links" id="vm-state-filter" aria-label="Filter by state">
+                        {filter_link("", "All", "vm-filter-all")}
+                        {filter_link("running", "Running", "vm-filter-running")}
+                        {filter_link("stopped", "Stopped", "vm-filter-stopped")}
+                        {filter_link("paused", "Paused", "vm-filter-paused")}
+                    </nav>
+                    <input type="search" class="grid-filter" id="vm-grid-filter" placeholder="Filter by name or ID"
+                        aria-label="Filter VMs by name or ID"
+                        on:input=move |ev| set_text.set(event_target_value(&ev))/>
+                </div>
+                <div class="toolbar-end">
+                    <ui::ColumnChooser grid="vm-grid" hidden=hidden columns=vec![
+                        ("status", "Status"), ("hypervisor", "Hypervisor"), ("cpus", "CPUs"), ("memory", "Memory"), ("arch", "Architecture"),
+                    ]/>
+                </div>
+            </div>
+            <div class="grid-wrap" id="vm-grid">
             {move || {
                 if loading.get() {
                     view! { <p class="loading">"Loading VMs..."</p> }.into_view()
@@ -214,24 +314,34 @@ pub fn VmList() -> impl IntoView {
                 } else {
                     let filter = state_filter();
                     let total = vms.get().len();
-                    let vm_list: Vec<VmConfig> = vms.get().into_iter().filter(|v| vm_state_matches(&filter, &v.status)).collect();
+                    let vm_list = rows();
                     if vm_list.is_empty() && total > 0 {
-                        view! { <p class="no-data" id="vm-filter-empty">{format!("No {} VMs. ", filter)}<A href="/vms">"Show all VMs"</A></p> }.into_view()
+                        view! { <p class="no-data grid-empty" id="vm-filter-empty">{if filter.is_empty() { "No VMs match the filter. ".to_string() } else { format!("No {} VMs. ", filter) }}<A href="/vms">"Show all VMs"</A></p> }.into_view()
                     } else if vm_list.is_empty() {
-                        view! { <p class="no-data">"No virtual machines found. Create one to get started!"</p> }.into_view()
+                        view! {
+                            <div class="empty-state">
+                                <div class="empty-title">"No virtual machines yet"</div>
+                                <p class="empty-todo">"Create one from an ISO, or import an existing VM from libvirt, an OVF/OVA file or ESXi."</p>
+                                <div class="empty-actions">
+                                    <A href="/vms/create" class="btn btn-primary">"Create VM"</A>
+                                    <A href="/vms/import-libvirt" class="btn">"Import from libvirt"</A>
+                                </div>
+                            </div>
+                        }.into_view()
                     } else {
+                        let shown = vm_list.len();
                         view! {
                             <table class="vm-table">
                                 <thead>
                                     <tr>
-                                        <th>"ID"</th>
-                                        <th>"Name"</th>
-                                        <th>"Status"</th>
-                                        <th>"Hypervisor"</th>
-                                        <th>"CPUs"</th>
-                                        <th>"Memory"</th>
-                                        <th>"Architecture"</th>
-                                        <th>"Actions"</th>
+                                        <ui::SortTh label="ID" key="id" sort=sort set_sort=set_sort/>
+                                        <ui::SortTh label="Name" key="name" sort=sort set_sort=set_sort/>
+                                        <ui::SortTh label="Status" key="status" sort=sort set_sort=set_sort/>
+                                        <ui::SortTh label="Hypervisor" key="hypervisor" sort=sort set_sort=set_sort/>
+                                        <ui::SortTh label="CPUs" key="cpus" sort=sort set_sort=set_sort num=true/>
+                                        <ui::SortTh label="Memory" key="memory" sort=sort set_sort=set_sort num=true/>
+                                        <ui::SortTh label="Architecture" key="arch" sort=sort set_sort=set_sort/>
+                                        <th class="cell-actions">"Actions"</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -262,79 +372,88 @@ pub fn VmList() -> impl IntoView {
                                             horcrux_common::VmStatus::Paused => "status-paused",
                                             horcrux_common::VmStatus::Unknown => "status-unknown",
                                         };
+                                        let tone = ui::state_tone(&vm.status.to_string());
 
                                         view! {
                                             <tr data-vm-id=vm.id.clone()>
-                                                <td>{&vm.id}</td>
-                                                <td><strong>{&vm.name}</strong></td>
-                                                <td><span class={status_class}>{vm.status.to_string()}</span>
+                                                <td class="mono" data-col="id">{&vm.id}</td>
+                                                <td class="cell-name" data-col="name"><A href=detail_href.clone()>{vm.name.clone()}</A></td>
+                                                <td data-col="status"><span class=format!("state-badge {tone} {status_class}")><span class=format!("dot {tone}") aria-hidden="true"></span>{vm.status.to_string()}</span>
                                                     {saved_state.clone().map(|s| view! {
-                                                        <span class="badge badge-info saved-badge" title=s.mechanism.clone()>{crate::pages::saved_label(&s)}</span>
+                                                        " " <span class="badge badge-info saved-badge" title=s.mechanism.clone()>{crate::pages::saved_label(&s)}</span>
                                                     })}
-                                                    {blocker.map(|b| view! { <small class="save-blocker" title=b.clone()>" ⚠ state can't be saved"</small> })}
+                                                    {blocker.map(|b| view! { " " <span class="badge warn save-blocker" title=format!("State can't be saved: {b}")>"no save"</span> })}
                                                 </td>
-                                                <td>{format!("{:?}", vm.hypervisor)}</td>
-                                                <td>{vm.cpus}</td>
-                                                <td>{format!("{} MB", vm.memory)}</td>
-                                                <td>{format!("{:?}", vm.architecture)}</td>
-                                                <td class="actions">
-                                                    <A href=console_href class="btn btn-sm btn-primary">"Console"</A>
+                                                <td data-col="hypervisor">{hypervisor_label(&format!("{:?}", vm.hypervisor))}</td>
+                                                <td class="num" data-col="cpus">{vm.cpus}</td>
+                                                <td class="num" data-col="memory">{ui::fmt_bytes(vm.memory * 1024 * 1024)}</td>
+                                                <td data-col="arch" class="mono">{format!("{:?}", vm.architecture).to_lowercase()}</td>
+                                                <td class="cell-actions">
+                                                  <div class="actions">
+                                                    <A href=console_href class="btn btn-sm">"Console"</A>
                                                     <button
                                                         class="btn btn-sm btn-success vm-start"
                                                         disabled=is_running
                                                         on:click=move |_| start_vm(vm_id_start.clone())
                                                     >{if saved_state.is_some() { "Start (resume)" } else { "Start" }}</button>
-                                                    {saved_state.is_some().then(|| view! {
-                                                        <button class="btn btn-sm btn-success vm-resume-state"
-                                                            on:click=move |_| resume_state(vm_id_resume.clone())>"Resume"</button>
-                                                        <button class="btn btn-sm btn-secondary vm-discard-state"
-                                                            title="Delete the saved state; the VM then boots normally"
-                                                            on:click=move |_| discard_state(vm_id_discard.clone())>"Discard state"</button>
-                                                    })}
-                                                    {(running && saved_state.is_none()).then(|| view! {
-                                                        <button class="btn btn-sm btn-warning vm-save-state"
-                                                            title="Save RAM and device state to disk and stop the VM"
-                                                            on:click=move |_| save_state(vm_id_save.clone())>"Save state"</button>
-                                                    })}
-                                                    {is_qemu.then(|| view! {
-                                                        <button
-                                                            class="btn btn-sm btn-warning vm-shutdown"
-                                                            disabled=is_stopped
-                                                            title="ACPI shutdown (the guest powers itself off)"
-                                                            on:click=move |_| shutdown_vm(vm_id_shutdown.clone())
-                                                        >"Shutdown"</button>
-                                                        <button
-                                                            class="btn btn-sm btn-secondary vm-reboot"
-                                                            disabled=is_stopped
-                                                            on:click=move |_| reboot_vm(vm_id_reboot.clone())
-                                                        >"Reboot"</button>
-                                                    })}
                                                     <button
                                                         class="btn btn-sm btn-warning vm-stop"
                                                         disabled=is_stopped
                                                         title="Stop immediately (like pulling the power)"
                                                         on:click=move |_| stop_vm(vm_id_stop.clone())
                                                     >"Stop"</button>
-                                                    <A href=detail_href class="btn btn-sm btn-secondary vm-detail-link">"Details"</A>
-                                                    <A href=hardware_href class="btn btn-sm btn-secondary vm-hardware-link">"Hardware"</A>
-                                                    <button
-                                                        class="btn btn-sm btn-secondary"
-                                                        on:click=move |_| open_clone(vm_for_clone.clone())
-                                                    >"Clone"</button>
-                                                    <button
-                                                        class="btn btn-sm btn-danger"
-                                                        on:click=move |_| delete_vm(vm_id_delete.clone())
-                                                    >"Delete"</button>
+                                                    <ui::RowMenu>
+                                                        {is_qemu.then(|| view! {
+                                                            <button
+                                                                class="btn btn-sm vm-shutdown"
+                                                                disabled=is_stopped
+                                                                title="ACPI shutdown (the guest powers itself off)"
+                                                                on:click=move |_| shutdown_vm(vm_id_shutdown.clone())
+                                                            >"Shutdown"</button>
+                                                            <button
+                                                                class="btn btn-sm vm-reboot"
+                                                                disabled=is_stopped
+                                                                on:click=move |_| reboot_vm(vm_id_reboot.clone())
+                                                            >"Reboot"</button>
+                                                        })}
+                                                        {saved_state.is_some().then(|| view! {
+                                                            <button class="btn btn-sm vm-resume-state"
+                                                                on:click=move |_| resume_state(vm_id_resume.clone())>"Resume"</button>
+                                                            <button class="btn btn-sm vm-discard-state"
+                                                                title="Delete the saved state; the VM then boots normally"
+                                                                on:click=move |_| discard_state(vm_id_discard.clone())>"Discard state"</button>
+                                                        })}
+                                                        {(running && saved_state.is_none()).then(|| view! {
+                                                            <button class="btn btn-sm vm-save-state"
+                                                                title="Save RAM and device state to disk and stop the VM"
+                                                                on:click=move |_| save_state(vm_id_save.clone())>"Save state"</button>
+                                                        })}
+                                                        <hr/>
+                                                        <A href=detail_href class="btn btn-sm vm-detail-link">"Details"</A>
+                                                        <A href=hardware_href class="btn btn-sm vm-hardware-link">"Hardware"</A>
+                                                        <button
+                                                            class="btn btn-sm"
+                                                            on:click=move |_| open_clone(vm_for_clone.clone())
+                                                        >"Clone"</button>
+                                                        <hr/>
+                                                        <button
+                                                            class="btn btn-sm btn-danger"
+                                                            on:click=move |_| delete_vm(vm_id_delete.clone())
+                                                        >"Delete"</button>
+                                                    </ui::RowMenu>
+                                                  </div>
                                                 </td>
                                             </tr>
                                         }
                                     }).collect_view()}
                                 </tbody>
                             </table>
+                            <div class="grid-footer"><span>{format!("{shown} of {total} VMs")}</span></div>
                         }.into_view()
                     }
                 }
             }}
+            </div>
 
             {move || clone_src.get().map(|src| view! {
                 <div class="modal" id="clone-dialog">

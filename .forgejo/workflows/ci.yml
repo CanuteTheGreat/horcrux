@@ -163,6 +163,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s ci/ux-qa -p 'test_*.py'
       - run: python3 ci/ux-qa/check_ascii_icons.py
+      - name: ui-kit budgets, contrast and ui- prefix
+        run: python3 ui-kit/check.py
       - run: python3 ci/ux-qa/check_owner_findings.py
       - name: live-installer common/ matches TREE.sha256 (a common/ edit without --write-hash fails every live-iso variant hours later)
         run: build/live-iso/sync-common.sh --check
@@ -1496,6 +1498,9 @@ jobs:
           echo $! > /tmp/horcrux-e2e.pid
           for i in $(seq 1 60); do curl -sf --cacert /tmp/horcrux-ca.pem -o /dev/null https://localhost:8006/api/health && break; sleep 1; done
           /tmp/pw/bin/python ci/ux-qa/ux_crawl.py --report /tmp/ux-crawl.json --shots /tmp/ux-shots
+          # visual regression report against docs/qa/ui-shots (key pages, light/dark x desktop/phone); a report, not a gate
+          /tmp/pw/bin/pip install -q pillow >/dev/null 2>&1 || true
+          /tmp/pw/bin/python ci/ux-qa/ui_snapshots.py --shots /tmp/ux-shots --report /tmp/ui-snapshots.json || true
 
       - name: User journey (fresh install, first-time admin; VM from an ISO boots, console works, no JS errors)
         # ci/ux-qa/user_journey.py: log in, fill the ISO Library, create a VM with ISO + NIC + sound + console, boot it to
