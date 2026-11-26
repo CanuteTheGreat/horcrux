@@ -226,19 +226,23 @@ pub async fn record_middleware(
     let who = Who::default();
     request.extensions_mut().insert(who.clone());
     let method = request.method().to_string();
-    let header = |n: &str| {
-        request
-            .headers()
-            .get(n)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.chars().take(200).collect::<String>())
+    // Read what we need in a block so no borrow of the request (not Sync)
+    // is alive across the await below: the middleware future must be Send.
+    let (client, user_agent) = {
+        let header = |n: &str| {
+            request
+                .headers()
+                .get(n)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.chars().take(200).collect::<String>())
+        };
+        let client = client_address(
+            &peer.ip().to_string(),
+            header("x-forwarded-for").as_deref(),
+            &log.trusted,
+        );
+        (client, header("user-agent"))
     };
-    let client = client_address(
-        &peer.ip().to_string(),
-        header("x-forwarded-for").as_deref(),
-        &log.trusted,
-    );
-    let user_agent = header("user-agent");
     let started = Instant::now();
     let ts_ms = now_ms();
     let response = next.run(request).await;
