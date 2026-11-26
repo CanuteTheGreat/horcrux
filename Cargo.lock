@@ -3436,6 +3436,7 @@ dependencies = [
  "chrono",
  "horcrux-common",
  "horcrux-core",
+ "horcrux-storage-plugin-sdk",
  "nix 0.29.0",
  "reqwest",
  "serde",
@@ -3445,6 +3446,15 @@ dependencies = [
  "tracing",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "horcrux-storage-plugin-sdk"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3472,6 +3482,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "horcrux-common",
+ "horcrux-storage-plugin-sdk",
  "js-sys",
  "leptos",
  "leptos_meta",

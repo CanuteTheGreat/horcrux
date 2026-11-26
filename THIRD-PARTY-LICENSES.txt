@@ -19,7 +19,7 @@ copied, used unmodified from the OS packages): libx264 (GPL-2.0+; the console's 
 H.264 encoder) and FFmpeg's libavcodec/libavutil (LGPL-2.1+ or GPL-2.0+; H.264 decoding in
 the Horcrux Console desktop client).
 
-Horcrux workspace crates (not listed below): horcrux-api, horcrux-auth, horcrux-backup, horcrux-cli, horcrux-cluster, horcrux-common, horcrux-container, horcrux-core, horcrux-desktop, horcrux-guest-proto, horcrux-guest-tools, horcrux-k8s, horcrux-media, horcrux-mobile, horcrux-monitoring, horcrux-nas, horcrux-sdn, horcrux-storage, horcrux-turn, horcrux-ui, horcrux-viewer, horcrux-vm, terraform-provider-horcrux
+Horcrux workspace crates (not listed below): horcrux-api, horcrux-auth, horcrux-backup, horcrux-cli, horcrux-cluster, horcrux-common, horcrux-container, horcrux-core, horcrux-desktop, horcrux-guest-proto, horcrux-guest-tools, horcrux-k8s, horcrux-media, horcrux-mobile, horcrux-monitoring, horcrux-nas, horcrux-sdn, horcrux-storage, horcrux-storage-plugin-sdk, horcrux-turn, horcrux-ui, horcrux-viewer, horcrux-vm, terraform-provider-horcrux
 
 ------------------------------------------------------------------------------
 1. Crates (786)
