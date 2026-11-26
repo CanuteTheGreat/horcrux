@@ -1,0 +1,9 @@
+diff -u -r a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt	2026-11-25 23:44:57.664642096 +0000
++++ b/CMakeLists.txt	2026-11-25 23:44:57.664672326 +0000
+@@ -894,3 +894,5 @@
+   EXCLUDES "*.js" "*.css" ".tox" "python-common/build")
+ add_custom_target(tags DEPENDS ctags)
+ 
++# suppress warning in cmake.eclass
++set(UNUSED_VAR "${CMAKE_INSTALL_LIBDIR}")
