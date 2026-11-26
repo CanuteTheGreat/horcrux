@@ -53,7 +53,7 @@ futures = "0.3"
 serde_yaml = "0.9"
 toml = "0.8"
 flate2 = "1.0"
-nix = { version = "0.29", features = ["process", "signal", "fs", "term", "ioctl", "user", "sched", "socket", "uio", "net"] }
+nix = { version = "0.29", features = ["process", "signal", "fs", "term", "ioctl", "user", "sched", "socket", "uio", "net", "poll"] }
 # Horcrux Console (docs/design/horcrux-console.md): WebRTC (sans-IO, pure-Rust crypto) and
 # QEMU's D-Bus display (peer-to-peer). Licences: str0m MIT OR Apache-2.0, zbus MIT.
 str0m = { version = "0.25", default-features = false, features = ["rust-crypto"] }

@@ -1145,6 +1145,7 @@ mod tests {
             mac: Some("52:54:00:00:00:01".into()),
             vlan: None,
             rate_mbps: None,
+            macvtap_multicast: Default::default(),
         };
         assert!(matches!(
             nic_reach(&[nic("vmbr0", NicAttach::Bridge)], d.path()),

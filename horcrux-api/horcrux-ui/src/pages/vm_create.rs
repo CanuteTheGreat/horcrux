@@ -62,6 +62,7 @@ pub fn VmCreate() -> impl IntoView {
                                     mac: None,
                                     vlan: None,
                                     rate_mbps: None,
+                                    macvtap_multicast: Default::default(),
                                 })
                             }
                         });

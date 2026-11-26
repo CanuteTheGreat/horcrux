@@ -22,6 +22,7 @@ pub mod pci;
 pub mod qemu;
 pub mod remote_play;
 pub mod replication;
+pub mod rxfilter;
 pub mod savestate;
 pub mod snapshot;
 pub mod snapshot_quota;
