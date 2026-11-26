@@ -7,88 +7,8 @@
 @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2"); }
 @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
 
-/* ---------- tokens (light) ---------- */
-:root {
-    --font-sans: "IBM Plex Sans", "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
-    --font-mono: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
-    --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 15px; --fs-xl: 18px; --fs-2xl: 24px;
-    --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 20px; --s-6: 24px; --s-8: 32px;
-    --r-sm: 3px; --r-md: 5px; --r-lg: 8px;
-    --row-h: 30px; --ctl-h: 30px;
-    --header-h: 44px; --sidebar-w: 232px;
-
-    --c-canvas: #f3f4f6; --c-surface: #ffffff; --c-sunken: #eceef1; --c-raised: #ffffff;
-    --c-border: #d9dde3; --c-border-strong: #bcc3cc;
-    --c-ink: #1a1f25; --c-muted: #5f6873; --c-muted-soft: #8a929c; --c-on-solid: #ffffff;
-    --c-chrome: #1b2027; --c-chrome-ink: #e6e9ed; --c-chrome-muted: #a3acb7; --c-chrome-hover: rgba(255,255,255,.08);
-    --c-accent: #0b6e77; --c-accent-solid: #0b6e77; --c-accent-hover: #095a62; --c-accent-subtle: #e0f1f2;
-    --c-brand: #c08a2e;
-    --c-ok: #1d7a3e; --c-ok-bg: #e5f4ea; --c-ok-solid: #1d7a3e;
-    --c-warn: #8a5200; --c-warn-bg: #fdf3dc; --c-warn-solid: #9a5d00; --c-warn-fill: #f2b632;
-    --c-crit: #b42318; --c-crit-bg: #fdeceb; --c-crit-solid: #b42318;
-    --c-info: #1f5fb0; --c-info-bg: #e7f0fb; --c-info-solid: #1f5fb0;
-    --c-neutral-solid: #5f6873;
-    --c-row-hover: #f6f8fa; --c-focus: #0b6e77;
-    --e-0: none;
-    --e-1: 0 1px 2px rgba(16,24,32,.06), 0 4px 12px rgba(16,24,32,.08);
-    --e-2: 0 8px 28px rgba(16,24,32,.18), 0 2px 6px rgba(16,24,32,.08);
-    --scrim: rgba(15,18,22,.45);
-}
-/* dark: follow the device unless the user picked light; or the user picked dark */
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-        --c-canvas: #0f1216; --c-surface: #161a20; --c-sunken: #12161b; --c-raised: #1c2128;
-        --c-border: #2b323b; --c-border-strong: #3a434e;
-        --c-ink: #e6e9ed; --c-muted: #98a2ad; --c-muted-soft: #6f7883;
-        --c-chrome: #0b0e11; --c-chrome-ink: #e6e9ed; --c-chrome-muted: #98a2ad;
-        --c-accent: #5cc8cf; --c-accent-solid: #137f88; --c-accent-hover: #179099; --c-accent-subtle: #122a2d;
-        --c-brand: #d9a54a;
-        --c-ok: #56c77a; --c-ok-bg: #13261a; --c-ok-solid: #1d7a3e;
-        --c-warn: #f0b545; --c-warn-bg: #2d2412; --c-warn-solid: #9a5d00; --c-warn-fill: #d99a1e;
-        --c-crit: #ff7d73; --c-crit-bg: #2e1715; --c-crit-solid: #b42318;
-        --c-info: #79aefc; --c-info-bg: #14233a; --c-info-solid: #1f5fb0;
-        --c-neutral-solid: #4b545f;
-        --c-row-hover: #1a1f26; --c-focus: #5cc8cf;
-        --e-1: 0 1px 2px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.35);
-        --e-2: 0 10px 32px rgba(0,0,0,.55);
-        --scrim: rgba(0,0,0,.6);
-    }
-}
-:root[data-theme="dark"] {
-    color-scheme: dark;
-    --c-canvas: #0f1216; --c-surface: #161a20; --c-sunken: #12161b; --c-raised: #1c2128;
-    --c-border: #2b323b; --c-border-strong: #3a434e;
-    --c-ink: #e6e9ed; --c-muted: #98a2ad; --c-muted-soft: #6f7883;
-    --c-chrome: #0b0e11; --c-chrome-ink: #e6e9ed; --c-chrome-muted: #98a2ad;
-    --c-accent: #5cc8cf; --c-accent-solid: #137f88; --c-accent-hover: #179099; --c-accent-subtle: #122a2d;
-    --c-brand: #d9a54a;
-    --c-ok: #56c77a; --c-ok-bg: #13261a; --c-ok-solid: #1d7a3e;
-    --c-warn: #f0b545; --c-warn-bg: #2d2412; --c-warn-solid: #9a5d00; --c-warn-fill: #d99a1e;
-    --c-crit: #ff7d73; --c-crit-bg: #2e1715; --c-crit-solid: #b42318;
-    --c-info: #79aefc; --c-info-bg: #14233a; --c-info-solid: #1f5fb0;
-    --c-neutral-solid: #4b545f;
-    --c-row-hover: #1a1f26; --c-focus: #5cc8cf;
-    --e-1: 0 1px 2px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.35);
-    --e-2: 0 10px 32px rgba(0,0,0,.55);
-    --scrim: rgba(0,0,0,.6);
-}
-:root[data-theme="light"] { color-scheme: light; }
-
-/* accent presets (user menu > Appearance). Each pair is in ci/ux-qa/check_ui_tokens.py. */
-:root[data-accent="cobalt"] { --c-accent: #1f5fb0; --c-accent-solid: #1f5fb0; --c-accent-hover: #194f93; --c-accent-subtle: #e7f0fb; --c-focus: #1f5fb0; }
-:root[data-accent="garnet"] { --c-accent: #a3243b; --c-accent-solid: #a3243b; --c-accent-hover: #891d31; --c-accent-subtle: #f8e8eb; --c-focus: #a3243b; }
-:root[data-accent="graphite"] { --c-accent: #3b434d; --c-accent-solid: #3b434d; --c-accent-hover: #2b3138; --c-accent-subtle: #e7eaee; --c-focus: #3b434d; }
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"])[data-accent="cobalt"] { --c-accent: #79aefc; --c-accent-solid: #1f5fb0; --c-accent-subtle: #14233a; --c-focus: #79aefc; }
-    :root:not([data-theme="light"])[data-accent="garnet"] { --c-accent: #ff8fa3; --c-accent-solid: #a3243b; --c-accent-subtle: #2e151b; --c-focus: #ff8fa3; }
-    :root:not([data-theme="light"])[data-accent="graphite"] { --c-accent: #c9d0d8; --c-accent-solid: #4b545f; --c-accent-subtle: #222830; --c-focus: #c9d0d8; }
-}
-:root[data-theme="dark"][data-accent="cobalt"] { --c-accent: #79aefc; --c-accent-solid: #1f5fb0; --c-accent-subtle: #14233a; --c-focus: #79aefc; }
-:root[data-theme="dark"][data-accent="garnet"] { --c-accent: #ff8fa3; --c-accent-solid: #a3243b; --c-accent-subtle: #2e151b; --c-focus: #ff8fa3; }
-:root[data-theme="dark"][data-accent="graphite"] { --c-accent: #c9d0d8; --c-accent-solid: #4b545f; --c-accent-subtle: #222830; --c-focus: #c9d0d8; }
-
-:root[data-density="compact"] { --row-h: 24px; --ctl-h: 26px; }
-:root[data-density="comfortable"] { --row-h: 36px; --ctl-h: 34px; }
+/* Horcrux brand on top of ui-kit/tokens.css: bundled IBM Plex type, gold crest accent */
+:root { --font-sans: "IBM Plex Sans", "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif; --font-mono: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace; }
 
 /* legacy variables used by main.css and page-local styles -> tokens */
 :root {
@@ -446,7 +366,7 @@ a.gauge:hover { background: var(--c-row-hover); text-decoration: none; }
 .gauge.warn .gauge-ring { --tone: var(--c-warn-fill); }
 .gauge.crit .gauge-ring { --tone: var(--c-crit); }
 .gauge-label { font-weight: 600; }
-.gauge-sub { color: var(--c-muted); font-size: var(--fs-sm); text-align: center; }
+.gauge-sub { color: var(--c-muted); font-size: var(--fs-sm); text-align: center; text-wrap: balance; }
 
 /* health tiles inside a panel */
 .health-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--s-3); }
@@ -618,3 +538,44 @@ a.node-row:hover { background: var(--c-row-hover); text-decoration: none; }
 .health-tile .ht-sub { display: block; }
 .dash-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
 .node-row .node-state { justify-self: end; }
+/* row "More" menu */
+.row-more { position: relative; display: inline-block; }
+.row-more > summary { list-style: none; }
+.row-more > summary::-webkit-details-marker { display: none; }
+.caret-dn { display: inline-block; width: 0; height: 0; margin-left: 2px; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid currentColor; opacity: .6; }
+.row-more > .menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 35; min-width: 200px; background: var(--c-raised); border: 1px solid var(--c-border); border-radius: var(--r-md); box-shadow: var(--e-1); padding: 4px 0; display: grid; }
+.row-more > .menu > .btn, .row-more > .menu > a.btn { justify-content: flex-start; border: 0; border-radius: 0; background: none; height: 28px; width: 100%; color: var(--c-ink); font-weight: 400; padding: 0 var(--s-3); }
+.row-more > .menu > .btn:hover:not(:disabled) { background: var(--c-row-hover); }
+.row-more > .menu > .btn-danger { color: var(--c-crit); }
+.row-more > .menu > hr { border: 0; border-top: 1px solid var(--c-border); margin: 4px 0; }
+.seg-links { display: inline-flex; border: 1px solid var(--c-border-strong); border-radius: var(--r-md); overflow: hidden; }
+.seg-links > a { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; color: var(--c-ink); font-size: var(--fs-sm); text-decoration: none; background: var(--c-surface); }
+.seg-links > a + a { border-left: 1px solid var(--c-border-strong); }
+.seg-links > a:hover { background: var(--c-row-hover); text-decoration: none; }
+.seg-links > a.active, .seg-links > a[aria-current="page"] { background: var(--c-accent-subtle); color: var(--c-accent); font-weight: 600; }
+.toolbar .grid-filter { width: 220px; }
+.cell-name a { color: var(--c-ink); font-weight: 500; }
+.cell-name a:hover { color: var(--c-accent); }
+.cell-actions { white-space: nowrap; text-align: right; }
+.cell-actions .actions { justify-content: flex-end; flex-wrap: nowrap; }
+.page-header .btn-group-split { display: inline-flex; gap: var(--s-2); }
+.seg-links.filter-links { gap: 0; margin: 0; flex-wrap: nowrap; }
+.seg-links.filter-links > a.filter-link { border: 0; border-radius: 0; padding: 0 10px; color: var(--c-ink); background: var(--c-surface); }
+.seg-links.filter-links > a.filter-link + a.filter-link { border-left: 1px solid var(--c-border-strong); }
+.seg-links.filter-links > a.filter-link.active { background: var(--c-accent-subtle); color: var(--c-accent); }
+.toolbar + .grid-wrap { border-top-left-radius: 0; border-top-right-radius: 0; }
+.grid-wrap > p, .grid-wrap > .loading { margin: 0; padding: var(--s-3); }
+.grid-wrap { overflow: visible; }
+@media (max-width: 900px) { .grid-wrap { overflow-x: auto; } .toolbar .grid-filter { width: 100%; } }
+.vm-table th.num, .vm-table td.num, .data-table th.num, .data-table td.num { text-align: right; }
+.vm-table .btn-success:not(:disabled), .data-table .btn-success:not(:disabled) { background: var(--c-surface); color: var(--c-ok); border-color: var(--c-ok); }
+.vm-table .btn-success:not(:disabled):hover { background: var(--c-ok-bg); }
+.cell-actions .actions { gap: 6px; }
+.vm-table td.cell-actions { padding-right: var(--s-3); }
+
+/* a text field that holds long identifiers (PCI address or mediated-device UUID) */
+input.w-wide { min-width: 24em; max-width: 100%; }
+
+/* a closed <details> menu takes no box: browsers that hide its content with content-visibility still report a
+   rectangle, which overlaps a console canvas below the header */
+details:not([open]) > .menu { display: none; }

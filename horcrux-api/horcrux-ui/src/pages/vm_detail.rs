@@ -147,7 +147,7 @@ pub fn VmDetailPage() -> impl IntoView {
             })}
             <h3>"When the host shuts down or restarts"</h3>
             <div class="form-row">
-                <select id="vmd-stop" prop:value=stop_sel
+                <select id="vmd-stop" aria-label="When the host shuts down or restarts" prop:value=stop_sel
                     on:change=move |ev| stop_sel.set(event_target_value(&ev))>
                     <option value="">{move || format!("Node default ({})", power.get().map(|p| p.effective.stop_action).unwrap_or_default())}</option>
                     <option value="save">"Save state (resume where it was)"</option>
