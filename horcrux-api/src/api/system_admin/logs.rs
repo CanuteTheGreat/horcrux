@@ -34,6 +34,54 @@ pub struct Filters {
     pub search: Option<String>,
     pub limit: Option<usize>,
     pub format: Option<String>,
+    /// Start of the time span: RFC 3339, `YYYY-MM-DD HH:MM:SS` (server local time) or epoch seconds.
+    pub since: Option<String>,
+    /// End of the time span, same formats as `since`.
+    pub until: Option<String>,
+    /// Kernel messages only.
+    pub kernel: Option<bool>,
+}
+
+/// Parse a `since`/`until` value.
+pub fn parse_time(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::{Local, NaiveDateTime, TimeZone, Utc};
+    let s = s.trim();
+    if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
+        return Utc.timestamp_opt(s.parse().ok()?, 0).single();
+    }
+    if let Ok(d) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(d.with_timezone(&Utc));
+    }
+    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M"] {
+        if let Ok(n) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Local
+                .from_local_datetime(&n)
+                .earliest()
+                .map(|d| d.with_timezone(&Utc));
+        }
+    }
+    None
+}
+
+/// Time of a log entry; syslog lines carry no zone and count as server local time.
+fn entry_time(ts: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    parse_time(&ts.replace('T', " ")).or_else(|| parse_time(ts))
+}
+
+/// Shell-style match with `*` and `?`; a pattern without them is a substring match.
+pub fn service_matches(pattern: &str, service: &str) -> bool {
+    if !pattern.contains(['*', '?']) {
+        return service.contains(pattern);
+    }
+    fn go(p: &[u8], s: &[u8]) -> bool {
+        match p.split_first() {
+            None => s.is_empty(),
+            Some((b'*', rest)) => (0..=s.len()).any(|i| go(rest, &s[i..])),
+            Some((b'?', rest)) => !s.is_empty() && go(rest, &s[1..]),
+            Some((c, rest)) => s.first() == Some(c) && go(rest, &s[1..]),
+        }
+    }
+    go(pattern.as_bytes(), service.as_bytes())
 }
 
 const MAX: usize = 5000;
@@ -166,7 +214,18 @@ pub fn apply_filters(mut v: Vec<LogEntry>, f: &Filters) -> Vec<LogEntry> {
         .as_deref()
         .filter(|s| !s.is_empty() && *s != "all")
     {
-        v.retain(|e| e.service.as_deref().is_some_and(|x| x.contains(s)));
+        v.retain(|e| e.service.as_deref().is_some_and(|x| service_matches(s, x)));
+    }
+    if f.kernel == Some(true) {
+        v.retain(|e| e.service.as_deref() == Some("kernel"));
+    }
+    let since = f.since.as_deref().and_then(parse_time);
+    let until = f.until.as_deref().and_then(parse_time);
+    if since.is_some() || until.is_some() {
+        v.retain(|e| match entry_time(&e.timestamp) {
+            Some(t) => since.is_none_or(|a| t >= a) && until.is_none_or(|b| t <= b),
+            None => true,
+        });
     }
     if let Some(q) = f.search.as_deref().filter(|s| !s.is_empty()) {
         let q = q.to_ascii_lowercase();
@@ -201,6 +260,15 @@ fn tail_lines(path: &std::path::Path, max_bytes: u64) -> Vec<String> {
 /// Newest-first log entries after filtering.
 pub async fn read_logs(f: &Filters) -> Result<Vec<LogEntry>, ApiError> {
     let limit = f.limit.unwrap_or(200).clamp(1, MAX);
+    for (name, v) in [("since", &f.since), ("until", &f.until)] {
+        if v.as_deref()
+            .is_some_and(|v| !v.is_empty() && parse_time(v).is_none())
+        {
+            return Err(ApiError::BadRequest(format!(
+                "{name} must be RFC 3339, 'YYYY-MM-DD HH:MM:SS' or epoch seconds"
+            )));
+        }
+    }
     let mut entries: Vec<LogEntry> = if journald_present() {
         let n = MAX.to_string();
         let mut args = vec!["-o", "json", "--no-pager", "-r", "-n", n.as_str()];
@@ -217,6 +285,16 @@ pub async fn read_logs(f: &Filters) -> Result<Vec<LogEntry>, ApiError> {
                 args.push("-p");
                 args.push(p);
             }
+        }
+        let mut span: Vec<String> = Vec::new();
+        for (flag, v) in [("--since", &f.since), ("--until", &f.until)] {
+            if let Some(t) = v.as_deref().and_then(parse_time) {
+                span.push(format!("{flag}=@{}", t.timestamp()));
+            }
+        }
+        args.extend(span.iter().map(|x| x.as_str()));
+        if f.kernel == Some(true) {
+            args.push("-k");
         }
         let out = run_secs("journalctl", &args, 30)
             .await
@@ -381,6 +459,56 @@ mod tests {
             message: m.into(),
             details: None,
         }
+    }
+
+    #[test]
+    fn time_span_wildcards_and_kernel_filters() {
+        let mut v = vec![
+            e("info", "sshd", "a"),
+            e("info", "sshd-session", "b"),
+            e("info", "kernel", "c"),
+        ];
+        v[0].timestamp = "2026-11-25T10:00:00.000Z".into();
+        v[1].timestamp = "2026-11-25T12:00:00.000Z".into();
+        v[2].timestamp = "2026-11-25T14:00:00.000Z".into();
+        let n = |f: Filters| apply_filters(v.clone(), &f).len();
+        let span = |a: &str, b: &str| Filters {
+            since: Some(a.into()),
+            until: Some(b.into()),
+            ..Default::default()
+        };
+        assert_eq!(n(span("2026-11-25T11:00:00Z", "2026-11-25T13:00:00Z")), 1);
+        assert_eq!(n(span("2026-11-25T10:00:00Z", "2026-11-25T14:00:00Z")), 3);
+        assert_eq!(
+            n(Filters {
+                kernel: Some(true),
+                ..Default::default()
+            }),
+            1
+        );
+        assert_eq!(
+            n(Filters {
+                service: Some("ssh*".into()),
+                ..Default::default()
+            }),
+            2
+        );
+        assert_eq!(
+            n(Filters {
+                service: Some("sshd".into()),
+                ..Default::default()
+            }),
+            2
+        );
+        assert_eq!(
+            n(Filters {
+                service: Some("sshd?session".into()),
+                ..Default::default()
+            }),
+            1
+        );
+        assert!(parse_time("1764072000").is_some());
+        assert!(parse_time("yesterday").is_none());
     }
 
     #[test]

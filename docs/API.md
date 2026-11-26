@@ -3260,3 +3260,7 @@ Needs Sys.Audit. Retention: `[access_log] max_entries` (default 50000) and
 `max_age_days` (default 14); `enabled = false` turns it off. The client is the
 TCP peer; `X-Forwarded-For` is believed only from peers in
 `[access_log] trusted_proxies`.
+
+## System log
+
+`GET /api/system/logs` and `GET /api/system/logs/export` read journald, or the syslog file on OpenRC hosts. Query parameters: `level` (minimum severity), `service` (identifier; `*` and `?` wildcards, otherwise substring), `search`, `limit`, `since` and `until` (RFC 3339, `YYYY-MM-DD HH:MM:SS` in server local time, or epoch seconds; an unparsable value answers 400), `kernel=true` (kernel messages only). Export also takes `format=txt|json|csv`.
