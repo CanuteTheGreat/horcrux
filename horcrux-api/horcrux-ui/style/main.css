@@ -1416,8 +1416,8 @@ td .actions { flex-wrap: nowrap; }
 .host-advisory-pkgs { margin: .25rem 0; font-family: var(--mono, ui-monospace, monospace); font-size: .85rem; }
 /* Wizard steps, choice cards, badges, summary and live task log
    (self-contained: components/steps.rs, components/task_log.rs). */
-.hx-steps { display: flex; flex-wrap: wrap; gap: .25rem; list-style: none; margin: 0 0 1rem; padding: 0; counter-reset: none; }
-.hx-step { flex: 1 1 8rem; min-width: 0; }
+.hx-steps { display: flex; flex-wrap: nowrap; gap: .25rem; list-style: none; margin: 0 0 1rem; padding: 0; counter-reset: none; }
+.hx-step { flex: 1 1 0; min-width: 0; }
 .hx-step-btn { display: flex; align-items: center; gap: .5rem; width: 100%; padding: .5rem .65rem; background: transparent; border: 0; border-bottom: 3px solid var(--border); color: var(--secondary); font: inherit; text-align: left; cursor: default; }
 .hx-step.done .hx-step-btn { border-bottom-color: var(--success); color: var(--text); cursor: pointer; }
 .hx-step.current .hx-step-btn { border-bottom-color: var(--primary); color: var(--text); font-weight: 600; }
@@ -1448,4 +1448,9 @@ td .actions { flex-wrap: nowrap; }
 .hx-tasklog-link { margin-left: auto; }
 .hx-tasklog-body { margin: 0; padding: .6rem .75rem; max-height: 22rem; min-height: 6rem; overflow: auto; background: var(--dark); color: #e4e8ec; font-size: .8rem; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
 .hx-actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
-@media (max-width: 600px) { .hx-actions .btn, .hx-wizard-actions .btn { flex: 1 1 100%; } }
+@media (max-width: 600px) {
+    .hx-actions .btn, .hx-wizard-actions .btn { flex: 1 1 100%; }
+    .hx-step:not(.current) .hx-step-title { display: none; }
+    .hx-step.current { flex: 3 1 0; }
+}
+.ceph-page ul { padding-left: 1.25rem; }
