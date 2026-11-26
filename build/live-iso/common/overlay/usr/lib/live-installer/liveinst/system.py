@@ -1114,6 +1114,10 @@ class Installer:
             # the pool was created on the live system: give the installed system the same host id
             if os.path.exists("/etc/hostid"):
                 shutil.copy("/etc/hostid", f"{T}/etc/hostid")
+            # the initramfs imports the root pool BEFORE the installed /etc/hostid is readable: it must carry the same file, for this
+            # initramfs and every one a kernel update builds (dracut's zfs module installs it hostonly-only, so force it)
+            from . import zfsroot
+            self.write("/etc/dracut.conf.d/92-horcrux-hostid.conf", zfsroot.HOSTID_DRACUT_CONF)
             for svc in ("zfs-import", "zfs-mount"):
                 initsys.enable(self, svc, "boot")
         if c["root_hash"]:
@@ -1339,6 +1343,9 @@ class Installer:
             zfsroot.configure(self, self.cmdline_extra, self.kernel_glob)
         if hib:
             zfsswap.finish_config(self)   # fstab swap line, resume device, initramfs check (rebuilt here unless T2 did it)
+        if self.zfs():
+            from . import zfsroot
+            zfsroot.ensure_initramfs_hostid(self)     # whichever step built the initramfs (or none did): it must hold the pool's hostid
 
     def motd(self):
         return (f"\n  {self.p['title']} (installed {time.strftime('%F')})\n"

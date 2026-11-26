@@ -54,6 +54,12 @@ def define(args):
             level = raid or "single"
             ok = len(vd) == ndisks and (level in ("single", "stripe") or re.search(rf"^\s+{level}(-\d+)?\s", st, re.M))
             m.check(f"zfs-pool-{want}-{level}-{ndisks}-disks", bool(ok), st[-800:])
+            # the pool must carry the installed system's own hostid from the first boot on: the initramfs imports with the hostid it was
+            # built with, so /etc/hostid has to be inside it (zpool status then reports "Mismatch between pool hostid and system hostid")
+            full = n.succeed("zpool status")
+            m.check("zfs-pool-hostid-matches-system", "Mismatch between pool hostid" not in full, full[:600])
+            hid = n.succeed("hostid; od -An -tx1 /etc/hostid; img=$(ls -t /boot/initramfs-*.img | head -1); lsinitrd -f etc/hostid $img > /tmp/ird-hostid && cmp /tmp/ird-hostid /etc/hostid && echo initramfs-hostid-same")
+            m.check("zfs-initramfs-carries-the-system-hostid", "initramfs-hostid-same" in hid and not hid.startswith("00000000"), hid)
             root = n.succeed("findmnt -n -o SOURCE /").strip()
             conf = n.succeed("grep '^POOL=' /etc/horcrux/be.conf").strip()
             m.check("zfs-root-boot-environment-on-the-pool", root == f"{want}/ROOT/horcrux" and conf == f'POOL="{want}"', f"{root} | {conf}")
