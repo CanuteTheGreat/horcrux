@@ -650,8 +650,11 @@ pub fn parse_kmsg(rec: &str, boot_us: i64) -> Option<LogEntry> {
     let usec: i64 = f.next()?.parse().ok()?;
     let sev = (pri & 7) as u8;
     let ts_us = boot_us.checked_add(usec)?;
-    let ts = DateTime::from_timestamp(ts_us.div_euclid(1_000_000), (ts_us.rem_euclid(1_000_000) * 1000) as u32)?
-        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let ts = DateTime::from_timestamp(
+        ts_us.div_euclid(1_000_000),
+        (ts_us.rem_euclid(1_000_000) * 1000) as u32,
+    )?
+    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     Some(LogEntry {
         timestamp: ts,
         level: level_of_priority(sev).into(),
@@ -768,7 +771,8 @@ fn normalise_indexes(v: &mut [BootInfo]) {
 pub fn wtmp_boot_times(bytes: &[u8]) -> Vec<i64> {
     const SZ: usize = 384;
     let mut out = Vec::new();
-    for rec in bytes.chunks_exact(SZ) {
+    let (recs, _) = bytes.as_chunks::<SZ>();
+    for rec in recs {
         let ty = i16::from_le_bytes([rec[0], rec[1]]);
         if ty == 2 {
             let sec = i32::from_le_bytes([rec[340], rec[341], rec[342], rec[343]]);
@@ -1102,8 +1106,15 @@ mod tests {
 
     #[test]
     fn kernel_ring_records_become_kernel_entries() {
-        let e = parse_kmsg("4,339,5140900,-;nf_conntrack: table full", 1_792_700_000_000_000).unwrap();
-        assert_eq!((e.priority, e.kernel, e.identifier.as_deref()), (Some(4), true, Some("kernel")));
+        let e = parse_kmsg(
+            "4,339,5140900,-;nf_conntrack: table full",
+            1_792_700_000_000_000,
+        )
+        .unwrap();
+        assert_eq!(
+            (e.priority, e.kernel, e.identifier.as_deref()),
+            (Some(4), true, Some("kernel"))
+        );
         assert_eq!(e.ts_us, Some(1_792_700_005_140_900));
         assert_eq!(e.message, "nf_conntrack: table full");
         // facility bits are dropped from the severity: 30 = daemon.info

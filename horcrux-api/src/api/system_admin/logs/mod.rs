@@ -191,7 +191,11 @@ fn kmsg_entries(s: &LogSettings) -> Vec<LogEntry> {
     }
     let uptime = std::fs::read_to_string(rooted("proc/uptime"))
         .ok()
-        .and_then(|t| t.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()));
+        .and_then(|t| {
+            t.split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<f64>().ok())
+        });
     let Some(boot_us) = uptime
         .map(|u| now_us() - (u * 1_000_000.0) as i64)
         .or_else(boot_start_of_machine)
