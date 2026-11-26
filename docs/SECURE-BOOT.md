@@ -1,6 +1,6 @@
 # UEFI Secure Boot
 
-Secure Boot works with the ISO and with installed systems on x86_64 and arm64, at no cost: the boot chain is signed with our
+Secure Boot works with the x86_64 ISO and installed x86_64 systems, at no cost: the boot chain is signed with our
 own key, and you enroll our public certificate **once**, on the first boot, through MokManager (the standard Linux "Machine
 Owner Key" screen, the same one Ubuntu, Fedora and openSUSE use for extra keys). After that, Secure Boot stays ON.
 
@@ -89,7 +89,9 @@ Microsoft keys enrolled, Secure Boot enforcing):
   test asserts SB is enabled inside the guest, the ESP holds the shim chain, the signed ZFS modules loaded, and the machine
   key is configured.
 
-A publish run fails if the ISO carries no signed chain. riscv64 has no Microsoft-signed shim and stays unsigned.
+An x86_64 publish run fails if the ISO carries no signed chain. arm64 uses the same chain (shimaa64, grubaa64); its images are
+signed when the kernel image is an EFI binary and the gates run in the aarch64 CI, but arm64 Secure Boot is not proven yet.
+riscv64 has no Microsoft-signed shim and stays unsigned.
 
 ## Key custody
 

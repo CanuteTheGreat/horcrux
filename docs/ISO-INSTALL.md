@@ -89,7 +89,7 @@ Each architecture has its own job, its own assets and its own status marker (`da
 `daily-status-server-openrc-aarch64`), so a failing arch never blocks the other. Test evidence is attached per arch
 (`horcrux-<desktop env>-<init>-daily-<arch>-test-evidence.tgz`). Build one yourself on a native host: `ARCH=aarch64 build/live-iso/build.sh -o ./iso`
 (`ALLOW_EMULATED=1` is needed to build a foreign arch under qemu-user; not supported for the app stage).
-On arm64 machines the ISO is written to the stick exactly as on x86 (`dd`); firmware must be UEFI (Secure Boot on or off: see [Secure Boot](#secure-boot)).
+On arm64 machines the ISO is written to the stick exactly as on x86 (`dd`); firmware must be UEFI (Secure Boot off until arm64 Secure Boot is proven: see [Secure Boot](#secure-boot)).
 Test it in QEMU: `qemu-system-aarch64 -machine virt -cpu max -m 4G -drive if=pflash,format=raw,readonly=on,file=AAVMF_CODE.fd -drive if=pflash,format=raw,file=VARS.fd -device qemu-xhci -device usb-storage,drive=iso -drive if=none,id=iso,file=horcrux-server-openrc-daily-aarch64.iso,format=raw -device virtio-gpu-pci -device usb-kbd -serial stdio`.
 
 **riscv64** is not in CI: there is no RISC-V runner, the official binhost has only ~600 riscv64 packages (about 40 of the
@@ -493,7 +493,7 @@ passphrase once, same boot id, marker and process back, `zpool status` clean, sc
 
 ## Secure Boot
 
-**Supported, with a one-time key enrollment** (x86_64 and arm64; free, no paid signing). The ISO boots through shim
+**Supported on x86_64, with a one-time key enrollment** (free, no paid signing; arm64: same chain, not proven yet). The ISO boots through shim
 (Microsoft-signed) into our GRUB and kernel, signed with our own key. The first time you boot it with Secure Boot on, shim
 shows *"Verification failed: (0x1A) Security Violation"* and opens MokManager: press Enter, press a key, choose **Enroll
 key from disk**, pick the USB stick, then **ENROLL_THIS_KEY_IN_MOKMANAGER.cer**, **Continue**, **Yes**, **Reboot**. The
