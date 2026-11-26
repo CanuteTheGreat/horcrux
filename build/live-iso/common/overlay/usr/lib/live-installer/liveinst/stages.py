@@ -453,6 +453,8 @@ class NetconfigStage(Stage):
             w, l = c["wan"], c["lan"]
             out.append(f"WAN {w['iface'] or '-'}: " + (w["address"] if w["mode"] == "static" else "DHCP") + (" (Wi-Fi)" if c["wifi"] else ""))
             out.append(f"LAN {l['iface'] or '-'}: {l['address'] if l['iface'] else '-'}")
+            for i, o in enumerate(c.get("opt") or [], 1):
+                out.append(f"OPT{i} {o}: role only (address set later: console menu or web UI)")
         else:
             n = c["mgmt"]
             out.append(f"Management NIC {n['iface'] or '-'}: " + (f"{n['address']} gw {n['gateway']} dns {n['dns']}" if n["mode"] == "static" else "DHCP")
@@ -595,17 +597,29 @@ class ServicesStage(Stage):
                            hint="Space toggles the highlighted service (Left/Right moves)"))
         else:
             f.append(Field("none", "There are no optional services for this product.", "label"))
+        if S.updchan.enabled(p):
+            f.append(Field("update_channel", "Update channel", "choice", c.get("update_channel") or S.updchan.default(p), S.updchan.options(p),
+                           hint="Where updates come from; changeable later on the web UI (System) and the console menu"))
         return f
 
     def commit(self, ctx, v):
         if "opt" in v:
             ctx.c["services_off"] = [s for s in self.optional(ctx.p) if s not in v["opt"]]
+        if v.get("update_channel"):
+            ctx.c["update_channel"] = v["update_channel"]
+
+    def validate(self, ctx, v):
+        if "update_channel" in v:
+            return S.updchan.problem(ctx.p, v["update_channel"])
+        return None
 
     def plan(self, ctx):
         on = [s for s in ctx.p["services"] if s not in ctx.c["services_off"] and s != "sshd"]
         out = ["Enable at boot: " + ", ".join(on)]
         if ctx.c["services_off"]:
             out.append("Left disabled: " + ", ".join(ctx.c["services_off"]))
+        if S.updchan.enabled(ctx.p) and ctx.c.get("update_channel"):
+            out.append(f"Update channel: {ctx.c['update_channel']}")
         return out
 
 

@@ -460,6 +460,8 @@ def summary_lines(st):
         out.append(("Network", line))
     out.append(("E-mail", c["email"] or "-"))
     out.append(("Services", ", ".join(x for x in p["services"] if x not in c["services_off"] and x != "sshd") or "-"))
+    if S.updchan.enabled(p):
+        out.append(("Update channel", c.get("update_channel") or S.updchan.default(p)))
     out.append(("SSH", ("off" if not c["ssh_enabled"] else (("key" if c["ssh_keys"] else "no key") + (", PASSWORD login ON" if c["ssh_password_auth"] else ", password login off")))))
     out.append(("Hardening", "sysctl " + ("on" if c["sysctl_hardening"] else "off") + "; console menu " + ("OPEN (no login)" if c["console_open"] else "after root login")))
     out.append(("Software", ST.BY_ID["use_flags"].plan(st.ctx)[0]))

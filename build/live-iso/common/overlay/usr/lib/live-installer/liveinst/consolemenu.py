@@ -55,31 +55,59 @@ def strip_iface_stanza(text, iface):
     return "\n".join(out) + ("\n" if out else "")
 
 
-def dhcpcd_block(iface, mode, address="", gateway="", dns=""):
-    if mode != "static":
+IPV6_MODES = ("auto", "static", "none")      # auto = router advertisements / DHCPv6 (dhcpcd's default)
+
+
+def ipv6_problem(addr):
+    """an IPv6 address with prefix (2001:db8::2/64), or None"""
+    import ipaddress
+    try:
+        i = ipaddress.ip_interface(addr)
+    except ValueError:
+        return f"{addr!r} is not an IPv6 address/prefix (e.g. 2001:db8::2/64)"
+    if i.version != 6 or "/" not in addr:
+        return f"{addr!r} is not an IPv6 address/prefix (e.g. 2001:db8::2/64)"
+    return None
+
+
+def dhcpcd_block(iface, mode, address="", gateway="", dns="", v6="auto", v6_address="", v6_gateway=""):
+    if v6 not in IPV6_MODES:
+        raise ValueError(f"IPv6 mode {v6!r} (one of {', '.join(IPV6_MODES)})")
+    if mode != "static" and v6 == "auto":
         return f"# BEGIN console-menu {iface}\n# {iface}: DHCP (set from the console menu)\n# END console-menu {iface}\n"
-    lines = [f"# BEGIN console-menu {iface}", f"interface {iface}", f"static ip_address={address}"]
-    if gateway:
-        lines.append(f"static routers={gateway}")
-    if dns:
-        lines.append("static domain_name_servers=" + " ".join(re.split(r"[\s,]+", dns.strip())))
+    lines = [f"# BEGIN console-menu {iface}", f"interface {iface}"]
+    if mode == "static":
+        lines.append(f"static ip_address={address}")
+        if gateway:
+            lines.append(f"static routers={gateway}")
+        if dns:
+            lines.append("static domain_name_servers=" + " ".join(re.split(r"[\s,]+", dns.strip())))
+    if v6 == "static":
+        lines += [f"static ip6_address={v6_address}", "noipv6rs"]          # fixed address: no SLAAC/DHCPv6 address next to it
+    elif v6 == "none":
+        lines.append("noipv6")
     lines.append(f"# END console-menu {iface}")
     return "\n".join(lines) + "\n"
 
 
-def apply_iface_config(text, iface, mode, address="", gateway="", dns=""):
-    return strip_iface_stanza(text, iface) + "\n" + dhcpcd_block(iface, mode, address, gateway, dns)
+def apply_iface_config(text, iface, mode, address="", gateway="", dns="", v6="auto", v6_address="", v6_gateway=""):
+    return strip_iface_stanza(text, iface) + "\n" + dhcpcd_block(iface, mode, address, gateway, dns, v6, v6_address, v6_gateway)
 
 
-def apply_roles(text, wan, lan):
-    """Set wan_interface / lan_interface in the [network] section of patronus.toml text."""
-    lines = [l for l in text.splitlines() if not re.match(r"\s*(wan_interfaces?|lan_interfaces?)\s*=", l)
+def apply_roles(text, wan, lan, opts=None):
+    """Set wan_interface / lan_interface (and opt_interfaces = OPT1, OPT2 ... in that order; None keeps the current list) in the
+    [network] section of patronus.toml text."""
+    if opts is None:
+        opts = read_opts(text)
+    lines = [l for l in text.splitlines() if not re.match(r"\s*(wan_interfaces?|lan_interfaces?|opt_interfaces)\s*=", l)
              and l.strip() not in ("# written by live-installer", "# written by live-installer / console menu")]
     roles = ["# written by live-installer / console menu"]
     if wan:
         roles.append(f'wan_interface = "{wan}"')
     if lan:
         roles.append(f'lan_interface = "{lan}"')
+    if opts:
+        roles.append("opt_interfaces = [" + ", ".join(f'"{o}"' for o in opts) + "]")
     out, placed = [], False
     for l in lines:
         out.append(l)
@@ -94,6 +122,46 @@ def apply_roles(text, wan, lan):
 def read_roles(text):
     m = lambda k: (re.search(rf'(?m)^\s*{k}\s*=\s*"([^"]*)"', text) or [None, ""])[1]
     return m("wan_interface"), m("lan_interface")
+
+
+def read_opts(text):
+    """opt_interfaces = ["eth2", "eth3"] -> ["eth2", "eth3"] (OPT1, OPT2)"""
+    m = re.search(r'(?m)^\s*opt_interfaces\s*=\s*\[([^\]]*)\]', text)
+    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
+
+
+def console_items(profile, taken):
+    """the product's own console-menu items (profile `console_items`, a list of tables: key, title, run = argv, optional
+    show = argv run first (e.g. a list to choose from), ask = a prompt whose answer replaces {answer} in run/then,
+    confirm = the question asked after run, then = argv (or a list of argv, run in order, stopping at the first failure)
+    run after a yes).
+    Returns (items, problems); an item whose key clashes with a built-in one or another item is dropped with a problem."""
+    out, bad, seen = [], [], set(taken)
+    for i, it in enumerate(profile.get("console_items", []) or []):
+        k, t, run = str(it.get("key", "")).strip(), str(it.get("title", "")).strip(), it.get("run")
+        argvs = [run] + ([it["show"]] if "show" in it else []) + then_list(it)
+        if not k or not t or not all(isinstance(a, list) and a and all(isinstance(x, str) for x in a) for a in argvs):
+            bad.append(f"console_items[{i}]: needs key, title and run = [argv] (show/then: argv too)")
+            continue
+        if k in seen:
+            bad.append(f"console_items[{i}]: key {k!r} is already used")
+            continue
+        seen.add(k)
+        out.append(dict(it, key=k, title=t))
+    return out, bad
+
+
+def then_list(it):
+    """an item's follow-up commands: then = argv or [argv, argv ...]"""
+    t = it.get("then")
+    if not t:
+        return []
+    return [t] if all(isinstance(x, str) for x in t) else list(t)
+
+
+def fill_argv(argv, answer):
+    """{answer} placeholders of a console item's argv (one argv element each: never a shell)"""
+    return [a.replace("{answer}", answer) for a in argv]
 
 
 def host_ok(h):
@@ -192,16 +260,23 @@ class Console:
             return "", ""
         return read_roles(S.read(self.root + "etc/patronus/patronus.toml"))
 
+    def opts(self):
+        if self.p["network_mode"] != "wan-lan":
+            return []
+        return read_opts(S.read(self.root + "etc/patronus/patronus.toml"))
+
     def header(self):
         wan, lan = self.roles()
+        opts = self.opts()
         self.say("\033[H\033[2J" if os.environ.get("TERM", "dumb") != "dumb" else "")
         self.say(f"*** {self.p['title']} - console menu ***   {S.read('/etc/hostname')}")
         self.say("")
         for n in S.list_nics():
-            role = ("WAN" if n["name"] == wan else "LAN" if n["name"] == lan else "")
+            role = ("WAN" if n["name"] == wan else "LAN" if n["name"] == lan else
+                    f"OPT{opts.index(n['name']) + 1}" if n["name"] in opts else "")
             ip = S.nic_ip(n["name"]) or "-"
             link = "wifi" if n["wifi"] else ("up" if S.carrier(n["name"]) else "no link")
-            self.say(f" {role:<4}{n['name']:<10}{link:<8}{ip}")
+            self.say(f" {role:<5}{n['name']:<10}{link:<8}{ip}")
         self.say("")
         self.say(f" Web UI: {self.web_url()}   (user: " + ("a system user in wheel/" + self.p.get("web_admin_group", "horcrux-admin") if self.p.get("web_auth") == "pam" else "admin") + ")")
         self.say("")
@@ -210,12 +285,18 @@ class Console:
         ("1", "Assign interfaces"), ("2", "Set interface IP address (DHCP / static)"), ("3", "Reset the admin password"),
         ("4", "Reset to factory defaults"), ("5", "Power off"), ("6", "Reboot"), ("7", "Ping host"), ("8", "Shell"),
         ("9", "Show web UI URL and status"), ("10", "Restore a configuration backup"), ("11", "Create a configuration backup"),
+        ("12", "Restart the web UI"), ("13", "Turn SSH on or off"), ("14", "Live system view (top, q quits)"),
         ("0", "Log out"),
     ]
 
+    def items(self):
+        """the product's console items (profile console_items) after the built-in ones"""
+        it, bad = console_items(self.p, [k for k, _ in self.MENU])
+        return it
+
     def show_menu(self):
         self.header()
-        for k, t in self.MENU:
+        for k, t in self.MENU[:-1] + [(i["key"], i["title"]) for i in self.items()] + self.MENU[-1:]:
             if k == "3" and self.p.get("web_auth") == "pam":
                 t = "Reset a user password"          # the web UI signs in system users: this is chpasswd, not a web database
             self.say(f"  {k:>2}) {t}")
@@ -223,7 +304,10 @@ class Console:
 
     def loop(self):
         acts = {"1": self.assign, "2": self.set_ip, "3": self.reset_password, "4": self.factory_reset, "5": self.poweroff,
-                "6": self.reboot, "7": self.ping, "8": self.shell, "9": self.status, "10": self.restore, "11": self.backup_cmd}
+                "6": self.reboot, "7": self.ping, "8": self.shell, "9": self.status, "10": self.restore, "11": self.backup_cmd,
+                "12": self.restart_web, "13": self.ssh_toggle, "14": self.top}
+        for it in self.items():
+            acts[it["key"]] = (lambda it=it: self.run_item(it))
         while True:
             self.show_menu()
             try:
@@ -246,8 +330,62 @@ class Console:
                 self.say("\n(interrupted)")
             except Exception as e:  # noqa - never kill the console on a bug
                 self.say(f"Error: {e}")
-            if c not in ("5", "6", "8"):
+            if c not in ("5", "6", "8", "14"):
                 self.pause()
+
+    # -- 12 / 13 / 14 + the product's items ------------------------------------------
+    def restart_web(self):
+        if not self.web:
+            self.say("This system has no web UI service.")
+            return
+        self.say(f"Restarting {self.web} ...")
+        rc, o = self.rc_restart(self.web)
+        up = self.wait_listening(60)
+        self.say(f"  {self.web}: " + ("running, " + self.web_url() if up else "NOT listening: " + (o.strip()[-160:] or "see the service log")))
+
+    def ssh_svc(self):
+        return self.p.get("ssh_service", "sshd")
+
+    def ssh_running(self):
+        rc, o = S.sh(self.svc_cmd("status", self.ssh_svc()))
+        return ("started" in o) if self.init == "openrc" else rc == 0
+
+    def ssh_toggle(self):
+        svc, on = self.ssh_svc(), self.ssh_running()
+        self.say(f"SSH ({svc}) is {'ON' if on else 'OFF'}.")
+        if on:
+            if os.environ.get("SSH_CONNECTION"):
+                self.say("You are connected over SSH: turning it off ends this session.")
+            if not self.yes("Turn SSH OFF (stopped now and at boot)?"):
+                return
+            for cmd in [self.svc_cmd("stop", svc)] + initsys.disable_cmds(self.init, svc):
+                S.sh(cmd)
+        else:
+            if not self.yes("Turn SSH ON (started now and at boot)?", True):
+                return
+            for cmd in initsys.enable_cmds(self.init, svc) + [self.svc_cmd("start", svc)]:
+                S.sh(cmd)
+        self.say(f"SSH is now {'ON' if self.ssh_running() else 'OFF'}.")
+
+    def top(self):
+        subprocess.run(["top"])
+
+    def run_item(self, it):
+        """a profile console item: optional question, the command in the foreground, optional confirm + follow-up command"""
+        answer = ""
+        if it.get("show"):
+            subprocess.run(it["show"])
+        if it.get("ask"):
+            answer = self.ask(it["ask"], str(it.get("default", "")))
+            if not answer:
+                return
+        r = subprocess.run(fill_argv(it["run"], answer))
+        steps = then_list(it)
+        if steps and getattr(r, "returncode", 0) == 0 and self.yes(it.get("confirm", "Apply it now?")):
+            for argv in steps:
+                if getattr(subprocess.run(fill_argv(argv, answer)), "returncode", 0) != 0:
+                    self.say("Stopped: that step failed.")
+                    break
 
     # -- 9 status ---------------------------------------------------------------
     def status(self):
@@ -307,14 +445,30 @@ class Console:
             if wan == lan:
                 self.say("WAN and LAN must be different.")
                 return
+            opts = []
+            while lan and len(S.list_nics()) > 2 + len(opts):
+                o = self.pick_nic(f"OPT{len(opts) + 1} interface (number, name, d, or n when done)", allow_none=True)
+                if not o:
+                    break
+                if o in (wan, lan) or o in opts:
+                    self.say(f"{o} already has a role.")
+                    continue
+                opts.append(o)
             path = self.root + "etc/patronus/patronus.toml"
             txt = S.read(path)
-            open(path, "w").write(apply_roles(txt, wan, lan))
+            open(path, "w").write(apply_roles(txt, wan, lan, opts))
             S.sh(["chgrp", "patronus", path])
             S.sh(["chmod", "0640", path])
-            self.say(f"WAN={wan}  LAN={lan} written to /etc/patronus/patronus.toml")
+            self.say(f"WAN={wan}  LAN={lan}" + "".join(f"  OPT{i}={o}" for i, o in enumerate(opts, 1)) + " written to /etc/patronus/patronus.toml")
+            sync = self.p.get("roles_sync_cmd")            # the product's command that moves the roles from that file into its config store
+            if sync:
+                r = subprocess.run(list(sync), capture_output=True, text=True)
+                out = ((r.stdout or "") + (r.stderr or "")).strip()
+                self.say(("  " + out.replace("\n", "\n  ")) if out else "  roles stored")
+                if r.returncode != 0:
+                    self.say("  The roles were NOT stored (see above); the file keeps them for the next boot.")
             if self.yes("Set the addresses now (option 2)?", True):
-                for nm in (wan, lan):
+                for nm in (wan, lan, *opts):
                     if nm:
                         self.set_ip(nm)
             self.restart_services(("patronus-firewall", "patronus-applyd"))
@@ -398,9 +552,17 @@ class Console:
             cfg = ("static", addr, gw, dns)
         else:
             cfg = ("dhcp", "", "", "")
+        v6 = {"a": "auto", "s": "static", "n": "none"}.get(self.ask("IPv6: (a)uto (router advertisements / DHCPv6), (s)tatic or (n)one", "a").lower()[:1], "auto")
+        v6a = ""
+        while v6 == "static":
+            v6a = self.ask("IPv6 address/prefix (e.g. 2001:db8::2/64)")
+            e = ipv6_problem(v6a)
+            if not e:
+                break
+            self.say(e)
         path = self.root + DHCPCD.lstrip("/")
         txt = open(path).read() if os.path.exists(path) else ""
-        open(path, "w").write(apply_iface_config(txt, nm, *cfg))
+        open(path, "w").write(apply_iface_config(txt, nm, *cfg, v6=v6, v6_address=v6a))
         S.sh(["ip", "-4", "addr", "flush", "dev", nm])
         S.sh(["ip", "link", "set", nm, "up"])
         rc, o = S.sh(self.svc_cmd("restart", "dhcpcd"), timeout=90)
@@ -412,7 +574,9 @@ class Console:
             end = time.time() + 25
             while time.time() < end and not S.nic_ip(nm):
                 time.sleep(1)
-        self.say(f"{nm}: {S.nic_ip(nm) or 'no address (yet)'}")
+        if v6 == "static":
+            S.sh(["ip", "-6", "addr", "replace", v6a, "dev", nm])
+        self.say(f"{nm}: {S.nic_ip(nm) or 'no address (yet)'}" + (f"   IPv6 {v6a}" if v6 == "static" else f"   IPv6 {v6}"))
 
     def wifi(self, iface):
         nets = S.wifi_scan(iface)
