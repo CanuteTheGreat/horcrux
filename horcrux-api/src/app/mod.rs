@@ -644,6 +644,23 @@ pub async fn run() -> anyhow::Result<()> {
 
     let access_log = api::access_log::init(&horcrux_config);
 
+    // The access-log layer below wraps the routed handlers, but a request for
+    // an unknown path falls through to `serve_dir` (the static/SPA fallback),
+    // which is attached after the layers and so bypasses them. An unmatched
+    // `/api/...` request (e.g. a probe of a non-existent endpoint) must still
+    // be recorded, so wrap the fallback with the recorder too. Static assets
+    // are left out of the rate-limit/CORS layers on purpose (a page load pulls
+    // many files); the recorder itself only logs `/api/...` paths, so real
+    // asset requests pass through it untouched.
+    let serve_dir = {
+        use tower::Layer as _;
+        let access_log_fb = access_log.clone();
+        axum_middleware::from_fn(move |conn_info, req, next| {
+            api::access_log::record_middleware(access_log_fb.clone(), conn_info, req, next)
+        })
+        .layer(serve_dir)
+    };
+
     // Build main app with public and protected routes
     let app = Router::new()
         .route("/api/health", get(health_check))
