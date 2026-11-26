@@ -207,8 +207,8 @@ PATCHES=(
 	"${FILESDIR}/ceph-17.2.0-findre2.patch"
 	"${FILESDIR}/ceph-17.2.0-osd_class_dir.patch"
 	"${FILESDIR}/ceph-18.2.0-cython3.patch"
-	# https://bugs.gentoo.org/936889
-	"${FILESDIR}/ceph-18.2.4-liburing.patch"
+	# Ceph 21's upstream Finduring creates the imported target correctly;
+	# the older Gentoo liburing patch breaks cephfs-tool's link target.
 	"${FILESDIR}/ceph-18.2.4-spdk.patch"
 	"${FILESDIR}/ceph-19.2.2-QATAPP-Fix-clang-16-compiling-issue.patch"
 	"${FILESDIR}/ceph-19.2.2-add-option-to-build-agains-system-opentelemetry.patch"
@@ -325,6 +325,8 @@ ceph_src_configure() {
 		-DWITH_RBD_SSD_CACHE:BOOL=$(usex rbd-ssd)
 		-DWITH_SYSTEMD:BOOL=$(usex systemd)
 		-DWITH_TESTS:BOOL=$(usex test)
+		-DWITH_CATCH2:BOOL=no
+		-DWITH_UADK:BOOL=no
 		-DWITH_LIBURING:BOOL=$(usex uring)
 		-DWITH_SYSTEM_LIBURING:BOOL=$(usex uring)
 		-DWITH_LIBCEPHSQLITE:BOOL=$(usex sqlite)
