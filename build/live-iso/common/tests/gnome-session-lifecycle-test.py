@@ -376,6 +376,28 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
     XFT_PROBE = ('import gi; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk; '
                  's = Gtk.Settings.get_default(); print(round(s.get_property("gtk-xft-dpi") / 1024) if s else "no-settings")')
 
+    def diag_x11(self, n, disp, xenv):
+        """Failure diagnostics for the X11 scale checks (printed once): which Xwayland/gsd-xsettings run, on which display, and what each X display says."""
+        vm = self.vm
+        cmds = [
+            "ps -eo pid,etimes,user,args | grep -E '[X]wayland|[g]sd-xsettings|[g]nome-shell' | cut -c1-220",
+            "for p in $(pgrep -x Xwayland) $(pgrep -x gsd-xsettings); do echo pid $p $(cat /proc/$p/comm): $(xargs -0 -n1 echo < /proc/$p/cmdline | tr '\\n' ' ' | cut -c1-160); xargs -0 -n1 echo < /proc/$p/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|WAYLAND_DISPLAY)='; done",
+            "ls -l /tmp/.X11-unix /tmp/.X*-lock 2>&1",
+        ]
+        ucmds = [
+            "systemctl --user show-environment | grep -E '^(DISPLAY|XAUTHORITY)='",
+            "systemctl --user list-units --all --no-pager 'org.gnome.SettingsDaemon.XSettings*' 'gnome-session-x11*' 2>&1 | cut -c1-200",
+            "journalctl --user -b --no-pager 2>&1 | grep -iE 'xwayland|xsettings|x11 services|native scal' | tail -40 | cut -c1-260",
+            "gsettings get org.gnome.mutter experimental-features; gsettings get org.gnome.desktop.interface scaling-factor",
+        ]
+        for c in cmds:
+            print(f"DIAG-x11 c{n} root$ {c[:60]}\n" + vm.out(c).strip()[-1500:], flush=True)
+        for c in ucmds:
+            print(f"DIAG-x11 c{n} user$ {c[:60]}\n" + self.as_user(c).strip()[-2500:], flush=True)
+        for d in (":0", ":1", ":2"):
+            r = self.as_user(f"DISPLAY={d} XAUTHORITY=$(xargs -0 -n1 echo < /proc/$(pgrep -u {self.uid} -x Xwayland | head -n1)/cmdline | sed -n '/^-auth$/{{n;p;q}}') GDK_BACKEND=x11 timeout 20 python3 -c {shq(self.XFT_PROBE)} 2>&1 | tail -2")
+            print(f"DIAG-x11 c{n} xft-probe {d}: {r.strip()[-200:]}", flush=True)
+
     def as_user(self, cmd, timeout=60):
         a = self.a
         env = f"XDG_RUNTIME_DIR=/run/user/{self.uid} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{self.uid}/bus"
@@ -444,6 +466,9 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
                 else:
                     stat = self.wait(lambda: (lambda o: o if "FAIL" not in o and "OK Xft.dpi" in o else None)(
                         self.as_user(f"{xenv} {hp} x11-scale-status")), 20, step=2) or self.as_user(f"{xenv} {hp} x11-scale-status")
+                if "FAIL" in stat and not getattr(self, "_x11_diag_done", False):
+                    self._x11_diag_done = True
+                    self.diag_x11(n, disp, xenv)
                 self.check(n, f"x11-scale-{want}-xsettings", "FAIL" not in stat and "OK Xft.dpi" in stat and f"X11 UI scale {f}," in stat,
                            f"monitor scale {s:.4f} (want {want}) -> {stat!r}")
                 gdk = self.as_user(f"{xenv} GDK_BACKEND=x11 python3 -c {shq(self.GDK_PROBE)}").strip().splitlines()
