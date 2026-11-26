@@ -87,7 +87,8 @@ if [ "$result" = pass ]; then
   echo "::group::build ISO"
   t=$(date +%s)
   # Secure Boot: with the repo secret present the build MUST sign (SECUREBOOT=on fails the build otherwise); riscv64 has no signed shim
-  if [ -n "${SECUREBOOT_SIGNING_KEY:-}" ] && [ "$ARCH" != riscv64 ]; then export SECUREBOOT=on; fi
+  # (x86_64: required. aarch64: signed when its kernel is an EFI image, else built unsigned with a warning, until proven in CI there)
+  if [ -n "${SECUREBOOT_SIGNING_KEY:-}" ] && [ "$ARCH" = x86_64 ]; then export SECUREBOOT=on; fi
   ARCH=$ARCH VARIANT=$VARIANT JOBS=${JOBS:-4} bash ../build.sh -o "$OUT" -n "$suffix" 2>&1 | tee "$EVI/build.log" | tail -60
   build_rc=${PIPESTATUS[0]}
   BUILD_S=$(( $(date +%s)-t ))
@@ -228,7 +229,7 @@ if [ "$result" = pass ]; then
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
-  elif [ "$ARCH" != riscv64 ] && [ -n "${SECUREBOOT_SIGNING_KEY:-}" ]; then
+  elif [ "$ARCH" = x86_64 ] && [ -n "${SECUREBOOT_SIGNING_KEY:-}" ]; then
     fail secureboot "SECUREBOOT_SIGNING_KEY is set but the ISO carries no signed boot chain"
   fi
   if [ "$PROJECT" = horcrux ] || { [ "$PROJECT" = patronus ] && [ "$ARCH" = x86_64 ]; }; then
@@ -351,7 +352,7 @@ if [ -n "${FORGEJO_TOKEN:-}" ] && [ "$result" = pass ]; then
     fail publish "GH_RELEASE_TOKEN is not set: the ISO cannot be delivered (the GitHub release is the only download location)"
   elif [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
     fail publish "RELEASE_SIGNING_KEY is not set: unsigned images are never published (repo Actions secret)"
-  elif [ "$ARCH" != riscv64 ] && [ "${SB_SIGNED:-0}" != 1 ]; then
+  elif [ "$ARCH" = x86_64 ] && [ "${SB_SIGNED:-0}" != 1 ]; then
     fail publish "the ISO has no Secure Boot chain (SECUREBOOT_SIGNING_KEY repo secret missing?): the download pages promise Secure Boot support"
   elif SBOM=$SBOM_FILE bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json"; then
     gh_note="GitHub release updated."
