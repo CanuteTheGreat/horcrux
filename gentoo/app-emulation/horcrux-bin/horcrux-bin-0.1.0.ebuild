@@ -58,6 +58,7 @@ RDEPEND="
 	virtual/libudev
 !app-emulation/horcrux
 	san? (
+		sys-apps/nvme-cli
 		sys-apps/util-linux
 		sys-block/open-iscsi
 		sys-cluster/sanlock

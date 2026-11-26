@@ -22,6 +22,7 @@
 pub mod iscsi;
 pub mod lvm_shared;
 pub mod multipath;
+pub mod nvme;
 pub mod paths;
 pub mod tools;
 
@@ -34,7 +35,10 @@ pub mod kinds {
     pub const SETTINGS: &str = "san_settings";
     pub const SHARED_LVM: &str = "san_shared_lvm";
     pub const HOST_ID: &str = "san_host_id";
+    pub const NVME_TARGET: &str = "san_nvme_target";
 }
+
+pub use nvme::NvmeTargetSpec;
 
 /// The id of the single cluster-wide settings row.
 pub const SETTINGS_ID: &str = "cluster";
@@ -682,6 +686,9 @@ pub struct SanSpec {
     pub targets: Vec<IscsiTargetSpec>,
     #[serde(default)]
     pub shared_lvm: Vec<SharedLvmSpec>,
+    /// NVMe over Fabrics subsystems.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nvme_targets: Vec<NvmeTargetSpec>,
 }
 
 impl SanSpec {
@@ -691,6 +698,11 @@ impl SanSpec {
         s.settings.rev = 0;
         s.targets.retain(|t| !t.deleted);
         s.shared_lvm.retain(|l| !l.deleted);
+        s.nvme_targets.retain(|t| !t.deleted);
+        for t in &mut s.nvme_targets {
+            t.rev = 0;
+        }
+        s.nvme_targets.sort_by(|a, b| a.id.cmp(&b.id));
         for t in &mut s.targets {
             t.rev = 0;
         }
@@ -719,6 +731,14 @@ impl SanSpec {
                 .map_err(|e| format!("shared_lvm.{}: {e}", l.id))?;
             if !ids.insert(l.id.clone()) {
                 return Err(format!("shared_lvm: {} twice", l.id));
+            }
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for t in &mut self.nvme_targets {
+            t.validate()
+                .map_err(|e| format!("nvme_targets.{}: {e}", t.id))?;
+            if !ids.insert(t.id.clone()) {
+                return Err(format!("nvme_targets: {} twice", t.id));
             }
         }
         Ok(())

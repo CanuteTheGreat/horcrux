@@ -419,6 +419,10 @@ fn san_section_plans_creates_updates_and_prunes() {
     let mut want = e.san.clone().unwrap();
     want.targets = vec![t("a", "10.0.0.2"), t("b", "10.0.1.1")];
     want.settings.polling_interval_secs = 10;
+    want.nvme_targets = vec![serde_json::from_value(serde_json::json!({
+        "id": "nv", "subnqn": "nqn.2014-08.org.x:nv", "addresses": ["10.0.2.1"]
+    }))
+    .unwrap()];
     let s = Spec {
         san: Some(want),
         ..Default::default()
@@ -434,6 +438,7 @@ fn san_section_plans_creates_updates_and_prunes() {
     assert!(got.contains(&("san_target".into(), "a".into(), Action::Update)));
     assert!(got.contains(&("san_target".into(), "b".into(), Action::Create)));
     assert!(got.contains(&("san_target".into(), "old".into(), Action::Delete)));
+    assert!(got.contains(&("san_nvme_target".into(), "nv".into(), Action::Create)));
     // invalid sections are plan errors, not applies
     let mut bad = SanSpec::default();
     bad.settings.config_path = "/etc/multipath.conf".into();

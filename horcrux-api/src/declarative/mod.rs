@@ -449,7 +449,31 @@ fn san_plan(
             _ => {}
         }
     }
+    for t in &w.nvme_targets {
+        match l.nvme_targets.iter().find(|x| x.id == t.id) {
+            None => creates.push(ch(
+                "san_nvme_target",
+                &t.id,
+                Action::Create,
+                vec![t.subnqn.clone()],
+            )),
+            Some(x) if x != t => creates.push(ch(
+                "san_nvme_target",
+                &t.id,
+                Action::Update,
+                json_diff(x, t),
+            )),
+            _ => {}
+        }
+    }
     if prune {
+        for t in l
+            .nvme_targets
+            .iter()
+            .filter(|t| !w.nvme_targets.iter().any(|x| x.id == t.id))
+        {
+            deletes.push(ch("san_nvme_target", &t.id, Action::Delete, vec![]));
+        }
         for t in l
             .targets
             .iter()

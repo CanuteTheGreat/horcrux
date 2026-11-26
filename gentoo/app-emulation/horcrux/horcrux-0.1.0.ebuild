@@ -127,6 +127,7 @@ RDEPEND="
 	nas-mdraid? ( sys-fs/mdadm )
 	nas-lvm? ( sys-fs/lvm2 )
 	san? (
+		sys-apps/nvme-cli
 		sys-apps/util-linux
 		sys-block/open-iscsi
 		sys-cluster/sanlock

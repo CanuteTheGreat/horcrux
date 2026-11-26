@@ -160,6 +160,84 @@ api POST /san/apply >/dev/null
 check "sessions-gone-after-delete" '[ "$(iscsiadm -m session 2>/dev/null | grep -c "$IQN")" = 0 ]' "$(iscsiadm -m session 2>&1)"
 check "no-secret-or-500-in-log" '! grep -q " 500 " $D/api.log'
 
+echo "== NVMe over TCP: nvmet on 2 addresses (one per NIC), native multipath"
+NQN=nqn.2014-08.org.horcrux:hxsan-e2e
+modprobe nvmet 2>/dev/null; modprobe nvmet_tcp 2>/dev/null; modprobe nvme_tcp 2>/dev/null
+mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
+truncate -s 1G /var/lib/san/nvme0.img
+LOOP=$(losetup -f --show /var/lib/san/nvme0.img)
+C=/sys/kernel/config/nvmet
+mkdir -p $C/subsystems/$NQN/namespaces/1
+echo 1 > $C/subsystems/$NQN/attr_allow_any_host
+echo "$LOOP" > $C/subsystems/$NQN/namespaces/1/device_path
+echo 1 > $C/subsystems/$NQN/namespaces/1/enable
+for pa in 1:10.77.1.1 2:10.77.2.1; do
+  n=${pa%%:*}; a=${pa#*:}
+  mkdir -p $C/ports/$n
+  echo tcp > $C/ports/$n/addr_trtype; echo ipv4 > $C/ports/$n/addr_adrfam
+  echo "$a" > $C/ports/$n/addr_traddr; echo 4420 > $C/ports/$n/addr_trsvcid
+  ln -sf $C/subsystems/$NQN $C/ports/$n/subsystems/$NQN
+done
+check "nvmet-has-2-ports" '[ "$(ls $C/ports/*/subsystems | grep -c "$NQN")" = 2 ]' "$(ls -R $C/ports 2>&1 | head -20)"
+r=$(api POST /san/nvme/discover '{"addresses":["10.77.1.1:4420","10.77.2.1:4420"]}')
+nd=$(echo "$r" | jq_ "[s['addresses'] for s in d['body']['subsystems'] if s['subnqn'] == '$NQN']")
+check "nvme-discover-finds-2-paths" '[ "$nd" = "[['"'"'10.77.1.1:4420'"'"', '"'"'10.77.2.1:4420'"'"']]" ]' "$r"
+r=$(api POST /san/nvme/targets "{\"id\":\"nv\",\"subnqn\":\"$NQN\",\"addresses\":[\"10.77.1.1:4420\",\"10.77.2.1:4420\"]}")
+check "nvme-target-created" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 201 ]' "$r"
+rep=$(api POST /san/apply)
+echo "$rep" | head -c 2000; echo
+nctrl() { grep -l "^$NQN\$" /sys/class/nvme/nvme*/subsysnqn 2>/dev/null | wc -l; }
+check "2-nvme-controllers" '[ "$(nctrl)" = 2 ]' "$(nvme list-subsys 2>&1 | head -20)"
+check "host-nqn-present" 'grep -q "^nqn\." /etc/nvme/hostnqn'
+p=$(api GET /san/paths)
+echo "$p" | head -c 3000; echo
+nv=$(echo "$p" | jq_ "[(l['active_paths'], len(l['paths']), bool(l['map'])) for l in d['body']['luns'] if l['target'] == '$NQN']")
+check "nvme-one-head-2-active-paths" '[ "$nv" = "[(2, 2, True)]" ]' "$p"
+np=$(echo "$p" | jq_ "','.join(sorted(x['portal'] for l in d['body']['luns'] if l['target'] == '$NQN' for x in l['paths']))")
+check "nvme-paths-carry-addresses" '[ "$np" = "10.77.1.1:4420,10.77.2.1:4420" ]' "$p"
+check "native-multipath-reported" '[ "$(echo "$p" | jq_ "d[\"body\"][\"native_nvme_multipath\"]")" = True ]' "$p"
+HEAD=$(echo "$p" | jq_ "[l['map'] for l in d['body']['luns'] if l['target'] == '$NQN'][0]")
+iop=$(for f in /sys/class/nvme-subsystem/*/subsysnqn; do grep -qx "$NQN" $f && cat $(dirname $f)/iopolicy; done)
+check "iopolicy-round-robin" '[ "$iop" = round-robin ]' "$(grep -H . /sys/class/nvme-subsystem/*/iopolicy 2>&1)"
+
+echo "== NVMe I/O while one NIC (1 of 2 paths) dies"
+rm -f /tmp/hxnv-io.err /tmp/hxnv-io.count; touch /tmp/hxnv-writing
+( i=0; while [ -e /tmp/hxnv-writing ]; do dd if=/dev/zero of=/dev/$HEAD bs=64k count=16 seek=$((i % 4000)) oflag=direct conv=notrunc status=none || echo WRITE-ERROR >> /tmp/hxnv-io.err; i=$((i+16)); echo $i > /tmp/hxnv-io.count; done ) &
+sleep 3
+nft add table inet hxnvme2e; nft add chain inet hxnvme2e in '{ type filter hook input priority -10; }'
+nft add rule inet hxnvme2e in ip daddr 10.77.2.0/24 tcp dport 4420 drop
+nft add rule inet hxnvme2e in ip saddr 10.77.2.0/24 tcp sport 4420 drop
+for i in $(seq 1 60); do
+  p=$(api GET /san/paths)
+  [ "$(echo "$p" | jq_ "[l['failed_paths'] for l in d['body']['luns'] if l['target'] == '$NQN']")" = "[1]" ] && break
+  sleep 3
+done
+nf=$(echo "$p" | jq_ "[(l['active_paths'], l['failed_paths'], [x['portal'] for x in l['paths'] if x['state'] == 'failed']) for l in d['body']['luns'] if l['target'] == '$NQN']")
+check "nvme-path-view-shows-the-dead-nic" '[ "$nf" = "[(1, 1, ['"'"'10.77.2.1:4420'"'"'])]" ]' "$p"
+c1=$(cat /tmp/hxnv-io.count 2>/dev/null || echo 0); sleep 10; c2=$(cat /tmp/hxnv-io.count 2>/dev/null || echo 0)
+check "nvme-io-continues-on-remaining-path" '[ "$c2" -gt "$c1" ]' "$c1 -> $c2"
+nft delete table inet hxnvme2e
+for i in $(seq 1 60); do
+  p=$(api GET /san/paths)
+  [ "$(echo "$p" | jq_ "[l['active_paths'] for l in d['body']['luns'] if l['target'] == '$NQN']")" = "[2]" ] && break
+  sleep 3
+done
+check "nvme-paths-recover" '[ "$(echo "$p" | jq_ "[l[\"active_paths\"] for l in d[\"body\"][\"luns\"] if l[\"target\"] == \"$NQN\"]")" = "[2]" ]' "$p"
+rm -f /tmp/hxnv-writing; wait
+check "nvme-io-never-failed" '[ ! -s /tmp/hxnv-io.err ]' "$(head -3 /tmp/hxnv-io.err 2>/dev/null)"
+check "nvme-writer-really-wrote" '[ "$(cat /tmp/hxnv-io.count 2>/dev/null || echo 0)" -gt 160 ]' "$(cat /tmp/hxnv-io.count 2>/dev/null)"
+
+echo "== NVMe: missing nvme-cli answers 424; delete disconnects every path"
+NVB=$(command -v nvme)
+mv "$NVB" "$NVB.hx-off"
+r=$(api POST /san/nvme/discover '{"addresses":["10.77.1.1:4420"]}')
+mv "$NVB.hx-off" "$NVB"
+check "nvme-discover-424-without-nvme-cli" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 424 ] && echo "$r" | grep -q san-nvme-cli-missing' "$r"
+api DELETE /san/nvme/targets/nv >/dev/null
+api POST /san/apply >/dev/null
+check "nvme-disconnected-after-delete" '[ "$(nctrl)" = 0 ]' "$(nvme list-subsys 2>&1 | head)"
+check "still-no-500-in-log" '! grep -q " 500 " $D/api.log'
+
 pkill -x horcrux-api || true
 echo "SUMMARY fails=$fails"
 [ $fails = 0 ]

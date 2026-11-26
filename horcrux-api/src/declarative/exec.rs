@@ -139,7 +139,7 @@ async fn run_change(
         }
 
         #[cfg(feature = "san")]
-        (k @ ("san_settings" | "san_target" | "san_lvm"), a) => {
+        (k @ ("san_settings" | "san_target" | "san_lvm" | "san_nvme_target"), a) => {
             let w = spec.san.as_ref().ok_or("not in spec")?;
             crate::api::san::declarative_apply(state, w, k, &c.name, a).await?;
             Ok(Some(

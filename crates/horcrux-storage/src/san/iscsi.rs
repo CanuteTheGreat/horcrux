@@ -20,9 +20,15 @@ impl Portal {
     /// `10.0.0.1`, `10.0.0.1:3261`, `san.example`, `[fd00::1]`, `[fd00::1]:3261`,
     /// bare `fd00::1`; a `,tpgt` suffix (as iscsiadm prints) is ignored.
     pub fn parse(s: &str) -> Result<Self, String> {
+        Self::parse_default(s, DEFAULT_PORT)
+    }
+
+    /// [`Portal::parse`] with another default port (NVMe-oF uses 4420 for
+    /// I/O controllers and 8009 for discovery controllers).
+    pub fn parse_default(s: &str, default_port: u16) -> Result<Self, String> {
         let s = s.trim();
         let s = s.split(',').next().unwrap_or("");
-        let bad = || format!("portal {s:?}: use host, host:port or [ipv6]:port");
+        let bad = || format!("address {s:?}: use host, host:port or [ipv6]:port");
         if s.is_empty() || s.len() > 270 || s.chars().any(|c| c.is_whitespace()) {
             return Err(bad());
         }
@@ -30,7 +36,7 @@ impl Portal {
             let (h, after) = rest.split_once(']').ok_or_else(bad)?;
             let port = match after.strip_prefix(':') {
                 Some(p) => p.parse().map_err(|_| bad())?,
-                None if after.is_empty() => DEFAULT_PORT,
+                None if after.is_empty() => default_port,
                 None => return Err(bad()),
             };
             h.parse::<std::net::Ipv6Addr>().map_err(|_| bad())?;
@@ -38,11 +44,11 @@ impl Portal {
         } else if s.matches(':').count() > 1 {
             // bare IPv6
             s.parse::<std::net::Ipv6Addr>().map_err(|_| bad())?;
-            (s.to_string(), DEFAULT_PORT)
+            (s.to_string(), default_port)
         } else if let Some((h, p)) = s.split_once(':') {
             (h.to_string(), p.parse().map_err(|_| bad())?)
         } else {
-            (s.to_string(), DEFAULT_PORT)
+            (s.to_string(), default_port)
         };
         if port == 0
             || host.is_empty()

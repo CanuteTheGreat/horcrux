@@ -9,6 +9,9 @@
 //! * `GET      /api/san/nodes/:node/paths`   the same, asked of another member
 //! * `POST     /api/san/apply`               reconcile this node now, returns the report
 //! * `GET/POST /api/san/lvm`, `GET/DELETE /api/san/lvm/:id`  shared VGs used as storage
+//! * `GET/POST /api/san/nvme/targets`, `GET/PUT/DELETE /api/san/nvme/targets/:id`
+//!   NVMe over Fabrics subsystems (TCP/RDMA), connected on every advertised path
+//! * `POST     /api/san/nvme/discover`       discovery log of listed discovery controllers
 //!
 //! Cluster: every row (settings, targets, shared VGs, sanlock host ids) is
 //! replicated to all members (pushed on change, pulled every reconcile
@@ -31,8 +34,8 @@ use axum::{
     Extension, Json, Router,
 };
 use horcrux_storage::san::{
-    self, iscsi, kinds, lvm_shared, multipath, paths, tools, HostId, IscsiTargetSpec,
-    MultipathSettings, SharedLvmSpec, TargetWrite, SETTINGS_ID,
+    self, iscsi, kinds, lvm_shared, multipath, nvme, paths, tools, HostId, IscsiTargetSpec,
+    MultipathSettings, NvmeTargetSpec, SharedLvmSpec, TargetWrite, SETTINGS_ID,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -59,6 +62,12 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/san/apply", post(apply_now))
         .route("/api/san/lvm", get(list_lvm).post(create_lvm))
         .route("/api/san/lvm/:id", get(get_lvm).delete(delete_lvm))
+        .route("/api/san/nvme/targets", get(list_nvme).post(create_nvme))
+        .route(
+            "/api/san/nvme/targets/:id",
+            get(get_nvme).put(update_nvme).delete(delete_nvme),
+        )
+        .route("/api/san/nvme/discover", post(discover_nvme))
         .route("/api/ha/peer/san/sync", post(peer_sync))
         .route("/api/ha/peer/san/list", post(peer_list))
         .route("/api/ha/peer/san/paths", post(peer_paths))
@@ -181,6 +190,8 @@ struct PeerList {
     lvm: Vec<SharedLvmSpec>,
     #[serde(default)]
     host_ids: Vec<HostId>,
+    #[serde(default)]
+    nvme: Vec<NvmeTargetSpec>,
 }
 
 async fn everything(state: &AppState) -> PeerList {
@@ -202,6 +213,7 @@ async fn everything(state: &AppState) -> PeerList {
         settings: s.into_iter().next(),
         lvm: rows(state, kinds::SHARED_LVM).await,
         host_ids: rows(state, kinds::HOST_ID).await,
+        nvme: rows(state, kinds::NVME_TARGET).await,
     }
 }
 
@@ -249,6 +261,18 @@ async fn merge_in(state: &AppState, inc: PeerList) -> bool {
     for l in inc.lvm {
         if have.get(&l.id).is_none_or(|r| l.rev > *r)
             && put_row(state, kinds::SHARED_LVM, &l.id, &l).await.is_ok()
+        {
+            changed = true;
+        }
+    }
+    let have: HashMap<String, u64> = rows::<NvmeTargetSpec>(state, kinds::NVME_TARGET)
+        .await
+        .into_iter()
+        .map(|t| (t.id, t.rev))
+        .collect();
+    for t in inc.nvme {
+        if have.get(&t.id).is_none_or(|r| t.rev > *r)
+            && put_row(state, kinds::NVME_TARGET, &t.id, &t).await.is_ok()
         {
             changed = true;
         }
@@ -503,15 +527,26 @@ pub async fn reconcile(state: &Arc<AppState>) -> ApplyReport {
                 login_target(state, t, &mut rep).await;
             }
             if cfg.enabled && tools.multipathd {
-                register_wwids(&mine, &mut rep).await;
+                let iqns: HashSet<&str> = mine.iter().map(|t| t.iqn.as_str()).collect();
+                multipath::settle(TOOL_TIMEOUT).await;
+                let devs: Vec<String> = iscsi::sessions(TOOL_TIMEOUT)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|s| iqns.contains(s.iqn.as_str()))
+                    .flat_map(|s| s.disks.into_iter().map(|d| d.dev))
+                    .collect();
+                register_wwids(devs, &mut rep).await;
             }
         }
-    } else if !cfg.enabled {
+    } else if !cfg.enabled && mine_nvme_empty(state, &local).await {
         if let Ok(true) = multipath::remove_dropin(std::path::Path::new(&cfg.config_path)) {
             rep.actions.push(format!("removed {}", cfg.config_path));
             let _ = multipath::reconfigure(TOOL_TIMEOUT).await;
         }
     }
+
+    reconcile_nvme(state, &local, &cfg, &tools, &mut rep).await;
 
     // Shared VGs deleted or moved off this node: drop the pool, leave the
     // lockspace (the VG and its data stay on the LUN).
@@ -589,31 +624,29 @@ async fn login_target(state: &AppState, t: &IscsiTargetSpec, rep: &mut ApplyRepo
 }
 
 /// `find_multipaths strict` only maps known WWIDs: register the LUNs of
-/// our own targets (and nothing else, so local disks stay untouched).
-async fn register_wwids(mine: &[&IscsiTargetSpec], rep: &mut ApplyReport) {
-    let iqns: HashSet<&str> = mine.iter().map(|t| t.iqn.as_str()).collect();
+/// our own targets (`devs`: the disks of our iSCSI sessions, or our NVMe-oF
+/// namespaces when native NVMe multipath is off; nothing else, so local
+/// disks stay untouched).
+async fn register_wwids(devs: Vec<String>, rep: &mut ApplyReport) {
     // Disks of sessions that just logged in may still be in udev's queue.
     multipath::settle(TOOL_TIMEOUT).await;
-    let sessions = iscsi::sessions(TOOL_TIMEOUT).await.unwrap_or_default();
     let mut added = false;
     let mut disk_wwid: Vec<(String, String)> = Vec::new();
-    for s in sessions.iter().filter(|s| iqns.contains(s.iqn.as_str())) {
-        for d in &s.disks {
-            let Some(w) = multipath::wwid_of(&d.dev, TOOL_TIMEOUT).await else {
-                continue;
-            };
-            disk_wwid.push((d.dev.clone(), w.clone()));
-            if known_wwids().lock().unwrap().contains(&w) {
-                continue;
+    for dev in &devs {
+        let Some(w) = multipath::wwid_of(dev, TOOL_TIMEOUT).await else {
+            continue;
+        };
+        disk_wwid.push((dev.clone(), w.clone()));
+        if known_wwids().lock().unwrap().contains(&w) {
+            continue;
+        }
+        match multipath::add_wwid(&w, TOOL_TIMEOUT).await {
+            Ok(()) => {
+                known_wwids().lock().unwrap().insert(w.clone());
+                rep.actions.push(format!("multipath: added {w}"));
+                added = true;
             }
-            match multipath::add_wwid(&w, TOOL_TIMEOUT).await {
-                Ok(()) => {
-                    known_wwids().lock().unwrap().insert(w.clone());
-                    rep.actions.push(format!("multipath: added {w}"));
-                    added = true;
-                }
-                Err(e) => rep.errors.push(e),
-            }
+            Err(e) => rep.errors.push(e),
         }
     }
     if added {
@@ -800,6 +833,9 @@ fn spawn_reconciler(state: Arc<AppState>) {
                 .await
                 .is_empty()
                 || !rows::<SharedLvmSpec>(&state, kinds::SHARED_LVM)
+                    .await
+                    .is_empty()
+                || !rows::<NvmeTargetSpec>(&state, kinds::NVME_TARGET)
                     .await
                     .is_empty();
             if configured {
@@ -1065,6 +1101,10 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusView> {
 pub struct NodePaths {
     pub node: String,
     pub multipathd_running: bool,
+    /// Native NVMe multipath (`nvme_core.multipath`); `None` = no NVMe
+    /// driver loaded.
+    #[serde(default)]
+    pub native_nvme_multipath: Option<bool>,
     pub luns: Vec<paths::LunView>,
     pub errors: Vec<String>,
 }
@@ -1076,7 +1116,27 @@ async fn collect_paths(state: &AppState) -> NodePaths {
         node,
         ..Default::default()
     };
-    if !t.iscsiadm && !t.multipathd {
+    let root = std::path::Path::new("/");
+    let nqns: HashSet<String> = live_nvme(state)
+        .await
+        .into_iter()
+        .filter(|x| x.applies_to(&out.node))
+        .map(|x| x.subnqn)
+        .collect();
+    let (subs, ctrls) = if nqns.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        out.native_nvme_multipath = nvme::native_multipath(root);
+        (nvme::scan_subsystems(root), nvme::scan_controllers(root))
+    };
+    // Our NVMe-oF namespace devices (they count like session disks for
+    // the dm-multipath view when native multipath is off).
+    let nvme_devs: HashSet<String> = subs
+        .iter()
+        .filter(|s| nqns.contains(&s.subsysnqn))
+        .flat_map(|s| s.namespaces.iter().map(|n| n.dev.clone()))
+        .collect();
+    if !t.iscsiadm && !t.multipathd && nvme_devs.is_empty() {
         return out;
     }
     let sessions = if t.iscsiadm {
@@ -1106,10 +1166,11 @@ async fn collect_paths(state: &AppState) -> NodePaths {
     };
     // Only SAN maps: those with a path from an iSCSI session (or, later,
     // NVMe-oF/FC); local multipathed disks are not ours to show.
-    let session_devs: HashSet<&str> = sessions
+    let mut session_devs: HashSet<&str> = sessions
         .iter()
         .flat_map(|s| s.disks.iter().map(|d| d.dev.as_str()))
         .collect();
+    session_devs.extend(nvme_devs.iter().map(String::as_str));
     let maps: Vec<multipath::Map> = maps
         .into_iter()
         .filter(|m| {
@@ -1123,12 +1184,23 @@ async fn collect_paths(state: &AppState) -> NodePaths {
         .iter()
         .flat_map(|m| m.paths.iter().map(|p| p.dev.as_str()))
         .collect();
-    for d in session_devs.iter().filter(|d| !mapped.contains(*d)) {
+    for d in session_devs
+        .iter()
+        .filter(|d| !mapped.contains(*d) && !nvme_devs.contains(**d))
+    {
         if let Some(w) = multipath::wwid_of(d, TOOL_TIMEOUT).await {
             wwids.insert(d.to_string(), w);
         }
     }
     out.luns = paths::assemble(&sessions, &maps, &wwids, paths::sysfs_size);
+    let in_dm: HashSet<String> = mapped.iter().map(|d| d.to_string()).collect();
+    out.luns.extend(nvme::assemble(
+        &subs,
+        &ctrls,
+        &nqns,
+        &in_dm,
+        paths::sysfs_size,
+    ));
     out
 }
 
@@ -1308,6 +1380,286 @@ async fn delete_lvm(
 
 // ------------------------------------------------------------ declarative
 
+// ------------------------------------------------------------ NVMe-oF
+
+async fn live_nvme(state: &AppState) -> Vec<NvmeTargetSpec> {
+    rows::<NvmeTargetSpec>(state, kinds::NVME_TARGET)
+        .await
+        .into_iter()
+        .filter(|t| !t.deleted)
+        .collect()
+}
+
+async fn mine_nvme_empty(state: &AppState, local: &str) -> bool {
+    !live_nvme(state).await.iter().any(|t| t.applies_to(local))
+}
+
+/// Connect every NVMe-oF subsystem meant for this node on all its paths,
+/// disconnect the ones deleted or moved away, and set the I/O policy.
+async fn reconcile_nvme(
+    state: &AppState,
+    local: &str,
+    cfg: &MultipathSettings,
+    t: &tools::ToolStatus,
+    rep: &mut ApplyReport,
+) {
+    let all = rows::<NvmeTargetSpec>(state, kinds::NVME_TARGET).await;
+    let mine: Vec<&NvmeTargetSpec> = all.iter().filter(|x| x.applies_to(local)).collect();
+    let root = std::path::Path::new("/");
+    let wanted: HashSet<&str> = mine.iter().map(|x| x.subnqn.as_str()).collect();
+    // Gone from this node: disconnect its controllers (only NQNs we
+    // configured; other fabrics connections are not ours).
+    for g in all.iter().filter(|x| !x.applies_to(local)) {
+        if wanted.contains(g.subnqn.as_str()) {
+            continue;
+        }
+        for c in nvme::scan_controllers(root)
+            .into_iter()
+            .filter(|c| c.subsysnqn == g.subnqn)
+        {
+            match nvme::disconnect(&c.name, TOOL_TIMEOUT).await {
+                Ok(()) => rep
+                    .actions
+                    .push(format!("disconnected {} ({})", c.name, g.subnqn)),
+                Err(e) => rep.errors.push(e),
+            }
+        }
+    }
+    if mine.is_empty() {
+        return;
+    }
+    if let Err(e) = tools::Need::Nvme.check(t) {
+        missing(rep, e);
+        return;
+    }
+    match nvme::ensure_hostnqn(TOOL_TIMEOUT).await {
+        Ok(Some(n)) => rep.actions.push(format!("host NQN {n}")),
+        Ok(None) => {}
+        Err(e) => rep.errors.push(e),
+    }
+    for x in &mine {
+        if let Err(e) = nvme::load_transport(x.transport, TOOL_TIMEOUT).await {
+            missing(rep, tools::nvme_transport_missing(x.transport.module(), &e));
+            continue;
+        }
+        let (found, errs) = if x.use_advertised_addresses {
+            nvme::discover(
+                x.transport,
+                &x.parsed_addresses().unwrap_or_default(),
+                TOOL_TIMEOUT,
+            )
+            .await
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        rep.errors
+            .extend(errs.into_iter().map(|e| format!("{} discovery: {e}", x.id)));
+        let want = nvme::connect_addresses(x, &found);
+        if want.is_empty() && x.use_advertised_addresses {
+            rep.errors.push(format!(
+                "{}: discovery reported no path for {}",
+                x.id, x.subnqn
+            ));
+        }
+        for a in want {
+            match nvme::ensure_path(x, &a, TOOL_TIMEOUT).await {
+                Ok(true) => rep
+                    .actions
+                    .push(format!("connected to {} on {a}", x.subnqn)),
+                Ok(false) => {}
+                Err(e) => rep.errors.push(format!("{}: {e}", x.id)),
+            }
+        }
+    }
+    let native = nvme::native_multipath(root).unwrap_or(false);
+    let subs = nvme::scan_subsystems(root);
+    if native {
+        for x in &mine {
+            for s in subs.iter().filter(|s| s.subsysnqn == x.subnqn) {
+                match nvme::set_iopolicy(root, &s.name, x.iopolicy) {
+                    Ok(true) => {
+                        rep.actions
+                            .push(format!("{}: iopolicy {}", s.name, x.iopolicy.as_sysfs()))
+                    }
+                    Ok(false) => {}
+                    Err(e) => rep.errors.push(e),
+                }
+            }
+        }
+    } else if cfg.enabled && t.multipathd {
+        // No native multipath: dm-multipath maps the namespaces by WWID.
+        let devs: Vec<String> = subs
+            .iter()
+            .filter(|s| wanted.contains(s.subsysnqn.as_str()))
+            .flat_map(|s| s.namespaces.iter().map(|n| n.dev.clone()))
+            .collect();
+        if !devs.is_empty() {
+            register_wwids(devs, rep).await;
+        }
+    }
+}
+
+async fn list_nvme(State(state): State<Arc<AppState>>) -> Json<Vec<NvmeTargetSpec>> {
+    Json(live_nvme(&state).await)
+}
+
+async fn find_nvme(state: &AppState, id: &str) -> Result<NvmeTargetSpec, ApiError> {
+    live_nvme(state)
+        .await
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| ApiError::NotFound(format!("NVMe-oF target {id} not found")))
+}
+
+async fn get_nvme(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<NvmeTargetSpec>, ApiError> {
+    Ok(Json(find_nvme(&state, &id).await?))
+}
+
+async fn commit_nvme(
+    state: &Arc<AppState>,
+    mut t: NvmeTargetSpec,
+    base_rev: u64,
+) -> Result<NvmeTargetSpec, ApiError> {
+    t.rev = now_ms().max(base_rev + 1);
+    put_row(state, kinds::NVME_TARGET, &t.id, &t).await?;
+    push_to_peers(
+        state,
+        PeerList {
+            nvme: vec![t.clone()],
+            ..Default::default()
+        },
+    )
+    .await;
+    kick(state);
+    Ok(t)
+}
+
+async fn create_nvme(
+    State(state): State<Arc<AppState>>,
+    Json(mut t): Json<NvmeTargetSpec>,
+) -> Result<(StatusCode, Json<NvmeTargetSpec>), ApiError> {
+    t.validate().map_err(ApiError::BadRequest)?;
+    t.deleted = false;
+    let live = live_nvme(&state).await;
+    if live.iter().any(|o| o.id == t.id) {
+        return Err(ApiError::Conflict(format!(
+            "NVMe-oF target {} already exists",
+            t.id
+        )));
+    }
+    if let Some(o) = live.iter().find(|o| o.subnqn == t.subnqn) {
+        return Err(ApiError::Conflict(format!(
+            "subsystem {} is already configured as {}",
+            t.subnqn, o.id
+        )));
+    }
+    let base = rows::<NvmeTargetSpec>(&state, kinds::NVME_TARGET)
+        .await
+        .into_iter()
+        .find(|o| o.id == t.id)
+        .map(|o| o.rev)
+        .unwrap_or(0);
+    let v = commit_nvme(&state, t, base).await?;
+    Ok((StatusCode::CREATED, Json(v)))
+}
+
+async fn update_nvme(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(mut t): Json<NvmeTargetSpec>,
+) -> Result<Json<NvmeTargetSpec>, ApiError> {
+    let old = find_nvme(&state, &id).await?;
+    t.id = id;
+    t.validate().map_err(ApiError::BadRequest)?;
+    t.deleted = false;
+    if live_nvme(&state)
+        .await
+        .iter()
+        .any(|o| o.id != t.id && o.subnqn == t.subnqn)
+    {
+        return Err(ApiError::Conflict(format!(
+            "subsystem {} is configured twice",
+            t.subnqn
+        )));
+    }
+    Ok(Json(commit_nvme(&state, t, old.rev).await?))
+}
+
+async fn tombstone_nvme(state: &Arc<AppState>, id: &str) -> Result<(), ApiError> {
+    let mut t = find_nvme(state, id).await?;
+    t.deleted = true;
+    t.rev = now_ms().max(t.rev + 1);
+    put_row(state, kinds::NVME_TARGET, &t.id, &t).await?;
+    push_to_peers(
+        state,
+        PeerList {
+            nvme: vec![t],
+            ..Default::default()
+        },
+    )
+    .await;
+    kick(state);
+    Ok(())
+}
+
+async fn delete_nvme(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    tombstone_nvme(&state, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct NvmeDiscoverReq {
+    #[serde(default)]
+    transport: nvme::NvmeTransport,
+    /// Discovery controllers (default port 8009).
+    addresses: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NvmeDiscoverAnswer {
+    pub subsystems: Vec<nvme::DiscoveredSubsystem>,
+    /// Addresses that did not answer (the others still count).
+    pub errors: Vec<String>,
+}
+
+async fn discover_nvme(
+    Json(req): Json<NvmeDiscoverReq>,
+) -> Result<Json<NvmeDiscoverAnswer>, ApiError> {
+    if req.addresses.is_empty() {
+        return Err(ApiError::BadRequest("addresses: at least one".into()));
+    }
+    let mut ps = Vec::new();
+    for a in &req.addresses {
+        ps.push(
+            iscsi::Portal::parse_default(a, nvme::DEFAULT_DISCOVERY_PORT)
+                .map_err(ApiError::BadRequest)?,
+        );
+    }
+    tools::Need::Nvme
+        .check(&tools::ToolStatus::probe())
+        .map_err(ApiError::from)?;
+    if let Err(e) = nvme::load_transport(req.transport, TOOL_TIMEOUT).await {
+        return Err(ApiError::from(tools::nvme_transport_missing(
+            req.transport.module(),
+            &e,
+        )));
+    }
+    let (subsystems, errors) = nvme::discover(req.transport, &ps, TOOL_TIMEOUT).await;
+    if subsystems.is_empty() && !errors.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "no discovery controller answered: {}",
+            errors.join("; ")
+        )));
+    }
+    Ok(Json(NvmeDiscoverAnswer { subsystems, errors }))
+}
+
 /// The SAN rows as the declarative spec shows them.
 pub async fn live_spec(state: &AppState) -> san::SanSpec {
     let s = rows::<MultipathSettings>(state, kinds::SETTINGS).await;
@@ -1315,6 +1667,7 @@ pub async fn live_spec(state: &AppState) -> san::SanSpec {
         settings: s.into_iter().next().unwrap_or_default(),
         targets: live_targets(state).await,
         shared_lvm: live_lvm(state).await,
+        nvme_targets: live_nvme(state).await,
     }
     .normalized()
 }
@@ -1443,6 +1796,25 @@ pub async fn declarative_apply(
             kick(state);
             Ok(())
         }
+        ("san_nvme_target", Action::Delete) => tombstone_nvme(state, name).await.map_err(msg),
+        ("san_nvme_target", _) => {
+            let mut t = w
+                .nvme_targets
+                .iter()
+                .find(|t| t.id == name)
+                .cloned()
+                .ok_or("not in spec")?;
+            t.validate()?;
+            t.deleted = false;
+            let base = rows::<NvmeTargetSpec>(state, kinds::NVME_TARGET)
+                .await
+                .into_iter()
+                .find(|o| o.id == t.id)
+                .map(|o| o.rev)
+                .unwrap_or(0);
+            commit_nvme(state, t, base).await.map_err(msg)?;
+            Ok(())
+        }
         _ => Err(format!("unknown SAN change {kind}")),
     }
 }
@@ -1477,6 +1849,7 @@ mod tests {
                 && p.settings.is_none()
                 && p.lvm.is_empty()
                 && p.host_ids.is_empty()
+                && p.nvme.is_empty()
         );
     }
 }

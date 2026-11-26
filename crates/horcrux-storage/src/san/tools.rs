@@ -44,6 +44,15 @@ impl ToolStatus {
     }
 }
 
+/// The kernel lacks the fabrics transport module (`nvme_tcp`/`nvme_rdma`).
+pub fn nvme_transport_missing(module: &str, detail: &str) -> horcrux_common::Error {
+    horcrux_common::Error::NodeLacks {
+        reason: "san-nvme-transport-missing",
+        message: format!("This node's kernel has no NVMe over Fabrics transport {module}: {detail}."),
+        hint: "Build the kernel with CONFIG_NVME_TCP (or CONFIG_NVME_RDMA for RDMA) and load the module.".into(),
+    }
+}
+
 /// A missing SAN facility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Need {
@@ -51,6 +60,8 @@ pub enum Need {
     Multipath,
     SharedLvm,
     Discard,
+    /// nvme-cli, for NVMe over Fabrics.
+    Nvme,
 }
 
 impl Need {
@@ -80,6 +91,12 @@ impl Need {
                 "san-blkdiscard-missing",
                 "This node has no blkdiscard, needed to wipe or discard removed volumes.",
                 "Install sys-apps/util-linux, or turn wipe_removed/discard_removed off for this storage.",
+            ),
+            Need::Nvme => (
+                t.nvme,
+                "san-nvme-cli-missing",
+                "This node has no NVMe over Fabrics tool (nvme-cli).",
+                "Install sys-apps/nvme-cli (USE=san on horcrux pulls it).",
             ),
         };
         if ok {
@@ -114,6 +131,7 @@ mod tests {
             (Need::Multipath, "san-multipathd-missing"),
             (Need::SharedLvm, "san-lvmlockd-missing"),
             (Need::Discard, "san-blkdiscard-missing"),
+            (Need::Nvme, "san-nvme-cli-missing"),
         ] {
             match n.check(&none) {
                 Err(horcrux_common::Error::NodeLacks { reason: r, .. }) => assert_eq!(r, reason),

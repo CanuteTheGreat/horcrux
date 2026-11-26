@@ -26,7 +26,7 @@ ssh_authorized_keys:
   - $(cat key.pub)
 disable_root: false
 package_update: true
-packages: [open-iscsi, multipath-tools, lvm2-lockd, sanlock, targetcli-fb, nftables, libvirt0, libpam0g, python3, qemu-utils, curl, util-linux]
+packages: [open-iscsi, nvme-cli, multipath-tools, lvm2-lockd, sanlock, targetcli-fb, nftables, libvirt0, libpam0g, python3, qemu-utils, curl, util-linux]
 runcmd:
   - [sh, -c, "for f in horcrux-api hx_node.py san_guest_e2e.sh; do curl -fsS http://10.0.2.2:${HTTP_PORT}/\$f -o /root/\$f; done; chmod 755 /root/horcrux-api; touch /root/hxsan-ready"]
 EOF

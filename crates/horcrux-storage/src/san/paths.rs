@@ -211,7 +211,7 @@ fn finish(mut l: LunView) -> LunView {
     l
 }
 
-fn recount(l: &mut LunView) {
+pub fn recount(l: &mut LunView) {
     // Without a map every disk is a usable path; with one, only the map's
     // active paths carry I/O.
     let mapped = l.map.is_some();

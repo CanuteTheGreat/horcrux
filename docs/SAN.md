@@ -1,18 +1,21 @@
-# SAN storage: iSCSI, dm-multipath and shared LVM
+# SAN storage: iSCSI, NVMe over Fabrics, multipath and shared LVM
 
 Horcrux manages block storage on a SAN for the whole cluster: an iSCSI
 target is configured once, every node logs in on every path the array
 advertises, dm-multipath turns those paths into one device per LUN, and a
-volume group on that LUN is shared by all nodes with node locking. Status:
-phase 1 (iSCSI + multipath + shared LVM). NVMe over Fabrics and Fibre
-Channel, the UI wizard, the per-node SAN page and snapshots as a qcow2
-volume chain are the next phases (`docs/design/proxmox-9.3-parity.md`,
+volume group on that LUN is shared by all nodes with node locking. NVMe
+over Fabrics subsystems (NVMe/TCP, NVMe/RDMA) are connected the same way on
+every path, with the kernel's native NVMe multipath. Status: phase 1
+(iSCSI + multipath + shared LVM) and phase 2 (NVMe-oF). Fibre Channel, the
+UI wizard, the per-node SAN page and snapshots as a qcow2 volume chain are
+the next phase (`docs/design/proxmox-9.3-parity.md`,
 item 4).
 
 Build: Cargo feature / USE flag `san` (on in the default build and the
 prebuilt `horcrux-bin`). On `horcrux-bin` the USE flag only pulls the host
 tools: `sys-block/open-iscsi`, `sys-fs/multipath-tools`,
-`sys-fs/lvm2[lvm,sanlock]`, `sys-cluster/sanlock`, `sys-apps/util-linux`.
+`sys-fs/lvm2[lvm,sanlock]`, `sys-cluster/sanlock`, `sys-apps/util-linux`,
+`sys-apps/nvme-cli`.
 A node without a tool answers **424** with a reason code instead of failing:
 
 | reason | missing | needed for |
@@ -21,6 +24,8 @@ A node without a tool answers **424** with a reason code instead of failing:
 | `san-multipathd-missing` | `multipathd`, `multipath` | multipath (or turn `enabled` off) |
 | `san-lvmlockd-missing` | `lvmlockd`, `sanlock` | shared volume groups |
 | `san-blkdiscard-missing` | `blkdiscard` | `wipe_removed` / `discard_removed` |
+| `san-nvme-cli-missing` | `nvme` (nvme-cli) | NVMe-oF discovery, connects |
+| `san-nvme-transport-missing` | kernel module `nvme_tcp` / `nvme_rdma` | NVMe-oF on that transport |
 
 The background apply reports the same reasons in `GET /api/san/status`
 (`last_apply.missing`).
@@ -41,10 +46,12 @@ on `/storage`.
 | `GET /api/san/nodes/:node/paths` | the same, asked of another cluster member |
 | `POST /api/san/apply` | apply now on this node and return the report |
 | `GET/POST /api/san/lvm`, `GET/DELETE /api/san/lvm/:id` | shared volume groups used as storage pools on every node |
+| `GET/POST /api/san/nvme/targets`, `GET/PUT/DELETE /api/san/nvme/targets/:id` | NVMe-oF subsystems |
+| `POST /api/san/nvme/discover` `{"transport": "tcp", "addresses": [...]}` | discovery log of the listed discovery controllers: every subsystem and each I/O controller address (nothing is stored) |
 
 The declarative config has the same objects in a `san:` section
-(`settings`, `targets`, `shared_lvm`; export/plan/apply, prune deletes
-targets and shared VGs the spec lacks).
+(`settings`, `targets`, `shared_lvm`, `nvme_targets`; export/plan/apply,
+prune deletes targets, NVMe-oF subsystems and shared VGs the spec lacks).
 
 ### Targets
 
@@ -74,6 +81,46 @@ targets and shared VGs the spec lacks).
 * `replacement_timeout_secs` (default 5) is how long a dead session holds
   I/O before multipath fails over (`node.session.timeo.replacement_timeout`).
 * `nodes` limits a target to some members (empty = all).
+
+### NVMe over Fabrics
+
+```json
+{
+  "id": "flash1",
+  "subnqn": "nqn.2014-08.com.example:flash1",
+  "transport": "tcp",
+  "addresses": ["10.10.1.1", "10.10.2.1:8009"],
+  "use_advertised_addresses": true,
+  "ctrl_loss_tmo_secs": 600,
+  "reconnect_delay_secs": 10,
+  "iopolicy": "round-robin",
+  "nodes": []
+}
+```
+
+* `addresses` are discovery controllers (default port 8009). With
+  `use_advertised_addresses` (default) each node runs `nvme discover` on
+  every listed address and connects to every I/O controller the discovery
+  logs report for `subnqn`; with it off, the listed addresses are the I/O
+  controllers themselves (default port 4420).
+* `ctrl_loss_tmo_secs` (kernel default 600; -1 = reconnect forever) and
+  `reconnect_delay_secs` (10) are passed to `nvme connect`.
+* Multipath: with native NVMe multipath (`nvme_core.multipath=Y`, the
+  default on Gentoo and distribution kernels) the paths of a namespace form
+  one head device (`/dev/nvme1n1`); Horcrux sets the subsystem's
+  `iopolicy` (`numa`, `round-robin` (default), `queue-depth` on 6.11+).
+  With native multipath off, each path is its own block device and
+  dm-multipath maps them by WWID like iSCSI LUNs (when `enabled`).
+* A node without `/etc/nvme/hostnqn` gets one (`nvme gen-hostnqn`) once, so
+  the array sees the same host after every reboot; an existing one is never
+  changed.
+* In `GET /api/san/paths` an NVMe namespace is a LUN with `transport:
+  "nvme"` paths: `map` is the head device, each path shows the controller,
+  its address and local address, the controller state (`device_state`:
+  `live`, `connecting`, ...) and the ANA state (`checker_state`:
+  `optimized`, `non-optimized`, `inaccessible`). `native_nvme_multipath`
+  says which mode the node runs. Only subsystems configured here are shown.
+* In-band authentication (DH-HMAC-CHAP) is not configured yet.
 
 ### Multipath settings
 
@@ -150,4 +197,5 @@ path, writes the drop-in and reloads multipathd only when it changed,
 registers the LUN WWIDs, starts the lock services, joins the lockspaces and
 creates the storage pools. A node that joins later pulls everything on its
 first tick. A target deleted (or limited away from a node) is logged out of
-on that node.
+on that node; an NVMe-oF subsystem deleted the same way has its
+controllers disconnected (`nvme disconnect`).
