@@ -57,7 +57,8 @@ pub fn fmt_bytes(b: u64) -> String {
     if i == 0 {
         format!("{} B", b)
     } else {
-        format!("{:.1} {}", v, UNITS[i])
+        let t = format!("{:.1}", v);
+        format!("{} {}", t.strip_suffix(".0").unwrap_or(&t), UNITS[i])
     }
 }
 
@@ -256,6 +257,110 @@ pub fn PrefSegment(
     }
 }
 
+// ---------- data grid helpers ----------
+
+/// Sort state of a grid: (column key, ascending).
+pub type SortState = (String, bool);
+
+/// A sortable column header: click toggles ascending/descending, `aria-sort` says the current order.
+#[component]
+pub fn SortTh(
+    #[prop(into)] label: String,
+    key: &'static str,
+    sort: ReadSignal<SortState>,
+    set_sort: WriteSignal<SortState>,
+    #[prop(optional)] num: bool,
+) -> impl IntoView {
+    let aria = move || {
+        let (k, asc) = sort.get();
+        if k == key {
+            if asc {
+                "ascending"
+            } else {
+                "descending"
+            }
+        } else {
+            "none"
+        }
+    };
+    let toggle = move || {
+        set_sort.update(|(k, asc)| {
+            if k == key {
+                *asc = !*asc;
+            } else {
+                *k = key.to_string();
+                *asc = true;
+            }
+        })
+    };
+    view! {
+        <th class=if num { "sortable num" } else { "sortable" } data-col=key aria-sort=aria tabindex="0"
+            on:click=move |_| toggle()
+            on:keydown=move |e| if e.key() == "Enter" || e.key() == " " { e.prevent_default(); toggle() }>
+            {label}<span class="sort-ind" aria-hidden="true"></span>
+        </th>
+    }
+}
+
+/// Hidden columns of a grid, kept per grid in localStorage (`hx.cols.<grid>`).
+pub fn hidden_columns(grid: &str) -> RwSignal<Vec<String>> {
+    let v = get_pref(&format!("hx.cols.{grid}"));
+    create_rw_signal(
+        v.split(',')
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect(),
+    )
+}
+
+/// "Columns" menu: tick boxes per column; hidden columns get a scoped display:none rule.
+#[component]
+pub fn ColumnChooser(
+    grid: &'static str,
+    columns: Vec<(&'static str, &'static str)>,
+    hidden: RwSignal<Vec<String>>,
+) -> impl IntoView {
+    let rules = move || {
+        hidden
+            .get()
+            .iter()
+            .map(|k| format!("#{grid} [data-col=\"{k}\"]{{display:none}}"))
+            .collect::<String>()
+    };
+    view! {
+        <style>{rules}</style>
+        <details class="col-chooser">
+            <summary class="btn btn-sm" id=format!("{grid}-columns")>"Columns"</summary>
+            <div class="menu">
+                {columns.into_iter().map(|(k, label)| view! {
+                    <label>
+                        <input type="checkbox" prop:checked=move || !hidden.get().iter().any(|h| h == k)
+                            on:change=move |ev| {
+                                let show = event_target_checked(&ev);
+                                hidden.update(|h| { h.retain(|x| x != k); if !show { h.push(k.to_string()); } });
+                                if let Some(st) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+                                    let _ = st.set_item(&format!("hx.cols.{grid}"), &hidden.get_untracked().join(","));
+                                }
+                            }/>
+                        {label}
+                    </label>
+                }).collect_view()}
+            </div>
+        </details>
+    }
+}
+
+/// Row "More" menu: secondary actions of one row, so the row shows only its main actions.
+#[component]
+pub fn RowMenu(children: Children) -> impl IntoView {
+    view! {
+        <details class="row-more">
+            <summary class="btn btn-sm" aria-label="More actions">"More"<span class="caret-dn" aria-hidden="true"></span></summary>
+            <div class="menu" role="menu">{children()}</div>
+        </details>
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +389,7 @@ mod tests {
     #[test]
     fn bytes_are_binary_units() {
         assert_eq!(fmt_bytes(512), "512 B");
+        assert_eq!(fmt_bytes(2 * 1024 * 1024 * 1024), "2 GiB");
         assert_eq!(
             fmt_bytes(16 * 1024 * 1024 * 1024 + 700 * 1024 * 1024),
             "16.7 GiB"

@@ -156,6 +156,7 @@ pub fn title_for(path: &str, subject: Option<&str>) -> String {
             ["vms", id] => named(id),
             ["vms", id, "console"] => format!("{} · Console", named(id)),
             ["vms", id, "hardware"] => format!("{} · Hardware", named(id)),
+            ["vms", id, "remote-play"] => format!("{} · Remote Play", named(id)),
             ["containers", id, sub] => format!(
                 "{} · {}",
                 named(id),
