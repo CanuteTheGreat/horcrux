@@ -97,6 +97,44 @@ def datasets(with_docker=False, product="horcrux"):
     return d
 
 
+HOSTID_DRACUT_CONF = ('# written by live-installer: the initramfs imports the root pool with the host id the pool was created with\n'
+                      '# (/etc/hostid of the installed system); without it zpool status says "Mismatch between pool hostid and system hostid"\n'
+                      'install_items+=" /etc/hostid "\n')
+
+
+def _initramfs_hostid(inst, img):
+    """bytes of /etc/hostid inside the initramfs image `img` (path inside the target), b'' when absent"""
+    import subprocess
+    r = subprocess.run(["chroot", inst.target, "lsinitrd", "-f", "etc/hostid", img], capture_output=True)
+    return r.stdout if r.returncode == 0 else b""
+
+
+def ensure_initramfs_hostid(inst):
+    """After every step that builds an initramfs (T2, TPM seal, hibernate swap): the newest kernel's initramfs holds the same
+    /etc/hostid as the installed system, i.e. the one the pool was created with. When it does not (the plain case: the image's
+    initramfs is copied as built), rebuild it once; fail the install when it still differs, a pool the initramfs cannot import
+    cleanly would report a hostid mismatch on every boot."""
+    from . import zfsswap
+    from .system import InstallError
+    want = open(f"{inst.target}/etc/hostid", "rb").read() if os.path.exists(f"{inst.target}/etc/hostid") else b""
+    if len(want) != 4 or want == b"\0\0\0\0":
+        raise InstallError("internal: the installed system has no usable /etc/hostid (the pool was created with the live system's)")
+    kver = zfsswap._newest_kver(inst)
+    img = f"/boot/initramfs-{kver}.img"
+    if _initramfs_hostid(inst, img) != want:
+        inst.log(f"initramfs {kver} lacks the pool's host id: rebuilding it")
+        gcc = f"{inst.target}/usr/lib/gcc"
+        chost = sorted(os.listdir(gcc))[0] if os.path.isdir(gcc) and os.listdir(gcc) else "x86_64-pc-linux-gnu"
+        inst.run(["dracut", "--force", "--no-hostonly", "--kver", kver, img, kver], chroot=True, env={"CHOST": chost})
+        listing = []
+        inst.run(["lsinitrd", img], chroot=True, line_cb=lambda l: listing.append(l))
+        if not re.search(r"zfs\.ko", "".join(listing)):
+            raise InstallError(f"the rebuilt initramfs {img} has no zfs.ko: the root pool could not be imported")
+        if _initramfs_hostid(inst, img) != want:
+            raise InstallError(f"the initramfs {img} does not carry the installed system's /etc/hostid: the pool would report a hostid mismatch")
+    inst.log("initramfs host id = system host id = pool host id")
+
+
 def mkpool(inst):
     c = inst.c
     devs = [inst.layout(d)[4] for d in c["disks"]]

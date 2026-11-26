@@ -19,7 +19,8 @@ def define(args):
     project = args.get("project", "horcrux")
     P = PROJECTS[project]
     mode, media = args.get("mode", "uefi"), args.get("media", "usb")
-    answers, key = make_answers(project)
+    fs = args.get("fs", "ext4")
+    answers, key = make_answers(project, fs=fs)
     nics = [Nic("user", forwards={"ssh": 22, "web": P["port"]})] if project == "horcrux" else [Nic("user", forwards={}), Nic("user", subnet="10.77.0.0/24", guest_ip="10.77.0.1", forwards={"ssh": 22, "web": P["port"]})]
     node = NodeSpec(name=project, mem=int(args.get("mem", 4096)), cpus=2, iso=args["iso"], iso_media=media, firmware=mode,
                     disks=[Disk("24G")], extra_drives=[(answers, "usb")], nics=nics, ssh_key=key, console="none", boot_timeout=420)
@@ -43,6 +44,13 @@ def define(args):
         if project == "horcrux":
             bad = {u: n.http("web", "/api/auth/login", "POST", {"username": u, "password": PW})[0] for u in ("admin", "root")}
             m.check("web-no-admin-or-root-account", all(c == 401 for c in bad.values()), str(bad))
+        if fs == "zfs":
+            # the pool must carry the installed system's own hostid from the first boot on: the initramfs imports with the hostid it was
+            # built with, so /etc/hostid has to be inside it (zpool status then reports "Mismatch between pool hostid and system hostid")
+            full = n.succeed("zpool status")
+            m.check("zfs-pool-hostid-matches-system", "Mismatch between pool hostid" not in full, full[:600])
+            hid = n.succeed("hostid; od -An -tx1 /etc/hostid; img=$(ls -t /boot/initramfs-*.img | head -1); lsinitrd -f etc/hostid $img > /tmp/ird-hostid && cmp /tmp/ird-hostid /etc/hostid && echo initramfs-hostid-same")
+            m.check("zfs-initramfs-carries-the-system-hostid", "initramfs-hostid-same" in hid and not hid.startswith("00000000"), hid)
         out = n.succeed("cat /etc/os-release; qfile -q /usr/lib/os-release")
         kv = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?$', out, re.M))
         good = bool(kv.get("VERSION_ID") and kv.get("BUILD_ID") and kv.get("VARIANT_ID")) and kv.get("ID_LIKE") == "gentoo" \
