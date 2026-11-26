@@ -101,8 +101,16 @@ impl SampleEvent {
             event: m.event.clone(),
             title: m.title.clone(),
             body: m.body.clone(),
-            rule: m.alert.as_ref().map(|a| a.rule_name.clone()).unwrap_or_default(),
-            target: m.alert.as_ref().map(|a| a.target.clone()).unwrap_or_default(),
+            rule: m
+                .alert
+                .as_ref()
+                .map(|a| a.rule_name.clone())
+                .unwrap_or_default(),
+            target: m
+                .alert
+                .as_ref()
+                .map(|a| a.target.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -218,10 +226,8 @@ pub fn evaluate(node: &MatchNode, ev: &SampleEvent, now: DateTime<Utc>) -> bool 
                 Some(m) => matches!((got, severity_rank(m)), (Some(g), Some(m)) if g >= m),
                 None => true,
             };
-            let set_ok = any_of.is_empty()
-                || any_of
-                    .iter()
-                    .any(|s| s.eq_ignore_ascii_case(&ev.severity));
+            let set_ok =
+                any_of.is_empty() || any_of.iter().any(|s| s.eq_ignore_ascii_case(&ev.severity));
             min_ok && set_ok
         }
         MatchNode::Event { any_of } => any_of.iter().any(|e| e.eq_ignore_ascii_case(&ev.event)),
@@ -311,9 +317,21 @@ mod tests {
 
     #[test]
     fn severity_min_and_set() {
-        assert!(evaluate(&sev_min("warning"), &ev("critical", "alert", "a"), at(1, 0)));
-        assert!(evaluate(&sev_min("warning"), &ev("warning", "alert", "a"), at(1, 0)));
-        assert!(!evaluate(&sev_min("warning"), &ev("info", "alert", "a"), at(1, 0)));
+        assert!(evaluate(
+            &sev_min("warning"),
+            &ev("critical", "alert", "a"),
+            at(1, 0)
+        ));
+        assert!(evaluate(
+            &sev_min("warning"),
+            &ev("warning", "alert", "a"),
+            at(1, 0)
+        ));
+        assert!(!evaluate(
+            &sev_min("warning"),
+            &ev("info", "alert", "a"),
+            at(1, 0)
+        ));
         let only = MatchNode::Severity {
             min: None,
             any_of: vec!["info".into()],
@@ -405,30 +423,38 @@ mod tests {
     #[test]
     fn validation_rejects_bad_trees() {
         assert!(validate_node(&sev_min("bogus")).is_err());
-        assert!(validate_node(&MatchNode::Field {
-            field: "nope".into(),
-            regex: "x".into()
-        })
-        .is_err());
-        assert!(validate_node(&MatchNode::Field {
-            field: "body".into(),
-            regex: "(".into()
-        })
-        .is_err());
-        assert!(validate_node(&MatchNode::Calendar {
-            weekdays: vec![7],
-            start: None,
-            end: None,
-            utc_offset_minutes: 0
-        })
-        .is_err());
-        assert!(validate_node(&MatchNode::Calendar {
-            weekdays: vec![],
-            start: Some("25:00".into()),
-            end: Some("06:00".into()),
-            utc_offset_minutes: 0
-        })
-        .is_err());
+        assert!(
+            validate_node(&MatchNode::Field {
+                field: "nope".into(),
+                regex: "x".into()
+            })
+            .is_err()
+        );
+        assert!(
+            validate_node(&MatchNode::Field {
+                field: "body".into(),
+                regex: "(".into()
+            })
+            .is_err()
+        );
+        assert!(
+            validate_node(&MatchNode::Calendar {
+                weekdays: vec![7],
+                start: None,
+                end: None,
+                utc_offset_minutes: 0
+            })
+            .is_err()
+        );
+        assert!(
+            validate_node(&MatchNode::Calendar {
+                weekdays: vec![],
+                start: Some("25:00".into()),
+                end: Some("06:00".into()),
+                utc_offset_minutes: 0
+            })
+            .is_err()
+        );
         assert!(validate_node(&MatchNode::Event { any_of: vec![] }).is_err());
         let mut deep = MatchNode::All { children: vec![] };
         for _ in 0..20 {
@@ -452,9 +478,26 @@ mod tests {
         assert_eq!(route(&[], &e, at(1, 0)), None);
         let ms = vec![
             m("page", true, sev_min("critical"), &["pd", "mail"]),
-            m("all", true, MatchNode::All { children: vec![] }, &["mail", "slack"]),
-            m("off", false, MatchNode::All { children: vec![] }, &["never"]),
-            m("info", true, MatchNode::Event { any_of: vec!["backup".into()] }, &["backup"]),
+            m(
+                "all",
+                true,
+                MatchNode::All { children: vec![] },
+                &["mail", "slack"],
+            ),
+            m(
+                "off",
+                false,
+                MatchNode::All { children: vec![] },
+                &["never"],
+            ),
+            m(
+                "info",
+                true,
+                MatchNode::Event {
+                    any_of: vec!["backup".into()],
+                },
+                &["backup"],
+            ),
         ];
         assert_eq!(
             route(&ms, &e, at(1, 0)),
