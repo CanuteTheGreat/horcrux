@@ -1309,7 +1309,9 @@ pub async fn declarative_apply(
             let mut st = w.settings.clone();
             st.validate()?;
             st.rev = now_ms().max(settings(state).await.rev + 1);
-            put_row(state, kinds::SETTINGS, SETTINGS_ID, &st).await.map_err(msg)?;
+            put_row(state, kinds::SETTINGS, SETTINGS_ID, &st)
+                .await
+                .map_err(msg)?;
             push_to_peers(
                 state,
                 PeerList {
@@ -1325,7 +1327,9 @@ pub async fn declarative_apply(
             let mut t = find_target(state, name).await.map_err(msg)?;
             t.deleted = true;
             t.rev = now_ms().max(t.rev + 1);
-            put_row(state, kinds::TARGET, &t.id, &t).await.map_err(msg)?;
+            put_row(state, kinds::TARGET, &t.id, &t)
+                .await
+                .map_err(msg)?;
             write_secret(state, &t.id, None).map_err(msg)?;
             push_to_peers(
                 state,
@@ -1368,7 +1372,9 @@ pub async fn declarative_apply(
                 .ok_or("not live")?;
             l.deleted = true;
             l.rev = now_ms().max(l.rev + 1);
-            put_row(state, kinds::SHARED_LVM, &l.id, &l).await.map_err(msg)?;
+            put_row(state, kinds::SHARED_LVM, &l.id, &l)
+                .await
+                .map_err(msg)?;
             remove_pool_for(state, &l).await;
             let _ = lvm_shared::lockstop(&l.vg_name, TOOL_TIMEOUT).await;
             push_to_peers(
@@ -1397,7 +1403,9 @@ pub async fn declarative_apply(
                 .map(|o| o.rev)
                 .unwrap_or(0);
             l.rev = now_ms().max(base + 1);
-            put_row(state, kinds::SHARED_LVM, &l.id, &l).await.map_err(msg)?;
+            put_row(state, kinds::SHARED_LVM, &l.id, &l)
+                .await
+                .map_err(msg)?;
             push_to_peers(
                 state,
                 PeerList {

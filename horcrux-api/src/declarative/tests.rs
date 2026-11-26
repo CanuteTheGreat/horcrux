@@ -447,4 +447,3 @@ fn san_section_plans_creates_updates_and_prunes() {
     );
     assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
 }
-

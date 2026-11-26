@@ -195,8 +195,7 @@ fn measured_by_statvfs(t: &StorageType) -> bool {
 /// Pools measured by a probe: statvfs for filesystem pools, `zfs list` for ZFS,
 /// `ceph df` for Ceph RBD, `vgs` for LVM.
 fn measured_by_probe(t: &StorageType) -> bool {
-    measured_by_statvfs(t)
-        || matches!(t, StorageType::Zfs | StorageType::Ceph | StorageType::Lvm)
+    measured_by_statvfs(t) || matches!(t, StorageType::Zfs | StorageType::Ceph | StorageType::Lvm)
 }
 
 /// Defence in depth: every backend re-checks each name it joins onto a pool

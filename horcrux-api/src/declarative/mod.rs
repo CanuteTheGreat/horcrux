@@ -450,10 +450,18 @@ fn san_plan(
         }
     }
     if prune {
-        for t in l.targets.iter().filter(|t| !w.targets.iter().any(|x| x.id == t.id)) {
+        for t in l
+            .targets
+            .iter()
+            .filter(|t| !w.targets.iter().any(|x| x.id == t.id))
+        {
             deletes.push(ch("san_target", &t.id, Action::Delete, vec![]));
         }
-        for v in l.shared_lvm.iter().filter(|v| !w.shared_lvm.iter().any(|x| x.id == v.id)) {
+        for v in l
+            .shared_lvm
+            .iter()
+            .filter(|v| !w.shared_lvm.iter().any(|x| x.id == v.id))
+        {
             deletes.push(ch("san_lvm", &v.id, Action::Delete, vec![]));
         }
     }

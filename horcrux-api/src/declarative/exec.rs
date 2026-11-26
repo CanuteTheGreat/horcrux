@@ -142,7 +142,9 @@ async fn run_change(
         (k @ ("san_settings" | "san_target" | "san_lvm"), a) => {
             let w = spec.san.as_ref().ok_or("not in spec")?;
             crate::api::san::declarative_apply(state, w, k, &c.name, a).await?;
-            Ok(Some("replicated to every cluster member and applied on each".into()))
+            Ok(Some(
+                "replicated to every cluster member and applied on each".into(),
+            ))
         }
 
         ("remote_play", Action::Update) => {

@@ -703,7 +703,9 @@ impl SanSpec {
     }
 
     pub fn validate(&mut self) -> Result<(), String> {
-        self.settings.validate().map_err(|e| format!("settings: {e}"))?;
+        self.settings
+            .validate()
+            .map_err(|e| format!("settings: {e}"))?;
         let mut ids = std::collections::BTreeSet::new();
         for t in &mut self.targets {
             t.validate().map_err(|e| format!("targets.{}: {e}", t.id))?;
@@ -713,7 +715,8 @@ impl SanSpec {
         }
         let mut ids = std::collections::BTreeSet::new();
         for l in &mut self.shared_lvm {
-            l.validate().map_err(|e| format!("shared_lvm.{}: {e}", l.id))?;
+            l.validate()
+                .map_err(|e| format!("shared_lvm.{}: {e}", l.id))?;
             if !ids.insert(l.id.clone()) {
                 return Err(format!("shared_lvm: {} twice", l.id));
             }
