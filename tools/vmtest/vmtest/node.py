@@ -251,7 +251,9 @@ class Node:
                 if not q.alive():
                     raise VmtestError(f"{self.name}: QEMU exited while waiting for a shell\n{q.serial_tail()}")
                 tail = q.serial_tail(300)
-                if time.time() - last_poke > 4:
+                # never type while the boot menu is on screen: the poke's "e" opens GRUB's editor and the boot stalls there
+                at_boot_menu = re.search(r"executed automatically in \d+s|Press enter to boot the selected OS", tail)
+                if time.time() - last_poke > 4 and not at_boot_menu:
                     q.send("\necho @@RDY@@$((20+22))\n")
                     last_poke = time.time()
                 if q.expect(r"@@RDY@@42", 1.5):

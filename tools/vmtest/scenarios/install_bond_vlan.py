@@ -7,7 +7,8 @@
 
 Both trunks are hubs with vlans=(42,): untagged frames and other VLANs are dropped (LACPDUs pass), so a node that is not tagged
 cannot get an address. Checks: the live system builds the link and gets a VLAN 42 lease during the install (MGMT-LINK-LIVE), the
-installed node comes up on bond0.42 at first boot, LACP is negotiated with the partner, HTTPS 443 answers on the VLAN address,
+installed node comes up on bond0.42 at first boot, LACP is negotiated with the partner, the web UI answers over HTTPS on the VLAN
+address (443 with standard ports, else the port the node serves; --arg port=N pins it),
 and the node stays reachable with either NIC unplugged. Init-agnostic: run it for the OpenRC and the systemd ISO.
 
     python3 -m vmtest run scenarios/install_bond_vlan.py --arg iso=/path/horcrux-server-openrc-daily-x86_64.iso \
@@ -77,6 +78,7 @@ def define(args):
 
         m.phase("first boot: management on the VLAN")
         n.start()
+        m.check("installed-boots-to-login", n.q.expect(r"login:|Enter an option:", n.T(600)), "")
         n.wait_for_shell(600)
         m.check("installed-shell", True, n.init.name)
         bondinfo = n.succeed("cat /proc/net/bonding/bond0")
@@ -107,12 +109,27 @@ def define(args):
         m.note("untagged-frames-dropped-by-trunk", True, f"trunk-a {m.network('trunk-a').stats} trunk-b {m.network('trunk-b').stats}")
 
         m.phase("HTTPS on the VLAN address")
+        # the web UI port the node serves: 443 once standard ports are the product default, else the configured port (8006).
+        # --arg port=N pins it; the check below then requires that port.
+        port = args.get("port")
+        if not port:
+            listen = ""
+            end = time.time() + n.T(300)
+            while time.time() < end and "horcrux-api" not in listen:
+                listen = n.execute("ss -Htlnp 2>/dev/null | grep horcrux-api", 20)[1]
+                if "horcrux-api" not in listen:
+                    time.sleep(5)
+            ports = sorted({int(p) for p in re.findall(r":(\d+)\s", listen)})
+            port = 443 if 443 in ports else (8006 if 8006 in ports else (ports[0] if ports else 443))
+            m.note("web-ui-on-standard-port-443", port == 443, f"horcrux-api listens on {ports or 'nothing'}")
+        port = int(port)
+        base = f"https://{ip}" + ("" if port == 443 else f":{port}")
 
         def https(path="/"):
-            rc, out = s.execute(f"curl -sk -o /dev/null -w '%{{http_code}}' --max-time 8 https://{ip}{path}", 20)
+            rc, out = s.execute(f"curl -sk -o /dev/null -w '%{{http_code}}' --max-time 8 {base}{path}", 20)
             return out.strip()[-3:]
-        s.wait_until(lambda: https("/api/health") == "200", 420, 5, "https://<vlan ip>/api/health 200")
-        m.check("https-443-on-vlan-address", https("/") == "200", f"https://{ip}/ from the switch side")
+        s.wait_until(lambda: https("/api/health") == "200", 420, 5, f"{base}/api/health 200")
+        m.check(f"https-{port}-on-vlan-address", https("/") == "200", f"{base}/ from the switch side")
 
         m.phase("unplug one NIC at a time")
         for i in (0, 1):

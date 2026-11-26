@@ -735,7 +735,7 @@ pub async fn get_quorum_plan() -> Result<QuorumPlanView, ApiError> {
 }
 
 /// One row of `GET /api/cluster/nics` (area 5): a physical NIC or bond.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct NicView {
     pub name: String,
     #[serde(default)]
