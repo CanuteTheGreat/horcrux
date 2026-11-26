@@ -1486,6 +1486,12 @@ jobs:
           HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
         run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/vm_create_form_e2e.py
 
+      - name: Storage pool form generated from a plugin schema (hints, limits, secrets, depends_on)
+        env:
+          BASE_URL: https://localhost:8006
+          HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
+        run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/storage_plugin_form_e2e.py
+
       - name: Dashboard banner lists only genuinely unmanaged libvirt domains
         env:
           BASE_URL: https://localhost:8006
