@@ -1,4 +1,4 @@
-# ui-kit v0.2 (shared by Horcrux and Patronus)
+# ui-kit v0.3 (shared by Horcrux and Patronus)
 
 Framework-neutral design system: plain CSS custom properties, `ui-`-prefixed component classes, and an
 optional dependency-free `ui.js`. No fonts, no branding, no build step, no npm. The design rules (density,
@@ -85,9 +85,10 @@ colour = state only, live panels, keyboard) are in `docs/design/ui-system.md`.
 ## Changes
 
 - v0.2: `ui-dialog` header/body/footer also match inside a direct child `<form>`; `.ui-dialog` sets `margin: auto`.
+- v0.3: a `.ui-toolbar` with no `.ui-grid-wrap` right after it is a closed box; `.ui-toast` text uses `--c-ink` and lays out a `.ui-toast-close` button on the right; `dialog.ui-dialog` is capped at the viewport height and its `.ui-dialog-body` scrolls.
 
-## Stability (v0.2)
+## Stability (v0.3)
 
 Stable: tokens, `ui-btn`, `ui-badge`, `ui-dot`, `ui-panel`, `ui-kv`, `ui-toolbar`, `ui-grid`, `ui-tabs`,
 `ui-steps`, `ui-field`, `ui-banner`, `ui-empty`, `ui-log`, `ui-usage`. May still change: `ui-tree` nesting
-depth styles, `ui-dialog`, `ui-toast`, `ui-menu`, charts (not in v0.2).
+depth styles, `ui-dialog`, `ui-toast`, `ui-menu`, charts (not in v0.3).
