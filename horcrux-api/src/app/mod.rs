@@ -559,6 +559,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::tasks::routes())
         .merge(api::ceph_admin::routes())
         .merge(api::audit_view::routes())
+        .merge(api::access_log::routes())
         .merge(api::node_shell::routes())
         .merge(api::sdn_zones::routes(&state))
         .merge(api::sdn_ovs::routes(&state))
@@ -631,10 +632,14 @@ pub async fn run() -> anyhow::Result<()> {
             state.clone(),
             middleware::rbac::rbac_middleware::<AppState>,
         ))
+        // Tell the access log who the authenticated caller is.
+        .layer(axum_middleware::from_fn(api::access_log::identify))
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::auth::auth_middleware::<AppState>,
         ));
+
+    let access_log = api::access_log::init(&horcrux_config);
 
     // Build main app with public and protected routes
     let app = Router::new()
@@ -664,6 +669,10 @@ pub async fn run() -> anyhow::Result<()> {
                 req,
                 next,
             )
+        }))
+        // API access log: every /api request with caller, client and outcome
+        .layer(axum_middleware::from_fn(move |conn_info, req, next| {
+            api::access_log::record_middleware(access_log.clone(), conn_info, req, next)
         }))
         // Prometheus: count every request by route pattern and status
         .layer(axum_middleware::from_fn_with_state(

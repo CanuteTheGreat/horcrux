@@ -2,6 +2,7 @@
 //! router by a single line in app/mod.rs (the router, formerly main.rs).
 
 pub mod alert_rules;
+pub mod access_log;
 pub mod audit_view;
 pub mod auth;
 #[cfg(feature = "backup")]

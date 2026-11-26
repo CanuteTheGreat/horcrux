@@ -106,6 +106,7 @@ pub const KNOWN_AREAS: &[&str] = &[
     "cloudinit",
     "templates",
     "audit",
+    "access-log",
     "storage",
     "ceph",
     "pools",
@@ -364,7 +365,7 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "backup-jobs" => read_write(m, P::SysAudit, P::SysModify, "/"),
         "backup-storages" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
 
-        "audit" => need(P::SysAudit, "/"),
+        "audit" | "access-log" => need(P::SysAudit, "/"),
 
         "ceph" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
         // Inventory views: the handlers show only what the caller may see.

@@ -39,6 +39,36 @@ pub struct HorcruxConfig {
     /// declarative spec store changes in `<data_dir>/console.json`.
     #[serde(default)]
     pub console: horcrux_common::console::ConsoleSettings,
+    /// API access log (`[access_log]`): who called what, from where, and
+    /// how it ended.
+    #[serde(default)]
+    pub access_log: AccessLogConfig,
+}
+
+/// API access log settings (`[access_log]` in config.toml).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AccessLogConfig {
+    /// Record every API request (`GET /api/access-log`).
+    pub enabled: bool,
+    /// Most requests kept (oldest dropped first).
+    pub max_entries: usize,
+    /// Requests older than this many days are dropped.
+    pub max_age_days: u32,
+    /// Peer addresses of reverse proxies whose `X-Forwarded-For` is
+    /// believed; from any other peer the header is ignored.
+    pub trusted_proxies: Vec<String>,
+}
+
+impl Default for AccessLogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_entries: 50_000,
+            max_age_days: 14,
+            trusted_proxies: Vec::new(),
+        }
+    }
 }
 
 /// Backup settings (`[backup]` in config.toml). Env overrides:
