@@ -1,0 +1,12 @@
+diff -u -r a/src/rgw/driver/dbstore/CMakeLists.txt b/src/rgw/driver/dbstore/CMakeLists.txt
+--- a/src/rgw/driver/dbstore/CMakeLists.txt	2026-11-25 23:44:57.667463046 +0000
++++ b/src/rgw/driver/dbstore/CMakeLists.txt	2026-11-25 23:44:57.667480636 +0000
+@@ -24,7 +24,7 @@
+     dbstore_mgr.cc
+     )
+ 
+-add_library(dbstore_lib ${dbstore_srcs})
++add_library(dbstore_lib STATIC ${dbstore_srcs})
+ if(COMPILER_SUPPORTS_VLA_ERROR)
+   target_compile_options(dbstore_lib PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Werror=vla>)
+ endif()
