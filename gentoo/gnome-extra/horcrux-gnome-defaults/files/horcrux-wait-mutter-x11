@@ -1,0 +1,32 @@
+#!/bin/sh
+# ExecStartPre of the systemd user unit org.gnome.SettingsDaemon.XSettings.service (drop-in shipped by horcrux-gnome-defaults).
+# gsd-xsettings reads the UI scale once at start from mutter's org.gnome.Mutter.X11 D-Bus name; mutter owns that name only after it has
+# created its X11 display, which happens when Xwayland (started on demand) is up. Started before that (slow/software-rendered VMs, first
+# login) gsd-xsettings logs "Failed to get current UI scaling factor: ... Name org.gnome.Mutter.X11 does not exist" and X11 apps stay
+# unscaled (Xft.dpi 96, scale factor 1) for the whole session. So: wake Xwayland (a connect to the X socket starts it), then wait
+# (bounded) for the name. Never fails the unit: after the timeout gsd-xsettings starts as before.
+timeout=${HX_WAIT_MUTTER_X11_SECS:-40}
+have() { busctl --user status org.gnome.Mutter.X11 >/dev/null 2>&1; }
+wake() {
+	d=${DISPLAY#:}; d=${d%%.*}
+	[ -n "$d" ] && [ -S "/tmp/.X11-unix/X$d" ] || return 0
+	python3 - "/tmp/.X11-unix/X$d" <<'PY' 2>/dev/null || true
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.settimeout(2)
+try:
+    s.connect(sys.argv[1])
+finally:
+    s.close()
+PY
+}
+have && exit 0
+i=0
+while [ "$i" -lt "$timeout" ]; do
+	[ $((i % 5)) -eq 0 ] && wake
+	have && exit 0
+	sleep 1
+	i=$((i + 1))
+done
+echo "horcrux-wait-mutter-x11: org.gnome.Mutter.X11 did not appear within ${timeout}s, starting anyway" >&2
+exit 0

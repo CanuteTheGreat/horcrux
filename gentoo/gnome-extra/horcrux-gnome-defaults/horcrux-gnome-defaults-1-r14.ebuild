@@ -14,6 +14,7 @@ KEYWORDS="amd64 arm64"
 # would be shadowed), so every default extension of the machine is listed here, in the one compiled db.
 IUSE="awcc systemd"
 
+# -r14: systemd: drop-in making gsd-xsettings wait for mutter's org.gnome.Mutter.X11 name (else it starts too early and X11 apps are unscaled).
 # -r12: horcrux-keyring-pam also makes sure /etc/pam.d/passwd re-keys the login keyring (the systemd profile's passwd only includes system-auth).
 # -r11: GNOME on OpenRC comes from gnome-base/gnome-session-openrc-49.2-r2::horcrux (the gsd/PipeWire/user-bus fixes that were /etc/portage/patches in
 # the images, plus session-scoped user services: a GNOME logout stops the session's gnome-shell & co. even while an ssh login of the user keeps the OpenRC
@@ -104,6 +105,14 @@ src_install() {
 	doexe "${FILESDIR}"/horcrux-session-env
 	insinto /etc/xdg/autostart
 	doins "${FILESDIR}"/horcrux-session-env.desktop
+
+	# systemd: gsd-xsettings must start after mutter owns org.gnome.Mutter.X11 (see the script header)
+	if use systemd; then
+		exeinto /usr/libexec
+		doexe "${FILESDIR}"/horcrux-wait-mutter-x11
+		insinto /usr/lib/systemd/user/org.gnome.SettingsDaemon.XSettings.service.d
+		doins "${FILESDIR}"/10-horcrux-wait-mutter-x11.conf
+	fi
 }
 
 pkg_postinst() {
