@@ -37,7 +37,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/ceph/osds/:id/:action", post(osd_action))
         .route("/api/ceph/pools", get(pools).post(create_pool))
         .route("/api/ceph/pools/:name", axum::routing::delete(delete_pool))
-        .route("/api/ceph/crush-rules", get(crush_rules).post(create_crush_rule))
+        .route(
+            "/api/ceph/crush-rules",
+            get(crush_rules).post(create_crush_rule),
+        )
         .route("/api/ceph/flags", get(flags))
         .route("/api/ceph/flags/:flag", post(set_flag))
         .route("/api/ceph/placement", get(placement))
@@ -946,8 +949,16 @@ fn default_crush_root() -> String {
 pub fn validate_crush_rule(r: &NewCrushRule) -> Result<(), String> {
     valid_ceph_name(&r.name, "rule name")?;
     valid_ceph_name(&r.root, "root")?;
-    if !["osd", "host", "chassis", "rack", "row", "room", "datacenter"]
-        .contains(&r.failure_domain.as_str())
+    if ![
+        "osd",
+        "host",
+        "chassis",
+        "rack",
+        "row",
+        "room",
+        "datacenter",
+    ]
+    .contains(&r.failure_domain.as_str())
     {
         return Err(
             "failure_domain must be osd, host, chassis, rack, row, room or datacenter".into(),
