@@ -13,6 +13,17 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// A description cut to about 300 characters at a word boundary, with an ellipsis.
+fn short(s: &str) -> String {
+    let s = s.trim();
+    if s.chars().count() <= 300 {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(300).collect();
+    let cut = cut.rsplit_once(' ').map(|(a, _)| a).unwrap_or(&cut);
+    format!("{}…", cut.trim_end_matches([',', '.', ';', ':']))
+}
+
 /// Parse Grype's `-o json` output.
 pub fn parse_grype(v: &Value) -> Vec<VulnFinding> {
     let mut out = Vec::new();
@@ -37,12 +48,7 @@ pub fn parse_grype(v: &Value) -> Vec<VulnFinding> {
             installed: a["version"].as_str().unwrap_or("").to_string(),
             fixed_in,
             pkg_type: a["type"].as_str().unwrap_or("").to_string(),
-            title: vu["description"]
-                .as_str()
-                .unwrap_or("")
-                .chars()
-                .take(300)
-                .collect(),
+            title: short(vu["description"].as_str().unwrap_or("")),
             url,
         });
     }
@@ -378,6 +384,12 @@ mod tests {
         assert_eq!(f[0].id, "CVE-2023-2");
         assert_eq!(f[0].url, "https://x/2");
         assert_eq!(f[1].fixed_in, vec!["1.2.4"]);
+        let long = "word ".repeat(100);
+        let t = short(&long);
+        assert!(
+            t.ends_with('…') && t.chars().count() <= 301 && !t.contains("wor…"),
+            "{t}"
+        );
         assert_eq!((c.critical, c.high, c.fixable, c.total()), (1, 1, 1, 2));
     }
 

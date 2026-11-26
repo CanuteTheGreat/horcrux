@@ -48,6 +48,29 @@ fn download(name: &str, mime: &str, text: &str) {
     let _ = web_sys::Url::revoke_object_url(&url);
 }
 
+/// In-app link with exact active state (query strings count), no full reload.
+#[component]
+fn NavLink(
+    #[prop(into)] href: String,
+    #[prop(into)] class: Signal<String>,
+    active: Signal<bool>,
+    children: Children,
+) -> impl IntoView {
+    let navigate = use_navigate();
+    let to = href.clone();
+    view! {
+        <a href=href class=class aria-current=move || active.get().then_some("page")
+            on:click=move |ev: web_sys::MouseEvent| {
+                if ev.button() == 0 && !ev.ctrl_key() && !ev.meta_key() && !ev.shift_key() {
+                    ev.prevent_default();
+                    navigate(&to, Default::default());
+                }
+            }>
+            {children()}
+        </a>
+    }
+}
+
 /// Severity badge; zero/negligible never red.
 #[component]
 fn SevBadge(sev: Severity) -> impl IntoView {
@@ -74,8 +97,9 @@ fn CountBadges(counts: SeverityCounts) -> impl IntoView {
 #[component]
 fn SecurityTabs(active: &'static str) -> impl IntoView {
     let tab = |href: &'static str, id: &'static str, label: &'static str| {
-        let cls = if id == active { "tab active" } else { "tab" };
-        view! { <A href=href class=cls attr:aria-current=move || (id == active).then_some("page")>{label}</A> }
+        let on = id == active;
+        let cls = if on { "tab active" } else { "tab" };
+        view! { <NavLink href=href class=Signal::derive(move || cls.to_string()) active=Signal::derive(move || on)>{label}</NavLink> }
     };
     view! {
         <nav class="tabs security-tabs" aria-label="Security sections">
@@ -139,7 +163,7 @@ pub fn SecurityOverviewPage() -> impl IntoView {
                             <A href="/security/vulnerabilities?severity=high" class={if high > 0 { "stat-card stat-link warning attention" } else { "stat-card stat-link" }}>
                                 <span class="stat-label">"High vulnerabilities"</span>
                                 <div class="stat-value">{high}</div>
-                                <div class="dash-meta">{format!("{} of all findings have a fix", o.counts.fixable)}</div>
+                                <div class="dash-meta">{format!("{} of {} findings have a fix", o.counts.fixable, o.counts.total())}</div>
                             </A>
                             <A href="/security/vulnerabilities" class="stat-card stat-link">
                                 <span class="stat-label">"Targets scanned"</span>
@@ -155,7 +179,7 @@ pub fn SecurityOverviewPage() -> impl IntoView {
                         <div class="card">
                             <h2>"Scanner"</h2>
                             <p>{if o.scanner_available { format!("{} {} is installed.", o.scanner, o.scanner_version) } else { format!("{} is not installed.", o.scanner) }}
-                               " Scanning is " {if o.scanning_enabled { "on" } else { "off" }} " on this node. "
+                               " Scanning is " {if o.scanning_enabled { "enabled" } else { "turned off" }} " on this node. "
                                {(o.running_scans > 0).then(|| format!("{} scan(s) running.", o.running_scans))}</p>
                         </div>
                     }.into_view()
@@ -278,7 +302,8 @@ pub fn SecurityVulnsPage() -> impl IntoView {
         } else {
             format!("/security/vulnerabilities?severity={val}")
         };
-        view! { <A href=href class=move || if sev_filter() == val { "filter-link active" } else { "filter-link" }>{label}</A> }
+        let on = Signal::derive(move || sev_filter() == val);
+        view! { <NavLink href=href class=Signal::derive(move || if on.get() { "filter-link active".to_string() } else { "filter-link".to_string() }) active=on>{label}</NavLink> }
     };
     view! {
         <div class="security-page">
@@ -439,7 +464,7 @@ pub fn SecurityScanPage() -> impl IntoView {
                                 " (" {format!("{:?}", sum.status).to_lowercase()} ", " {when(sum.finished.or(Some(sum.created)))} ")."
                             </p>
                             {sum.error.clone().map(|e| view! { <div class="alert alert-error">{e}</div> })}
-                            {(sum.status == ScanStatus::Done).then(|| view! { <p><CountBadges counts=sum.counts.clone()/>" " {format!("{} have a fixed version.", sum.counts.fixable)}</p> })}
+                            {(sum.status == ScanStatus::Done).then(|| view! { <p><CountBadges counts=sum.counts.clone()/>" " {format!("{} of {} {} a fixed version.", sum.counts.fixable, sum.counts.total(), if sum.counts.fixable == 1 { "has" } else { "have" })}</p> })}
                         </div>
                         <div class="toolbar">
                             <div class="form-group inline">
@@ -488,9 +513,13 @@ pub fn SecurityScanPage() -> impl IntoView {
                                                     view! { <a href=f.url.clone() target="_blank" rel="noopener noreferrer">{f.id.clone()}</a> }.into_view()
                                                 } else { f.id.clone().into_view() }}
                                                 {(!f.title.is_empty()).then(|| view! { <div class="dash-meta">{f.title.clone()}</div> })}</td>
-                                            <td><span class="mono">{f.package.clone()}</span><div class="dash-meta">{f.pkg_type.clone()}</div></td>
-                                            <td class="mono">{f.installed.clone()}</td>
-                                            <td class="mono">{if f.fixed_in.is_empty() { "no fix yet".to_string() } else { f.fixed_in.join(", ") }}</td>
+                                            <td class="nowrap"><span class="mono">{f.package.clone()}</span><div class="dash-meta">{f.pkg_type.clone()}</div></td>
+                                            <td class="mono nowrap">{f.installed.clone()}</td>
+                                            <td class="nowrap">{if f.fixed_in.is_empty() {
+                                                view! { <span class="dash-meta">"no fix yet"</span> }.into_view()
+                                            } else {
+                                                view! { <span class="mono">{f.fixed_in.join(", ")}</span> }.into_view()
+                                            }}</td>
                                         </tr>
                                     }).collect_view()}
                                     </tbody>
@@ -620,7 +649,8 @@ pub fn SecurityHardeningPage() -> impl IntoView {
         } else {
             format!("/security/hardening?status={val}")
         };
-        view! { <A href=href class=move || if status_filter() == val { "filter-link active" } else { "filter-link" }>{label}</A> }
+        let on = Signal::derive(move || status_filter() == val);
+        view! { <NavLink href=href class=Signal::derive(move || if on.get() { "filter-link active".to_string() } else { "filter-link".to_string() }) active=on>{label}</NavLink> }
     };
     view! {
         <div class="security-page">
@@ -674,7 +704,7 @@ pub fn SecurityHardeningPage() -> impl IntoView {
                         </div>
                         <div class="table-container">
                         <table class="data-table hardening-table">
-                            <thead><tr><th>"Status"</th><th>"Rule"</th><th>"Now"</th><th>"Fix"</th><th>"Actions"</th></tr></thead>
+                            <thead><tr><th>"Status"</th><th>"Rule"</th><th>"Actions"</th></tr></thead>
                             <tbody>
                             {rows.into_iter().map(|x| {
                                 let st = format!("{:?}", x.status).to_lowercase();
@@ -689,9 +719,10 @@ pub fn SecurityHardeningPage() -> impl IntoView {
                                         <td><span class=format!("rule-status rule-{st}")>{st.clone()}</span><div><SevBadge sev=x.severity/></div></td>
                                         <td><strong>{x.title.clone()}</strong>
                                             <div class="dash-meta"><span class="mono">{x.id.clone()}</span>" · "{x.category.clone()}" · "{x.reference.clone()}</div>
-                                            <div class="dash-meta">{x.rationale.clone()}</div></td>
-                                        <td class="mono">{x.current.clone()}{(!x.expected.is_empty() && x.status != RuleStatus::Pass).then(|| view! { <div class="dash-meta">"wanted: "{x.expected.clone()}</div> })}</td>
-                                        <td>{matches!(x.status, RuleStatus::Fail | RuleStatus::Manual).then(|| x.remediation.clone())}</td>
+                                            <div class="dash-meta">{x.rationale.clone()}</div>
+                                            <div class="rule-now">"Now: "<span class="mono">{x.current.clone()}</span>
+                                                {(!x.expected.is_empty() && x.status != RuleStatus::Pass).then(|| view! { <span>" · wanted: "<span class="mono">{x.expected.clone()}</span></span> })}</div>
+                                            {matches!(x.status, RuleStatus::Fail | RuleStatus::Manual).then(|| view! { <div class="rule-fix"><strong>"Fix: "</strong>{x.remediation.clone()}</div> })}</td>
                                         <td class="actions">
                                             {can_apply.then(|| view! { <button class="btn btn-xs btn-primary" disabled=busy aria-label=la.clone() title=la on:click=move |_| act.dispatch((false, vec![id.clone()]))>"Apply"</button> })}
                                             {applied.then(|| view! { <button class="btn btn-xs" disabled=busy aria-label=lr.clone() title=lr on:click=move |_| act.dispatch((true, vec![id2.clone()]))>"Revert"</button> })}
