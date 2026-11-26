@@ -39,7 +39,7 @@ class Machines:
         self.nets = {}
         for n in test.networks:
             if n.kind == "hub":
-                self.nets[n.name] = Hub(n.name, self.out, n.pcap)
+                self.nets[n.name] = Hub(n.name, self.out, n.pcap, n.vlans)
             else:
                 self.nets[n.name] = n.bridge
         self.nodes: dict[str, Node] = {}

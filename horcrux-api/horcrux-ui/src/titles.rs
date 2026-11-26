@@ -66,6 +66,7 @@ fn exact(path: &str) -> Option<&'static str> {
         "/network" => "Network",
         "/network/firewall-objects" => "Firewall Objects",
         "/network/bridges" => "Host Bridges",
+        "/network/management" => "Management Link",
         "/network/dhcp" => "DHCP & DNS",
         "/network/sdn" => "SDN",
         "/system/power" => "Guest Power",

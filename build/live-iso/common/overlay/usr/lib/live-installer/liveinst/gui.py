@@ -27,6 +27,7 @@ from .stages import Field  # noqa: E402
 from . import system as S  # noqa: E402
 from . import useflags as UF  # noqa: E402
 from . import app as APP  # noqa: E402
+from . import netlayout as NL  # noqa: E402
 
 RESUME = "/run/live-installer/gui-resume.json"
 STATUS = "/run/live-installer/gui-status.json"        # written on every page change (test harness / support)
@@ -691,11 +692,56 @@ class NetPage(Page):
                        visible=lambda v: v["mode"] == "static", advanced=True),
                  Field("dns", "DNS server(s)", "text", n["dns"] or APP.default_dns(), validate=lambda v, a: S.dns_problem(v),
                        visible=lambda v: v["mode"] == "static", hint="space separated", advanced=True)]
+            # bond (link aggregation) + VLAN tag of the management link: the same fields as the text installer (stages.py)
+            f = ST.mgmt_link_fields(n, w.nics, w.p) + f
         self.fields = f
         self.view = FormView(w, f)
         self.form_holder.append(self.view)
+        if not self.wanlan:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=w.px(10))
+            btn = Gtk.Button(label="Set up the link now")
+            a11y(btn, "Set up the bond / VLAN on this live system and get an address")
+            btn.connect("clicked", lambda b: self.link_go())
+            self.link_status = lbl("A bond or VLAN is also set up on this live system, so the installer can reach the network.", "hint")
+            row.append(btn)
+            row.append(self.link_status)
+            self.form_holder.append(row)
         wifi = [x for x in w.nics if x["wifi"] and self.role.get(x["name"]) in ("mgmt", "wan")]
         self.build_wifi(wifi[0]["name"] if wifi else None)
+
+    def link_values(self):
+        n = dict(self.win.c["mgmt"])
+        n["ifaces"], n["bond"] = list(n.get("ifaces") or []), dict(n.get("bond") or {})
+        v = ST.form_values(self.fields)
+        n.update({k: (v[k].strip() if isinstance(v[k], str) else v[k]) for k in ("mode", "address", "gateway", "dns") if k in v})
+        errs = ST.commit_mgmt_link(n, v, self.selected_iface(), self.win.p)
+        return n, errs
+
+    def link_go(self, quiet=False):
+        n, errs = self.link_values()
+        if errs:
+            self.link_status.set_text(errs[0])
+            return
+        prev = getattr(self, "live_link", None)
+        if self.win.dry or (NL.is_plain(n) and (prev is None or NL.is_plain(prev))):
+            self.live_link = n
+            if not quiet:
+                self.link_status.set_text("Nothing to set up: " + NL.describe(n) + (" (dry run)" if self.win.dry else ""))
+            return
+        self.link_status.set_text(f"Setting up {NL.describe(n)} ...")
+
+        def work():
+            ok, info = APP.apply_live_link(self.win.p, n, prev)
+            GLib.idle_add(self.link_done, ok, info, n)
+        self.live_link = n
+        threading.Thread(target=work, daemon=True).start()
+
+    def link_done(self, ok, info, n):
+        try:
+            self.link_status.set_text((f"Link up: {info} on {NL.l3_iface(n)}" if info else "Link set up.") if ok else
+                                      f"{info} - the installed system gets the same settings; you can continue.")
+        except Exception:  # noqa - the page may be gone already
+            pass
 
     def build_wifi(self, iface):
         w = self.win
@@ -750,6 +796,10 @@ class NetPage(Page):
         r = ST.first_problem(self.stage, w.ctx, self.fields)
         if r:
             return r[1]
+        if not self.wanlan and self.selected_iface():
+            errs = self.link_values()[1]
+            if errs:
+                return errs[0]
         if self.wifi_iface and not c.get("wifi"):
             return "Connect to the Wi-Fi network first (Scan and connect)."
         return None
@@ -764,6 +814,10 @@ class NetPage(Page):
         else:
             c["mgmt"].update({"iface": self.selected_iface(), "mode": "dhcp" if c.get("wifi") else v["mode"],
                               "address": v.get("address", ""), "gateway": v.get("gateway", ""), "dns": v.get("dns", "")})
+            ST.commit_mgmt_link(c["mgmt"], v, self.selected_iface(), self.win.p)
+            prev = getattr(self, "live_link", None)
+            if prev is None or NL.record(prev) != NL.record(c["mgmt"]):
+                self.link_go(quiet=True)          # the live system follows the chosen link (background thread)
         wn = next((x for x in self.win.nics if x["name"] == self.selected_iface()), None)
         if not wn or not wn["wifi"]:
             c["wifi"] = None

@@ -137,6 +137,7 @@ pub fn App() -> impl IntoView {
                             <A href="/pools" class="dropdown-item">"Resource Pools"</A>
                             <A href="/network" class="dropdown-item">"Network"</A>
                             <A href="/network/bridges" class="dropdown-item">"Host Bridges"</A>
+                            <A href="/network/management" class="dropdown-item">"Management Link"</A>
                             <A href="/network/dhcp" class="dropdown-item">"DHCP & DNS"</A>
                             <A href="/network/firewall-objects" class="dropdown-item">"Firewall Objects"</A>
                             <A href="/network/sdn" class="dropdown-item">"SDN (Zones, VNets, IPAM)"</A>
@@ -244,6 +245,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/pools" view=crate::pages::ResourcePoolsPage/>
                     <Route path="/network/firewall-objects" view=crate::pages::FirewallObjectsPage/>
                     <Route path="/network/bridges" view=crate::pages::HostBridgesPage/>
+                    <Route path="/network/management" view=crate::pages::MgmtLinkPage/>
                     <Route path="/network/dhcp" view=crate::pages::DhcpNetworksPage/>
                     <Route path="/network/sdn" view=crate::pages::sdn_zones::SdnZonesPage/>
                     <Route path="/system/power" view=crate::pages::GuestPowerPage/>
