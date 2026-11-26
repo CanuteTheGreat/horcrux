@@ -179,6 +179,28 @@ pub fn Dashboard() -> impl IntoView {
             .filter(|(_, t)| *t > 0)
             .map(|(u, t)| u as f64 * 100.0 / t as f64)
     };
+    let capacity = move || {
+        let cpu = node_metrics.get().map(|m| m.cpu_usage);
+        [
+            ("CPU", cpu),
+            ("Memory", mem_pct()),
+            ("Storage", storage_pct()),
+        ]
+        .into_iter()
+        .filter_map(|(name, v)| v.map(|v| (name, v)))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+    };
+    let capacity_tone = move || match capacity() {
+        None => "",
+        Some((_, v)) if v >= 90.0 => "crit",
+        Some((_, v)) if v >= 80.0 => "warn",
+        Some(_) => "ok",
+    };
+    let capacity_text = move || match capacity() {
+        None => "Loading".to_string(),
+        Some((name, v)) if v >= 80.0 => format!("{name} at {v:.0}%"),
+        Some(_) => "below 80 %".to_string(),
+    };
     let alert_n = move || active_alerts.get().len();
     let running_tasks = move || {
         tasks
@@ -223,6 +245,15 @@ pub fn Dashboard() -> impl IntoView {
                                             node_metrics.get().map(|m| format!("{} online", m.hostname)).unwrap_or_else(|| "Loading".into())
                                         }}
                                     </span>
+                                </span>
+                            </A>
+                            // Capacity: the worst of CPU / memory / storage, so a full disk is never
+                            // shown as a green health list next to a red gauge.
+                            <A href="/system/health" class=move || format!("health-tile stat-link {}", capacity_tone()) attr:id="dash-capacity">
+                                <span class="ht-icon" aria-hidden="true">{move || match capacity_tone() { "ok" => "\u{2713}", "" => "\u{2026}", _ => "!" }}</span>
+                                <span>
+                                    <span class="ht-title">"Capacity"</span>
+                                    <span class="ht-sub">{capacity_text}</span>
                                 </span>
                             </A>
                             <A href="/alerts" class=move || format!("health-tile stat-link {}", if alerts_access.get() == Access::Denied { "" } else if alert_n() > 0 { "crit" } else { "ok" }) attr:id="stat-active-alerts">
@@ -299,11 +330,11 @@ pub fn Dashboard() -> impl IntoView {
                             <Gauge id="stat-memory" href="/system/health" label="Memory"
                                 pct=Signal::derive(mem_pct)
                                 value=Signal::derive(move || mem_pct().map(|p| format!("{:.0}%", p)).unwrap_or_else(|| "--".into()).into_view())
-                                sub=Signal::derive(move || node_metrics.get().map(|m| format!("{} of {}", fmt_bytes(m.memory_used), fmt_bytes(m.memory_total))).unwrap_or_default())/>
+                                sub=Signal::derive(move || node_metrics.get().map(|m| format!("{} of {}", nb(fmt_bytes(m.memory_used)), nb(fmt_bytes(m.memory_total)))).unwrap_or_default())/>
                             <Gauge id="stat-storage" href="/storage" label="Storage"
                                 pct=Signal::derive(storage_pct)
                                 value=Signal::derive(move || storage_pct().map(|p| format!("{:.0}%", p)).unwrap_or_else(|| "--".into()).into_view())
-                                sub=Signal::derive(move || storage_totals().map(|(u, t)| format!("{} of {}", fmt_bytes(u), fmt_bytes(t))).unwrap_or_default())/>
+                                sub=Signal::derive(move || storage_totals().map(|(u, t)| format!("{} of {}", nb(fmt_bytes(u)), nb(fmt_bytes(t)))).unwrap_or_default())/>
                         </div>
                     </div>
                 </section>
@@ -480,6 +511,11 @@ pub fn Dashboard() -> impl IntoView {
 }
 
 /// Local "Nov 25 17:51" for a unix timestamp.
+/// "22.5 GiB" with a no-break space, so a gauge caption never splits a number from its unit.
+fn nb(s: String) -> String {
+    s.replace(' ', "\u{a0}")
+}
+
 fn fmt_time(ts: i64) -> String {
     let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ts as f64 * 1000.0));
     const M: [&str; 12] = [

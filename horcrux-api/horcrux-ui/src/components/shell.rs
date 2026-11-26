@@ -175,7 +175,7 @@ pub fn ResourceTree() -> impl IntoView {
                         if group.children.is_empty() {
                             if group.id == "vms" {
                                 rows.push(view! {
-                                    <li class="tree-empty">"No VMs yet \u{b7} " <A href="/vms/create">"Create"</A></li>
+                                    <li class="tree-empty">"0 VMs \u{b7} " <A href="/vms/create">"Create VM"</A></li>
                                 }.into_view());
                             }
                             continue;
