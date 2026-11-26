@@ -805,6 +805,28 @@ pub(crate) fn report_offline_as_failure(
     !maint_known.contains(node)
 }
 
+/// Fold one round of maintenance answers into the remembered set: a node
+/// that answered is in it exactly when it said so; one that did not answer
+/// (`None`: shutting down, unreachable) keeps what it last said. A node in
+/// maintenance that is being shut down stops answering before the cluster
+/// sees it offline, and must still count as in maintenance then.
+pub(crate) fn update_maint_known(
+    maint_known: &mut std::collections::HashSet<String>,
+    flags: &HashMap<String, Option<bool>>,
+) {
+    for (n, f) in flags {
+        match f {
+            Some(true) => {
+                maint_known.insert(n.clone());
+            }
+            Some(false) => {
+                maint_known.remove(n);
+            }
+            None => {}
+        }
+    }
+}
+
 /// May this node (re)start HA guests that its own records say belong here?
 ///
 /// A node that has just booted (hard crash, power loss, manager restart) holds a
@@ -1097,19 +1119,19 @@ async fn tick(state: &Arc<AppState>, ls: &mut LoopState) {
     let quorum = online.len() * 2 > total;
 
     // Nodes in maintenance are online but take no guests: HA never picks
-    // them as a recovery or relocation target.
-    let maintenance = if online.len() > 1 {
-        super::drain::maintenance_nodes(state, &nodes, &local).await
+    // them as a recovery or relocation target. (A peer that does not answer
+    // in time counts as not in maintenance for placement: HA's own online
+    // view already decides if it is up.)
+    let flags = if online.len() > 1 {
+        super::drain::maintenance_flags(state, &nodes, &local).await
     } else {
         Default::default()
     };
+    let maintenance = super::drain::in_maintenance(&flags);
     let targets = crate::cluster::drain::recovery_targets(&online, &maintenance);
-    // Remember who is in maintenance while they answer; an offline node keeps
-    // its last known state (it cannot be asked).
-    if online.len() > 1 {
-        ls.maint_known.retain(|n| !online.contains(n));
-        ls.maint_known.extend(maintenance.iter().cloned());
-    }
+    // Remember who is in maintenance; a node that does not answer (going
+    // down, offline) keeps its last known state.
+    update_maint_known(&mut ls.maint_known, &flags);
 
     // Feed live node figures to placement.
     let all = state.ha_manager.list_resources().await;
@@ -1622,6 +1644,25 @@ mod maintenance_offline_tests {
         assert!(!report_offline_as_failure("b", &known));
         assert!(report_offline_as_failure("a", &known));
         assert!(report_offline_as_failure("b", &Default::default()));
+    }
+
+    #[test]
+    fn a_node_that_stops_answering_keeps_its_maintenance() {
+        let mut known = std::collections::HashSet::new();
+        let f = |v: &[(&str, Option<bool>)]| -> HashMap<String, Option<bool>> {
+            v.iter().map(|(n, f)| (n.to_string(), *f)).collect()
+        };
+        update_maint_known(&mut known, &f(&[("a", Some(false)), ("b", Some(true))]));
+        assert!(known.contains("b") && !known.contains("a"));
+        // b is shutting down: no answer, still known in maintenance
+        update_maint_known(&mut known, &f(&[("a", Some(false)), ("b", None)]));
+        assert!(!report_offline_as_failure("b", &known));
+        // b answers again, out of maintenance: forgotten
+        update_maint_known(&mut known, &f(&[("b", Some(false))]));
+        assert!(report_offline_as_failure("b", &known));
+        // a node that never said it was in maintenance and stops answering
+        update_maint_known(&mut known, &f(&[("c", None)]));
+        assert!(report_offline_as_failure("c", &known));
     }
 }
 

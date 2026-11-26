@@ -1857,18 +1857,16 @@ async fn peer_maintenance(
     }))
 }
 
-/// The nodes of the cluster that are in maintenance, this one included
-/// (asked of every online peer; a peer that does not answer in time counts as
-/// not in maintenance - HA's own online view already decides if it is up).
-pub async fn maintenance_nodes(
+/// Which members are in maintenance, as far as they answer: `Some(flag)` for
+/// this node and every peer that answered, `None` for a peer that did not
+/// (going down, unreachable). A caller keeps its last known state for those.
+pub async fn maintenance_flags(
     state: &Arc<AppState>,
     nodes: &[Node],
     local: &str,
-) -> std::collections::HashSet<String> {
-    let mut set = std::collections::HashSet::new();
-    if load_maintenance(state).await.enabled {
-        set.insert(local.to_string());
-    }
+) -> HashMap<String, Option<bool>> {
+    let mut out = HashMap::new();
+    out.insert(local.to_string(), Some(load_maintenance(state).await.enabled));
     let peers = peer_nodes(nodes, local);
     let answers = futures::future::join_all(peers.iter().map(|n| async move {
         let r = tokio::time::timeout(
@@ -1878,12 +1876,24 @@ pub async fn maintenance_nodes(
         .await;
         (
             n.name.clone(),
-            matches!(r, Ok(Ok(MaintFlag { maintenance: true }))),
+            match r {
+                Ok(Ok(MaintFlag { maintenance })) => Some(maintenance),
+                _ => None,
+            },
         )
     }))
     .await;
-    set.extend(answers.into_iter().filter(|(_, m)| *m).map(|(n, _)| n));
-    set
+    out.extend(answers);
+    out
+}
+
+/// The members known to be in maintenance right now (see [`maintenance_flags`]).
+pub fn in_maintenance(flags: &HashMap<String, Option<bool>>) -> std::collections::HashSet<String> {
+    flags
+        .iter()
+        .filter(|(_, f)| **f == Some(true))
+        .map(|(n, _)| n.clone())
+        .collect()
 }
 
 async fn peer_move(
