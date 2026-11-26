@@ -16,6 +16,7 @@ use crate::api::{
     CpuGroupsView, FindNodeRequest, NicView, NicsView, NodeCaps, PowerAuto, PowerStatus,
     QuorumPlanView,
 };
+use crate::pages::ha::maintenance::NodeMaintenancePanel;
 use horcrux_common::VmConfig;
 use leptos::*;
 
@@ -187,6 +188,17 @@ pub fn ClusterManagementPage() -> impl IntoView {
     let (show_add_node_modal, set_show_add_node_modal) = create_signal(false);
     let (show_node_finder_modal, set_show_node_finder_modal) = create_signal(false);
     let (search_query, set_search_query) = create_signal(String::new());
+    // Every member's maintenance state (badge, Enter/Exit) and the member
+    // whose maintenance panel is open.
+    let (maint_rows, set_maint_rows) = create_signal(Vec::<crate::api::NodeMaintenanceRow>::new());
+    let maint_open = create_rw_signal(None::<String>);
+    let load_maint = move || {
+        spawn_local(async move {
+            if let Ok(c) = crate::api::get_cluster_maintenance().await {
+                set_maint_rows.set(c.nodes);
+            }
+        });
+    };
 
     // Add node form state
     let (node_name, set_node_name) = create_signal(String::new());
@@ -264,7 +276,10 @@ pub fn ClusterManagementPage() -> impl IntoView {
     // Load data on mount
     create_effect(move |_| {
         load_cluster_data();
+        load_maint();
     });
+    // Badges follow a running drain / return.
+    set_interval(load_maint, std::time::Duration::from_secs(5));
 
     // Auto-refresh every 60 seconds
     set_interval(load_cluster_data, std::time::Duration::from_secs(60));
@@ -614,6 +629,25 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                 let mem_sig = create_rw_signal(caps0.max_guest_memory.map(|b| format!("{}", (b as f64) / 1073741824.0)).unwrap_or_default());
                                                 let votes_sig = create_rw_signal(caps0.quorum_votes.map(|v| v.to_string()).unwrap_or_default());
                                                 let is_local = node.is_local;
+                                                let name_for_badge = node.name.clone();
+                                                let name_for_maint = node.name.clone();
+                                                let name_attr = node.name.clone();
+                                                let badge = move || {
+                                                    let n = name_for_badge.clone();
+                                                    maint_rows.get().into_iter().find(|r| r.node == n).and_then(|r| {
+                                                        let moved = r.maintenance.as_ref().map(|m| m.origins.len()).unwrap_or(0);
+                                                        crate::api::maintenance_badge(&r).map(|b| (b, moved))
+                                                    }).map(|(b, moved)| view! {
+                                                        <a class="node-maint-badge ml-2 px-2 py-1 text-xs font-medium rounded bg-yellow-100 text-yellow-800"
+                                                            href=format!("/ha/maintenance?node={n}") data-state=b>
+                                                            {if moved > 0 { format!("{b} ({moved} moved away)") } else { b.to_string() }}
+                                                        </a>
+                                                    })
+                                                };
+                                                let in_maint = create_memo(move |_| {
+                                                    let n = name_attr.clone();
+                                                    maint_rows.get().into_iter().find(|r| r.node == n).and_then(|r| r.maintenance).is_some_and(|m| m.enabled)
+                                                });
                                                 view! {
                                                     <tr>
                                                         <td class="px-6 py-4 whitespace-nowrap">
@@ -629,6 +663,7 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                             <span class=format!("px-2 py-1 text-xs font-medium rounded {}", status_color)>
                                                                 {node.status.clone()}
                                                             </span>
+                                                            {badge}
                                                             {node.status_reason.clone().map(|why| view! {
                                                                 <div class="mt-1 text-xs text-gray-500 whitespace-normal max-w-xs">{why}</div>
                                                             })}
@@ -691,6 +726,11 @@ pub fn ClusterManagementPage() -> impl IntoView {
                                                             </div>
                                                         </td>
                                                         <td class="px-6 py-4 whitespace-nowrap">
+                                                            <button class="node-maint-toggle text-yellow-700 hover:text-yellow-900 px-2 py-1 rounded hover:bg-yellow-50"
+                                                                data-node=name_for_maint.clone()
+                                                                on:click=move |_| maint_open.set(Some(name_for_maint.clone()))>
+                                                                {move || if in_maint.get() { "Exit maintenance..." } else { "Enter maintenance..." }}
+                                                            </button>
                                                             {if is_local {
                                                                 view! { <span class="text-xs text-gray-400" title="The node you are connected to cannot be removed">"this node"</span> }.into_view()
                                                             } else {
@@ -715,6 +755,16 @@ pub fn ClusterManagementPage() -> impl IntoView {
                     </div>
                 }.into_view()
             }}
+
+            // Maintenance of the member picked in the table (plan preview,
+            // Enter / Exit, live progress).
+            {move || maint_open.get().map(|n| view! {
+                <div class="bg-white rounded-lg shadow p-6 mt-4" id="node-maint-dialog">
+                    <button class="btn btn-secondary btn-sm float-right" id="node-maint-close"
+                        on:click=move |_| { maint_open.set(None); load_maint(); }>"Close"</button>
+                    <NodeMaintenancePanel node=n/>
+                </div>
+            })}
 
             // Idle power-down (area 7): read-only view of the planner.
             {move || power_status.get().map(|p| {
