@@ -1,0 +1,15 @@
+# Horcrux VM network devices (tap<hash>i<n>: bridge taps and macvtap) carry the
+# MAC Horcrux gave them, the guest NIC's own address. systemd-udev's default
+# policy (99-default.link, MACAddressPolicy=persistent) rewrites a new
+# device's address to a "persistent" one a few milliseconds after it appears;
+# for a macvtap device the host then drops every frame meant for the guest.
+# systemd-udev only (eudev has no link files and does not touch addresses).
+
+[Match]
+OriginalName=tap*i*
+Kind=macvtap tun
+
+[Link]
+MACAddressPolicy=none
+NamePolicy=keep
+AlternativeNamesPolicy=

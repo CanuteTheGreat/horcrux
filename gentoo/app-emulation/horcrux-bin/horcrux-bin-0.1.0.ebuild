@@ -102,6 +102,9 @@ src_install() {
 	systemd_dounit "${FILESDIR}"/horcrux-ha-fence.service
 	# the manager and the guest save/resume service: the image tarball carries only the OpenRC scripts, so the units come from files/
 	systemd_dounit "${FILESDIR}"/horcrux-api.service "${FILESDIR}"/horcrux-guests.service
+	# udev must not rewrite the MAC of VM tap/macvtap devices (see the file)
+	insinto /usr/lib/systemd/network
+	doins "${FILESDIR}"/10-horcrux-tap.link
 	keepdir /etc/horcrux/ssl /var/lib/horcrux /var/log/horcrux
 	fperms 0700 /etc/horcrux/ssl
 	# PAM realm (host accounts): the "horcrux" PAM service, same as the source ebuild
