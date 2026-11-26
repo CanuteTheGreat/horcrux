@@ -180,10 +180,19 @@ def define(args):
             return sum(int(N[x].execute(f"pgrep -fc '[q]emu-system.*{g}' || true", 30)[1].strip() or 0) for x in NAMES)
 
         def guest_up(n, g):
+            """The guest's own uptime, read on its serial console (CirrOS may still be booting: ask again)."""
             cfg = hx(n, "GET", f"/vms/{g}")["body"]
             sock = cfg["disks"][0]["path"].rsplit(".", 1)[0] + ".serial.sock"
-            out = n.succeed(f"{env}python3 /root/hx_node.py serial {sock} \"cut -d' ' -f1 /proc/uptime\"", timeout=900).strip().splitlines()
-            return float(out[-1].split()[-1])
+            deadline = time.time() + n.T(600)
+            while True:
+                rc, out = n.execute(f"{env}python3 /root/hx_node.py serial {sock} \"cut -d' ' -f1 /proc/uptime\"", 900)
+                words = out.split()
+                try:
+                    return float(words[-1])
+                except (IndexError, ValueError):
+                    if time.time() > deadline:
+                        raise AssertionError(f"{g}: no uptime on its serial console (rc={rc}): {out[-300:]!r}")
+                    time.sleep(10)
         time.sleep(30)
         up0 = guest_up(B, "g-run1")
         m.note("g-run1-uptime-before", True, str(up0))
