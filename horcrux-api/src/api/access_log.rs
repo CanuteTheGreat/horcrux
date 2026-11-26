@@ -20,7 +20,7 @@ use axum::{
     middleware::Next,
     response::Response,
     routing::get,
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -225,6 +225,10 @@ pub async fn record_middleware(
     }
     let who = Who::default();
     request.extensions_mut().insert(who.clone());
+    // Make this server's own log reachable by the /api/access-log handlers
+    // via request extensions, so they never read a stale process-global
+    // instance (several servers share one process under test).
+    request.extensions_mut().insert(log.clone());
     let method = request.method().to_string();
     // Read what we need in a block so no borrow of the request (not Sync)
     // is alive across the await below: the middleware future must be Send.
@@ -430,8 +434,21 @@ fn current() -> Result<&'static Arc<AccessLog>, ApiError> {
         .ok_or_else(|| ApiError::Internal("the access log is not initialised".into()))
 }
 
-async fn list(Query(q): Query<AccessQuery>) -> Result<Json<AccessPage>, ApiError> {
-    let log = current()?;
+/// Resolve the log for a request handler: prefer the instance the access-log
+/// middleware put in the request extensions (this server's own log), and fall
+/// back to the process-global only if the middleware did not run.
+fn resolve(ext: Option<Extension<Arc<AccessLog>>>) -> Result<Arc<AccessLog>, ApiError> {
+    match ext {
+        Some(Extension(log)) => Ok(log),
+        None => current().cloned(),
+    }
+}
+
+async fn list(
+    Query(q): Query<AccessQuery>,
+    ext: Option<Extension<Arc<AccessLog>>>,
+) -> Result<Json<AccessPage>, ApiError> {
+    let log = resolve(ext)?;
     let v = filter_entries(log.all(), &q);
     let total = v.len();
     let limit = q.limit.unwrap_or(100).clamp(1, 5000);
@@ -447,8 +464,12 @@ async fn list(Query(q): Query<AccessQuery>) -> Result<Json<AccessPage>, ApiError
     }))
 }
 
-async fn stats(Query(q): Query<AccessQuery>) -> Result<Json<AccessStats>, ApiError> {
-    let v = filter_entries(current()?.all(), &q);
+async fn stats(
+    Query(q): Query<AccessQuery>,
+    ext: Option<Extension<Arc<AccessLog>>>,
+) -> Result<Json<AccessStats>, ApiError> {
+    let log = resolve(ext)?;
+    let v = filter_entries(log.all(), &q);
     Ok(Json(compute_stats(&v, q.bucket_secs.unwrap_or(3600))))
 }
 
