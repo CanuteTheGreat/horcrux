@@ -135,7 +135,9 @@ BDEPEND="
 	dev-debug/valgrind
 	>=dev-build/cmake-3.5.0
 	dev-python/cython[${PYTHON_USEDEP}]
+	dev-python/pip[${PYTHON_USEDEP}]
 	dev-python/setuptools[${PYTHON_USEDEP}]
+	dev-python/wheel[${PYTHON_USEDEP}]
 	dev-python/sphinx
 	dev-util/gperf
 	dev-util/ragel
@@ -230,6 +232,8 @@ PATCHES=(
 	"${FILESDIR}/ceph-20.1.1-qatlib-glibc-prereq.patch"
 	# 21.x rebases of Gentoo patches, generated against the 21.2.0 tarball
 	"${FILESDIR}/ceph-21.2.0-suppress-cmake-warning.patch"
+	# system RocksDB does not install the private util/stderr_logger.h
+	"${FILESDIR}/ceph-21.2.0-system-rocksdb-stderr-logger.patch"
 	"${FILESDIR}/ceph-21.2.0-cyclic-deps.patch"
 	"${FILESDIR}/ceph-21.2.0-isa-l.patch"
 	"${FILESDIR}/ceph-21.2.0-nvmeof-upb.patch"
@@ -326,6 +330,7 @@ ceph_src_configure() {
 		-DWITH_SYSTEMD:BOOL=$(usex systemd)
 		-DWITH_TESTS:BOOL=$(usex test)
 		-DWITH_CATCH2:BOOL=no
+		-DWITH_BREAKPAD:BOOL=no
 		-DWITH_UADK:BOOL=no
 		-DWITH_LIBURING:BOOL=$(usex uring)
 		-DWITH_SYSTEM_LIBURING:BOOL=$(usex uring)
