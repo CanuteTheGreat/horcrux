@@ -226,19 +226,25 @@ pub async fn record_middleware(
     let who = Who::default();
     request.extensions_mut().insert(who.clone());
     let method = request.method().to_string();
-    let header = |n: &str| {
-        request
-            .headers()
-            .get(n)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.chars().take(200).collect::<String>())
+    // Read everything needed from the request in a plain function so no
+    // borrow of the (non-Sync) body type lives across the await below.
+    let (client, user_agent) = {
+        let headers = request.headers();
+        let header = |n: &str| {
+            headers
+                .get(n)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.chars().take(200).collect::<String>())
+        };
+        (
+            client_address(
+                &peer.ip().to_string(),
+                header("x-forwarded-for").as_deref(),
+                &log.trusted,
+            ),
+            header("user-agent"),
+        )
     };
-    let client = client_address(
-        &peer.ip().to_string(),
-        header("x-forwarded-for").as_deref(),
-        &log.trusted,
-    );
-    let user_agent = header("user-agent");
     let started = Instant::now();
     let ts_ms = now_ms();
     let response = next.run(request).await;
