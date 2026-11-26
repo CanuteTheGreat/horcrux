@@ -4,6 +4,7 @@ Port of `qemu-test.py --flow auto` (UEFI+USB or BIOS+CD, ext4 default) onto vmte
 the services are checked through the init-agnostic API, so an OpenRC and a systemd ISO use the same script.
 
     python3 -m vmtest run scenarios/install_smoke.py --arg iso=/path/x.iso [--arg project=patronus] [--arg mode=bios --arg media=cdrom]
+        [--arg fs=zfs --arg zfs_raid=raidz1 --arg disks=3 --arg zfs_pool=tank]   (multi-disk ZFS: pool layout + name checked)
 """
 import os
 import re
@@ -19,10 +20,13 @@ def define(args):
     project = args.get("project", "horcrux")
     P = PROJECTS[project]
     mode, media = args.get("mode", "uefi"), args.get("media", "usb")
-    answers, key = make_answers(project)
+    fs, raid, pool = args.get("fs", "ext4"), args.get("zfs_raid") or None, args.get("zfs_pool") or None
+    ndisks = int(args.get("disks", 1))
+    devs = [f"/dev/vd{chr(ord('a') + i)}" for i in range(ndisks)]
+    answers, key = make_answers(project, fs=fs, disks=devs, zfs_raid=raid, zfs_pool=pool)
     nics = [Nic("user", forwards={"ssh": 22, "web": P["port"]})] if project == "horcrux" else [Nic("user", forwards={}), Nic("user", subnet="10.77.0.0/24", guest_ip="10.77.0.1", forwards={"ssh": 22, "web": P["port"]})]
     node = NodeSpec(name=project, mem=int(args.get("mem", 4096)), cpus=2, iso=args["iso"], iso_media=media, firmware=mode,
-                    disks=[Disk("24G")], extra_drives=[(answers, "usb")], nics=nics, ssh_key=key, console="none", boot_timeout=420)
+                    disks=[Disk("24G") for _ in devs], extra_drives=[(answers, "usb")], nics=nics, ssh_key=key, console="none", boot_timeout=420)
 
     def run(m):
         n = m[project]
@@ -43,6 +47,16 @@ def define(args):
         if project == "horcrux":
             bad = {u: n.http("web", "/api/auth/login", "POST", {"username": u, "password": PW})[0] for u in ("admin", "root")}
             m.check("web-no-admin-or-root-account", all(c == 401 for c in bad.values()), str(bad))
+        if fs == "zfs":
+            want = pool or "rpool"
+            st = n.succeed(f"zpool status -P {want}")
+            vd = re.findall(r"^\s+(/dev/\S+)", st, re.M)
+            level = raid or "single"
+            ok = len(vd) == ndisks and (level in ("single", "stripe") or re.search(rf"^\s+{level}(-\d+)?\s", st, re.M))
+            m.check(f"zfs-pool-{want}-{level}-{ndisks}-disks", bool(ok), st[-800:])
+            root = n.succeed("findmnt -n -o SOURCE /").strip()
+            conf = n.succeed("grep '^POOL=' /etc/horcrux/be.conf").strip()
+            m.check("zfs-root-boot-environment-on-the-pool", root == f"{want}/ROOT/horcrux" and conf == f'POOL="{want}"', f"{root} | {conf}")
         out = n.succeed("cat /etc/os-release; qfile -q /usr/lib/os-release")
         kv = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?$', out, re.M))
         good = bool(kv.get("VERSION_ID") and kv.get("BUILD_ID") and kv.get("VARIANT_ID")) and kv.get("ID_LIKE") == "gentoo" \
@@ -56,5 +70,5 @@ def define(args):
         m.check("clean-poweroff", not n.q.alive(), "")
         shutil.rmtree(os.path.dirname(key), ignore_errors=True)
 
-    return Test(f"install-smoke-{project}-{mode}-{media}", nodes=[node], run=run, timeout=3600,
+    return Test(f"install-smoke-{project}-{mode}-{media}" + (f"-{fs}-{raid or 'single'}-{ndisks}" if fs != "ext4" else ""), nodes=[node], run=run, timeout=3600,
                 description="unattended install from ISO, reboot, service/web/ssh checks (init-agnostic)")
