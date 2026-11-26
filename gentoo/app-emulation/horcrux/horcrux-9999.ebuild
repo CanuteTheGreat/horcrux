@@ -30,6 +30,8 @@ SLOT="0"
 # Container runtimes: lxc, podman (preferred OCI runtime, USE default), docker (secondary)
 # Platform features: backup (default), cluster (+HA), kubernetes, nas
 # Build options: cli, monitoring, systemd, webui (default)
+# Runtime tooling: security (installs the vulnerability scanner Security >
+#   Vulnerabilities uses; the scanning code itself is always built)
 # NAS protocols: smb, nfs-server, afp, webdav, ftp
 # NAS auth: ldap (client), ldap-server, kerberos, ad (Active Directory)
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
@@ -40,6 +42,7 @@ IUSE="
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
 	nas-zfs nas-btrfs nas-mdraid nas-lvm
+	security
 "
 
 # At least one virtualization backend or container runtime must be enabled
@@ -131,6 +134,8 @@ RDEPEND="
 	nas-lvm? ( sys-fs/lvm2 )
 
 	nas? ( sys-apps/acl )
+
+	security? ( app-containers/grype )
 "
 
 # Build dependencies

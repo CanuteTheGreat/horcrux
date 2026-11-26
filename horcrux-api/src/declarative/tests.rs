@@ -392,3 +392,35 @@ fn guest_power_rejects_unknown_vms_and_bad_values() {
     assert!(parse("guest_power: {node: {max_parallel: 0}}").is_err());
     assert!(parse("guest_power: {vms: {a: {save_dir: relative}}}").is_err());
 }
+
+#[test]
+fn security_settings_are_planned_validated_and_exported() {
+    use horcrux_common::security::SecuritySettings;
+    let live = Live::default();
+    let mut s = Spec {
+        security: Some(SecuritySettings::default()),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).in_sync());
+    let mut want = SecuritySettings::default();
+    want.vuln_scan.scanner = "trivy".into();
+    want.hardening.exclude = vec!["kernel-ptrace-scope".into()];
+    s.security = Some(want);
+    let p = plan(&s, &live, false);
+    assert_eq!(p.changes.len(), 1, "{:?}", p.changes);
+    assert_eq!(p.changes[0].kind, "security");
+    let d = p.changes[0].details.join("\n");
+    assert!(
+        d.contains("vuln_scan.scanner: \"grype\" -> \"trivy\""),
+        "{d}"
+    );
+    assert!(d.contains("hardening.exclude"), "{d}");
+    let mut bad = SecuritySettings::default();
+    bad.vuln_scan.max_concurrent = 0;
+    s.security = Some(bad);
+    assert_eq!(plan(&s, &live, false).errors.len(), 1);
+    let y: Spec =
+        serde_yaml::from_str("version: 1\nsecurity: {vuln_scan: {schedule_hours: 0}}\n").unwrap();
+    assert_eq!(y.security.unwrap().vuln_scan.schedule_hours, 0);
+    assert!(export(&live).security.is_some());
+}

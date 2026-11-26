@@ -7984,3 +7984,89 @@ pub async fn boot_env_action(path: &str, body: serde_json::Value) -> Result<Stri
 pub async fn delete_boot_environment(path: &str) -> Result<(), ApiError> {
     delete_json(&format!("/system/boot-environments{path}")).await
 }
+
+// ============================================================================
+// Security: vulnerability scanning and the host hardening baseline
+// ============================================================================
+
+pub use horcrux_common::security::{
+    HardeningApplyRequest, HardeningApplyResult, HardeningReport, HardeningRuleResult, RuleStatus,
+    ScanRequest, ScanResult, ScanStatus, ScanSummary, ScanTarget, ScanTargetKind, SecurityOverview,
+    SecuritySettings, Severity, SeverityCounts,
+};
+
+pub async fn get_security_overview() -> Result<SecurityOverview, ApiError> {
+    fetch_json("/security/overview").await
+}
+
+pub async fn get_security_settings() -> Result<SecuritySettings, ApiError> {
+    fetch_json("/security/settings").await
+}
+
+pub async fn put_security_settings(s: &SecuritySettings) -> Result<SecuritySettings, ApiError> {
+    put_json("/security/settings", s).await
+}
+
+pub async fn get_scan_targets() -> Result<Vec<ScanTarget>, ApiError> {
+    fetch_json("/security/targets").await
+}
+
+pub async fn list_security_scans() -> Result<Vec<ScanSummary>, ApiError> {
+    fetch_json("/security/scans?limit=200").await
+}
+
+pub async fn start_security_scan(
+    kind: ScanTargetKind,
+    target: &str,
+) -> Result<ScanSummary, ApiError> {
+    post_json(
+        "/security/scans",
+        &ScanRequest {
+            kind,
+            target: target.to_string(),
+        },
+    )
+    .await
+}
+
+pub async fn scan_all_targets() -> Result<Vec<ScanSummary>, ApiError> {
+    post_json("/security/scans/all", &serde_json::json!({})).await
+}
+
+pub async fn get_security_scan(id: &str) -> Result<ScanResult, ApiError> {
+    fetch_json(&format!("/security/scans/{id}")).await
+}
+
+pub async fn delete_security_scan(id: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/security/scans/{id}")).await
+}
+
+pub async fn get_hardening() -> Result<HardeningReport, ApiError> {
+    fetch_json("/security/hardening").await
+}
+
+pub async fn hardening_apply(
+    rules: Vec<String>,
+    dry_run: bool,
+) -> Result<HardeningApplyResult, ApiError> {
+    post_json(
+        "/security/hardening/apply",
+        &HardeningApplyRequest { rules, dry_run },
+    )
+    .await
+}
+
+pub async fn hardening_revert(
+    rules: Vec<String>,
+    dry_run: bool,
+) -> Result<HardeningApplyResult, ApiError> {
+    post_json(
+        "/security/hardening/revert",
+        &HardeningApplyRequest { rules, dry_run },
+    )
+    .await
+}
+
+pub async fn hardening_report_text(format: &str) -> Result<String, ApiError> {
+    fetch_text(&format!("/security/hardening/report?format={format}")).await
+}

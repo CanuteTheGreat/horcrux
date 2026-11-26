@@ -107,6 +107,7 @@ pub const KNOWN_AREAS: &[&str] = &[
     "templates",
     "audit",
     "access-log",
+    "security",
     "storage",
     "ceph",
     "pools",
@@ -366,6 +367,8 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "backup-storages" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
 
         "audit" | "access-log" => need(P::SysAudit, "/"),
+        // Vulnerability scans and the host hardening baseline.
+        "security" => read_write(m, P::SysAudit, P::SysModify, "/"),
 
         "ceph" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
         // Inventory views: the handlers show only what the caller may see.

@@ -3264,3 +3264,9 @@ TCP peer; `X-Forwarded-For` is believed only from peers in
 ## System log
 
 `GET /api/system/logs` and `GET /api/system/logs/export` read journald, or the syslog file on OpenRC hosts. Query parameters: `level` (minimum severity), `service` (identifier; `*` and `?` wildcards, otherwise substring), `search`, `limit`, `since` and `until` (RFC 3339, `YYYY-MM-DD HH:MM:SS` in server local time, or epoch seconds; an unparsable value answers 400), `kernel=true` (kernel messages only). Export also takes `format=txt|json|csv`.
+## Security: vulnerability scans and hardening baseline
+
+`/api/security/*`: scan container images and containers for known vulnerabilities (Grype or
+Trivy), check the host against the Horcrux hardening baseline, apply and revert its automatic
+rules, download the compliance report. Reads need Sys.Audit, changes Sys.Modify. Full route
+list, settings and behaviour: [SECURITY-SUITE.md](SECURITY-SUITE.md).

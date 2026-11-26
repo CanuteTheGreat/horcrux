@@ -47,6 +47,7 @@
 	</longdescription>
 	<use>
 		<!-- Virtualization backends -->
+		<flag name="security">Install the vulnerability scanner (<pkg>app-containers/grype</pkg>) used by Security &gt; Vulnerabilities to scan container images and containers</flag>
 		<flag name="qemu">Enable QEMU/KVM hypervisor support for hardware virtualization</flag>
 		<flag name="incus">Enable Incus support (preferred over LXD) for system containers and VMs</flag>
 		<flag name="lxd">Enable LXD support (supported secondary to Incus) for system containers and VMs</flag>

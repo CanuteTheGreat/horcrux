@@ -468,6 +468,8 @@ pub async fn run() -> anyhow::Result<()> {
     // Opt-in automatic idle power-down of `power-managed` lab nodes (leader only).
     #[cfg(feature = "cluster")]
     api::idle_power::spawn(state.clone());
+    // Scheduled vulnerability scans and hardening baseline checks.
+    api::security::spawn_scheduler(state.clone());
 
     // Save/resume of guests across host shutdown: token, boot pass, running snapshot.
     api::guest_state::engine::spawn(state.clone());
@@ -560,6 +562,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::ceph_admin::routes())
         .merge(api::audit_view::routes())
         .merge(api::access_log::routes())
+        .merge(api::security::routes())
         .merge(api::node_shell::routes())
         .merge(api::sdn_zones::routes(&state))
         .merge(api::sdn_ovs::routes(&state))
