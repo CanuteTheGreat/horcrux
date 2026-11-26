@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 
+from . import netlayout as NL
 from . import stages as ST
 from . import system as S
 from . import portableswap
@@ -136,20 +137,39 @@ def s_mgmt(t, st, step):
         wired = [x for x in st.nics if not x["wifi"]]
         up = [x for x in wired if S.carrier(x["name"])]
         n["iface"] = (up or wired or st.nics)[0]["name"]
-    cur_ip = S.nic_ip(n["iface"])
-    f = [Field("iface", "Management NIC", "list", n["iface"], nics, width=60, hint="The interface that carries the web UI and SSH"),
-         Field("mode", "IP configuration", "choice", n["mode"], [("dhcp", "DHCP (automatic)"), ("static", "Static address")]),
+    NL.ensure(n, st.p)
+    cur_ip = S.nic_ip(NL.l3_iface(n) or n["iface"])
+    f = [Field("iface", "Management NIC", "list", n["iface"], nics, width=60, hint="The interface that carries the web UI and SSH")]
+    link_f = ST.mgmt_link_fields(n, st.nics, st.p)
+    f += [x for x in link_f if not x.advanced]
+    f += [Field("mode", "IP configuration", "choice", n["mode"], [("dhcp", "DHCP (automatic)"), ("static", "Static address")]),
          Field("address", "IP address / prefix", "text", n["address"] or cur_ip, validate=lambda v, a: S.cidr_problem(v),
                visible=lambda v: v["mode"] == "static", hint="e.g. 192.168.1.50/24"),
          Field("gateway", "Gateway", "text", n["gateway"] or default_gateway(), validate=lambda v, a: S.ip_problem(v, a.get("address")),
                visible=lambda v: v["mode"] == "static"),
          Field("dns", "DNS server(s)", "text", n["dns"] or default_dns(), validate=lambda v, a: S.dns_problem(v),
                visible=lambda v: v["mode"] == "static", hint="space separated")]
+    f += [x for x in link_f if x.advanced]          # hash policy / LACP rate / miimon: under "Show advanced options"
+    if any(x.advanced for x in f):
+        f.append(Field("__adv", "Show advanced options", "check", os.environ.get("LIVE_INSTALLER_EXPERT") == "1",
+                       hint="Space toggles the bond options (hash policy, LACP rate, link check)"))
+        for x in f:
+            if x.advanced:
+                x.visible = (lambda vv, old=x.visible: bool(vv.get("__adv")) and (old is None or old(vv)))
+    prev = dict(n, ifaces=list(n["ifaces"]), bond=dict(n["bond"]))
     b, v = run_form(t, step, "Management network",
-                    "Pick the network interface for the management web UI and SSH.", f)
+                    "Pick the network interface(s) for the management web UI and SSH: one NIC, or several bonded into one link, "
+                    "optionally with a VLAN tag.", f,
+                    validate_all=lambda a: (ST.commit_mgmt_link(dict(n, ifaces=list(n["ifaces"]), bond=dict(n["bond"])), a, a["iface"], st.p)
+                                            or [None])[0])
     if b == "Back":
         return "back"
-    n.update({k: v[k].strip() if isinstance(v[k], str) else v[k] for k in ("iface", "mode", "address", "gateway", "dns")})
+    n.update({k: v[k].strip() if isinstance(v[k], str) else v[k] for k in ("iface", "mode", "address", "gateway", "dns") if k in v})
+    ST.commit_mgmt_link(n, v, n["iface"], st.p)
+    if not st.dry and not (NL.is_plain(n) and NL.is_plain(prev)):
+        r = live_link(t, st, step, n, prev)
+        if r != "next":
+            return r
     if next(x for x in st.nics if x["name"] == n["iface"])["wifi"]:
         r = s_wifi(t, st, step, n["iface"])
         if r != "next":
@@ -158,6 +178,43 @@ def s_mgmt(t, st, step):
     else:
         c["wifi"] = None
     return "next"
+
+
+def apply_live_link(p, n, prev=None, log=print):
+    """bond / VLAN on the live system + dhcpcd (same config as the installed system) -> (ok, address or error)"""
+    from . import initsys
+
+    def run(cmd, check):
+        rc, out = S.sh(cmd, timeout=30)
+        return rc, out
+
+    def write(path, text):
+        with open(path, "w") as fh:
+            fh.write(text)
+    ok, info = NL.apply_live(n, run, read=S.read, write=write, restart_dhcpcd=lambda: initsys.control("restart", "dhcpcd", timeout=60),
+                             nic_ip=S.nic_ip, wait_secs=int(NL.default(p, "live_wait_secs")), prev=prev, log=log)
+    if not ok:
+        # what the kernel and dhcpcd ended up with, so a failed link says why (installer log / console)
+        for cmd in NL.live_diag_commands(n):
+            rc, out = S.sh(cmd, timeout=15)
+            for line in (out or "").strip().splitlines()[:90]:
+                log(f"MGMT-LINK-DIAG {cmd[0] if isinstance(cmd, list) else 'sh'}: {line}")
+    return ok, info
+
+
+def live_link(t, st, step, n, prev):
+    t.scr.clear()
+    t.frame(step, "Management network")
+    t.put(5, 2, f"Setting up {NL.describe(n)} and waiting for an address ...")
+    t.scr.refresh()
+    ok, info = apply_live_link(st.p, n, prev)
+    if ok:
+        if info:
+            message(t, "Management link up", f"{NL.describe(n)}\nAddress {info} on {NL.l3_iface(n)}.", "ok")
+        return "next"
+    r = message(t, "Management link", f"{NL.describe(n)}\n\n{info}\n\nThe installed system gets the same configuration; you can "
+                "continue (e.g. the switch is set up later) or go back and change it.", "warn", ("Back", "Continue"))
+    return "next" if r == "Continue" else "again"
 
 
 def s_wifi(t, st, step, iface):
@@ -536,7 +593,8 @@ def web_url(st):
         ip = c["lan"]["address"].split("/")[0] if c["lan"]["iface"] else (c["wan"]["address"].split("/")[0] if c["wan"]["mode"] == "static" else "<WAN address from DHCP>")
     else:
         n = c["mgmt"]
-        ip = n["address"].split("/")[0] if n["mode"] == "static" else (S.nic_ip(n["iface"]).split("/")[0] or "<address from DHCP>") if n["iface"] else "<IP address>"
+        l3 = NL.l3_iface(NL.ensure(n, p)) or n["iface"]
+        ip = n["address"].split("/")[0] if n["mode"] == "static" else (S.nic_ip(l3).split("/")[0] or "<address from DHCP>") if n["iface"] else "<IP address>"
     return f"{p['web_scheme']}://{ip}:{p['web_port']}/"
 
 
@@ -673,7 +731,9 @@ def unattended(profile, answers_path, halt=True):
             if c["lan"].get("iface") in ("auto", None) or (c["lan"].get("iface") == "" and not c["lan"].get("_none")):
                 c["lan"]["iface"] = lan_pool[0]["name"] if lan_pool else ""
         else:
+            NL.resolve_all(c["mgmt"], [x for x in wired if S.carrier(x["name"])] + [x for x in wired if not S.carrier(x["name"])])
             resolve("mgmt", 0)
+            NL.ensure(c["mgmt"], profile)
         c["ssh_enabled"] = c["ssh_enabled"] and True
         errs = S.validate_config(profile, c, unattended=True, nic_names=[n["name"] for n in nics])
         if errs:
@@ -681,6 +741,10 @@ def unattended(profile, answers_path, halt=True):
                 say("ANSWER-FILE-ERROR " + e)
             raise S.InstallError("invalid answer file")
         say(f"AUTOINSTALL-PLAN disks={','.join(c['disks'])} fs={c['fs']} swap={c.get('swap', 'auto')} host={c['hostname']} net={c['mgmt']['iface'] or (c['wan']['iface'] + '/' + c['lan']['iface'])}")
+        if profile["network_mode"] != "wan-lan" and not NL.is_plain(c["mgmt"]):
+            # the live system gets the same bond / VLAN first, so a tagged-only network works while installing
+            ok, info = apply_live_link(profile, c["mgmt"], log=say)
+            say(f"MGMT-LINK-LIVE {'ok' if ok else 'failed'} {NL.describe(c['mgmt'])}: {info or '-'}")
         last = {"n": -1}
 
         def prog(pct, note):

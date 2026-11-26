@@ -586,6 +586,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::firewall_objects::routes())
         .merge(api::sdn_cni::routes())
         .merge(api::host_net::routes(&state))
+        .merge(api::mgmt_net::routes())
         .merge(api::net_dhcp::routes(&state))
         .merge(api::dashboards::routes(&state));
     #[cfg(feature = "s3-gateway")]

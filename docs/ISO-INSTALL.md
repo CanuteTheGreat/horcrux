@@ -308,6 +308,41 @@ gateway = "192.168.1.1"
 dns = ["192.168.1.1"]
 ```
 
+### Bonded and VLAN-tagged management network
+
+The management step (guided text and graphical installer, answer file, and the console menu's option 15 afterwards) can put the
+node's address on a **bond** of several NICs and/or a **tagged 802.1Q VLAN**, so a node whose switch port only carries tagged
+frames is reachable from the first boot:
+
+```toml
+[network.management]
+mode = "dhcp"                             # or "static" + address / gateway / dns as above
+interfaces = ["enp1s0", "enp2s0"]         # two or more = a bond; "all" = every wired NIC; one NIC = no bond
+vlan = 42                                 # 1-4094; omit (or 0) = untagged
+[network.management.bond]                 # only used with two or more interfaces; every key is optional
+mode = "802.3ad"                          # active-backup (default) | 802.3ad | balance-alb | balance-tlb | balance-xor | balance-rr | broadcast
+miimon = 100                              # link check interval, ms (default 100)
+xmit_hash_policy = "layer3+4"             # 802.3ad / balance-xor / balance-tlb (default layer3+4)
+lacp_rate = "fast"                        # 802.3ad: fast (default) | slow
+name = "bond0"                            # default bond0
+primary = "enp1s0"                        # active-backup / balance-alb / balance-tlb: preferred NIC
+```
+
+`802.3ad` needs an LACP group on the switch and member NICs that report link speed and duplex (Linux keeps an 802.3ad member
+without them down; a virtio-net NIC reports them only when the hypervisor sets `speed=` / `duplex=`, which the
+`MGMT-LINK-DIAG` lines show as `Speed: Unknown`); `active-backup` works on any switch and any NIC. The installer builds the same link on the live
+system first, so DHCP on the tagged VLAN works during the install (`MGMT-LINK-LIVE ok ...` on the console). On the installed node the
+bond and VLAN are configured by the init system's own network stack: netifrc (`/etc/conf.d/net`, service `net.bond0` or
+`net.<nic>` in the default runlevel) on OpenRC, systemd-networkd (`/etc/systemd/network/10-mgmt-*.netdev/.network`) on systemd, and
+NetworkManager keyfiles on desktop installs. dhcpcd keeps the address (DHCP or static) on the bond/VLAN interface and leaves the
+member NICs and the VLAN parent alone. The layout is recorded in `/etc/horcrux/management-network.json`; the web UI shows and edits it
+under Infrastructure > Management Link (`GET`/`PUT /api/network/management`, declarative section `management_network`). A change from
+the UI or a declarative apply is written for the next boot unless "apply now" is chosen. Wrong names, VLAN ids, bond modes or
+options stop an unattended install with a clear `ANSWER-FILE-ERROR`. Defaults can be changed per product in the installer profile
+(`mgmt_bond_name`, `mgmt_bond_mode`, `mgmt_bond_miimon`, `mgmt_bond_xmit_hash_policy`, `mgmt_bond_lacp_rate`,
+`mgmt_live_wait_secs` (default 40 s), `mgmt_network_record`); the API side reads `[management_network]` in config.toml
+(`record_path`, `tool_path` = `/usr/bin/console-menu`, `tool_timeout_secs` = 120; env `HORCRUX_MGMT_NETWORK_*`).
+
 The installed system has no web `admin` account: log in to the web UI (https, port 8006) with the user from the answer file's `[user]` section (a system user in `wheel` + `horcrux-admin`, created by the installer; PAM). `[user]` is required for Horcrux. See [WEB-LOGIN-PAM.md](WEB-LOGIN-PAM.md).
 The installer powers the machine off when it is done (`AUTOINSTALL-OK` on the console and in
 `/var/log/autoinstall.log`). Invalid answer files stop with `ANSWER-FILE-ERROR ...` lines and start the guided installer instead.
