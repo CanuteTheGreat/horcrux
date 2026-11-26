@@ -98,7 +98,11 @@
       </div>
     </div>
 
-    <div class="ui-toasts"><div class="ui-toast ok">VM vm-100 started.</div></div>
+    <h2>Toolbar on its own (no grid after it)</h2>
+    <div class="ui-toolbar"><div><button class="ui-btn sm">Add</button></div><div><input aria-label="Search" placeholder="Search"></div></div>
+    <div class="ui-empty">No backup jobs yet.</div>
+
+    <div class="ui-toasts"><div class="ui-toast ok">VM vm-100 started.</div><div class="ui-toast crit"><span>Backup of vm-105 failed: storage offline.</span><button class="ui-btn sm ui-toast-close" type="button">Close</button></div></div>
   </main>
 </div>
 <script src="ui.js"></script>

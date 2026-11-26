@@ -1,4 +1,4 @@
-/* errant ui-kit v0.2 - components.css (needs tokens.css first)
+/* errant ui-kit v0.3 - components.css (needs tokens.css first)
    Every class is prefixed ui- and nothing styles bare elements, so a product can adopt it page by page
    next to its existing CSS. Markup contract: ui-kit/README.md. License GPL-3.0-or-later. */
 
@@ -72,6 +72,7 @@
 .ui-input[aria-invalid="true"] { border-color: var(--c-crit); }
 .ui-grid-wrap { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-md); overflow: auto; }
 .ui-toolbar + .ui-grid-wrap { border-radius: 0 0 var(--r-md) var(--r-md); }
+.ui-toolbar:not(:has(+ .ui-grid-wrap)) { border-bottom: 1px solid var(--c-border); border-radius: var(--r-md); }
 .ui-grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-md); }
 .ui-grid th { height: 30px; padding: 0 var(--s-3); text-align: left; font-weight: 600; font-size: var(--fs-sm); color: var(--c-muted); background: var(--c-sunken); border-bottom: 1px solid var(--c-border); white-space: nowrap; position: sticky; top: 0; z-index: 1; }
 .ui-grid td { height: var(--row-h); padding: 3px var(--s-3); border-bottom: 1px solid var(--c-border); vertical-align: middle; }
@@ -139,13 +140,18 @@
 @keyframes ui-spin { to { transform: rotate(360deg); } }
 
 /* dialog + toast */
-.ui-dialog { margin: auto; border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--e-2); padding: 0; background: var(--c-surface); color: var(--c-ink); width: min(560px, calc(100vw - 32px)); }
+.ui-dialog { margin: auto; border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--e-2); padding: 0; background: var(--c-surface); color: var(--c-ink); width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); }
+.ui-dialog[open], .ui-dialog[open] > form { display: flex; flex-direction: column; min-height: 0; }
+.ui-dialog > form { flex: 1 1 auto; }
+.ui-dialog > .ui-dialog-body, .ui-dialog > form > .ui-dialog-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .ui-dialog::backdrop { background: var(--scrim); }
 .ui-dialog > header, .ui-dialog > form > header { padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--c-border); font-weight: 600; font-size: var(--fs-lg); }
 .ui-dialog > .ui-dialog-body, .ui-dialog > form > .ui-dialog-body { padding: var(--s-4); }
 .ui-dialog > footer, .ui-dialog > form > footer { display: flex; justify-content: flex-end; gap: var(--s-2); padding: var(--s-3) var(--s-4); border-top: 1px solid var(--c-border); background: var(--c-sunken); }
 .ui-toasts { position: fixed; right: var(--s-4); bottom: var(--s-4); display: grid; gap: var(--s-2); z-index: 400; width: min(380px, calc(100vw - 32px)); }
-.ui-toast { background: var(--c-raised); border: 1px solid var(--c-border); border-radius: var(--r-md); box-shadow: var(--e-2); padding: var(--s-3); }
+.ui-toast { background: var(--c-raised); color: var(--c-ink); border: 1px solid var(--c-border); border-radius: var(--r-md); box-shadow: var(--e-2); padding: var(--s-3); }
+.ui-toast:has(> .ui-toast-close) { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.ui-toast > .ui-toast-close { flex: none; }
 .ui-toast.ok { border-color: var(--c-ok); }
 .ui-toast.crit { border-color: var(--c-crit); }
 
