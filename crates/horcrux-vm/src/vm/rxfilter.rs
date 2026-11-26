@@ -205,8 +205,12 @@ pub async fn adopt_running(vms: &super::VmManager) {
         {
             continue;
         }
+        // A VM started before this feature has no watcher monitor; it keeps
+        // the filter it was started with until its next start.
         if let Some(d) = vm.disks.first() {
-            spawn_watcher(&vm.id, Path::new(&d.path), &vm.hardware.nets);
+            if rxfilter_socket(Path::new(&d.path)).exists() {
+                spawn_watcher(&vm.id, Path::new(&d.path), &vm.hardware.nets);
+            }
         }
     }
 }
