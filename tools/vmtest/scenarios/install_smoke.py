@@ -60,6 +60,9 @@ def define(args):
             m.check("zfs-pool-hostid-matches-system", "Mismatch between pool hostid" not in full, full[:600])
             hid = n.succeed("hostid; od -An -tx1 /etc/hostid; img=$(ls -t /boot/initramfs-*.img | head -1); lsinitrd -f etc/hostid $img > /tmp/ird-hostid && cmp /tmp/ird-hostid /etc/hostid && echo initramfs-hostid-same")
             m.check("zfs-initramfs-carries-the-system-hostid", "initramfs-hostid-same" in hid and not hid.startswith("00000000"), hid)
+            # every later initramfs (a kernel update's dracut run) keeps the file too
+            cf = n.succeed("cat /etc/dracut.conf.d/92-horcrux-hostid.conf")
+            m.check("zfs-dracut-config-keeps-hostid-for-kernel-updates", "install_items" in cf and "/etc/hostid" in cf, cf)
             root = n.succeed("findmnt -n -o SOURCE /").strip()
             conf = n.succeed("grep '^POOL=' /etc/horcrux/be.conf").strip()
             m.check("zfs-root-boot-environment-on-the-pool", root == f"{want}/ROOT/horcrux" and conf == f'POOL="{want}"', f"{root} | {conf}")
