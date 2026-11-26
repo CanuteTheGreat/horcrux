@@ -133,12 +133,17 @@ pub fn KernelLineCard() -> impl IntoView {
                             }).collect_view()}
                         </tbody>
                     </table>
-                    <p id="kernel-line-running" class="form-help">{format!("Running: {}", s.running)}</p>
                     {s.update_pending.clone().map(|u| view! {
-                        <div class="form-actions" id="kernel-line-pending">
-                            <span>{format!("{u} is selected but not installed yet.")}</span>
-                            <button id="kernel-line-apply" class="btn btn-primary btn-sm" type="button" on:click=apply
-                                disabled=move || task.get().is_some_and(|u| handled.get_value() != u)>"Update now"</button>
+                        <div class="hx-actions" id="kernel-line-pending">
+                            {move || if task.get().is_some_and(|t| handled.get_value() != t) {
+                                view! { <span>{format!("Installing {u}: follow the log below.")}</span> }.into_view()
+                            } else {
+                                let u = u.clone();
+                                view! {
+                                    <span>{format!("{u} is selected but not installed yet.")}</span>
+                                    <button id="kernel-line-apply" class="btn btn-primary btn-sm" type="button" on:click=apply>"Update now"</button>
+                                }.into_view()
+                            }}
                         </div>
                     })}
                     {s.reboot_required.then(|| view! { <p class="alert alert-info" id="kernel-line-reboot">"A newer kernel is installed: reboot this node when convenient."</p> })}
