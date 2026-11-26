@@ -119,7 +119,7 @@ pub fn short_time(ts: &str) -> String {
 /// stands between the newer boot's first line and the older boot's last).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
-    Entry(LogEntry),
+    Entry(Box<LogEntry>),
     Reboot(String),
 }
 
@@ -142,7 +142,7 @@ pub fn with_separators(entries: &[LogEntry], boots: &[LogBoot]) -> Vec<Row> {
                 }
             }
         }
-        rows.push(Row::Entry(e.clone()));
+        rows.push(Row::Entry(Box::new(e.clone())));
     }
     rows
 }
