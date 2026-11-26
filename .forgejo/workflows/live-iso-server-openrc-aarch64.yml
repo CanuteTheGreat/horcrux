@@ -75,6 +75,7 @@ jobs:
           FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}   # public GitHub mirror release (second publish step)
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}   # OpenPGP release key: every published file is signed (common/sign-artifacts.sh); unset = nothing is published
+          SECUREBOOT_SIGNING_KEY: ${{ secrets.SECUREBOOT_SIGNING_KEY }}   # UEFI Secure Boot signing key (common/boot/secureboot-sign.sh): the ISO's GRUB, kernels, modules
           ARCH: aarch64
           JOBS: '4'
         run: |

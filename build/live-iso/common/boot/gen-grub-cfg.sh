@@ -50,7 +50,8 @@ CFG
 # would no longer reach it (serial consoles and the serial-driven QEMU tests would never see the menu: grub-menu-reached timeouts)
 if [ "${GFX_OK:-0}" = 1 ] && [ "$GRUB_SERIAL" = 1 ]; then
 cat <<CFG
-if loadfont /boot/grub/fonts/unicode.pf2; then
+# Secure Boot: GRUB in lockdown refuses font files (not signed), so the graphical menu is skipped there (text menu, same entries)
+if [ "\$lockdown" != y ] && loadfont /boot/grub/fonts/unicode.pf2; then
     insmod gfxterm
     insmod png
     set gfxmode=auto

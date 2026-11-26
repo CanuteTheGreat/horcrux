@@ -736,10 +736,26 @@ FIRMWARE = {   # (CODE, VARS) candidates per arch, first existing pair wins
                 ("/usr/share/edk2/riscv/RISCV_VIRT_CODE.fd", "/usr/share/edk2/riscv/RISCV_VIRT_VARS.fd")],
 }
 ARCH = HOST_ARCH      # set from --arch in main()
+# --secure-boot: off (plain OVMF) | mok (Secure Boot ON, Microsoft keys in db/KEK, the ISO's own certificate pre-enrolled in
+# MokList: what a user has after enrolling it once in MokManager) | nokey (Secure Boot ON, nothing enrolled: shim must refuse
+# our GRUB and open MokManager instead). Firmware with Secure Boot keys: Ubuntu's ovmf / qemu-efi-aarch64 (".ms" builds).
+SECURE_BOOT = "off"
+SB_ISO = ""
+SB_FIRMWARE = {
+    "x86_64": [("/usr/share/OVMF/OVMF_CODE_4M.secboot.fd", "/usr/share/OVMF/OVMF_VARS_4M.ms.fd"),
+               ("/usr/share/OVMF/OVMF_CODE_4M.ms.fd", "/usr/share/OVMF/OVMF_VARS_4M.ms.fd")],
+    "aarch64": [("/usr/share/AAVMF/AAVMF_CODE.ms.fd", "/usr/share/AAVMF/AAVMF_VARS.ms.fd")],
+}
+MOK_OWNER = "605dab50-e046-4300-abb6-3dd810dd8b23"     # shim's GUID, owner of MokList entries
 
 
 def find_ovmf(arch=None):
     """UEFI firmware (CODE, VARS template) for the guest architecture (OVMF / AAVMF / edk2-riscv)"""
+    if SECURE_BOOT != "off":
+        for code, vars_ in SB_FIRMWARE.get(arch or ARCH, []):
+            if os.path.exists(code) and os.path.exists(vars_):
+                return code, vars_
+        raise SystemExit(f"--secure-boot {SECURE_BOOT}: no Secure Boot firmware for {arch or ARCH} (apt: ovmf / qemu-efi-aarch64)")
     for code, vars_ in FIRMWARE[arch or ARCH]:
         if os.path.exists(code) and os.path.exists(vars_):
             return code, vars_
@@ -754,6 +770,24 @@ def pflash_vars(dst):
     if ARCH != "x86_64" and os.path.getsize(dst) < want:
         with open(dst, "ab") as f:
             f.truncate(want)
+    if SECURE_BOOT == "mok":
+        sb_enroll_iso_cert(dst)
+
+
+def sb_enroll_iso_cert(vars_path):
+    """put the certificate the ISO ships (ENROLL_THIS_KEY_IN_MOKMANAGER.cer) into MokList of `vars_path`: the state after the
+    user enrolled it once in MokManager. The test enrolls exactly what the medium carries, never a key of its own."""
+    d = tempfile.mkdtemp(prefix="sbcert-")
+    try:
+        der, pem = os.path.join(d, "c.der"), os.path.join(d, "c.pem")
+        subprocess.run(["xorriso", "-osirrox", "on", "-indev", SB_ISO, "-extract", "/ENROLL_THIS_KEY_IN_MOKMANAGER.cer", der],
+                       check=True, capture_output=True)
+        subprocess.run(["openssl", "x509", "-inform", "DER", "-in", der, "-out", pem], check=True, capture_output=True)
+        tmp = vars_path + ".mok"
+        subprocess.run(["virt-fw-vars", "-i", vars_path, "-o", tmp, "--add-mok", MOK_OWNER, pem], check=True, capture_output=True)
+        os.replace(tmp, vars_path)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def grub_entries(iso):
@@ -1141,7 +1175,10 @@ class Runner:
         if ARCH == "x86_64":
             # a.cpu is a conservative x86-64-v2 model, NOT "host": binaries built with target-cpu=native passed under
             # -cpu host on the build machine and then died with "invalid opcode" on a different real CPU.
-            return kvm, ["-machine", "q35,accel=kvm" if kvm else "q35", "-cpu", self.a.cpu]
+            m = "q35,accel=kvm" if kvm else "q35"
+            if SECURE_BOOT != "off":    # Secure Boot OVMF keeps its variable store in SMM-protected flash
+                return kvm, ["-machine", m + ",smm=on", "-global", "driver=cfi.pflash01,property=secure,value=on", "-cpu", self.a.cpu]
+            return kvm, ["-machine", m, "-cpu", self.a.cpu]
         if ARCH == "aarch64":
             if kvm:
                 return True, ["-machine", "virt,gic-version=host,accel=kvm", "-cpu", "host"]
@@ -2535,6 +2572,22 @@ class Runner:
             if vm.alive():
                 vm.p.kill()
 
+    def secure_boot_checks(self):
+        """the installed system really booted with Secure Boot ON through shim + our signed chain, and enforces module signatures"""
+        cmd = ("od -An -t u1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c | awk '{print \"SB=\" $NF}'; "
+               "dmesg | grep -m1 -o 'Secure boot enabled'; mokutil --sb-state 2>&1 | head -1; "
+               "ls /boot/efi/EFI/BOOT/; sbverify --list /boot/efi/EFI/BOOT/grub*.efi 2>/dev/null | grep -m1 'subject:'; "
+               "echo ZFSMOD=$(lsmod | grep -cE '^(zfs|spl) '); echo REJECTED=$(dmesg | grep -c 'Loading of unsigned module is rejected'); "
+               "ls /etc/*/secureboot/ 2>/dev/null; echo SBEND")
+        rc, out = ssh(FWD_SSH, self.key, cmd, timeout=int(T(60)))
+        o = out.replace("\r", "")
+        flat = re.sub(r"\s+", " ", o)[:300]
+        self.step("secure-boot-enabled-in-installed-system", "SB=1" in o and "Secure boot enabled" in o, flat)
+        self.step("secure-boot-esp-is-shim-chain", all(x in o for x in ("BOOTX64.EFI" if ARCH == "x86_64" else "BOOTAA64.EFI", "mm", "grub.cfg")), flat)
+        if self.a.fs == "zfs":
+            self.step("secure-boot-zfs-module-signed-and-loaded", "ZFSMOD=2" in o, flat)
+        self.step("secure-boot-machine-key-configured", "machine.key" in o and "machine.der" in o, flat)
+
     def ssh_checks(self):
         a = self.a
         end = time.time() + T(90)
@@ -2565,6 +2618,8 @@ class Runner:
         rc, out = ssh(FWD_SSH, self.key, "echo KEYLOGIN-OK; sshd -T 2>/dev/null | grep -Ei '^(permitrootlogin|passwordauthentication) '; hostname; cat /etc/timezone; findmnt -no FSTYPE /; id -u")
         flat = out.strip().replace("\n", " | ")[:220]
         self.step("ssh-key-login-accepted", rc == 0 and "KEYLOGIN-OK" in out, flat)
+        if SECURE_BOOT == "mok":
+            self.secure_boot_checks()
         HG.admin_tools_gate(lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step)
         if getattr(self, "P", {}).get("web_user"):
             # the installer-created administrator: in the portage group, runs equery + eix itself (owner 2026-11-17)
@@ -2666,7 +2721,7 @@ cd /; rm -rf $d
 """
 
 def main():
-    global ARCH, SLOW, RUNNER
+    global ARCH, SLOW, RUNNER, SECURE_BOOT, SB_ISO
     arm_deadline()
     ap = argparse.ArgumentParser()
     ap.add_argument("--iso", required=True)
@@ -2696,6 +2751,9 @@ def main():
     ap.add_argument("--restarts", type=int, default=0, help="after the install checks: boot the installed disk again and restart it N times from inside the guest, asserting service health after each boot")
     ap.add_argument("--headless-gates", action="store_true", help="headless-first gates (headless_gates.py): every boot starts with an RTC months off, the installed system boots with the NIC links down until the login prompt, no GUI stack, no empty password/autologin, chrony steps the clock after the late network")
     ap.add_argument("--disk-gb", type=int, default=24)
+    ap.add_argument("--secure-boot", choices=["off", "mok", "nokey"], default="off",
+                    help="UEFI Secure Boot: mok = ON with the ISO's certificate enrolled in MokList (installer + installed system must boot), "
+                         "nokey = ON with nothing enrolled (use secureboot-test.py for that case); needs the .ms OVMF/AAVMF build + virt-fw-vars")
     ap.add_argument("--init", choices=init_cmds.INITS, default="openrc", help="init system of the image under test (its INIT, common/image-name.sh): selects the service checks run in the guest")
     args = ap.parse_args()
     ARCH = args.arch
@@ -2706,6 +2764,10 @@ def main():
     args.zfs_raid = args.zfs_raid or ("single" if args.fs_default else "mirror")
     if args.mode == "bios" and not ARCHS[ARCH]["bios"]:
         ap.error(f"{ARCH} has no legacy BIOS: use --mode uefi")
+    if args.secure_boot != "off":
+        if args.mode != "uefi":
+            ap.error("--secure-boot needs --mode uefi")
+        SECURE_BOOT, SB_ISO = args.secure_boot, args.iso
     kvm = os.path.exists("/dev/kvm") and ARCH == HOST_ARCH
     SLOW = args.slow or float(os.environ.get("QEMU_SLOW", 0) or 0) or (1.0 if kvm else 3.0 if ARCH == HOST_ARCH else 10.0)
     print(f"arch={ARCH} host={HOST_ARCH} accel={'kvm' if kvm else 'tcg'} timeout-factor={SLOW}", flush=True)

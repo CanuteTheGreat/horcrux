@@ -38,7 +38,7 @@ Status: first written version, 2026-11-22, by the maintainers. It is the written
 | T11 | Rogue node joins the cluster | Joining needs the shared token signing secret and the cluster join flow; all nodes trust each other fully once joined. A compromised node is a compromised cluster: **accepted risk**, mitigated only by fencing and removal. | none |
 | T12 | Tampered release or update | Detached OpenPGP signatures on every published file, CycloneDX SBOM, CI refuses to publish what it cannot sign and verify; signed binhost packages. | publish step in CI |
 | T13 | Vulnerable dependency | `cargo audit` in CI. | `ci.yml` Security Audit |
-| T14 | Physical access to a node | Out of scope except that full-disk encryption is the owner's choice; Secure Boot is unsupported (documented in [ISO-INSTALL.md](ISO-INSTALL.md#secure-boot)). | none |
+| T14 | Physical access to a node | Out of scope except that full-disk encryption is the owner's choice; UEFI Secure Boot is supported (shim + our signed GRUB, kernel and modules; one-time key enrollment, [SECURE-BOOT.md](SECURE-BOOT.md)), so a tampered boot chain does not boot when Secure Boot is on. | none |
 
 ## Out of scope
 

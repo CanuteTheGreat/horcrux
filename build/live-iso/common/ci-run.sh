@@ -86,6 +86,8 @@ BUILD_S=0
 if [ "$result" = pass ]; then
   echo "::group::build ISO"
   t=$(date +%s)
+  # Secure Boot: with the repo secret present the build MUST sign (SECUREBOOT=on fails the build otherwise); riscv64 has no signed shim
+  if [ -n "${SECUREBOOT_SIGNING_KEY:-}" ] && [ "$ARCH" != riscv64 ]; then export SECUREBOOT=on; fi
   ARCH=$ARCH VARIANT=$VARIANT JOBS=${JOBS:-4} bash ../build.sh -o "$OUT" -n "$suffix" 2>&1 | tee "$EVI/build.log" | tail -60
   build_rc=${PIPESTATUS[0]}
   BUILD_S=$(( $(date +%s)-t ))
@@ -165,6 +167,15 @@ if [ "$result" = pass ]; then
       "uefi-usb-auto-zfs-mirror-sshpw|--mode uefi --media usb --flow auto --fs zfs --zfs-raid mirror --static-ip 10.0.2.99 --ssh-password-opt-in"
     )
   fi
+  # UEFI SECURE BOOT (common/boot/secureboot-sign.sh): a signed ISO is installed and its installed system booted with Secure Boot ON
+  # (Microsoft keys in the firmware, the ISO's own certificate in MokList), asserting SB is on inside the guest and the signed
+  # out-of-tree modules load. secureboot-test.py (below) covers the no-key refusal, the MokManager enrollment walk and SB off.
+  SB_SIGNED=0
+  if xorriso -osirrox on -indev "$ISO" -ls / 2>/dev/null | grep -q ENROLL_THIS_KEY_IN_MOKMANAGER.cer; then SB_SIGNED=1; fi
+  if [ "$SB_SIGNED" = 1 ]; then
+    if [ "$PROJECT" = horcrux ]; then sbfs="--fs zfs --zfs-raid mirror"; else sbfs="--fs zfs --zfs-raid single"; fi
+    MATRIX+=("uefi-usb-auto-secureboot-mok|--mode uefi --media usb --flow auto $sbfs --secure-boot mok")
+  fi
   # Hard per-test deadlines (a stuck QEMU test must FAIL in minutes-to-an-hour, not hold the single KVM runner for hours): the harness arms a
   # watchdog (QEMU_TEST_DEADLINE: kills its QEMUs, prints [FAIL] hard-deadline, exits 124) and `timeout` is the backstop (SIGTERM = same cleanup).
   if [ "$ARCH" = "$HOST_ARCH" ] && [ -e /dev/kvm ]; then DL_QEMU=2700; DL_ZFS=3600; DL_MODES=3000; else DL_QEMU=5400; DL_ZFS=10800; DL_MODES=10800; fi   # DL_ZFS under TCG 7200 -> 10800: systemd aarch64 run 3281 passed every step of the headless gate and was cut by the 7200 s deadline in its last stage (install alone 1446 s)
@@ -210,6 +221,16 @@ if [ "$result" = pass ]; then
     rm -f "$EVI/$name"/target*.qcow2 "$EVI/$name"/answers.img
     if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
   done
+  if [ "$SB_SIGNED" = 1 ]; then
+    name=secureboot
+    echo "::group::QEMU test $name (Secure Boot: no key refused, MokManager enrollment, SB off)"
+    with_deadline 2400 python3 -u "$HERE/secureboot-test.py" --iso "$ISO" --arch "$ARCH" --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+    rc=${PIPESTATUS[0]}
+    echo "::endgroup::"
+    if [ "$rc" != 0 ]; then failed_list="$failed_list $name"; [ -z "$failed_step" ] && fail "qemu-$name" "$(grep -E '^\[FAIL\]' "$EVI/test-$name.log" | head -1)"; fi
+  elif [ "$ARCH" != riscv64 ] && [ -n "${SECUREBOOT_SIGNING_KEY:-}" ]; then
+    fail secureboot "SECUREBOOT_SIGNING_KEY is set but the ISO carries no signed boot chain"
+  fi
   if [ "$PROJECT" = horcrux ] || { [ "$PROJECT" = patronus ] && [ "$ARCH" = x86_64 ]; }; then
     # (both products boot an installed system with GRUB: Horcrux ships the menu scripts in sys-apps/horcrux-core, Patronus in net-firewall/patronus;
     # Patronus aarch64 runs under TCG with no time left in the job)
@@ -330,6 +351,8 @@ if [ -n "${FORGEJO_TOKEN:-}" ] && [ "$result" = pass ]; then
     fail publish "GH_RELEASE_TOKEN is not set: the ISO cannot be delivered (the GitHub release is the only download location)"
   elif [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
     fail publish "RELEASE_SIGNING_KEY is not set: unsigned images are never published (repo Actions secret)"
+  elif [ "$ARCH" != riscv64 ] && [ "${SB_SIGNED:-0}" != 1 ]; then
+    fail publish "the ISO has no Secure Boot chain (SECUREBOOT_SIGNING_KEY repo secret missing?): the download pages promise Secure Boot support"
   elif SBOM=$SBOM_FILE bash "$HERE/publish-github.sh" "$mode" "$PROJECT" "$ISO" "$OUT/$PROJECT-$VPFX$suffix-$ARCH-test-evidence.tgz" "$OUT/status.json"; then
     gh_note="GitHub release updated."
   else

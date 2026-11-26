@@ -8,6 +8,13 @@ ARCH=${ARCH:-x86_64}
 . /usr/local/share/live-arch/$ARCH.env
 W=$(mktemp -d /work/iso.XXXXXX); ISO=$W/iso; mkdir -p "$ISO"/{LiveOS,boot/grub,EFI/BOOT}
 kver=$(ls "$ROOT/lib/modules" | sort -V | tail -1)
+# UEFI Secure Boot (shim + our own key, enrolled once via MokManager): see boot/secureboot-sign.sh. Signs the kernels and
+# out-of-tree modules IN the rootfs first, so the installed system inherits signed files.
+SBLIB=$(dirname "$0")/secureboot-sign.sh; [ -f "$SBLIB" ] || SBLIB=/usr/local/share/live-boot/secureboot-sign.sh
+. "$SBLIB"
+trap sb_cleanup EXIT
+sb_init
+sb_sign_rootfs
 cp "$ROOT/boot/vmlinuz-$kver" "$ISO/boot/vmlinuz"
 cp "$ROOT/boot/initramfs-$kver.img" "$ISO/boot/initramfs.img"
 cp "$ROOT/etc/os-release" "$ISO/boot/os-release"
@@ -70,11 +77,17 @@ fi
 echo "== grub UEFI ($EFI_GRUB_TARGET)"
 # only embed modules this platform ships (e.g. arm64-efi has no biosdisk)
 EMODS=""; for m in $MODS; do if [ -e "/usr/lib/grub/$EFI_GRUB_TARGET/$m.mod" ]; then EMODS="$EMODS $m"; else echo "note: grub $EFI_GRUB_TARGET has no module $m"; fi; done
-grub-mkimage -O $EFI_GRUB_TARGET -o "$ISO/EFI/BOOT/$EFI_BOOT_FILE" -p /boot/grub -c $W/early.cfg $EMODS
-dd if=/dev/zero of=$W/efi.img bs=1M count=8 status=none
+if [ "$SB_ON" = 1 ]; then
+  # shim boots first (Microsoft-signed), then our signed GRUB (all modules embedded: no module loading under lockdown)
+  sb_iso_esp "$ISO" $W/early.cfg
+else
+  grub-mkimage -O $EFI_GRUB_TARGET -o "$ISO/EFI/BOOT/$EFI_BOOT_FILE" -p /boot/grub -c $W/early.cfg $EMODS
+fi
+dd if=/dev/zero of=$W/efi.img bs=1M count=$([ "$SB_ON" = 1 ] && echo 16 || echo 8) status=none
 mkfs.vfat -n EFIBOOT $W/efi.img >/dev/null
 mmd -i $W/efi.img ::EFI ::EFI/BOOT
-mcopy -i $W/efi.img "$ISO/EFI/BOOT/$EFI_BOOT_FILE" ::EFI/BOOT/$EFI_BOOT_FILE
+for f in "$ISO"/EFI/BOOT/*; do mcopy -i $W/efi.img "$f" ::EFI/BOOT/$(basename "$f"); done
+[ -f "$ISO/ENROLL_THIS_KEY_IN_MOKMANAGER.cer" ] && mcopy -i $W/efi.img "$ISO/ENROLL_THIS_KEY_IN_MOKMANAGER.cer" ::ENROLL_THIS_KEY_IN_MOKMANAGER.cer
 
 echo "== xorriso"
 if [ "$HAS_BIOS" = 1 ]; then
