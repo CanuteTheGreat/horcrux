@@ -16,9 +16,10 @@ PROJECTS = {
 }
 
 
-def answer_toml(project, pubkey, pwhash, lan_ip="10.77.0.1", fs="ext4", luks=None, disks=("/dev/vda",), zfs_raid=None, zfs_pool=None):
+def answer_toml(project, pubkey, pwhash, lan_ip="10.77.0.1", fs="ext4", luks=None, disks=("/dev/vda",), zfs_raid=None, zfs_pool=None, hostname=None):
     p, P = project, PROJECTS[project]
-    L = ["[global]", 'keyboard = "us"', 'timezone = "Europe/Berlin"', f'hostname = "{p}-vmt.test.lan"', 'email = "ops@example.test"',
+    hostname = hostname or f"{p}-vmt.test.lan"          # several nodes of one test need their own names
+    L = ["[global]", 'keyboard = "us"', 'timezone = "Europe/Berlin"', f'hostname = "{hostname}"', 'email = "ops@example.test"',
          f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', "ssh_password_auth = false", "console_menu_open = false",
          "", "[disk]", f'filesystem = "{fs}"', *([f'luks_passphrase = "{luks}"'] if luks else []),
          *([f'zfs_raid = "{zfs_raid}"'] if zfs_raid else []), *([f'zfs_pool = "{zfs_pool}"'] if zfs_pool else []),

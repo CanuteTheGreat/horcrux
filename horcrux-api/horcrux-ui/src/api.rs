@@ -7803,6 +7803,73 @@ pub struct MaintenanceState {
     pub drain: Option<MoveRun>,
     #[serde(default)]
     pub clustered: bool,
+    /// The node this state belongs to.
+    #[serde(default)]
+    pub node: String,
+    /// Guests the drain moved away (leaving with `origin` brings them back).
+    #[serde(default)]
+    pub origins: Vec<MaintenanceOrigin>,
+    /// This node's own return policy (None = the cluster default).
+    #[serde(default)]
+    pub return_policy: Option<String>,
+    /// The policy leaving maintenance would apply now.
+    #[serde(default)]
+    pub effective_return_policy: String,
+    /// The last exit (guests brought back, or the rebalance it started).
+    #[serde(default)]
+    pub exit: Option<MoveRun>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct MaintenanceOrigin {
+    pub guest_id: String,
+    pub name: String,
+    pub origin: String,
+    pub moved_to: String,
+    #[serde(default)]
+    pub at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct MaintenanceSettings {
+    pub return_policy: String,
+}
+
+/// One member as `GET /cluster/maintenance` lists it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct NodeMaintenanceRow {
+    pub node: String,
+    pub online: bool,
+    #[serde(default)]
+    pub local: bool,
+    pub maintenance: Option<MaintenanceState>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct ClusterMaintenance {
+    pub settings: MaintenanceSettings,
+    pub nodes: Vec<NodeMaintenanceRow>,
+}
+
+/// A run is still moving guests.
+pub fn run_busy(r: &Option<MoveRun>) -> bool {
+    r.as_ref()
+        .is_some_and(|r| r.status == "planning" || r.status == "running")
+}
+
+/// The badge text of a member in the Nodes list.
+pub fn maintenance_badge(row: &NodeMaintenanceRow) -> Option<&'static str> {
+    let m = row.maintenance.as_ref()?;
+    if m.enabled && run_busy(&m.drain) {
+        Some("entering maintenance")
+    } else if m.enabled {
+        Some("maintenance")
+    } else if run_busy(&m.exit) {
+        Some("leaving maintenance")
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -7871,6 +7938,60 @@ pub async fn set_maintenance(enabled: bool, drain: bool) -> Result<MaintenanceSt
 
 pub async fn drain_plan() -> Result<MovePlan, ApiError> {
     fetch_json("/nodes/maintenance/plan").await
+}
+
+/// Every member's maintenance state and the cluster's return policy.
+pub async fn get_cluster_maintenance() -> Result<ClusterMaintenance, ApiError> {
+    fetch_json("/cluster/maintenance").await
+}
+
+pub async fn put_maintenance_settings(
+    s: &MaintenanceSettings,
+) -> Result<MaintenanceSettings, ApiError> {
+    put_json("/cluster/maintenance", s).await
+}
+
+pub async fn get_node_maintenance(node: &str) -> Result<MaintenanceState, ApiError> {
+    fetch_json(&format!("/nodes/{node}/maintenance")).await
+}
+
+/// The JSON body of `POST /nodes/<node>/maintenance`.
+pub fn node_maintenance_body(
+    enabled: bool,
+    drain: bool,
+    return_policy: Option<&str>,
+    force: bool,
+) -> serde_json::Value {
+    let mut b = serde_json::json!({"enabled": enabled, "drain": drain, "force": force});
+    if let Some(r) = return_policy.filter(|r| !r.is_empty()) {
+        b["return"] = serde_json::json!(r);
+    }
+    b
+}
+
+/// Enter or leave maintenance on any member.
+pub async fn set_node_maintenance(
+    node: &str,
+    enabled: bool,
+    drain: bool,
+    return_policy: Option<&str>,
+    force: bool,
+) -> Result<MaintenanceState, ApiError> {
+    post_json(
+        &format!("/nodes/{node}/maintenance"),
+        &node_maintenance_body(enabled, drain, return_policy, force),
+    )
+    .await
+}
+
+/// What entering (`exit = None`) or leaving (`exit = Some(policy)`) would move.
+pub async fn node_maintenance_plan(node: &str, exit: Option<&str>) -> Result<MovePlan, ApiError> {
+    let q = match exit {
+        Some(r) if !r.is_empty() => format!("?action=exit&return={r}"),
+        Some(_) => "?action=exit".to_string(),
+        None => String::new(),
+    };
+    fetch_json(&format!("/nodes/{node}/maintenance/plan{q}")).await
 }
 
 pub async fn get_rebalance() -> Result<RebalanceState, ApiError> {

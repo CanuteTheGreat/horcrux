@@ -25,7 +25,10 @@
 //!   that is not in maintenance) runs the automatic passes.
 //! - Every move is recorded (`guest_move`): when, from where to where, why,
 //!   result - the guests' location history.
-use crate::cluster::drain::{plan_drain, plan_rebalance, Move, Plan, PlanGuest, PlanNode, Rules};
+use crate::cluster::drain::{
+    merge_origins, origins_of, plan_drain, plan_rebalance, plan_return, Move, Origin, Plan,
+    PlanGuest, PlanNode, ReturnPolicy, Rules,
+};
 use crate::cluster::node::{Node, NodeStatus};
 use crate::db::config_store::ConfigStore;
 use crate::error::ApiError;
@@ -46,6 +49,8 @@ use std::time::Duration;
 const PLACEMENT: &str = "guest_placement";
 const MAINT: &str = "node_maintenance";
 const SETTINGS: &str = "rebalance_settings";
+/// Cluster-wide maintenance settings (`cluster.maintenance.*`).
+const MAINT_SETTINGS: &str = "maintenance_settings";
 const MOVES: &str = "guest_move";
 const MAX_HISTORY: usize = 500;
 
@@ -56,6 +61,16 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_maintenance).post(set_maintenance),
         )
         .route("/api/nodes/maintenance/plan", get(drain_plan))
+        // Any member, from any member (forwarded over the peer channel).
+        .route(
+            "/api/nodes/:node/maintenance",
+            get(get_node_maintenance).post(set_node_maintenance),
+        )
+        .route("/api/nodes/:node/maintenance/plan", get(node_plan))
+        .route(
+            "/api/cluster/maintenance",
+            get(get_cluster_maintenance).put(put_maintenance_settings),
+        )
         .route(
             "/api/cluster/rebalance",
             get(get_rebalance).put(put_rebalance),
@@ -70,6 +85,11 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/ha/peer/maintenance", post(peer_maintenance))
         .route("/api/ha/peer/move", post(peer_move))
         .route("/api/ha/peer/rebalance-settings", post(peer_settings))
+        .route("/api/ha/peer/node-maintenance", post(peer_node_maintenance))
+        .route(
+            "/api/ha/peer/maintenance-settings",
+            post(peer_maintenance_settings),
+        )
 }
 
 fn store(state: &AppState) -> ConfigStore {
@@ -156,6 +176,28 @@ pub struct Maintenance {
     pub since: Option<String>,
     pub reason: Option<String>,
     pub drain: Option<Run>,
+    /// The guests the drain(s) of this maintenance moved away, and where to:
+    /// leaving with `return_policy = origin` brings them back.
+    #[serde(default)]
+    pub origins: Vec<Origin>,
+    /// This node's own return policy (`nodes.<name>.maintenance.return_policy`);
+    /// unset = the cluster default (`cluster.maintenance.return_policy`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_policy: Option<ReturnPolicy>,
+    /// The last exit: the guests brought back (or the rebalance it started).
+    #[serde(default)]
+    pub exit: Option<Run>,
+}
+
+/// Cluster-wide maintenance settings, the typed config key
+/// `cluster.maintenance` (declarative `cluster.maintenance`, API
+/// `/api/cluster/maintenance`); replicated to every member.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MaintenanceSettings {
+    /// What leaving maintenance does with the guests the drain moved away:
+    /// `origin` (default: move them back), `rebalance` or `none`.
+    pub return_policy: ReturnPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,7 +256,17 @@ async fn load_settings(state: &AppState) -> Settings {
         .unwrap_or_default()
 }
 
-async fn load_maintenance(state: &AppState) -> Maintenance {
+pub async fn load_maintenance_settings(state: &AppState) -> MaintenanceSettings {
+    store(state)
+        .load::<MaintenanceSettings>(MAINT_SETTINGS)
+        .await
+        .ok()
+        .and_then(|v| v.into_iter().next())
+        .map(|(_, s)| s)
+        .unwrap_or_default()
+}
+
+pub async fn load_maintenance(state: &AppState) -> Maintenance {
     let mem = maint_cell().lock().unwrap().clone();
     if mem.enabled || mem.since.is_some() {
         return mem;
@@ -325,6 +377,7 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
                 None
             },
             rules: load_rules(state, &v.id).await,
+            ha: state.ha_manager.get_resource(&v.id).await.is_some(),
         });
     }
     for c in state.container_manager.list_containers().await {
@@ -338,6 +391,7 @@ pub async fn local_info(state: &Arc<AppState>) -> PeerInfo {
             arch: arch_name(),
             immovable: None,
             rules: load_rules(state, &c.id).await,
+            ha: false,
         });
     }
     PeerInfo {
@@ -720,16 +774,36 @@ pub fn is_clustered(nodes: &[Node]) -> bool {
 /// `plan.unplaced` or have a failed result: they are still running here.
 pub async fn drain_node(state: &Arc<AppState>, reason: &str, timeout_secs: u64) -> Run {
     let started = now();
+    let prev = load_maintenance(state).await;
     let mut m = Maintenance {
         enabled: true,
-        since: Some(started.clone()),
-        reason: Some(reason.to_string()),
+        since: prev
+            .since
+            .clone()
+            .filter(|_| prev.enabled)
+            .or(Some(started.clone())),
+        // An administrator's maintenance keeps its reason when the host is
+        // shut down in it (drain on shutdown): the next boot leaves only a
+        // maintenance that the shutdown itself started.
+        reason: if prev.enabled {
+            prev.reason.clone()
+        } else {
+            Some(reason.to_string())
+        },
         drain: Some(Run {
             kind: "drain".into(),
             started_at: started.clone(),
             status: "planning".into(),
             ..Default::default()
         }),
+        // A second drain of the same maintenance keeps the first origins.
+        origins: if prev.enabled {
+            prev.origins.clone()
+        } else {
+            vec![]
+        },
+        return_policy: prev.return_policy,
+        exit: prev.exit.clone(),
     };
     save_maintenance(state, &m).await;
     let (local, nodes, guests) = snapshot(state).await;
@@ -762,8 +836,157 @@ pub async fn drain_node(state: &Arc<AppState>, reason: &str, timeout_secs: u64) 
     run.results = results;
     run.status = "done".into();
     run.finished_at = Some(now());
+    let done: Vec<(Move, bool)> = run
+        .results
+        .iter()
+        .map(|r| {
+            (
+                Move {
+                    guest_id: r.guest_id.clone(),
+                    name: r.name.clone(),
+                    from: r.from.clone(),
+                    to: r.to.clone(),
+                    reason: r.reason.clone(),
+                },
+                r.status == "done",
+            )
+        })
+        .collect();
+    m.origins = merge_origins(&m.origins, &origins_of(&local, &done, &now()));
     m.drain = Some(run.clone());
     save_maintenance(state, &m).await;
+    run
+}
+
+/// Leave maintenance: the flag goes off at once, then `policy` decides what
+/// happens to the guests the drain moved away. `origin` moves them back
+/// here (in the background, progress in `exit`), `rebalance` lets the
+/// rebalancer even out the cluster, `none` leaves them where they are.
+pub async fn leave_maintenance(state: &Arc<AppState>, policy: ReturnPolicy, delay: Duration) {
+    let prev = load_maintenance(state).await;
+    let started = now();
+    let exit = Run {
+        kind: format!("return ({})", policy.as_str()),
+        started_at: started.clone(),
+        status: match policy {
+            ReturnPolicy::None => "done".into(),
+            _ => "planning".into(),
+        },
+        finished_at: (policy == ReturnPolicy::None).then(|| started.clone()),
+        ..Default::default()
+    };
+    let m = Maintenance {
+        enabled: false,
+        since: None,
+        reason: None,
+        drain: prev.drain.clone(),
+        origins: if policy == ReturnPolicy::Origin {
+            prev.origins.clone()
+        } else {
+            vec![]
+        },
+        return_policy: prev.return_policy,
+        exit: Some(exit),
+    };
+    let all = state.cluster_manager.list_nodes().await;
+    if !is_clustered(&all) {
+        // Nowhere the guests could come back from: the exit is complete.
+        let mut m = m;
+        if let Some(e) = m.exit.as_mut() {
+            e.status = "done".into();
+            e.finished_at = Some(now());
+        }
+        save_maintenance(state, &m).await;
+        return;
+    }
+    save_maintenance(state, &m).await;
+    match policy {
+        ReturnPolicy::None => {}
+        ReturnPolicy::Rebalance => {
+            let st = load_settings(state).await;
+            let s2 = state.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                let r = rebalance_run(&s2, &st, false, None, "on-return").await;
+                let mut m = load_maintenance(&s2).await;
+                if let Some(e) = m.exit.as_mut() {
+                    e.plan = r.plan.clone();
+                    e.results = r.results.clone();
+                    e.status = "done".into();
+                    e.finished_at = Some(now());
+                }
+                save_maintenance(&s2, &m).await;
+            });
+        }
+        ReturnPolicy::Origin => {
+            let s2 = state.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                return_guests(&s2).await;
+            });
+        }
+    }
+}
+
+/// Move the guests recorded in `origins` back to this node.
+async fn return_guests(state: &Arc<AppState>) -> Run {
+    let timeout = crate::api::guest_state::policy::load_node(state)
+        .await
+        .drain_timeout_secs;
+    let mut m = load_maintenance(state).await;
+    let (local, nodes, guests) = snapshot(state).await;
+    let plan = plan_return(&local, &nodes, &guests, &m.origins);
+    let started = m
+        .exit
+        .as_ref()
+        .map(|e| e.started_at.clone())
+        .unwrap_or_else(now);
+    let mut run = Run {
+        kind: "return (origin)".into(),
+        started_at: started.clone(),
+        status: "running".into(),
+        plan: plan.clone(),
+        results: vec![],
+        finished_at: None,
+    };
+    m.exit = Some(run.clone());
+    save_maintenance(state, &m).await;
+    let base = m.clone();
+    let plan_c = plan.clone();
+    let results = execute(state, &local, &plan.moves, 2, timeout, move |res| {
+        let mut mm = base.clone();
+        mm.exit = Some(Run {
+            kind: "return (origin)".into(),
+            started_at: started.clone(),
+            status: "running".into(),
+            plan: plan_c.clone(),
+            results: res.to_vec(),
+            finished_at: None,
+        });
+        *maint_cell().lock().unwrap() = mm;
+    })
+    .await;
+    run.results = results;
+    run.status = "done".into();
+    run.finished_at = Some(now());
+    // Keep only the guests that did not come back (for the record).
+    let back: Vec<&str> = run
+        .results
+        .iter()
+        .filter(|r| r.status == "done")
+        .map(|r| r.guest_id.as_str())
+        .collect();
+    let mut m = load_maintenance(state).await;
+    m.origins.retain(|o| !back.contains(&o.guest_id.as_str()));
+    m.exit = Some(run.clone());
+    save_maintenance(state, &m).await;
+    if !run.plan.moves.is_empty() {
+        tracing::info!(
+            "maintenance exit: {} of {} guest(s) back on {local}",
+            back.len(),
+            run.plan.moves.len()
+        );
+    }
     run
 }
 
@@ -882,12 +1105,11 @@ pub fn spawn(state: Arc<AppState>) {
             let arrived = match &known {
                 None => false, // first look: nothing to compare with
                 Some(prev) => now_map.iter().any(|(n, maint)| {
-                    !maint
-                        && match prev.get(n) {
-                            None => true,       // joined / came back online
-                            Some(true) => true, // left maintenance
-                            Some(false) => false,
-                        }
+                    // Only a node that joined or came back online counts.
+                    // Leaving maintenance is handled by the node that leaves,
+                    // per its return policy (origin / rebalance / none):
+                    // never a second, competing pass here.
+                    !maint && !prev.contains_key(n)
                 }),
             };
             known = Some(now_map);
@@ -914,41 +1136,108 @@ pub fn spawn(state: Arc<AppState>) {
 
 // ------------------------------------------------------------ HTTP handlers
 
-#[derive(Serialize)]
-struct MaintenanceView {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaintenanceView {
     #[serde(flatten)]
-    m: Maintenance,
+    pub m: Maintenance,
     /// This node would take part in the cluster's placement.
-    clustered: bool,
+    pub clustered: bool,
+    /// The node this is about.
+    #[serde(default)]
+    pub node: String,
+    /// The policy that leaving maintenance would apply now (the node's own,
+    /// else the cluster default).
+    #[serde(default)]
+    pub effective_return_policy: ReturnPolicy,
+}
+
+async fn local_view(state: &Arc<AppState>) -> MaintenanceView {
+    let clustered = is_clustered(&state.cluster_manager.list_nodes().await);
+    let m = load_maintenance(state).await;
+    let cluster = load_maintenance_settings(state).await;
+    MaintenanceView {
+        effective_return_policy: m.return_policy.unwrap_or(cluster.return_policy),
+        m,
+        clustered,
+        node: state
+            .cluster_manager
+            .get_local_node_name()
+            .await
+            .unwrap_or_default(),
+    }
 }
 
 async fn get_maintenance(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<MaintenanceView>, ApiError> {
-    let clustered = is_clustered(&state.cluster_manager.list_nodes().await);
-    Ok(Json(MaintenanceView {
-        m: load_maintenance(&state).await,
-        clustered,
-    }))
+    Ok(Json(local_view(&state).await))
 }
 
-#[derive(Deserialize)]
-struct SetMaintenance {
-    enabled: bool,
-    /// Move the running VMs away when entering maintenance (default true).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetMaintenance {
+    pub enabled: bool,
+    /// Move the guests away when entering maintenance (default true).
     #[serde(default = "yes")]
-    drain: bool,
+    pub drain: bool,
+    /// Entering: this node's return policy for the coming exit (kept as
+    /// `nodes.<name>.maintenance.return_policy`). Leaving: the policy to
+    /// apply now (overrides the node's and the cluster's).
+    #[serde(default, rename = "return", skip_serializing_if = "Option::is_none")]
+    pub return_policy: Option<ReturnPolicy>,
+    /// Enter even though some guests cannot be moved (they stay on the node
+    /// and are handled by its stop action: saved on host shutdown).
+    #[serde(default)]
+    pub force: bool,
+    /// Who asked (filled in by the node that took the request; logs only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_by: Option<String>,
 }
 
 fn yes() -> bool {
     true
 }
 
-async fn set_maintenance(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<SetMaintenance>,
-) -> Result<Json<MaintenanceView>, ApiError> {
+fn busy(r: &Option<Run>) -> bool {
+    r.as_ref()
+        .is_some_and(|r| r.status == "planning" || r.status == "running")
+}
+
+/// The refusal text for a drain that would leave guests behind.
+pub(crate) fn unplaced_refusal(node: &str, plan: &Plan) -> Option<String> {
+    if plan.unplaced.is_empty() {
+        return None;
+    }
+    let list = plan
+        .unplaced
+        .iter()
+        .map(|u| format!("{} ({}): {}", u.name, u.guest_id, u.reason))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(format!(
+        "{} guest(s) cannot be moved off {node}: {list}. Enter with force to keep them \
+         on {node} (their state is saved when the host shuts down)",
+        plan.unplaced.len()
+    ))
+}
+
+/// Enter or leave maintenance on THIS node.
+pub async fn set_local_maintenance(
+    state: &Arc<AppState>,
+    req: SetMaintenance,
+) -> Result<MaintenanceView, ApiError> {
     let clustered = is_clustered(&state.cluster_manager.list_nodes().await);
+    let cur = load_maintenance(state).await;
+    if busy(&cur.drain) || busy(&cur.exit) {
+        return Err(ApiError::Conflict(
+            "a drain or return of this node is still running: wait for it to finish".into(),
+        ));
+    }
+    let local = state
+        .cluster_manager
+        .get_local_node_name()
+        .await
+        .unwrap_or_default();
+    let who = req.requested_by.clone().unwrap_or_else(|| "local".into());
     if req.enabled {
         if !clustered {
             return Err(ApiError::Conflict(
@@ -956,18 +1245,39 @@ async fn set_maintenance(
             ));
         }
         if req.drain {
+            let (_, nodes, guests) = snapshot(state).await;
+            let plan = plan_drain(&local, &nodes, &guests);
+            if !req.force {
+                if let Some(why) = unplaced_refusal(&local, &plan) {
+                    return Err(ApiError::Conflict(why));
+                }
+            }
+            tracing::warn!(
+                "maintenance: {local} enters maintenance (asked by {who}): {} move(s), {} stay",
+                plan.moves.len(),
+                plan.unplaced.len()
+            );
             let st = state.clone();
             let timeout = crate::api::guest_state::policy::load_node(&st)
                 .await
                 .drain_timeout_secs;
-            // Runs in the background; the UI polls GET /nodes/maintenance.
+            let mut m = cur.clone();
+            if req.return_policy.is_some() {
+                m.return_policy = req.return_policy;
+            }
+            // Keep the node's policy, then drain in the background; the UI
+            // polls GET /nodes/<node>/maintenance.
+            save_maintenance(state, &m).await;
             tokio::spawn(async move {
                 drain_node(&st, "maintenance", timeout).await;
             });
             // Make the flag visible at once.
-            let mut m = load_maintenance(&state).await;
+            let mut m = load_maintenance(state).await;
             m.enabled = true;
-            m.since = Some(now());
+            m.since = m.since.or(Some(now()));
+            if !cur.enabled {
+                m.reason = Some("maintenance".into());
+            }
             m.drain = Some(Run {
                 kind: "drain".into(),
                 started_at: now(),
@@ -976,39 +1286,376 @@ async fn set_maintenance(
             });
             *maint_cell().lock().unwrap() = m;
         } else {
+            tracing::warn!(
+                "maintenance: {local} enters maintenance without a drain (asked by {who})"
+            );
             let m = Maintenance {
                 enabled: true,
-                since: Some(now()),
+                since: cur.since.clone().filter(|_| cur.enabled).or(Some(now())),
                 reason: Some("maintenance".into()),
-                drain: None,
+                drain: if cur.enabled { cur.drain.clone() } else { None },
+                origins: if cur.enabled {
+                    cur.origins.clone()
+                } else {
+                    vec![]
+                },
+                return_policy: req.return_policy.or(cur.return_policy),
+                exit: cur.exit.clone(),
             };
-            save_maintenance(&state, &m).await;
+            save_maintenance(state, &m).await;
         }
     } else {
-        let m = Maintenance {
-            enabled: false,
-            since: None,
-            reason: None,
-            drain: load_maintenance(&state).await.drain,
-        };
-        save_maintenance(&state, &m).await;
-        // The node is back: the cluster may want to even out (on_return/auto).
-        let st = load_settings(&state).await;
-        if st.mode != "off" && clustered {
-            let s2 = state.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(3)).await;
-                rebalance_run(&s2, &st, false, None, "on-return").await;
-            });
-        }
+        let policy = req
+            .return_policy
+            .or(cur.return_policy)
+            .unwrap_or(load_maintenance_settings(state).await.return_policy);
+        tracing::warn!(
+            "maintenance: {local} leaves maintenance (asked by {who}), return policy {}",
+            policy.as_str()
+        );
+        leave_maintenance(state, policy, Duration::from_secs(3)).await;
     }
-    get_maintenance(State(state)).await
+    Ok(local_view(state).await)
+}
+
+async fn set_maintenance(
+    State(state): State<Arc<AppState>>,
+    user: Option<Extension<AuthUser>>,
+    Json(mut req): Json<SetMaintenance>,
+) -> Result<Json<MaintenanceView>, ApiError> {
+    req.requested_by = user.map(|Extension(u)| u.username);
+    Ok(Json(set_local_maintenance(&state, req).await?))
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlanQuery {
+    /// `enter` (default: what a drain would do) or `exit` (what leaving
+    /// would bring back).
+    #[serde(default)]
+    pub action: Option<String>,
+    /// For `exit`: the policy to preview (default: the effective one).
+    #[serde(default, rename = "return")]
+    pub return_policy: Option<ReturnPolicy>,
+}
+
+/// Dry run on THIS node: what entering (drain) or leaving would move.
+pub async fn local_plan(state: &Arc<AppState>, q: &PlanQuery) -> Result<Plan, ApiError> {
+    let (local, nodes, guests) = snapshot(state).await;
+    match q.action.as_deref().unwrap_or("enter") {
+        "enter" => Ok(plan_drain(&local, &nodes, &guests)),
+        "exit" => {
+            let m = load_maintenance(state).await;
+            let policy = q
+                .return_policy
+                .or(m.return_policy)
+                .unwrap_or(load_maintenance_settings(state).await.return_policy);
+            Ok(match policy {
+                ReturnPolicy::Origin => plan_return(&local, &nodes, &guests, &m.origins),
+                ReturnPolicy::Rebalance => {
+                    let st = load_settings(state).await;
+                    // The node counts as back already.
+                    let nodes: Vec<PlanNode> = nodes
+                        .into_iter()
+                        .map(|mut n| {
+                            if n.name == local {
+                                n.maintenance = false;
+                            }
+                            n
+                        })
+                        .collect();
+                    plan_rebalance(&nodes, &guests, st.max_moves, st.threshold_pct)
+                }
+                ReturnPolicy::None => Plan::default(),
+            })
+        }
+        other => Err(ApiError::ValidationError(format!(
+            "action {other:?}: expected enter or exit"
+        ))),
+    }
 }
 
 /// Dry run: what a drain of this node would do.
-async fn drain_plan(State(state): State<Arc<AppState>>) -> Result<Json<Plan>, ApiError> {
-    let (local, nodes, guests) = snapshot(&state).await;
-    Ok(Json(plan_drain(&local, &nodes, &guests)))
+async fn drain_plan(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<PlanQuery>,
+) -> Result<Json<Plan>, ApiError> {
+    Ok(Json(local_plan(&state, &q).await?))
+}
+
+// ------------------------------------------------- any member's maintenance
+
+/// What one node is asked over the peer channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+enum NodeMaintOp {
+    Get,
+    Set { req: SetMaintenance },
+    Plan { query: PlanQuery },
+}
+
+/// `node` is this node (by name, or the local entry of the member list).
+async fn is_local_node(state: &Arc<AppState>, node: &str) -> Result<bool, ApiError> {
+    let local = state.cluster_manager.get_local_node_name().await?;
+    if node == local {
+        return Ok(true);
+    }
+    Ok(state
+        .cluster_manager
+        .list_nodes()
+        .await
+        .iter()
+        .any(|n| n.name == node && n.is_local))
+}
+
+fn peer_message(text: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| {
+            v["message"]
+                .as_str()
+                .or(v["error"].as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| text.to_string())
+}
+
+/// Ask `node` (another member) to run `op` and pass its answer through,
+/// keeping its status class (a refusal stays a 409 with its reason).
+async fn forward<T: serde::de::DeserializeOwned>(
+    state: &Arc<AppState>,
+    node: &str,
+    op: &NodeMaintOp,
+) -> Result<T, ApiError> {
+    let local = state.cluster_manager.get_local_node_name().await?;
+    let all = state.cluster_manager.list_nodes().await;
+    let Some(n) = all.iter().find(|n| n.name == node) else {
+        return Err(ApiError::NotFound(format!(
+            "{node} is not a member of this cluster"
+        )));
+    };
+    if n.status != NodeStatus::Online {
+        return Err(ApiError::ServiceUnavailable(format!(
+            "{node} is not online: its maintenance can only be changed while it answers"
+        )));
+    }
+    let token =
+        crate::middleware::auth::generate_cluster_ha_token(&local).map_err(ApiError::Internal)?;
+    let resp = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .post(format!(
+            "{}/api/ha/peer/node-maintenance",
+            n.api_url(state.config.server.port)
+        ))
+        .bearer_auth(token)
+        .json(op)
+        .send()
+        .await
+        .map_err(|e| ApiError::ServiceUnavailable(format!("{node} did not answer: {e}")))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if status.is_success() {
+        return serde_json::from_str(&text)
+            .map_err(|e| ApiError::Internal(format!("{node} answered: {e}")));
+    }
+    let msg = format!("{node}: {}", peer_message(&text));
+    Err(match status.as_u16() {
+        404 => ApiError::NotFound(msg),
+        409 => ApiError::Conflict(msg),
+        400 | 422 => ApiError::ValidationError(msg),
+        _ => ApiError::ServiceUnavailable(msg),
+    })
+}
+
+async fn get_node_maintenance(
+    State(state): State<Arc<AppState>>,
+    Path(node): Path<String>,
+) -> Result<Json<MaintenanceView>, ApiError> {
+    if is_local_node(&state, &node).await? {
+        return Ok(Json(local_view(&state).await));
+    }
+    Ok(Json(forward(&state, &node, &NodeMaintOp::Get).await?))
+}
+
+async fn set_node_maintenance(
+    State(state): State<Arc<AppState>>,
+    Path(node): Path<String>,
+    user: Option<Extension<AuthUser>>,
+    Json(mut req): Json<SetMaintenance>,
+) -> Result<Json<MaintenanceView>, ApiError> {
+    let local = state.cluster_manager.get_local_node_name().await?;
+    let who = user.map(|Extension(u)| u.username).unwrap_or_default();
+    req.requested_by = Some(format!("{who} via {local}"));
+    if is_local_node(&state, &node).await? {
+        return Ok(Json(set_local_maintenance(&state, req).await?));
+    }
+    Ok(Json(
+        forward(&state, &node, &NodeMaintOp::Set { req }).await?,
+    ))
+}
+
+async fn node_plan(
+    State(state): State<Arc<AppState>>,
+    Path(node): Path<String>,
+    Query(query): Query<PlanQuery>,
+) -> Result<Json<Plan>, ApiError> {
+    if is_local_node(&state, &node).await? {
+        return Ok(Json(local_plan(&state, &query).await?));
+    }
+    Ok(Json(
+        forward(&state, &node, &NodeMaintOp::Plan { query }).await?,
+    ))
+}
+
+async fn peer_node_maintenance(
+    State(state): State<Arc<AppState>>,
+    user: Option<Extension<AuthUser>>,
+    Json(op): Json<NodeMaintOp>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_peer(&user)?;
+    let v = match op {
+        NodeMaintOp::Get => serde_json::to_value(local_view(&state).await),
+        NodeMaintOp::Set { req } => serde_json::to_value(set_local_maintenance(&state, req).await?),
+        NodeMaintOp::Plan { query } => serde_json::to_value(local_plan(&state, &query).await?),
+    };
+    v.map(Json).map_err(|e| ApiError::Internal(e.to_string()))
+}
+
+/// One member as the Nodes list shows it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeMaintenanceRow {
+    pub node: String,
+    pub online: bool,
+    pub local: bool,
+    /// Its maintenance state (None when it could not be asked).
+    pub maintenance: Option<MaintenanceView>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterMaintenanceView {
+    pub settings: MaintenanceSettings,
+    pub nodes: Vec<NodeMaintenanceRow>,
+}
+
+/// Every member's maintenance state (asked of each online peer).
+pub async fn cluster_maintenance(state: &Arc<AppState>) -> ClusterMaintenanceView {
+    let local = state
+        .cluster_manager
+        .get_local_node_name()
+        .await
+        .unwrap_or_default();
+    let all = state.cluster_manager.list_nodes().await;
+    let mut rows = vec![NodeMaintenanceRow {
+        node: local.clone(),
+        online: true,
+        local: true,
+        maintenance: Some(local_view(state).await),
+        error: None,
+    }];
+    let peers: Vec<&Node> = all
+        .iter()
+        .filter(|n| n.name != local && !n.is_local)
+        .collect();
+    let answers = futures::future::join_all(peers.iter().map(|n| async move {
+        if n.status != NodeStatus::Online {
+            return NodeMaintenanceRow {
+                node: n.name.clone(),
+                online: false,
+                local: false,
+                maintenance: None,
+                error: Some("offline".into()),
+            };
+        }
+        let r = tokio::time::timeout(
+            Duration::from_secs(5),
+            forward::<MaintenanceView>(state, &n.name, &NodeMaintOp::Get),
+        )
+        .await;
+        let (maintenance, error) = match r {
+            Ok(Ok(v)) => (Some(v), None),
+            Ok(Err(e)) => (None, Some(format!("{e:?}"))),
+            Err(_) => (None, Some("no answer within 5 s".into())),
+        };
+        NodeMaintenanceRow {
+            node: n.name.clone(),
+            online: true,
+            local: false,
+            maintenance,
+            error,
+        }
+    }))
+    .await;
+    rows.extend(answers);
+    rows.sort_by(|a, b| a.node.cmp(&b.node));
+    ClusterMaintenanceView {
+        settings: load_maintenance_settings(state).await,
+        nodes: rows,
+    }
+}
+
+async fn get_cluster_maintenance(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ClusterMaintenanceView>, ApiError> {
+    Ok(Json(cluster_maintenance(&state).await))
+}
+
+/// Store the cluster maintenance settings here and on every online member.
+pub async fn set_maintenance_settings(
+    state: &Arc<AppState>,
+    s: &MaintenanceSettings,
+) -> Result<(), ApiError> {
+    store(state).put(MAINT_SETTINGS, "cluster", s).await?;
+    if let Ok(local) = state.cluster_manager.get_local_node_name().await {
+        let all = state.cluster_manager.list_nodes().await;
+        for n in peer_nodes(&all, &local) {
+            if let Err(e) = peer_post::<_, serde_json::Value>(
+                state,
+                &local,
+                &n,
+                "/api/ha/peer/maintenance-settings",
+                s,
+            )
+            .await
+            {
+                tracing::warn!("maintenance settings not sent to {}: {e}", n.name);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn put_maintenance_settings(
+    State(state): State<Arc<AppState>>,
+    Json(s): Json<MaintenanceSettings>,
+) -> Result<Json<MaintenanceSettings>, ApiError> {
+    set_maintenance_settings(&state, &s).await?;
+    Ok(Json(s))
+}
+
+async fn peer_maintenance_settings(
+    State(state): State<Arc<AppState>>,
+    user: Option<Extension<AuthUser>>,
+    Json(s): Json<MaintenanceSettings>,
+) -> Result<Json<MaintenanceSettings>, ApiError> {
+    require_peer(&user)?;
+    store(&state).put(MAINT_SETTINGS, "cluster", &s).await?;
+    Ok(Json(s))
+}
+
+/// Enter or leave maintenance on any member (this node or a peer).
+pub async fn set_any_node_maintenance(
+    state: &Arc<AppState>,
+    node: &str,
+    req: SetMaintenance,
+) -> Result<MaintenanceView, ApiError> {
+    if is_local_node(state, node).await? {
+        return set_local_maintenance(state, req).await;
+    }
+    forward(state, node, &NodeMaintOp::Set { req }).await
 }
 
 #[derive(Serialize)]
@@ -1210,18 +1857,19 @@ async fn peer_maintenance(
     }))
 }
 
-/// The nodes of the cluster that are in maintenance, this one included
-/// (asked of every online peer; a peer that does not answer in time counts as
-/// not in maintenance - HA's own online view already decides if it is up).
-pub async fn maintenance_nodes(
+/// Which members are in maintenance, as far as they answer: `Some(flag)` for
+/// this node and every peer that answered, `None` for a peer that did not
+/// (going down, unreachable). A caller keeps its last known state for those.
+pub async fn maintenance_flags(
     state: &Arc<AppState>,
     nodes: &[Node],
     local: &str,
-) -> std::collections::HashSet<String> {
-    let mut set = std::collections::HashSet::new();
-    if load_maintenance(state).await.enabled {
-        set.insert(local.to_string());
-    }
+) -> HashMap<String, Option<bool>> {
+    let mut out = HashMap::new();
+    out.insert(
+        local.to_string(),
+        Some(load_maintenance(state).await.enabled),
+    );
     let peers = peer_nodes(nodes, local);
     let answers = futures::future::join_all(peers.iter().map(|n| async move {
         let r = tokio::time::timeout(
@@ -1231,12 +1879,24 @@ pub async fn maintenance_nodes(
         .await;
         (
             n.name.clone(),
-            matches!(r, Ok(Ok(MaintFlag { maintenance: true }))),
+            match r {
+                Ok(Ok(MaintFlag { maintenance })) => Some(maintenance),
+                _ => None,
+            },
         )
     }))
     .await;
-    set.extend(answers.into_iter().filter(|(_, m)| *m).map(|(n, _)| n));
-    set
+    out.extend(answers);
+    out
+}
+
+/// The members known to be in maintenance right now (see [`maintenance_flags`]).
+pub fn in_maintenance(flags: &HashMap<String, Option<bool>>) -> std::collections::HashSet<String> {
+    flags
+        .iter()
+        .filter(|(_, f)| **f == Some(true))
+        .map(|(n, _)| n.clone())
+        .collect()
 }
 
 async fn peer_move(
@@ -1316,24 +1976,13 @@ pub async fn leave_boot_maintenance(state: &Arc<AppState>) {
     if !(m.enabled && m.reason.as_deref() == Some("host shutdown")) {
         return;
     }
-    save_maintenance(
-        state,
-        &Maintenance {
-            enabled: false,
-            since: None,
-            reason: None,
-            drain: m.drain,
-        },
-    )
-    .await;
-    tracing::info!("node back from its shutdown drain: maintenance off");
-    let st = load_settings(state).await;
-    if st.mode != "off" {
-        let s2 = state.clone();
-        tokio::spawn(async move {
-            // Let the other nodes see this one online first.
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            rebalance_run(&s2, &st, false, None, "on-return").await;
-        });
-    }
+    let policy = m
+        .return_policy
+        .unwrap_or(load_maintenance_settings(state).await.return_policy);
+    tracing::info!(
+        "node back from its shutdown drain: maintenance off, return policy {}",
+        policy.as_str()
+    );
+    // Let the other nodes see this one online first.
+    leave_maintenance(state, policy, Duration::from_secs(10)).await;
 }
