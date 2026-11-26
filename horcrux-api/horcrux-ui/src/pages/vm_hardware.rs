@@ -178,7 +178,7 @@ pub fn HardwareFields(
                         view! {
                             <div class="vm-nic-row form-row" data-nic=i>
                                 <strong>{format!("net{i}")}</strong>
-                                <select class="vm-nic-model" disabled={move || running.get()}
+                                <select class="vm-nic-model" aria-label="NIC model" disabled={move || running.get()}
                                     on:change=move |ev| {
                                         let m = model_from(&event_target_value(&ev));
                                         hardware.update(|h| if let Some(n) = h.nets.get_mut(i) { n.model = m });
@@ -210,7 +210,7 @@ pub fn HardwareFields(
                                         view! { <option value=v selected=sel>{label}</option> }
                                     }).collect_view()}
                                 </select>
-                                <input class="vm-nic-vlan" type="number" min="1" max="4094"
+                                <input class="vm-nic-vlan" aria-label="VLAN tag" type="number" min="1" max="4094"
                                     placeholder=vlan_hint
                                     disabled={move || running.get() || !vlan_aware}
                                     prop:value=vlan
@@ -417,7 +417,7 @@ pub fn SystemFields(
                         <option value="custom" selected={move || !is_listed()}>"Other model..."</option>
                     </select>
                     <Show when=move || !is_listed()>
-                        <input id="vm-cpu-custom" type="text" placeholder="QEMU CPU model, e.g. EPYC-v4, Skylake-Server"
+                        <input id="vm-cpu-custom" aria-label="Custom CPU model" type="text" placeholder="QEMU CPU model, e.g. EPYC-v4, Skylake-Server"
                             disabled={move || running.get()}
                             prop:value=cpu_value
                             on:change=move |ev| {
@@ -692,7 +692,7 @@ fn VmDisks(
                                 .unwrap_or_else(|| p.clone());
                             view! { <span class="type-badge vm-disk-pool">{label}</span> }
                         })}
-                        <input class="vm-disk-size" type="number" min=d.size_gb.to_string() prop:value=size
+                        <input class="vm-disk-size" type="number" aria-label="Disk size (GB)" min=d.size_gb.to_string() prop:value=size
                             on:input=move |ev| size.set(event_target_value(&ev).parse().unwrap_or(0))/>
                         " GB "
                         <DiskOptionFields disk=row prefix=format!("vm-disk{i}")/>
@@ -708,7 +708,7 @@ fn VmDisks(
             }).collect_view()}
             <form class="form-row" id="vm-disk-add-form" on:submit=add>
                 <strong>"New disk"</strong>
-                <input id="vm-disk-add-size" type="number" min="1" prop:value={move || new_disk.get().size_gb}
+                <input id="vm-disk-add-size" aria-label="New disk size (GB)" type="number" min="1" prop:value={move || new_disk.get().size_gb}
                     on:input=move |ev| { let n = event_target_value(&ev).parse().unwrap_or(1); new_disk.update(|d| d.size_gb = n) }/>
                 " GB "
                 <DiskOptionFields disk=new_disk prefix="vm-disk-add"/>
@@ -1046,26 +1046,26 @@ pub fn GuestFirewall(
                 </tbody>
             </table>
             <form class="form-row" id="vm-fw-form" on:submit=add>
-                <select id="vm-fw-direction" on:change=move |ev| direction.set(event_target_value(&ev))>
+                <select id="vm-fw-direction" aria-label="Direction" on:change=move |ev| direction.set(event_target_value(&ev))>
                     <option value="in">"In (to VM)"</option>
                     <option value="out">"Out (from VM)"</option>
                 </select>
-                <select id="vm-fw-action" on:change=move |ev| action.set(event_target_value(&ev))>
+                <select id="vm-fw-action" aria-label="Action" on:change=move |ev| action.set(event_target_value(&ev))>
                     <option value="DROP">"Drop"</option>
                     <option value="REJECT">"Reject"</option>
                     <option value="ACCEPT">"Accept"</option>
                 </select>
-                <select id="vm-fw-protocol" on:change=move |ev| protocol.set(event_target_value(&ev))>
+                <select id="vm-fw-protocol" aria-label="Protocol" on:change=move |ev| protocol.set(event_target_value(&ev))>
                     <option value="tcp">"TCP"</option>
                     <option value="udp">"UDP"</option>
                     <option value="icmp">"ICMP"</option>
                     <option value="any">"Any"</option>
                 </select>
-                <input id="vm-fw-dport" type="text" placeholder="port (22, 80-90)" prop:value=dport
+                <input id="vm-fw-dport" aria-label="Destination port" type="text" placeholder="port (22, 80-90)" prop:value=dport
                     on:input=move |ev| dport.set(event_target_value(&ev))/>
-                <input id="vm-fw-source" type="text" placeholder="source IP/CIDR (any)" prop:value=source
+                <input id="vm-fw-source" aria-label="Source IP or CIDR" type="text" placeholder="source IP/CIDR (any)" prop:value=source
                     on:input=move |ev| source.set(event_target_value(&ev))/>
-                <input id="vm-fw-comment" type="text" placeholder="comment" prop:value=comment
+                <input id="vm-fw-comment" aria-label="Comment" type="text" placeholder="comment" prop:value=comment
                     on:input=move |ev| comment.set(event_target_value(&ev))/>
                 <button type="submit" id="vm-fw-add" class="btn btn-primary">"Add rule"</button>
             </form>
