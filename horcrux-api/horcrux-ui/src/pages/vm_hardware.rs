@@ -129,6 +129,7 @@ pub fn HardwareFields(
                 mac: None,
                 vlan: None,
                 rate_mbps: None,
+                macvtap_multicast: Default::default(),
             })
         });
     };
@@ -227,6 +228,24 @@ pub fn HardwareFields(
                                         let v = event_target_value(&ev).trim().parse::<u32>().ok();
                                         hardware.update(|h| if let Some(n) = h.nets.get_mut(i) { n.rate_mbps = v });
                                     }/>
+                                {(nic.attach == NicAttach::Macvtap).then(|| {
+                                    let all = nic.macvtap_multicast == horcrux_common::MacvtapMulticast::All;
+                                    view! {
+                                        <select class="vm-nic-mcast" disabled={move || running.get()}
+                                            title="Multicast on this macvtap card: follow the guest's own receive filter (default), or pass all multicast to the guest"
+                                            on:change=move |ev| {
+                                                let m = if event_target_value(&ev) == "all" {
+                                                    horcrux_common::MacvtapMulticast::All
+                                                } else {
+                                                    horcrux_common::MacvtapMulticast::Follow
+                                                };
+                                                hardware.update(|h| if let Some(n) = h.nets.get_mut(i) { n.macvtap_multicast = m });
+                                            }>
+                                            <option value="follow" selected={!all}>"Multicast: follow the guest"</option>
+                                            <option value="all" selected={all}>"Multicast: pass all"</option>
+                                        </select>
+                                    }
+                                })}
                                 <code class="vm-nic-mac">{mac}</code>
                                 <button type="button" class="btn btn-sm btn-danger vm-nic-remove" disabled={move || running.get()}
                                     on:click=move |_| hardware.update(|h| { if i < h.nets.len() { h.nets.remove(i); } })>

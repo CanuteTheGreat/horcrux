@@ -402,6 +402,12 @@ pub async fn run() -> anyhow::Result<()> {
         let vms = state.vm_manager.clone();
         tokio::spawn(async move { vms.reconcile_passthrough().await });
     }
+    // macvtap NICs of VMs that kept running across an API restart: the
+    // receive-filter watcher (guest multicast groups -> host device) again.
+    {
+        let vms = state.vm_manager.clone();
+        tokio::spawn(async move { crate::vm::rxfilter::adopt_running(&vms).await });
+    }
     // Horcrux Console relay (WAN access), when turned on.
     #[cfg(feature = "qemu")]
     crate::console::hxc::relay::apply_spawn(&crate::console::hxc_settings::get());

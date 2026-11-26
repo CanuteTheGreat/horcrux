@@ -700,6 +700,7 @@ mod tests {
             mac: mac.map(Into::into),
             vlan: None,
             rate_mbps: None,
+            macvtap_multicast: Default::default(),
         }
     }
 

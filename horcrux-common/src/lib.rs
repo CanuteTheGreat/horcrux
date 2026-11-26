@@ -201,6 +201,32 @@ impl NicAttach {
     }
 }
 
+/// How the host's macvtap device of a NIC learns which multicast groups the
+/// guest listens on. A macvtap device only passes the multicast frames its
+/// own filter lists, and the kernel knows nothing of the guest's groups:
+/// without them the guest never sees IPv6 neighbour solicitations for its
+/// global addresses (solicited-node groups) and v6 stops working.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MacvtapMulticast {
+    /// Follow the guest's own receive filter (QEMU's `NIC_RX_FILTER_CHANGED`
+    /// event and `query-rx-filter`, the way libvirt does with
+    /// trustGuestRxFilters); the device passes all multicast until the
+    /// guest has reported once.
+    #[default]
+    Follow,
+    /// Pass all multicast to the guest (`allmulticast on`), whatever it
+    /// subscribed to: the fallback for a guest NIC that never reports a
+    /// filter.
+    All,
+}
+
+impl MacvtapMulticast {
+    pub fn is_default(&self) -> bool {
+        *self == MacvtapMulticast::Follow
+    }
+}
+
 /// One VM network card: a tap device on a host Linux bridge, or a macvtap
 /// device directly on a host interface (see `attach`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -224,6 +250,10 @@ pub struct VmNic {
     /// (`tc`) when the VM starts; unset = unlimited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_mbps: Option<u32>,
+    /// macvtap only: how the device's multicast filter is kept (follow the
+    /// guest's receive filter, or pass all multicast).
+    #[serde(default, skip_serializing_if = "MacvtapMulticast::is_default")]
+    pub macvtap_multicast: MacvtapMulticast,
 }
 
 /// Highest NIC rate limit accepted (Mbit/s).
@@ -1885,6 +1915,7 @@ mod tests {
             mac: None,
             vlan: None,
             rate_mbps: None,
+            macvtap_multicast: Default::default(),
         };
         let mut hw = VmHardware {
             nets: vec![nic("vmbr0")],
