@@ -110,11 +110,27 @@ pub async fn ceph_create_pool(
     pg_num: u32,
     size: u32,
     application: &str,
+    crush_rule: &str,
 ) -> Result<(), ApiError> {
     post_json::<serde_json::Value, _>(
         "/ceph/pools",
         &serde_json::json!({"name": name, "pg_num": pg_num, "size": size,
-                            "application": if application.is_empty() { None } else { Some(application) }}),
+                            "application": if application.is_empty() { None } else { Some(application) },
+                            "crush_rule": if crush_rule.is_empty() { None } else { Some(crush_rule) }}),
+    )
+    .await?;
+    Ok(())
+}
+/// `POST /api/ceph/crush-rules`: replicated rule over a failure domain, optionally one device class.
+pub async fn ceph_create_crush_rule(
+    name: &str,
+    failure_domain: &str,
+    device_class: &str,
+) -> Result<(), ApiError> {
+    post_json::<serde_json::Value, _>(
+        "/ceph/crush-rules",
+        &serde_json::json!({"name": name, "failure_domain": failure_domain,
+                            "device_class": if device_class.is_empty() { None } else { Some(device_class) }}),
     )
     .await?;
     Ok(())

@@ -3244,6 +3244,18 @@ VM or one with snapshots, 403 for loopback/link-local hosts. See [OVF_IMPORT.md]
 
 `POST /api/ceph/osds` with `{"device": "/dev/nvme1n1", "confirm": "/dev/nvme1n1"}` runs `ceph-volume lvm create --data <device>` on the node that serves the request. It is refused (409) unless this node's role is `storage` with a 10 GbE or faster uplink (the same rule as `GET /api/ceph/placement`), and unless the device is a blank whole disk: a partition, a mounted or read-only disk, or any disk with a partition table, filesystem, LVM or Ceph signature is refused, because Horcrux never wipes a disk. `confirm` must repeat `device` (400 otherwise). The result is recorded in Tasks.
 
+## Ceph: CRUSH rules and pool placement
+
+`POST /api/ceph/crush-rules` with `{"name": "nvme-host", "device_class": "nvme", "failure_domain": "host"}` runs
+`ceph osd crush rule create-replicated nvme-host default host nvme`: a replicated rule that only uses OSDs of that
+device class (`hdd`, `ssd`, `nvme`; omit for all) and never puts two replicas on the same `host` (default; also `osd`,
+`chassis`, `rack`, `row`, `room`, `datacenter`). Optional `root` (default `default`). 409 if the rule exists, 422 for a bad name/value.
+
+`POST /api/ceph/pools` accepts `crush_rule` (an existing rule name, 422 if unknown) and `min_size` (1..size) next to
+`name`, `pg_num`, `size`, `application`. Example for an NVMe-only 3x pool: create the `nvme-host` rule, then
+`{"name": "vmdata", "pg_num": 128, "size": 3, "min_size": 2, "crush_rule": "nvme-host", "application": "rbd"}`.
+The Ceph page has both forms (CRUSH rules section, "CRUSH rule" picker on the pool form).
+
 ## API access log
 
 Every `/api` request is recorded with the caller, client address, route group,

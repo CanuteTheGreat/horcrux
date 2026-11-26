@@ -23,6 +23,10 @@ pub fn CephPage() -> impl IntoView {
     let pg_num = create_rw_signal("32".to_string());
     let size = create_rw_signal("3".to_string());
     let app = create_rw_signal("rbd".to_string());
+    let pool_rule = create_rw_signal(String::new());
+    let rule_name = create_rw_signal(String::new());
+    let rule_domain = create_rw_signal("host".to_string());
+    let rule_class = create_rw_signal("nvme".to_string());
 
     let reload = move || {
         spawn_local(async move {
@@ -107,15 +111,34 @@ pub fn CephPage() -> impl IntoView {
     };
     let create = move |ev: ev::SubmitEvent| {
         ev.prevent_default();
-        let (n, pg, sz, a) = (
+        let (n, pg, sz, a, cr) = (
             name.get().trim().to_string(),
             pg_num.get().trim().parse().unwrap_or(0),
             size.get().trim().parse().unwrap_or(0),
             app.get(),
+            pool_rule.get(),
         );
         spawn_local(async move {
-            match c::ceph_create_pool(&n, pg, sz, &a).await {
+            match c::ceph_create_pool(&n, pg, sz, &a, &cr).await {
                 Ok(()) => ok(format!("Pool {n} created")),
+                Err(e) => fail(e),
+            }
+            reload();
+        });
+    };
+    let create_rule = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let (n, fd, dc) = (
+            rule_name.get().trim().to_string(),
+            rule_domain.get(),
+            rule_class.get(),
+        );
+        spawn_local(async move {
+            match c::ceph_create_crush_rule(&n, &fd, &dc).await {
+                Ok(()) => {
+                    rule_name.set(String::new());
+                    ok(format!("CRUSH rule {n} created"));
+                }
                 Err(e) => fail(e),
             }
             reload();
@@ -249,6 +272,10 @@ pub fn CephPage() -> impl IntoView {
                     <option value="rbd">"rbd (VM disks)"</option><option value="cephfs">"cephfs"</option>
                     <option value="rgw">"rgw"</option><option value="">"none"</option>
                 </select></div>
+                <div class="form-group"><label for="ceph-pool-rule">"CRUSH rule"</label><select id="ceph-pool-rule" prop:value=pool_rule on:change=move |ev| pool_rule.set(event_target_value(&ev))>
+                    <option value="">"cluster default"</option>
+                    {move || rules.get().into_iter().map(|r| view! { <option value=r.name.clone()>{r.name.clone()}</option> }).collect_view()}
+                </select></div>
                 <button id="ceph-pool-create" type="submit" class="btn btn-primary">"Create pool"</button>
             </form>
             <table class="vm-table" id="ceph-pool-table">
@@ -272,6 +299,18 @@ pub fn CephPage() -> impl IntoView {
             <ul id="ceph-mons">{move || mons.get().into_iter().map(|m| view! { <li>{format!("{} (rank {}) {} {}", m.name, m.rank, m.address, if m.in_quorum { "in quorum" } else { "OUT of quorum" })}</li> }).collect_view()}</ul>
 
             <h2>"CRUSH rules"</h2>
+            <form id="ceph-rule-form" class="form-row fields" on:submit=create_rule>
+                <div class="form-group"><label for="ceph-rule-name">"Rule name"</label><input id="ceph-rule-name" type="text" required placeholder="nvme-host" prop:value=rule_name on:input=move |ev| rule_name.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="ceph-rule-class">"Disks"</label><select id="ceph-rule-class" prop:value=rule_class on:change=move |ev| rule_class.set(event_target_value(&ev))>
+                    <option value="nvme">"NVMe only"</option><option value="ssd">"SSD only"</option>
+                    <option value="hdd">"HDD only"</option><option value="">"any"</option>
+                </select></div>
+                <div class="form-group"><label for="ceph-rule-domain">"Replicas on different"</label><select id="ceph-rule-domain" prop:value=rule_domain on:change=move |ev| rule_domain.set(event_target_value(&ev))>
+                    <option value="host">"hosts"</option><option value="osd">"disks (single node)"</option>
+                    <option value="chassis">"chassis"</option><option value="rack">"racks"</option>
+                </select></div>
+                <button id="ceph-rule-create" type="submit" class="btn btn-primary">"Create rule"</button>
+            </form>
             <ul id="ceph-rules">{move || rules.get().into_iter().map(|r| view! { <li>{format!("{} (id {}): from {} spread over {}", r.name, r.id, r.root.clone().unwrap_or_default(), r.failure_domain.clone().unwrap_or_default())}</li> }).collect_view()}</ul>
         </div>
     }
