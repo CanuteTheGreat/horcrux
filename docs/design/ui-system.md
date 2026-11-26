@@ -146,6 +146,8 @@ header actions collapse to icons with labels kept for screen readers.
 2. Use the components; a page-local style is allowed only for layout inside a panel, and only with tokens.
 3. Every count is a link to the filtered list (ux_crawl `unlinked-summary`); zero is never red.
 4. Every page has its own title and h1; every list has an empty state with an action.
-5. Screenshots: `ci/ux-qa/visual/` holds the committed baseline for every page at desktop 1280 and
-   phone 390, light and dark (`ci/ux-qa/visual_snapshots.py`). A UI change re-captures them in the
-   same commit; review the PNG diff like code.
+5. Screenshots: `docs/qa/ui-shots/` holds the committed first-screen baseline of the key pages (dashboard,
+   VM list and detail, storage, resources, tasks, health, logs, monitoring, users, containers, backup,
+   network, HA) at desktop 1280 and phone 390, light and dark (`ci/ux-qa/ui_snapshots.py --write` from a
+   `ux_crawl.py --shots` run). A UI change re-captures them in the same commit; the CI UX crawl step reports
+   every page whose first screen changed by more than 25 %, so review those PNG pairs like code.

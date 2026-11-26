@@ -168,7 +168,7 @@ pub fn VmLiveDevices(
                     <p id="balloon-state">{format!("Configured {} MB, the guest holds {} now", b.memory_mb, mb(b.actual_mb))}
                         {b.target_mb.map(|t| format!(" (target {t} MB)")).unwrap_or_default()}</p>
                     <div class="form-row">
-                        <input id="balloon-target" type="number" min="16" placeholder="target MB" prop:value=target
+                        <input id="balloon-target" aria-label="Balloon target (MB)" type="number" min="16" placeholder="target MB" prop:value=target
                             on:input=move |ev| target.set(event_target_value(&ev))/>
                         <button id="balloon-apply" type="button" class="btn btn-primary" on:click=apply_balloon>"Set target"</button>
                     </div>
@@ -212,7 +212,7 @@ pub fn VmLiveDevices(
                 }).collect_view())}
             </ul>
             <div class="form-row">
-                <select id="usb-host-pick" prop:value=usb_pick on:change=move |ev| usb_pick.set(event_target_value(&ev))>
+                <select id="usb-host-pick" aria-label="USB device on this host" prop:value=usb_pick on:change=move |ev| usb_pick.set(event_target_value(&ev))>
                     <option value="">"host USB device..."</option>
                     {move || host_usb.get().into_iter().filter(|d| !d.is_hub).map(|d| view! {
                         <option value=format!("{}:{}", d.vendor_id, d.product_id)>
