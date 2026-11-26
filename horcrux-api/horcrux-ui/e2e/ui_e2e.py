@@ -43,7 +43,7 @@ import time
 import urllib.error
 import urllib.request
 
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, expect, sync_playwright
 
 BASE = os.environ.get("BASE_URL", "https://localhost:8006")
 # Trust the node's local CA when given (CI), never skip verification silently.
@@ -670,7 +670,7 @@ def main():
 
         # ---- VM clone from the VM list: dialog, linked mode, base protected
         page.goto(f"{BASE}/vms")
-        vm_row_menu(page, REP_VM).get_by_role("button", name="Clone").click()
+        vm_row_action(page, REP_VM, "button", "Clone")
         page.fill("#clone-name", REP_CLONE)
         page.select_option("#clone-mode", "linked")
         expect(page.locator("#clone-linked-help")).to_be_visible()
@@ -692,7 +692,7 @@ def main():
             "completed", timeout=30000)
         # ... and Delete on its base is refused with the reason shown.
         page.goto(f"{BASE}/vms")
-        vm_row_menu(page, REP_VM).get_by_role("button", name="Delete").click()
+        vm_row_action(page, REP_VM, "button", "Delete")
         expect(page.locator("#vm-notice")).to_contain_text("linked clone", timeout=30000)
         expect(page.locator("#vm-notice")).to_contain_text(cid)
         assert api_get(f"/api/vms/{REP_VM}", token())["id"] == REP_VM
@@ -1403,7 +1403,7 @@ def vm_hardware_checks(page, vid):
 
     # ---- VM > Hardware: CD-ROM + boot order + CPUs, saved ----------------
     page.goto(f"{BASE}/vms")
-    vm_row_menu(page, vid).get_by_role("link", name="Hardware").click()
+    vm_row_action(page, vid, "link", "Hardware")
     page.wait_for_url(f"{BASE}/vms/{vid}/hardware")
     expect(page.locator("#vm-cdrom option", has_text="e2e-ui.iso")).to_have_count(1, timeout=30000)
     page.select_option("#vm-cdrom", iso["path"])
@@ -1853,13 +1853,27 @@ def ui_login(page, user, password):
     page.locator("#login-submit").click()
 
 
-def vm_row_menu(page, vid):
-    """The VM list row, with its "More" menu (secondary actions) opened."""
+def vm_row_action(page, vid, role, name):
+    """Click a secondary action in a VM list row's "More" menu.
+
+    The list renders its rows before the saved-state / save-blocker lookups
+    answer, and that answer re-renders the rows (closing an opened menu), so
+    wait for the row, open the menu and retry the click a few times instead of
+    assuming the first open sticks.
+    """
     row = page.locator(f"tr[data-vm-id='{vid}']")
-    more = row.locator("details.row-more")
-    if more.count() and not more.first.evaluate("d => d.open"):
-        more.first.locator("summary").click()
-    return row
+    expect(row).to_be_visible(timeout=60000)
+    target = row.get_by_role(role, name=name, exact=True)
+    for _ in range(6):
+        more = row.locator("details.row-more")
+        if more.count() and not more.first.evaluate("d => d.open"):
+            more.first.locator("summary").click()
+        try:
+            target.click(timeout=5000)
+            return
+        except PlaywrightTimeoutError:
+            continue
+    target.click()
 
 
 def ui_logout(page):
