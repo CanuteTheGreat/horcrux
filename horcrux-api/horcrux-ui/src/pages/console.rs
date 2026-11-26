@@ -694,6 +694,7 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
                 <input
                     type="text"
                     class="serial-input"
+                    aria-label="Serial console input"
                     style="width:80%"
                     prop:value=move || input.get()
                     on:input=move |ev| set_input.set(event_target_value(&ev))

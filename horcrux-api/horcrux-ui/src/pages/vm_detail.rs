@@ -189,7 +189,7 @@ pub fn VmDetailPage() -> impl IntoView {
             })}
             <h3>"Tags"</h3>
             <div class="form-row">
-                <input id="vmd-tags" type="text" placeholder="prod, web" style="flex: 3" prop:value=tags_text
+                <input id="vmd-tags" type="text" aria-label="Tags (comma-separated)" placeholder="prod, web" style="flex: 3" prop:value=tags_text
                     on:input=move |ev| set_tags_text.set(event_target_value(&ev))/>
                 <button id="vmd-tags-save" class="btn btn-primary" on:click=save_tags>"Save tags"</button>
             </div>
