@@ -424,6 +424,14 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         // The node shell is a root shell: always Sys.Modify, even for the
         // WebSocket GET that redeems the ticket.
         "nodes" if arg(1) == "shell" => need(P::SysModify, "/nodes"),
+        // Maintenance of one cluster member (`/api/nodes/<node>/maintenance`
+        // and its `/plan`): Sys.Audit / Sys.Modify on that node.
+        "nodes"
+            if arg(2) == "maintenance"
+                && !matches!(arg(1), "" | "maintenance" | "guest-power" | "shell") =>
+        {
+            read_write(m, P::SysAudit, P::SysModify, format!("/nodes/{}", arg(1)))
+        }
         "gpu" | "system" | "nodes" | "host-agent" => {
             read_write(m, P::SysAudit, P::SysModify, "/nodes")
         }
@@ -687,6 +695,32 @@ mod tests {
                 (P::DatastoreAllocate, "/storage".into()),
                 "{m} {p}"
             );
+        }
+    }
+
+    #[test]
+    fn per_node_maintenance_routes_map_to_that_node() {
+        for (m, p, want, path) in [
+            ("GET", "/api/nodes/nb/maintenance", P::SysAudit, "/nodes/nb"),
+            (
+                "POST",
+                "/api/nodes/nb/maintenance",
+                P::SysModify,
+                "/nodes/nb",
+            ),
+            (
+                "GET",
+                "/api/nodes/nb/maintenance/plan",
+                P::SysAudit,
+                "/nodes/nb",
+            ),
+            // the local node's own routes keep their node-wide rule
+            ("POST", "/api/nodes/maintenance", P::SysModify, "/nodes"),
+            ("GET", "/api/nodes/maintenance/plan", P::SysAudit, "/nodes"),
+            ("GET", "/api/cluster/maintenance", P::SysAudit, "/cluster"),
+            ("PUT", "/api/cluster/maintenance", P::SysModify, "/cluster"),
+        ] {
+            assert_eq!(priv_of(requirement(m, p)), (want, path.into()), "{m} {p}");
         }
     }
 

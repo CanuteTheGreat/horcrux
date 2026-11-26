@@ -484,3 +484,106 @@ fn san_section_plans_creates_updates_and_prunes() {
     );
     assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
 }
+
+fn maint_live() -> Live {
+    let mut live = Live {
+        cluster_maintenance: Some(ClusterMaintenanceSpec::default()),
+        ..Default::default()
+    };
+    live.node_maintenance.insert(
+        "na".into(),
+        NodeMaintenanceSpec {
+            enabled: false,
+            return_policy: None,
+        },
+    );
+    live.node_maintenance.insert(
+        "nb".into(),
+        NodeMaintenanceSpec {
+            enabled: true,
+            return_policy: Some(ReturnPolicy::None),
+        },
+    );
+    live.nodes_unreachable.insert("nc".into());
+    live
+}
+
+#[test]
+fn cluster_and_node_maintenance_are_planned_and_exported() {
+    let spec = parse(
+        r#"
+version: 1
+cluster:
+  maintenance:
+    return_policy: rebalance
+nodes:
+  na:
+    maintenance: {enabled: true, return_policy: origin}
+  nb:
+    maintenance: {enabled: true, return_policy: origin}
+"#,
+    )
+    .unwrap();
+    let p = plan(&spec, &maint_live(), false);
+    assert!(p.errors.is_empty(), "{:?}", p.errors);
+    let got: Vec<(String, String, Vec<String>)> = p
+        .changes
+        .iter()
+        .map(|c| (c.kind.clone(), c.name.clone(), c.details.clone()))
+        .collect();
+    assert_eq!(got[0].0, "cluster", "cluster settings first");
+    assert_eq!(
+        got[0].2,
+        vec!["return_policy: origin -> rebalance".to_string()]
+    );
+    let na = got.iter().find(|c| c.1 == "na").unwrap();
+    assert_eq!(na.0, "node_maintenance");
+    assert_eq!(na.2, vec!["enabled: false -> true".to_string()]);
+    let nb = got.iter().find(|c| c.1 == "nb").unwrap();
+    assert!(nb.2[0].contains("return_policy"), "{:?}", nb.2);
+    assert_eq!(
+        p.changes.last().unwrap().kind,
+        "node_maintenance",
+        "maintenance last"
+    );
+
+    // export -> plan is a no-op, through YAML
+    let live = maint_live();
+    let exported = export(&live);
+    let text = serde_yaml::to_string(&exported).unwrap();
+    assert!(text.contains("return_policy: origin"), "{text}");
+    let again = parse(&text).unwrap();
+    assert!(
+        plan(&again, &live, false).in_sync(),
+        "{:?}",
+        plan(&again, &live, false)
+    );
+}
+
+#[test]
+fn node_maintenance_errors_name_the_problem() {
+    let spec = parse(
+        r#"
+version: 1
+nodes:
+  nc: {maintenance: {enabled: true}}
+  zz: {maintenance: {enabled: true}}
+"#,
+    )
+    .unwrap();
+    let p = plan(&spec, &maint_live(), false);
+    assert_eq!(p.errors.len(), 2, "{:?}", p.errors);
+    assert!(p.errors.iter().any(|e| e.contains("nc does not answer")));
+    assert!(p
+        .errors
+        .iter()
+        .any(|e| e.contains("no member with that name")));
+    // a server without clustering refuses the sections
+    let p = plan(&spec, &Live::default(), false);
+    assert!(
+        p.errors.iter().all(|e| e.contains("USE=cluster")),
+        "{:?}",
+        p.errors
+    );
+    assert!(parse("version: 1\ncluster: {maintenance: {return_policy: back}}").is_err());
+}

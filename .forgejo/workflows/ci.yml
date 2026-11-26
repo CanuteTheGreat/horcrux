@@ -1474,6 +1474,11 @@ jobs:
           BASE_URL: https://localhost:8006
         run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/san_wizard_e2e.py
 
+      - name: Cluster nodes list enters and leaves maintenance of another member (Firefox)
+        env:
+          BASE_URL: https://localhost:8006
+        run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/node_maintenance_ui_e2e.py
+
       - name: UX crawl (every nav page, desktop + phone, light + dark; no JS errors, overlays, dead stat cards, private text)
         # ci/ux-qa/ux_crawl.py: the owner kept finding these by hand (docs/qa/owner-findings.md). Known, tracked
         # failures live in ci/ux-qa/ux-crawl-baseline.json; a NEW failure fails the job.
