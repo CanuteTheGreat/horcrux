@@ -16,11 +16,13 @@ PROJECTS = {
 }
 
 
-def answer_toml(project, pubkey, pwhash, lan_ip="10.77.0.1", fs="ext4", luks=None):
+def answer_toml(project, pubkey, pwhash, lan_ip="10.77.0.1", fs="ext4", luks=None, disks=("/dev/vda",), zfs_raid=None, zfs_pool=None):
     p, P = project, PROJECTS[project]
     L = ["[global]", 'keyboard = "us"', 'timezone = "Europe/Berlin"', f'hostname = "{p}-vmt.test.lan"', 'email = "ops@example.test"',
          f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', "ssh_password_auth = false", "console_menu_open = false",
-         "", "[disk]", f'filesystem = "{fs}"', *([f'luks_passphrase = "{luks}"'] if luks else []), 'disks = ["/dev/vda"]', "", "[user]", f'name = "{P["web_user"]}"', f'password_hash = "{pwhash}"', "",
+         "", "[disk]", f'filesystem = "{fs}"', *([f'luks_passphrase = "{luks}"'] if luks else []),
+         *([f'zfs_raid = "{zfs_raid}"'] if zfs_raid else []), *([f'zfs_pool = "{zfs_pool}"'] if zfs_pool else []),
+         "disks = [" + ", ".join(f'"{d}"' for d in disks) + "]", "", "[user]", f'name = "{P["web_user"]}"', f'password_hash = "{pwhash}"', "",
          "[hardening]", "ssh = true", "sysctl = true", "", "[use_flags]", 'preset = "minimal"', ""]
     L += ["[network.management]", 'mode = "dhcp"'] if p == "horcrux" else ["[network.wan]", 'mode = "dhcp"', "", "[network.lan]", f'address = "{lan_ip}/24"']
     return "\n".join(L) + "\n"
