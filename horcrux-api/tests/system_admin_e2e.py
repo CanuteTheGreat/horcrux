@@ -503,7 +503,7 @@ case "$*" in
  "df "*) cat $fx/df.json;;
  "osd crush rule dump "*) cat $fx/crush_rules.json;;
  "osd dump "*) cat $fx/osd_dump.json;;
- "osd out "*|"osd in "*|"osd set "*|"osd unset "*|"osd pool create "*|"osd pool set "*|"osd pool application enable "*|"osd pool delete "*) echo done;;
+ "osd out "*|"osd in "*|"osd set "*|"osd unset "*|"osd pool create "*|"osd pool set "*|"osd pool application enable "*|"osd pool delete "*|"osd crush rule create-replicated "*) echo done;;
  *) echo "unknown: $*" >&2; exit 22;;
 esac
 """)
@@ -533,6 +533,16 @@ esac
     log = cl()
     ok("osd pool create newpool 64" in log and "osd pool set newpool size 2" in log and "osd pool application enable newpool rbd" in log, "pool create runs create + size + application")
     expect(409, "POST", "/ceph/pools", {"name": "vmdata", "pg_num": 32})
+    expect(200, "POST", "/ceph/crush-rules", {"name": "nvme-host", "device_class": "nvme"})
+    ok("osd crush rule create-replicated nvme-host default host nvme" in cl(), "CRUSH rule create runs create-replicated with root, failure domain and device class")
+    expect(409, "POST", "/ceph/crush-rules", {"name": "replicated_rule"})
+    expect(422, "POST", "/ceph/crush-rules", {"name": "x", "failure_domain": "galaxy"})
+    expect(422, "POST", "/ceph/crush-rules", {"name": "x", "device_class": "tape"})
+    expect(422, "POST", "/ceph/pools", {"name": "p2", "pg_num": 32, "crush_rule": "no-such-rule"})
+    expect(422, "POST", "/ceph/pools", {"name": "p3", "pg_num": 32, "size": 3, "min_size": 4})
+    expect(200, "POST", "/ceph/pools", {"name": "p4", "pg_num": 32, "size": 3, "min_size": 2, "crush_rule": "replicated_rule"})
+    log = cl()
+    ok("osd pool set p4 crush_rule replicated_rule" in log and "osd pool set p4 min_size 2" in log, "pool create applies crush_rule and min_size")
     expect(422, "POST", "/ceph/pools", {"name": "bad pool", "pg_num": 32})
     expect(422, "POST", "/ceph/pools", {"name": "x", "pg_num": 33})
     expect(400, "DELETE", "/ceph/pools/vmdata")

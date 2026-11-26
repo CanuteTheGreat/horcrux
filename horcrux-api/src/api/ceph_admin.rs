@@ -37,7 +37,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/ceph/osds/:id/:action", post(osd_action))
         .route("/api/ceph/pools", get(pools).post(create_pool))
         .route("/api/ceph/pools/:name", axum::routing::delete(delete_pool))
-        .route("/api/ceph/crush-rules", get(crush_rules))
+        .route("/api/ceph/crush-rules", get(crush_rules).post(create_crush_rule))
         .route("/api/ceph/flags", get(flags))
         .route("/api/ceph/flags/:flag", post(set_flag))
         .route("/api/ceph/placement", get(placement))
@@ -694,6 +694,13 @@ pub struct NewPool {
     /// rbd | cephfs | rgw (omit for none)
     #[serde(default)]
     pub application: Option<String>,
+    /// Name of an existing CRUSH rule (e.g. an NVMe-only rule from
+    /// `POST /api/ceph/crush-rules`); omit for the cluster default.
+    #[serde(default)]
+    pub crush_rule: Option<String>,
+    /// Replicas needed to keep serving I/O (default: Ceph's own).
+    #[serde(default)]
+    pub min_size: Option<u32>,
 }
 
 fn default_size() -> u32 {
@@ -716,6 +723,14 @@ pub fn validate_pool(p: &NewPool) -> Result<(), String> {
     if !(1..=7).contains(&p.size) {
         return Err("size (replicas) must be 1-7".into());
     }
+    if let Some(m) = p.min_size {
+        if m == 0 || m > p.size {
+            return Err("min_size must be between 1 and size".into());
+        }
+    }
+    if let Some(r) = p.crush_rule.as_deref() {
+        valid_ceph_name(r, "crush_rule")?;
+    }
     if let Some(a) = p.application.as_deref() {
         if !["rbd", "cephfs", "rgw"].contains(&a) {
             return Err("application must be rbd, cephfs or rgw".into());
@@ -732,6 +747,14 @@ async fn create_pool(u: AuthExt, Json(p): Json<NewPool>) -> Res<serde_json::Valu
             "pool {} already exists",
             p.name
         )));
+    }
+    if let Some(r) = &p.crush_rule {
+        let rules = parse_crush_rules(&ceph(&["osd", "crush", "rule", "dump"]).await?);
+        if !rules.iter().any(|x| &x.name == r) {
+            return Err(ApiError::ValidationError(format!(
+                "CRUSH rule {r} does not exist (create it first, or omit crush_rule)"
+            )));
+        }
     }
     let who = super::system_admin::user_of(&u);
     let steps: Vec<Vec<String>> = {
@@ -750,6 +773,26 @@ async fn create_pool(u: AuthExt, Json(p): Json<NewPool>) -> Res<serde_json::Valu
             "size".into(),
             p.size.to_string(),
         ]);
+        if let Some(r) = &p.crush_rule {
+            s.push(vec![
+                "osd".into(),
+                "pool".into(),
+                "set".into(),
+                p.name.clone(),
+                "crush_rule".into(),
+                r.clone(),
+            ]);
+        }
+        if let Some(m) = p.min_size {
+            s.push(vec![
+                "osd".into(),
+                "pool".into(),
+                "set".into(),
+                p.name.clone(),
+                "min_size".into(),
+                m.to_string(),
+            ]);
+        }
         if let Some(a) = &p.application {
             s.push(vec![
                 "osd".into(),
@@ -861,6 +904,108 @@ async fn crush_rules() -> Res<Vec<CrushRule>> {
     Ok(Json(parse_crush_rules(
         &ceph(&["osd", "crush", "rule", "dump"]).await?,
     )))
+}
+
+fn valid_ceph_name(v: &str, what: &str) -> Result<(), String> {
+    let ok = !v.is_empty()
+        && v.len() <= 64
+        && !v.starts_with(['.', '-'])
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what}: 1-64 letters, digits, _ . - (not starting with . or -)"
+        ))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewCrushRule {
+    pub name: String,
+    /// CRUSH bucket type replicas must not share: host (default), osd, chassis, rack, row, room, datacenter
+    #[serde(default = "default_failure_domain")]
+    pub failure_domain: String,
+    /// Only use OSDs of this device class: hdd, ssd or nvme (omit for all)
+    #[serde(default)]
+    pub device_class: Option<String>,
+    /// CRUSH root bucket (default `default`)
+    #[serde(default = "default_crush_root")]
+    pub root: String,
+}
+
+fn default_failure_domain() -> String {
+    "host".into()
+}
+
+fn default_crush_root() -> String {
+    "default".into()
+}
+
+pub fn validate_crush_rule(r: &NewCrushRule) -> Result<(), String> {
+    valid_ceph_name(&r.name, "rule name")?;
+    valid_ceph_name(&r.root, "root")?;
+    if !["osd", "host", "chassis", "rack", "row", "room", "datacenter"]
+        .contains(&r.failure_domain.as_str())
+    {
+        return Err(
+            "failure_domain must be osd, host, chassis, rack, row, room or datacenter".into(),
+        );
+    }
+    if let Some(c) = r.device_class.as_deref() {
+        if !["hdd", "ssd", "nvme"].contains(&c) {
+            return Err("device_class must be hdd, ssd or nvme".into());
+        }
+    }
+    Ok(())
+}
+
+/// `ceph osd crush rule create-replicated <name> <root> <type> [<class>]`
+pub fn crush_rule_cmd(r: &NewCrushRule) -> Vec<String> {
+    let mut v: Vec<String> = ["osd", "crush", "rule", "create-replicated"]
+        .iter()
+        .map(|x| x.to_string())
+        .collect();
+    v.extend([r.name.clone(), r.root.clone(), r.failure_domain.clone()]);
+    if let Some(c) = &r.device_class {
+        v.push(c.clone());
+    }
+    v
+}
+
+async fn create_crush_rule(u: AuthExt, Json(r): Json<NewCrushRule>) -> Res<serde_json::Value> {
+    validate_crush_rule(&r).map_err(ApiError::ValidationError)?;
+    let existing = parse_crush_rules(&ceph(&["osd", "crush", "rule", "dump"]).await?);
+    if existing.iter().any(|x| x.name == r.name) {
+        return Err(ApiError::Conflict(format!(
+            "CRUSH rule {} already exists",
+            r.name
+        )));
+    }
+    let cmd = crush_rule_cmd(&r);
+    let refs: Vec<&str> = cmd.iter().map(|x| x.as_str()).collect();
+    let res = ceph_do(&refs).await;
+    tasks::record_done(
+        "ceph-crush-rule",
+        &r.name,
+        &super::system_admin::user_of(&u),
+        &res.as_ref()
+            .map(|_| {
+                format!(
+                    "created: {} over {}{}",
+                    r.root,
+                    r.failure_domain,
+                    r.device_class
+                        .as_deref()
+                        .map(|c| format!(", class {c}"))
+                        .unwrap_or_default()
+                )
+            })
+            .map_err(|e| format!("{e:?}")),
+    );
+    res?;
+    Ok(Json(serde_json::json!({"created": r.name})))
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -1104,6 +1249,8 @@ mod tests {
             pg_num: pg,
             size,
             application: app.map(String::from),
+            crush_rule: None,
+            min_size: None,
         };
         assert!(validate_pool(&p("vmdata", 32, 3, Some("rbd"))).is_ok());
         for bad in [
@@ -1118,5 +1265,54 @@ mod tests {
         ] {
             assert!(validate_pool(&bad).is_err(), "{:?}", bad.name);
         }
+    }
+
+    #[test]
+    fn crush_rules_are_validated_and_built() {
+        let r = |n: &str, fd: &str, dc: Option<&str>| NewCrushRule {
+            name: n.into(),
+            failure_domain: fd.into(),
+            device_class: dc.map(String::from),
+            root: "default".into(),
+        };
+        let good = r("nvme-host", "host", Some("nvme"));
+        assert!(validate_crush_rule(&good).is_ok());
+        assert_eq!(
+            crush_rule_cmd(&good).join(" "),
+            "osd crush rule create-replicated nvme-host default host nvme"
+        );
+        assert_eq!(
+            crush_rule_cmd(&r("all", "osd", None)).join(" "),
+            "osd crush rule create-replicated all default osd"
+        );
+        for bad in [
+            r("", "host", None),
+            r("a b", "host", None),
+            r("x", "galaxy", None),
+            r("x", "host", Some("tape")),
+            r("-x", "host", None),
+        ] {
+            assert!(validate_crush_rule(&bad).is_err(), "{:?}", bad.name);
+        }
+    }
+
+    #[test]
+    fn pool_min_size_and_rule_are_validated() {
+        let mut p = NewPool {
+            name: "fast".into(),
+            pg_num: 32,
+            size: 3,
+            application: None,
+            crush_rule: Some("nvme-host".into()),
+            min_size: Some(2),
+        };
+        assert!(validate_pool(&p).is_ok());
+        p.min_size = Some(4);
+        assert!(validate_pool(&p).is_err());
+        p.min_size = Some(0);
+        assert!(validate_pool(&p).is_err());
+        p.min_size = None;
+        p.crush_rule = Some("bad rule".into());
+        assert!(validate_pool(&p).is_err());
     }
 }
