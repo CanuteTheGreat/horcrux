@@ -206,6 +206,7 @@ class BuildWiring(unittest.TestCase):
         self.assertIn("secureboot-test.py", s)
         self.assertIn("--secure-boot mok", s)
         self.assertIn("export SECUREBOOT=on", s)
+        self.assertIn("SB_SIGNED", s)
 
     def test_live_iso_workflows_pass_the_key(self):
         wf = os.path.join(COMMON, "..", "..", "..", ".forgejo", "workflows")

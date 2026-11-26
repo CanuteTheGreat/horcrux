@@ -61,6 +61,18 @@ sb_init() {
     [ -n "$SB_SHIM" ] || for d in "$ROOT/usr/share/shim" /usr/share/shim; do [ -f "$d/BOOT${SB_S^^}.EFI" ] && { SB_SHIM=$d; break; }; done
     [ -f "$SB_SHIM/BOOT${SB_S^^}.EFI" ] && [ -f "$SB_SHIM/mm$SB_S.efi" ] || { echo "secureboot: no shim (BOOT${SB_S^^}.EFI + mm$SB_S.efi; emerge sys-boot/shim)" >&2; return 1; }
     command -v sbsign >/dev/null || { echo "secureboot: sbsign missing (app-crypt/sbsigntools)" >&2; return 1; }
+    # the kernel must be an EFI (PE) image to carry an Authenticode signature (x86 bzImage always is; an arm64 kernel only with
+    # its EFI stub / EFI zboot). Checked BEFORE anything is signed, so `auto` falls back to a whole unsigned image.
+    local k pe=1
+    for k in "$ROOT"/boot/vmlinuz-*; do
+        case "$k" in *.old) continue ;; esac
+        [ -f "$k" ] && [ "$(head -c 2 "$k")" != "MZ" ] && pe=0
+    done
+    if [ "$pe" = 0 ]; then
+        rm -rf "$SB_TMP"
+        [ "$mode" = on ] && { echo "secureboot: the kernel image is not an EFI/PE binary: it cannot be signed" >&2; return 1; }
+        echo "::warning::secureboot: the kernel image is not an EFI/PE binary ($ARCH): unsigned image" ; return 0
+    fi
     SB_ON=1
     sb_log "ON: signing with $(openssl x509 -in "$SB_CERT" -noout -subject | sed 's/^subject= *//'), sha256 $(openssl x509 -in "$SB_CERT" -noout -fingerprint -sha256 | cut -d= -f2), shim from $SB_SHIM"
 }
