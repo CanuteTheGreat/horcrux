@@ -16,7 +16,7 @@ stack, skip the server sysctl lock-down and use the desktop USE preset.
 """
 import re
 
-from . import portableswap, secretcheck
+from . import portableswap, secretcheck, zfsroot
 from . import system as S
 
 ERASE_WORD = "ERASE"
@@ -222,11 +222,14 @@ class DiskStage(Stage):
         why = c.get("fs_why") or ""
         luks = lambda v: v.get("fs") == "xfs-luks"  # noqa: E731
         return [Field("fs", "Root file system", "choice", c["fs"], [(x, opts.get(x, x)) for x in fss],
-                      hint=("Default: " + why + ". " if why else "") + "ext4 and XFS use one disk. ZFS uses the whole disk as a pool 'rpool'."),
+                      hint=("Default: " + why + ". " if why else "") + "ext4 and XFS use one disk. ZFS uses the whole disk(s) as one pool (layout and pool name under Advanced)."),
                 Field("zfs_raid", "ZFS layout", "choice", c["zfs_raid"],
-                      [("single", "single disk"), ("mirror", "mirror (RAID1, two disks)")],
+                      [(x, zfsroot.RAID_LABELS[x]) for x in zfsroot.RAID_LEVELS],
                       visible=lambda v: v.get("fs") == "zfs", advanced=True,
-                      hint="A mirror needs two disks and survives one failing; /boot lives on the first disk only."),
+                      hint="Pick the disks on the next screen (mirror/stripe 2+, RAID-Z1 3+, RAID-Z2 4+). Every disk gets a bootable copy of /boot."),
+                Field("zfs_pool", "ZFS pool name", "text", zfsroot.pool_name(c), width=24,
+                      visible=lambda v: v.get("fs") == "zfs", advanced=True,
+                      hint="Default rpool. A letter first, then letters, digits, _ - . : (the boot environments live in <pool>/ROOT)."),
                 *self._enc_fields(c, p),
                 Field("lpw", "Disk passphrase", "password", c.get("luks_passphrase", ""), width=40, visible=luks,
                       hint="Typed at every boot (the Type Cover / a USB keyboard works). Min 12 chars. Lose it = lose the data"),
@@ -257,6 +260,10 @@ class DiskStage(Stage):
                 Field("pp2", "Confirm passphrase", "password", c.get("zfs_passphrase", ""), width=40, visible=lambda v: v.get("fs") == "zfs" and v.get("enc"))]
 
     def validate(self, ctx, v):
+        if v.get("fs") == "zfs" and "zfs_pool" in v:
+            bad = zfsroot.pool_name_problem((v.get("zfs_pool") or "").strip())
+            if bad:
+                return bad
         if v.get("fs") == "xfs-luks":
             if v.get("lpw") != v.get("lpw2"):
                 return "The two passphrases do not match."
@@ -266,12 +273,13 @@ class DiskStage(Stage):
         if v.get("fs") == "zfs" and v.get("enc"):
             if v.get("pp") != v.get("pp2"):
                 return "The two passphrases do not match."
-            from . import zfsroot
             return zfsroot.passphrase_problem(v.get("pp") or "") or self._reuse(ctx, v.get("pp") or "")
         return None
 
     def commit(self, ctx, v):
         ctx.c["fs"], ctx.c["zfs_raid"] = v["fs"], v["zfs_raid"]
+        if v.get("zfs_pool"):
+            ctx.c["zfs_pool"] = v["zfs_pool"].strip()
         ctx.c["test_machine_no_encryption"] = bool(v.get("tm"))
         if ctx.c["test_machine_no_encryption"]:
             from . import testmachine
@@ -287,22 +295,32 @@ class DiskStage(Stage):
         ctx.c["swap"] = v.get("swap", "auto") if (v["fs"] != "zfs" or ctx.c["zfs_encrypt"] or ctx.c["test_machine_no_encryption"]) else "auto"
 
     def need_disks(self, c):
-        return 2 if (c["fs"] == "zfs" and c["zfs_raid"] == "mirror") else 1
+        """the FEWEST disks the layout takes (single = exactly one; the multi-disk ZFS layouts take that many or more)"""
+        return zfsroot.MIN_DISKS.get(c["zfs_raid"], 1) if c["fs"] == "zfs" else 1
+
+    def multi_disk(self, c):
+        """the disk picker lets the user tick several disks"""
+        return c["fs"] == "zfs" and c["zfs_raid"] != "single"
 
     def check_selection(self, ctx, sel):
         """Return (error, warning) for a disk selection."""
         need = self.need_disks(ctx.c)
-        if len(sel) != need:
-            return f"Select exactly {need} disk{'s' if need > 1 else ''} (selected: {len(sel)}).", None
+        if not self.multi_disk(ctx.c) and len(sel) != 1:
+            return f"Select exactly one disk (selected: {len(sel)}).", None
+        if len(sel) < need:
+            w = {2: "two", 3: "three", 4: "four"}.get(need, str(need))
+            return f"ZFS {ctx.c['zfs_raid']} needs at least {w} disks (selected: {len(sel)}).", None
         by = {d["path"]: d for d in ctx.disks}
         small = [by[x] for x in sel if x in by and by[x]["size"] < 8 * 10**9]
         if small:
             return f"{small[0]['path']} is smaller than 8 GB; the installed system needs more room.", None
         warn = None
-        if need == 2 and all(x in by for x in sel):
-            a, b = by[sel[0]]["size"], by[sel[1]]["size"]
-            if abs(a - b) > 0.1 * max(a, b):
-                warn = "The disks differ in size by more than 10%; the mirror is limited to the smaller one."
+        if len(sel) > 1 and all(x in by for x in sel):
+            sizes = [by[x]["size"] for x in sel]
+            if max(sizes) - min(sizes) > 0.1 * max(sizes):
+                warn = "The disks differ in size by more than 10%; every disk of the pool is limited to the smallest one."
+            if ctx.c.get("zfs_raid") == "stripe":
+                warn = ((warn + " ") if warn else "") + "A stripe has NO redundancy: one failed disk loses the whole pool."
         return None, warn
 
     def plan(self, ctx):
@@ -320,7 +338,7 @@ class DiskStage(Stage):
         if c["fs"] == "xfs-luks":
             out.append("Encrypt the root partition with LUKS2 (argon2id) and create XFS inside it; zram instead of swap")
         elif c["fs"] == "zfs":
-            out.append("Create ZFS pool rpool" + (" (mirror)" if c["zfs_raid"] == "mirror" else "") + " with lz4 compression"
+            out.append(f"Create ZFS pool {zfsroot.pool_name(c)}" + ("" if c["zfs_raid"] == "single" else f" ({c['zfs_raid']}, {len(c['disks'])} disks)") + " with zstd compression"
                        + ((", natively ENCRYPTED (AES-256-GCM, key sealed to the TPM 2.0: unattended boot)" if c.get("zfs_keymode") == "tpm" else ", natively ENCRYPTED (AES-256-GCM, passphrase at every boot)") if c.get("zfs_encrypt") else ""))
         if ctx.p.get("encryption") == "tpm-or-none":
             out.append("Disk encryption: " + (c.get("enc_why") or "none"))

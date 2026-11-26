@@ -413,6 +413,10 @@ class DiskPage(Page):
         self.rebuild_disks()
         return outer
 
+    def multi(self):
+        return self.stage.multi_disk({"fs": next((f.value for f in self.fields if f.key == "fs"), self.win.c["fs"]),
+                                      "zfs_raid": next((f.value for f in self.fields if f.key == "zfs_raid"), self.win.c["zfs_raid"])})
+
     def need(self):
         return self.stage.need_disks(self.win.c if not hasattr(self, "fields") else {
             "fs": next((f.value for f in self.fields if f.key == "fs"), self.win.c["fs"]),
@@ -426,7 +430,7 @@ class DiskPage(Page):
         while (ch := self.dbox.get_first_child()) is not None:
             self.dbox.remove(ch)
         disks = w.ctx.disks
-        multi = self.need() == 2
+        multi = self.multi()
         self.sel = [d for d in self.sel if any(x["path"] == d for x in disks)]
         if not multi and len(self.sel) > 1:
             self.sel = self.sel[:1]
@@ -461,7 +465,7 @@ class DiskPage(Page):
         self.draw_preview()
 
     def toggled(self, path, on):
-        multi = self.need() == 2
+        multi = self.multi()
         if on:
             if path not in self.sel:
                 self.sel = (self.sel + [path]) if multi else [path]
@@ -513,6 +517,9 @@ class DiskPage(Page):
         vals = {f.key: f.value for f in self.fields}
         vals.update(fs=fsv, zfs_raid=zr)
         bad = self.stage.validate(w.ctx, vals) if fsv == "xfs-luks" else None
+        if not bad and fsv == "zfs" and "zfs_pool" in vals:
+            from . import zfsroot
+            bad = zfsroot.pool_name_problem((vals.get("zfs_pool") or "").strip())
         if bad:
             return bad
         tmp = dict(w.c, fs=fsv, zfs_raid=zr)

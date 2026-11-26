@@ -116,6 +116,63 @@ class Answers(unittest.TestCase):
         """)
         self.assertTrue(any("two different disks" in e for e in S.validate_config(PROFILE, c)))
 
+    def test_zfs_raidz_and_pool_name_from_answers(self):
+        c = self.cfg(f"""
+            [global]
+            hostname = "a.example.com"
+            root_password_hash = "{HASH}"
+            [disk]
+            filesystem = "zfs"
+            zfs_raid = "raidz2"
+            zfs_pool = "tank"
+            disks = ["/dev/vda", "/dev/vdb", "/dev/vdc", "/dev/vdd"]
+        """)
+        self.assertEqual(S.validate_config(PROFILE, c), [])
+        from liveinst import zfsroot as Z
+        self.assertEqual(Z.pool_name(c), "tank")
+        a = Z.pool_args(False, c["disks"], c["zfs_raid"], "/mnt/target", pool=Z.pool_name(c))
+        self.assertEqual(a[a.index("-R") + 2:], ["tank", "raidz2", "/dev/vda", "/dev/vdb", "/dev/vdc", "/dev/vdd"])
+        c["disks"] = c["disks"][:3]
+        self.assertTrue(any("four different disks" in e for e in S.validate_config(PROFILE, c)))
+        c["disks"], c["zfs_pool"] = ["/dev/vda", "/dev/vdb", "/dev/vdc", "/dev/vdd"], "raidz1"
+        self.assertTrue(any("reserved" in e for e in S.validate_config(PROFILE, c)))
+
+    def test_zfs_pool_name_rules(self):
+        from liveinst import zfsroot as Z
+        self.assertEqual(Z.pool_name({}), "rpool")
+        for ok in ("rpool", "tank", "data_1", "pool.a:b-c"):
+            self.assertIsNone(Z.pool_name_problem(ok), ok)
+        for bad in ("", "1pool", "my pool", "a/b", "mirror", "raidz", "raidz3", "draid2", "log", "c0t0", "x" * 65):
+            self.assertIsNotNone(Z.pool_name_problem(bad), bad)
+        self.assertIn('POOL="tank"', Z.BE_CONF.format(pool="tank", cmdline="", kglob="*"))
+
+    def test_disk_stage_multi_disk_layouts(self):
+        st = ST.DiskStage()
+        ctx = type("C", (), {})()
+        ctx.disks = [{"path": f"/dev/vd{x}", "size": 64 * 10**9} for x in "abcde"]
+        for raid, need, n_ok, n_bad in (("single", 1, 1, 2), ("mirror", 2, 3, 1), ("stripe", 2, 2, 1),
+                                        ("raidz1", 3, 3, 2), ("raidz2", 4, 5, 3)):
+            ctx.c = {"fs": "zfs", "zfs_raid": raid}
+            self.assertEqual(st.need_disks(ctx.c), need, raid)
+            self.assertEqual(st.multi_disk(ctx.c), raid != "single")
+            err, _ = st.check_selection(ctx, [d["path"] for d in ctx.disks[:n_ok]])
+            self.assertIsNone(err, raid)
+            err, _ = st.check_selection(ctx, [d["path"] for d in ctx.disks[:n_bad]])
+            self.assertIsNotNone(err, raid)
+        ctx.c = {"fs": "zfs", "zfs_raid": "stripe"}
+        self.assertIn("NO redundancy", st.check_selection(ctx, ["/dev/vda", "/dev/vdb"])[1])
+        ctx.c = {"fs": "xfs", "zfs_raid": "raidz1"}
+        self.assertFalse(st.multi_disk(ctx.c))
+        self.assertIsNotNone(st.check_selection(ctx, ["/dev/vda", "/dev/vdb"])[0])
+        # the layout menu offers every level, the pool name field validates
+        ctx.c, ctx.p = dict(S._default_config(PROFILE, "zfs", ""), fs="zfs"), PROFILE
+        ctx.ram_mb = 8192
+        f = {x.key: x for x in st.fields(ctx)}
+        self.assertEqual([k for k, _ in f["zfs_raid"].options], ["single", "mirror", "stripe", "raidz1", "raidz2"])
+        self.assertEqual(f["zfs_pool"].value, "rpool")
+        self.assertIn("reserved", st.validate(ctx, {"fs": "zfs", "zfs_pool": "mirror"}))
+        self.assertIsNone(st.validate(ctx, {"fs": "zfs", "zfs_pool": "tank"}))
+
     def test_patronus_wan_lan_sections(self):
         c = self.cfg(f"""
             [global]

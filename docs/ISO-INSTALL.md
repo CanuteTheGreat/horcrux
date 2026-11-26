@@ -293,7 +293,9 @@ ssh_password_auth = false                 # default false: key-only root SSH
 filesystem = "ext4"                       # ext4 | xfs | zfs | xfs-luks (then also: luks_passphrase = "...", >= 12 chars)
 disks = ["first"]                         # or ["/dev/nvme0n1"]; "first" = first internal non-USB disk >= 8 GB
 swap = "auto"                             # auto (default: portable = encrypted hibernate swap, server = none) | none | hibernate
-zfs_raid = "mirror"                       # with filesystem = "zfs": single | mirror (needs two disks)
+zfs_raid = "mirror"                       # with filesystem = "zfs": single | mirror (2+ disks) | stripe (2+, no redundancy)
+                                          #   | raidz1 (3+ disks) | raidz2 (4+ disks); list every disk in disks = [...]
+# zfs_pool = "rpool"                      # root pool name (default rpool; a letter first, then letters/digits/_-.:)
 
 [network.management]
 mode = "static"                           # or "dhcp"

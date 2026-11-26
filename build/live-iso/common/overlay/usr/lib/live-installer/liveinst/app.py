@@ -80,8 +80,9 @@ def s_disk(t, st, step):
         message(t, "No disk found", "No usable internal disk (>= 2 GB) was found. If the disk is behind a RAID/VMD "
                 "controller, switch the firmware to AHCI mode. The installer will exit to a shell.", "err")
         raise Abort()
-    mirror = stage.need_disks(c) == 2
-    intro = (stage.intro.split(".")[0] + ". ") + ("Select the TWO disks for the mirror." if mirror else "Select the disk to install to.") + \
+    mirror = stage.multi_disk(c)
+    need = stage.need_disks(c)
+    intro = (stage.intro.split(".")[0] + ". ") + (f"Select the disks for the ZFS {c['zfs_raid']} (at least {need})." if mirror else "Select the disk to install to.") + \
             " Everything on a selected disk will be ERASED. The live USB stick is not listed."
     sel = [d for d in c["disks"] if any(x["path"] == d for x in disks)]
     while True:
