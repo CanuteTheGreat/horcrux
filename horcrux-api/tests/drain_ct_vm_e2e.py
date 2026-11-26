@@ -114,7 +114,10 @@ def maint(node):
 
 
 def set_maintenance(node, on):
-    api(node, "POST", "/nodes/maintenance", {"enabled": on, "drain": on}, expect=200)
+    # Leaving keeps the container where the drain put it ("none"): each step
+    # below decides itself where it goes next.
+    body = {"enabled": on, "drain": on} if on else {"enabled": False, "drain": False, "return": "none"}
+    api(node, "POST", "/nodes/maintenance", body, expect=200)
 
 
 def drained(node):

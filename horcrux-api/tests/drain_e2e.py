@@ -173,8 +173,13 @@ check(vm_cfg(N1, "dr-main")["status"] == "running", "nothing moved by the dry ru
 
 # --- 2. drain -----------------------------------------------------------------
 log("== 2. Enter maintenance (drain): live moves, no restart")
+# dr-pin cannot move: entering is refused (with the reason) unless forced
 st, m = api(N1, "POST", "/nodes/maintenance", {"enabled": True, "drain": True})
-check(st == 200 and m["enabled"], f"maintenance on ({st})")
+check(st == 409 and "dr-pin" in json.dumps(m) and "pinned" in json.dumps(m),
+      f"enter refused while a guest cannot move ({st} {m})")
+check(not maint(N1)["enabled"], "the refused enter changed nothing")
+st, m = api(N1, "POST", "/nodes/maintenance", {"enabled": True, "drain": True, "force": True})
+check(st == 200 and m["enabled"], f"maintenance on with force ({st})")
 
 
 def drained():
@@ -205,6 +210,12 @@ check(st == 200 and all(m["to"] != "node1" for m in nodes2["moves"]), "a node in
 
 st, s = api(N1, "PUT", "/cluster/rebalance", {"mode": "on_return", "max_moves": 2, "threshold_pct": 0.1, "min_interval_secs": 5})
 check(st == 200, "rebalance settings: on return, 0.1 points threshold (replicated to node2)")
+# This scenario checks the rebalance path of a return; returning every guest to
+# its origin (the default) is covered by tools/vmtest/scenarios/cluster_maintenance.py.
+st, s2 = api(N1, "PUT", "/cluster/maintenance", {"return_policy": "rebalance"})
+check(st == 200 and s2["return_policy"] == "rebalance", f"return policy rebalance ({st} {s2})")
+st, s2 = api(N2, "GET", "/cluster/maintenance")
+check(st == 200 and s2["settings"]["return_policy"] == "rebalance", f"replicated to node2 ({s2})")
 
 # --- 3. host shutdown -------------------------------------------------------------
 log("== 3. host shutdown of node1: nothing movable left, the pinned VM is saved locally")
@@ -253,8 +264,8 @@ check(victim is not None, f"something to move: {plan['moves']}")
 vcfg = vm_cfg(N1, victim)
 vm_marker = f"hx-fail-{int(time.time())}"
 guest(N1, vcfg, f"echo {vm_marker} > /dev/shm/f; sync")
-st, m = api(N1, "POST", "/nodes/maintenance", {"enabled": True, "drain": True})
-check(st == 200, "drain started")
+st, m = api(N1, "POST", "/nodes/maintenance", {"enabled": True, "drain": True, "force": True})
+check(st == 200, f"drain started ({st} {m})")
 
 
 def migrating():
@@ -287,7 +298,7 @@ check(qemus(fid) == 1, f"exactly one running QEMU for {fid} in the whole cluster
 check(guest(N1, vm_cfg(N1, fid), "cat /dev/shm/f 2>/dev/null || echo gone").split()[-1] in (vm_marker, "gone"),
       "and it is the original (never restarted)")
 
-api(N1, "POST", "/nodes/maintenance", {"enabled": False, "drain": False})
+api(N1, "POST", "/nodes/maintenance", {"enabled": False, "drain": False, "return": "none"})
 for node in (N1, N2):
     st, vms = api(node, "GET", "/vms")
     for v in vms if st == 200 else []:
