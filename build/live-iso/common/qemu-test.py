@@ -1672,8 +1672,13 @@ class Runner:
         rc, out = self.gsh(vm, "ps -eo comm,args | grep -E '^cage' | head -2; cat /run/live-installer/gui-result 2>/dev/null; ps -eo comm | grep -qx cage && echo CAGE-RUNNING-$((40+2))")
         self.step("gui-running-in-cage-kiosk", "CAGE-RUNNING-42" in (out or ""), (out or "")[-120:].replace("\n", " "))
         # AT-SPI: the accessibility tree must expose the sidebar, the headline widgets and the buttons
-        netadv = a.project != "horcrux" and bool(installer_profile().get("net_bonds_vlans"))   # wan-lan profiles with the bonds/VLANs screen have one step more
-        want = ["Next", "Abort", "High contrast", "Larger text", "Server (default)", "1  Keyboard", f"{12 if netadv else 11}  Finish"]
+        # the sidebar is one numbered label per page and Finish is the last page: read the page list the GUI publishes instead of a fixed
+        # count (profiles add pages, e.g. Patronus' optional bonds/VLANs step)
+        _, pout = self.gsh(vm, "python3 -c \"import json;print('PAGES='+','.join(json.load(open('/run/live-installer/gui-status.json'))['pages']))\" 2>/dev/null")
+        pm = re.search(r"PAGES=([\w,]+)", pout or "")
+        pages = pm.group(1).split(",") if pm else []
+        netadv = "netadv" in pages
+        want = ["Next", "Abort", "High contrast", "Larger text", "Server (default)", "1  Keyboard", f"{len(pages) or 11}  Finish"]
         n, missing = 0, want
         for _ in range(10):                       # the toolkit registers with the accessibility bus a few seconds after the first frame
             n, missing = self.gnames(vm, *want)
