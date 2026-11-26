@@ -376,6 +376,10 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
     XFT_PROBE = ('import gi; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk; '
                  's = Gtk.Settings.get_default(); print(round(s.get_property("gtk-xft-dpi") / 1024) if s else "no-settings")')
 
+    def diag_line(self, n, what, text):
+        # gnome-vm-gate relays only [PASS]/[FAIL] lines, so a diagnostic is one such line (it is printed only after a failed check)
+        print(f"[FAIL] c{n} diag-x11 {what}: " + text.replace("\n", " | "), flush=True)
+
     def diag_x11(self, n, disp, xenv):
         """Failure diagnostics for the X11 scale checks (printed once): which Xwayland/gsd-xsettings run, on which display, and what each X display says."""
         vm = self.vm
@@ -391,12 +395,12 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
             "gsettings get org.gnome.mutter experimental-features; gsettings get org.gnome.desktop.interface scaling-factor",
         ]
         for c in cmds:
-            print(f"DIAG-x11 c{n} root$ {c[:60]}\n" + vm.out(c).strip()[-1500:], flush=True)
+            self.diag_line(n, f"root$ {c[:50]}", vm.out(c).strip()[-1200:])
         for c in ucmds:
-            print(f"DIAG-x11 c{n} user$ {c[:60]}\n" + self.as_user(c).strip()[-2500:], flush=True)
+            self.diag_line(n, f"user$ {c[:50]}", self.as_user(c).strip()[-1800:])
         for d in (":0", ":1", ":2"):
             r = self.as_user(f"DISPLAY={d} XAUTHORITY=$(xargs -0 -n1 echo < /proc/$(pgrep -u {self.uid} -x Xwayland | head -n1)/cmdline | sed -n '/^-auth$/{{n;p;q}}') GDK_BACKEND=x11 timeout 20 python3 -c {shq(self.XFT_PROBE)} 2>&1 | tail -2")
-            print(f"DIAG-x11 c{n} xft-probe {d}: {r.strip()[-200:]}", flush=True)
+            self.diag_line(n, f"xft-probe {d}", r.strip()[-200:])
 
     def as_user(self, cmd, timeout=60):
         a = self.a
