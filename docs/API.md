@@ -450,6 +450,14 @@ Authorization: Bearer <token>
   and other macvtap guests on the interface can. No `vlan` (use a VLAN
   interface such as `eth0.20` as the host interface); bridges, bridge ports and
   Wi-Fi interfaces are refused.
+- `"macvtap_multicast": "follow" | "all"` (macvtap NICs, default `follow`): a macvtap
+  device only passes the multicast frames it lists, so IPv6 neighbour discovery for
+  the guest's global addresses (solicited-node groups) needs the guest's groups on
+  the host device. `follow` copies the guest's own receive filter (QEMU's
+  `NIC_RX_FILTER_CHANGED` + `query-rx-filter`, as libvirt does) to the device while
+  the VM runs; all multicast passes until the guest has reported once. `all` passes
+  all multicast permanently (for a guest NIC model that doesn't report a filter, e.g.
+  e1000/rtl8139, `follow` behaves like `all`). UI: the Multicast box on a macvtap card.
 - `cdrom` must be a file in the ISO library (see ISO Images). It can be changed or
   set to `null` (eject) while the VM runs; everything else needs the VM stopped
   (409 otherwise).

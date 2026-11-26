@@ -504,6 +504,11 @@ fn network_args(vm: &QemuVm, boot: &BootIndex) -> Vec<String> {
         args.push("-device".into());
         args.push(dev);
     }
+    // macvtap NICs: a monitor of their own for the receive-filter watcher.
+    args.extend(super::rxfilter::monitor_args(
+        &vm.hardware.nets,
+        &vm.disk_path,
+    ));
     args
 }
 
@@ -868,6 +873,26 @@ impl HostNet {
         run_ip(&tool[0], &argv).await
     }
 
+    /// Run `ip <args>`; a failure is logged, not returned (best-effort
+    /// filter updates on a running NIC).
+    pub(super) async fn ip_cmd(&self, args: &[&str]) {
+        if let Err(e) = Self::run(&self.ip, args).await {
+            tracing::debug!("{e}");
+        }
+    }
+
+    /// A host whose `ip` is the given argv (tests).
+    #[cfg(test)]
+    pub(super) fn with_ip(ip: Vec<String>) -> Self {
+        Self {
+            sys_class_net: PathBuf::from("/nonexistent"),
+            dev_dir: PathBuf::from("/nonexistent"),
+            ip,
+            bridge: vec!["true".into()],
+            tc: vec!["true".into()],
+        }
+    }
+
     fn exists(&self, ifname: &str) -> bool {
         self.sys_class_net.join(ifname).exists()
     }
@@ -1021,6 +1046,9 @@ impl HostNet {
         .await?;
         Self::run(&self.ip, &["link", "set", &tap, "address", mac]).await?;
         Self::run(&self.ip, &["link", "set", &tap, "up"]).await?;
+        // All multicast passes until the guest reports its own filter (see
+        // vm::rxfilter), and for good with `macvtap_multicast: all`.
+        self.init_macvtap_filter(&tap).await;
         if let Some(mbps) = nic.rate_mbps {
             self.limit_rate(&tap, mbps).await?;
         }
@@ -1628,6 +1656,7 @@ impl QemuManager {
         }
 
         runtime.save(&vm.disk_path).await?;
+        super::rxfilter::spawn_watcher(&vm.id, &vm.disk_path, &vm.hardware.nets);
         // Without a password nobody can attach to VNC/SPICE; set this run's.
         // If that fails, don't leave a VM running whose console nobody can
         // ever open: stop it and report the start as failed.
@@ -2032,6 +2061,7 @@ mod tests {
                 mac: None,
                 vlan: None,
                 rate_mbps: None,
+                macvtap_multicast: Default::default(),
             })
             .collect();
         let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
@@ -2057,6 +2087,7 @@ mod tests {
                 mac: Some("02:00:00:00:00:01".into()),
                 vlan: Some(20),
                 rate_mbps: None,
+                macvtap_multicast: Default::default(),
             },
             VmNic {
                 model: NicModel::E1000,
@@ -2065,6 +2096,7 @@ mod tests {
                 mac: Some("02:00:00:00:00:02".into()),
                 vlan: None,
                 rate_mbps: None,
+                macvtap_multicast: Default::default(),
             },
         ];
         let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
@@ -2786,6 +2818,7 @@ esac
             mac: None,
             vlan,
             rate_mbps: None,
+            macvtap_multicast: Default::default(),
         }
     }
 
@@ -2981,11 +3014,16 @@ esac
                 format!("ip link add link eth0 name {t1} type macvtap mode bridge"),
                 format!("ip link set {t1} address 02:00:00:5e:10:01"),
                 format!("ip link set {t1} up"),
+                // all multicast until the guest reports its own filter
+                format!("ip link set {t1} allmulticast on"),
             ]
         );
         // QEMU opens the bridge tap by name and gets the macvtap as an fd.
         let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
         let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        // The receive-filter watcher's own monitor (macvtap only).
+        assert!(a.contains("-chardev socket,id=hxrxf,path="), "{a}");
+        assert!(a.contains("-mon chardev=hxrxf,mode=control"), "{a}");
         assert!(
             a.contains(&format!(
                 "-netdev tap,id=net0,ifname={t0},script=no,downscript=no"

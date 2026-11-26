@@ -719,6 +719,7 @@ pub fn compose(
                 mac: None,
                 vlan: None,
                 rate_mbps: None,
+                macvtap_multicast: Default::default(),
             })
             .collect(),
         cdrom: Some(req.windows_iso.clone()),

@@ -224,6 +224,7 @@ fn generated_macs_are_not_drift() {
         mac: Some("52:54:00:aa:bb:cc".into()),
         vlan: None,
         rate_mbps: None,
+        macvtap_multicast: Default::default(),
     }];
     let live = Live {
         vms: vec![vm],
