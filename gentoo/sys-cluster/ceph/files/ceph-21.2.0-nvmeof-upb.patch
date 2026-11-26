@@ -1,0 +1,17 @@
+diff -u -r a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt	2026-11-25 23:44:57.676900748 +0000
++++ b/src/CMakeLists.txt	2026-11-25 23:44:57.676932298 +0000
+@@ -1027,6 +1027,13 @@
+   # Looks for protobuf-config.cmake file installed by Protobuf's cmake installation.
+   option(protobuf_MODULE_COMPATIBLE TRUE)
+   find_package(Protobuf REQUIRED)
++  find_library (UPB_LIBRARIES NAMES upb)
++  if (UPB_LIBRARIES)
++    add_library(protobuf::libupb STATIC IMPORTED)
++    add_executable(protobuf::protoc-gen-upb IMPORTED)
++    add_executable(protobuf::protoc-gen-upbdefs IMPORTED)
++    add_executable(protobuf::protoc-gen-upb_minitable IMPORTED)
++  endif()
+ 
+   set(_REFLECTION grpc++_reflection)
+   if(CMAKE_CROSSCOMPILING)

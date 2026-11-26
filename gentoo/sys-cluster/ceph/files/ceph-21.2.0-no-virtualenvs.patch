@@ -1,0 +1,65 @@
+diff -u -r a/cmake/modules/AddCephTest.cmake b/cmake/modules/AddCephTest.cmake
+--- a/cmake/modules/AddCephTest.cmake	2026-11-25 23:44:57.655583355 +0000
++++ b/cmake/modules/AddCephTest.cmake	2026-11-25 23:44:57.655618335 +0000
+@@ -91,7 +91,6 @@
+ 
+ function(add_tox_test name)
+   set(test_name run-tox-${name})
+-  set(venv_path ${CEPH_BUILD_VIRTUALENV}/${name}-virtualenv)
+   cmake_parse_arguments(TOXTEST "" "TOX_PATH;LABELS" "TOX_ENVS" ${ARGN})
+   if(DEFINED TOXTEST_TOX_PATH)
+     set(tox_path ${TOXTEST_TOX_PATH})
+@@ -105,26 +104,12 @@
+   endif()
+   string(REPLACE ";" "," tox_envs "${tox_envs}")
+   add_test(
+-    NAME setup-venv-for-${name}
+-    COMMAND ${CMAKE_SOURCE_DIR}/src/tools/setup-virtualenv.sh --python=${Python3_EXECUTABLE} ${venv_path}
+-    WORKING_DIRECTORY ${tox_path})
+-  set_tests_properties(setup-venv-for-${name} PROPERTIES
+-    FIXTURES_SETUP venv-for-${name})
+-  add_test(
+-    NAME teardown-venv-for-${name}
+-    COMMAND ${CMAKE_COMMAND} -E remove_directory ${venv_path})
+-  set_tests_properties(teardown-venv-for-${name} PROPERTIES
+-    FIXTURES_CLEANUP venv-for-${name})
+-  add_test(
+     NAME ${test_name}
+     COMMAND ${CMAKE_SOURCE_DIR}/src/script/run_tox.sh
+               --source-dir ${CMAKE_SOURCE_DIR}
+               --build-dir ${CMAKE_BINARY_DIR}
+               --tox-path ${tox_path}
+-              --tox-envs ${tox_envs}
+-              --venv-path ${venv_path})
+-  set_tests_properties(${test_name} PROPERTIES
+-    FIXTURES_REQUIRED venv-for-${name})
++              --tox-envs ${tox_envs})
+   set(toxtest_default_labels "PurePython;PythonTox")
+   if(DEFINED TOXTEST_LABELS)
+     set_tests_properties(
+diff -u -r a/src/ceph-volume/CMakeLists.txt b/src/ceph-volume/CMakeLists.txt
+--- a/src/ceph-volume/CMakeLists.txt	2026-11-25 23:44:57.655694856 +0000
++++ b/src/ceph-volume/CMakeLists.txt	2026-11-25 23:44:57.655731326 +0000
+@@ -8,22 +8,6 @@
+   add_subdirectory(plugin/zfs)
+ endif()
+ 
+-# Required for running ceph-volume inventory in a vstart environment
+-set(CEPH_VOLUME_VIRTUALENV ${CEPH_BUILD_VIRTUALENV}/ceph-volume-virtualenv)
+-
+-add_custom_command(
+-  OUTPUT ${CEPH_VOLUME_VIRTUALENV}/bin/python
+-  COMMAND ${CMAKE_SOURCE_DIR}/src/tools/setup-virtualenv.sh --python=${Python3_EXECUTABLE} ${CEPH_VOLUME_VIRTUALENV}
+-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/ceph-volume
+-  COMMENT "ceph-volume venv is being created")
+-
+-add_custom_command(
+-  OUTPUT ${CEPH_VOLUME_VIRTUALENV}/bin/ceph-volume
+-  DEPENDS ${CEPH_VOLUME_VIRTUALENV}/bin/python
+-  COMMAND . ${CEPH_VOLUME_VIRTUALENV}/bin/activate && ${CEPH_VOLUME_VIRTUALENV}/bin/python setup.py develop && deactivate
+-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/ceph-volume
+-  COMMENT "${CMAKE_SOURCE_DIR}/src/ceph-volume")
+-
+ add_custom_target(ceph-volume-venv-setup
+   DEPENDS ${CEPH_VOLUME_VIRTUALENV}/bin/ceph-volume)
+ 
