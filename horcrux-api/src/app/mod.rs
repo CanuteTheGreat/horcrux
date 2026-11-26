@@ -640,6 +640,15 @@ pub async fn run() -> anyhow::Result<()> {
         ));
 
     let access_log = api::access_log::init(&horcrux_config);
+    // Router::layer does not wrap a fallback added after it, so a request to
+    // an unknown /api path (answered 404 by the static UI fallback) gets its
+    // own access-log layer; the recorder keeps only /api requests.
+    let fallback_log = access_log.clone();
+    let serve_dir = tower::ServiceBuilder::new()
+        .layer(axum_middleware::from_fn(move |conn_info, req, next| {
+            api::access_log::record_middleware(fallback_log.clone(), conn_info, req, next)
+        }))
+        .service(serve_dir);
 
     // Build main app with public and protected routes
     let app = Router::new()
