@@ -1432,6 +1432,7 @@ class Runner:
                 kb.key("UP")                               # -> 'ZFS layout'
                 kb.key("RIGHT")
                 shot("03b-filesystem-zfs-mirror")
+                kb.key("TAB")                              # -> 'ZFS pool name' (advanced text row under the layout; keeps rpool)
                 kb.key("TAB")
                 if p == "horcrux":
                     kb.key("TAB")                          # -> 'TEST MACHINE: NO disk encryption' (advanced row added by b9d3838; the VGA zfs-mirror run pressed ENTER on 'Show advanced options' and sat on the disk screen for 1700 s)

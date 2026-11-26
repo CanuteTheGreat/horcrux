@@ -544,7 +544,7 @@ def apply_encryption_policy(profile, c, tpm_ok=None):
 def _default_config(profile, fs, fs_why):
     return {
         "locale": "en_US.UTF-8", "keymap": "us", "timezone": "UTC",
-        "disks": [], "fs": fs, "fs_why": fs_why, "zfs_raid": "single", "luks_passphrase": "",
+        "disks": [], "fs": fs, "fs_why": fs_why, "zfs_raid": "single", "zfs_pool": "rpool", "luks_passphrase": "",
         "swap": "auto",              # auto (portable = hibernate swap, server = none) | none | hibernate  (portableswap.py)
         "desktop": {"enable": False, "user": "", "password": "", "password_hash": "", "autologin": False}, "hw": "auto",
         "hostname": profile["default_hostname"],
@@ -612,6 +612,8 @@ def config_from_answers(profile, path):
         c["desktop"].update({k: de[k] for k in ("enable", "user", "password", "password_hash", "autologin") if k in de})
     c["hw"] = a.get("hardware", {}).get("profile", "auto")
     c["zfs_raid"] = d.get("zfs_raid", "single")
+    if d.get("zfs_pool"):
+        c["zfs_pool"] = str(d["zfs_pool"]).strip()
     enc = d.get("encryption", d.get("encrypt", False))
     if profile.get("encryption") == "tpm-or-none":
         # appliance: encryption is decided by the machine (TPM present and working -> encrypted + unattended, else none); "auto" | "none" only
@@ -676,6 +678,9 @@ def validate_config(profile, c, unattended=False, nic_names=None, require_secret
         rp = zfsroot.raid_problem(c["zfs_raid"], len(set(c["disks"])))
         if rp:
             errs.append(rp)
+        pp = zfsroot.pool_name_problem(zfsroot.pool_name(c))
+        if pp:
+            errs.append(pp)
     if c["fs"] != "zfs" and len(c["disks"]) > 1:
         errs.append("only ZFS uses more than one disk")
     if c.get("install_type") == "desktop":
@@ -1418,6 +1423,7 @@ class Installer:
             raise InstallError("no initramfs in /boot")
 
     def write_zfs_grubcfg(self, L):
+        from . import zfsroot
         T = self.target
         kver = sorted(f for f in os.listdir(f"{T}/lib/modules"))[-1]
         extra = arch.console_args()
@@ -1430,7 +1436,7 @@ set timeout=3
 insmod ext2
 search --no-floppy --fs-uuid --set=root {boot_uuid}
 menuentry "{self.p['title']} (ZFS root)" {{
-    linux /vmlinuz-{kver} root=ZFS=rpool/ROOT zfsforce=1 ro {extra}
+    linux /vmlinuz-{kver} root=ZFS={zfsroot.pool_name(self.c)}/ROOT zfsforce=1 ro {extra}
     initrd /initramfs-{kver}.img
 }}
 """
