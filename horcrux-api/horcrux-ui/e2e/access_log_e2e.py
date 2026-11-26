@@ -125,9 +125,14 @@ def run(tok, key):
             settle(page)
             page.locator("#al-errors-link").click()
             page.wait_for_function("() => location.search.includes('status=4xx')")
-            page.wait_for_selector("#al-table tbody tr.al-row", timeout=30000)
+            # the old rows stay until the filtered answer arrives: wait for it
+            page.wait_for_function(
+                """() => { const t = [...document.querySelectorAll('#al-table tbody tr.al-row td:nth-child(8)')]
+                    .map(e => e.innerText.trim()); return t.length > 0 && t.every(x => x.startsWith('4')); }""",
+                timeout=30000)
             statuses = page.locator("#al-table tbody tr.al-row td:nth-child(8)").all_inner_texts()
             assert statuses and all(s.strip().startswith("4") for s in statuses), statuses
+            page.wait_for_function("() => parseInt(document.querySelector('#al-total').innerText) >= 3", timeout=30000)
             n = int(page.locator("#al-total").inner_text().strip())
             assert n >= 3, f"[{label}] 4xx total {n}"
 
@@ -136,6 +141,10 @@ def run(tok, key):
             stamp = first_time.split(".")[0].replace(" ", "T")
             page.goto(f"{BASE}/access-log?start={stamp}&end={stamp}")
             settle(page)
+            page.wait_for_function(
+                """(st) => { const t = [...document.querySelectorAll('#al-table tbody tr.al-row td:nth-child(1)')]
+                    .map(e => e.innerText.trim()); return t.length > 0 && t.every(x => x.startsWith(st)); }""",
+                arg=stamp.replace("T", " "), timeout=30000)
             times = page.locator("#al-table tbody tr.al-row td:nth-child(1)").all_inner_texts()
             assert times, f"[{label}] nothing in {stamp}"
             assert all(t.strip().startswith(stamp.replace("T", " ")) for t in times), times
@@ -161,7 +170,9 @@ def run(tok, key):
 
             # ---- nothing matching: an empty state, not an error
             page.goto(f"{BASE}/access-log?user=nobody-at-all")
-            page.wait_for_selector("#al-table td.no-data", timeout=30000)
+            page.wait_for_function(
+                "() => document.querySelector('#al-table td.no-data')?.innerText.includes('No requests match')",
+                timeout=30000)
             assert "No requests match" in page.locator("#al-table").inner_text()
             assert page.locator("#al-error").count() == 0
 
@@ -172,12 +183,20 @@ def run(tok, key):
             page.fill("#als-days", "21")
             page.locator("#als-save").click()
             expect(page.locator("#als-msg")).to_contain_text("saved", timeout=30000)
-            _, s = req("GET", "/api/access-log/settings", tok)
+            for _i in range(60):
+                _, s = req("GET", "/api/access-log/settings", tok)
+                if s["retention_days"] == 21:
+                    break
+                time.sleep(0.5)
             assert s["retention_days"] == 21, s
             page.fill("#als-days", "30")
             page.locator("#als-save").click()
             expect(page.locator("#als-msg")).to_contain_text("saved", timeout=30000)
-            _, s = req("GET", "/api/access-log/settings", tok)
+            for _i in range(60):
+                _, s = req("GET", "/api/access-log/settings", tok)
+                if s["retention_days"] == 30:
+                    break
+                time.sleep(0.5)
             assert s["retention_days"] == 30, s
 
             # ---- no horizontal page scroll
@@ -205,5 +224,5 @@ if __name__ == "__main__":
     try:
         main()
     except AssertionError as e:
-        print(f"FAIL: {e}")
+        import traceback; traceback.print_exc(); print(f"FAIL: {e}")
         sys.exit(1)

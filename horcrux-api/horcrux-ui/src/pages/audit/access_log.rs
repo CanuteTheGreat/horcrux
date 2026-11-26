@@ -148,6 +148,7 @@ fn top_list(
                             let h = href(&params, &[(key, t.value.as_str())], &[]);
                             let name = match &t.label {
                                 Some(l) if !l.is_empty() => format!("{l} ({})", t.value),
+                                _ if key == "status" => format!("status {}", t.value),
                                 _ => t.value.clone(),
                             };
                             view! { <li><a href=h>{name}</a><span class="al-count">{t.count}</span></li> }

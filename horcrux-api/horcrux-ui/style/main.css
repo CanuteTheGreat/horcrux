@@ -1331,6 +1331,7 @@ td .actions { flex-wrap: nowrap; }
 }
 
 /* API access log */
+.access-log .al-filter .form-group:has(#al-start, #al-end) { flex: 1 1 16rem; min-width: min(16rem, 100%); }
 .access-log .al-muted { color: var(--secondary); }
 .access-log .al-actions { align-items: center; margin-bottom: 1rem; }
 .access-log .al-ranges { display: inline-flex; gap: .35rem; align-items: center; flex-wrap: wrap; }
