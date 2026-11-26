@@ -74,6 +74,26 @@ class HubTest(unittest.TestCase):
         self.assertIsNotNone(self._recv(b))
         h.close()
 
+    def test_vlan_only_trunk(self):
+        import tempfile
+        h = Hub("v", tempfile.mkdtemp(), pcap=False, vlans=(42,))
+        A, B = "52:54:00:01:00:00", "52:54:00:02:00:00"
+        a, b = self._port(h), self._port(h)
+        time.sleep(0.3)
+        mac = lambda m: bytes.fromhex(m.replace(":", ""))   # noqa: E731
+        tagged = lambda vid: mac("ff:ff:ff:ff:ff:ff") + mac(A) + b"\x81\x00" + struct.pack(">H", vid) + b"\x08\x00" + b"x" * 50  # noqa: E731
+        self._send(a, self._frame("ff:ff:ff:ff:ff:ff", A)); time.sleep(0.2)
+        self.assertIsNone(self._recv(b))                         # untagged: dropped
+        self._send(a, tagged(7)); time.sleep(0.2)
+        self.assertIsNone(self._recv(b))                         # another VLAN: dropped
+        self._send(a, tagged(42)); time.sleep(0.2)
+        self.assertIsNotNone(self._recv(b))                      # VLAN 42 passes
+        lacp = mac("01:80:c2:00:00:02") + mac(A) + b"\x88\x09" + b"\x01" * 50
+        self._send(a, lacp); time.sleep(0.2)
+        self.assertIsNotNone(self._recv(b))                      # LACPDUs pass (a trunk port still speaks LACP)
+        self.assertEqual(h.stats["vlan_dropped"], 2)
+        h.close()
+
 
 class NoInitCallsInScenarios(unittest.TestCase):
     """OWNER RULE: scenarios never name an init system; the guest layer does."""

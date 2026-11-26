@@ -29,6 +29,10 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         san: crate::api::san::live_spec(state).await,
         #[cfg(not(feature = "san"))]
         san: Default::default(),
+        management_network: tokio::fs::read_to_string(&state.config.management_network.record_path)
+            .await
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok()),
     }
 }
 
@@ -145,6 +149,16 @@ async fn run_change(
             crate::api::san::declarative_apply(state, w, k, &c.name, a).await?;
             Ok(Some(
                 "replicated to every cluster member and applied on each".into(),
+            ))
+        }
+
+        ("management_network", Action::Update) => {
+            let w = spec.management_network.clone().ok_or("not in spec")?;
+            crate::api::mgmt_net::run_tool(&state.config.management_network, &w, false)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
+            Ok(Some(
+                "written for the node's init system; takes effect at the next boot".into(),
             ))
         }
 
