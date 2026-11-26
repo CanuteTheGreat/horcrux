@@ -823,7 +823,10 @@ impl StorageManager {
         size_gb: u64,
     ) -> Result<String> {
         check_names(&[volume_name])?;
-        if let Some(p) = self.pools.read().await.get(pool_id).cloned() {
+        // Bind first: an `if let` scrutinee would keep the read guard alive
+        // through the block, and refreshing a plugin pool takes the write lock.
+        let known = self.pools.read().await.get(pool_id).cloned();
+        if let Some(p) = known {
             if let Some(id) = p.storage_type.plugin_id() {
                 self.refresh_plugin_pools(Some(pool_id)).await;
                 let p = self.get_pool_or_404(pool_id).await?;

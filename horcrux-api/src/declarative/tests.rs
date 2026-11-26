@@ -509,7 +509,11 @@ fn storage_plugin_settings_are_planned_validated_and_exported() {
     want.timeouts.create_secs = 0;
     s.storage_plugins = Some(want);
     let p = plan(&s, &live, false);
-    assert!(p.errors.iter().any(|e| e.contains("storage_plugins")), "{:?}", p.errors);
+    assert!(
+        p.errors.iter().any(|e| e.contains("storage_plugins")),
+        "{:?}",
+        p.errors
+    );
     // export carries them and round-trips
     let y = serde_yaml::to_string(&export(&live)).unwrap();
     assert!(y.contains("storage_plugins:"), "{y}");
@@ -565,5 +569,9 @@ storage_pools:
         "version: 1\nstorage_pools: [{name: nas, type: 'plugin:sshfs', config: {port: '2222'}}]",
     )
     .unwrap();
-    assert!(plan(&s, &live, false).in_sync(), "{:?}", plan(&s, &live, false).changes);
+    assert!(
+        plan(&s, &live, false).in_sync(),
+        "{:?}",
+        plan(&s, &live, false).changes
+    );
 }
