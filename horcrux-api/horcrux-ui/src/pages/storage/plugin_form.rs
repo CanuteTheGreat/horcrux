@@ -65,7 +65,11 @@ fn active(f: &PluginField, schema: &[PluginField], values: &PluginValues) -> boo
     match &d.value {
         None => !cur.is_empty() && cur != "false" && cur != "0",
         Some(serde_json::Value::String(s)) => cur == *s,
-        Some(v) => cur == v.to_string(),
+        // numbers/bools compare by their JSON text ("5", "true")
+        Some(v) => {
+            let want = v.to_string();
+            cur == want
+        }
     }
 }
 
