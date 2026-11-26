@@ -491,6 +491,23 @@ class Tests:
             self.finish(vm, False)
         os.unlink(disk)
 
+    def live_web_diag(self, vm):
+        """No HTTP answer from the live session: print the guest's own view (product start log, services, listeners, addresses, boot-time
+        log tail) so a flake is root-causable from the CI log instead of `login -> 0`."""
+        if not self.shell(vm, 60):
+            print("[DIAG] live-web: no root shell on the serial line", flush=True)
+            return
+        for label, cmd in (
+            ("live-product.log", "tail -n 40 /var/log/live-product.log 2>&1"),
+            ("services", "(rc-status -a 2>/dev/null || systemctl list-units --failed --no-pager 2>/dev/null) | tail -n 40"),
+            ("listeners", "ss -ltnp 2>&1 | head -n 20"),
+            ("addresses", "ip -4 -o addr; ip route; cat /run/live-installer/live-info 2>/dev/null | sed 's/\"password\": \"[^\"]*\"/password: <hidden>/'"),
+            ("web log", "tail -n 40 /var/log/patronus/*.log /var/log/horcrux/*.log 2>&1 | tail -n 60"),
+            ("dmesg", "dmesg | tail -n 15"),
+        ):
+            rc, o = self.run(vm, cmd, 60)
+            print(f"[DIAG] live-web {label} (rc={rc}):\n" + "\n".join(o.replace("\r", "").splitlines()[-60:]), flush=True)
+
     def t_live(self):
         disk = self.disk_copy("live-disk")
         vm = self.boot("live", disks=[disk])
@@ -508,6 +525,8 @@ class Tests:
             # Patronus: the live system has no static LAN address, its WAN-side (DHCP) port is the one QEMU forwards
             lp = qt.FWD_WAN if self.a.project == "patronus" else qt.FWD_WEB
             code = self.web_code(pw.group(1) if pw else "x", port=lp, user=user)
+            if code not in (200, 401, 403):
+                self.live_web_diag(vm)          # nothing answered: say why in the CI log (four unexplained `login -> 0` flakes before this)
             self.step("web-ui-up-in-live-session", code == 200, f"full product served from RAM: login {user} -> {code}")
             self.step("default-passwords-refused", self.web_code(self.P["old_pw"], 5, port=lp, user=user) in (401, 403), f"the product's old default is not accepted for {user}")
             self.step("live-sshd-off", not qt.ssh_banner(qt.FWD_SSH).startswith("SSH-"), "no sshd in the live session")
