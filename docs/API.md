@@ -3180,9 +3180,9 @@ X-API-Version: 1.0
 
 For code examples in different languages, see:
 - [Python Examples](./examples/python/)
-- [Go Examples](./examples/go/)
-- [TypeScript Examples](./examples/typescript/)
-- [Rust Examples](./examples/rust/)
+- [Shell (curl) Examples](./examples/shell/)
+
+Go, TypeScript and Rust clients can be generated from the OpenAPI document the API serves at `/api/openapi.json`.
 
 ---
 
