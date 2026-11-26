@@ -19,6 +19,7 @@
 //!   mode 0600) and travel to the other nodes only over the authenticated
 //!   peer channel.
 
+pub mod fc;
 pub mod iscsi;
 pub mod lvm_shared;
 pub mod multipath;
@@ -481,6 +482,16 @@ pub struct MultipathSettings {
     /// test bed without any watchdog device turns this off.
     #[serde(default = "yes")]
     pub sanlock_watchdog: bool,
+    /// Fibre Channel: register the WWIDs of the LUNs behind every online FC
+    /// target port on each reconcile, so they get multipath maps (default
+    /// true). FC needs no login: fabric zoning decides what a node sees.
+    #[serde(default = "yes")]
+    pub fc_multipath: bool,
+    /// What an FC rescan does unless the request says otherwise (default
+    /// `scan`: non-disruptive SCSI host scan; `lip` also re-logs the HBA in
+    /// to the fabric).
+    #[serde(default)]
+    pub fc_rescan_mode: fc::FcRescanMode,
     #[serde(default)]
     pub rev: u64,
 }
@@ -581,6 +592,10 @@ pub struct SharedLvmSpec {
     /// back to a thin-provisioned array. Default false.
     #[serde(default)]
     pub discard_removed: bool,
+    /// Snapshots as a qcow2 volume chain on the thick LVs (default false;
+    /// see `storage::lvm_chain`). Fixed once the storage holds volumes.
+    #[serde(default)]
+    pub snapshot_as_volume_chain: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<String>,
     #[serde(default)]
@@ -854,6 +869,7 @@ mod tests {
             lock_type: LockType::Sanlock,
             wipe_removed: false,
             discard_removed: true,
+            snapshot_as_volume_chain: false,
             nodes: vec![],
             rev: 0,
             deleted: false,

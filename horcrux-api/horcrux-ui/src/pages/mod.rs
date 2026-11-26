@@ -78,7 +78,7 @@ pub use replication_list::ReplicationList;
 pub use resource_pools::ResourcePoolsPage;
 pub use resources::ResourcesPage;
 pub use snapshot_list::SnapshotList;
-pub use storage::{DiskManagementPage, SmartMonitoringPage, StorageManagement};
+pub use storage::{DiskManagementPage, SanPage, SanWizard, SmartMonitoringPage, StorageManagement};
 pub use storage_content::StorageContentPage;
 pub use vm_create::VmCreate;
 pub use vm_detail::VmDetailPage;

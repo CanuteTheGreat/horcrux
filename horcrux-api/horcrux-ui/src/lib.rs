@@ -130,6 +130,7 @@ pub fn App() -> impl IntoView {
                             <A href="/storage" class="dropdown-item">"Storage"</A>
                             <A href="/storage/disks" class="dropdown-item">"Disks"</A>
                             <A href="/storage/smart" class="dropdown-item">"SMART Health"</A>
+                            <A href="/storage/san" class="dropdown-item">"SAN"</A>
                             <A href="/storage/ceph" class="dropdown-item">"Ceph"</A>
                             <A href="/storage/isos" class="dropdown-item">"ISO Library"</A>
                             <A href="/storage/content" class="dropdown-item">"Storage Content"</A>
@@ -291,6 +292,8 @@ pub fn App() -> impl IntoView {
                     <Route path="/storage" view=StorageManagement/>
                     <Route path="/storage/disks" view=DiskManagementPage/>
                     <Route path="/storage/smart" view=SmartMonitoringPage/>
+                    <Route path="/storage/san" view=crate::pages::SanPage/>
+                    <Route path="/storage/san/new" view=crate::pages::SanWizard/>
                     <Route path="/storage/ceph" view=crate::pages::ceph::CephPage/>
                     <Route path="/network" view=NetworkManagement/>
                     <Route path="/gpu" view=GpuManagement/>

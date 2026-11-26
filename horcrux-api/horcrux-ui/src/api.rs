@@ -3256,6 +3256,7 @@ pub mod ovf;
 pub mod passthrough;
 pub mod remote_play;
 pub mod s3;
+pub mod san;
 pub mod sdn;
 pub mod sdn_zones;
 pub mod vm_devices;

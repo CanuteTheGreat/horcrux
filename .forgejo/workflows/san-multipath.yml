@@ -7,13 +7,19 @@ name: SAN multipath (iSCSI on 4 portals, shared LVM, path loss, discard; KVM)
 # on the LUN holds a volume activated exclusively, dropping one NIC keeps a
 # writer going while the path view shows the 2 failed paths, deleting the
 # volume with discard_removed shrinks the array's backing file, and a missing
-# iscsiadm answers 424 (horcrux-api/tests/san_vm_e2e.sh + san_guest_e2e.sh).
+# iscsiadm answers 424; NVMe/TCP (nvmet on 2 addresses) connects both paths
+# with native multipath and survives one NIC; snapshots as a qcow2 volume
+# chain on the shared VG (take, refuse on a full VG, rollback, delete with
+# merge, volume delete removes the chain); FC without an HBA answers 424
+# (horcrux-api/tests/san_vm_e2e.sh + san_guest_e2e.sh).
 on:
   push:
     branches: [main]
     paths:
       - 'crates/horcrux-storage/src/san/**'
       - 'crates/horcrux-storage/src/storage/lvm.rs'
+      - 'crates/horcrux-storage/src/storage/lvm_chain.rs'
+      - 'horcrux-api/src/api/storage_volumes.rs'
       - 'horcrux-api/src/api/san.rs'
       - 'horcrux-api/tests/san_*.sh'
       - 'horcrux-api/tests/hx_node.py'

@@ -60,6 +60,8 @@ fn exact(path: &str) -> Option<&'static str> {
         "/storage/disks" => "Disks",
         "/storage/smart" => "SMART Health",
         "/storage/ceph" => "Ceph",
+        "/storage/san" => "SAN",
+        "/storage/san/new" => "Add SAN storage",
         "/pools" => "Resource Pools",
         "/network" => "Network",
         "/network/firewall-objects" => "Firewall Objects",

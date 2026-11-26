@@ -12,6 +12,8 @@
 //! * `GET/POST /api/san/nvme/targets`, `GET/PUT/DELETE /api/san/nvme/targets/:id`
 //!   NVMe over Fabrics subsystems (TCP/RDMA), connected on every advertised path
 //! * `POST     /api/san/nvme/discover`       discovery log of listed discovery controllers
+//! * `GET      /api/san/fc`                  this node's FC HBAs (WWPN, state, speed) and remote ports with LUNs
+//! * `POST     /api/san/fc/rescan`           rescan one HBA or all (`scan`, or `lip` = fabric re-login)
 //!
 //! Cluster: every row (settings, targets, shared VGs, sanlock host ids) is
 //! replicated to all members (pushed on change, pulled every reconcile
@@ -34,7 +36,7 @@ use axum::{
     Extension, Json, Router,
 };
 use horcrux_storage::san::{
-    self, iscsi, kinds, lvm_shared, multipath, nvme, paths, tools, HostId, IscsiTargetSpec,
+    self, fc, iscsi, kinds, lvm_shared, multipath, nvme, paths, tools, HostId, IscsiTargetSpec,
     MultipathSettings, NvmeTargetSpec, SharedLvmSpec, TargetWrite, SETTINGS_ID,
 };
 use serde::{Deserialize, Serialize};
@@ -68,6 +70,8 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             get(get_nvme).put(update_nvme).delete(delete_nvme),
         )
         .route("/api/san/nvme/discover", post(discover_nvme))
+        .route("/api/san/fc", get(fc_view))
+        .route("/api/san/fc/rescan", post(fc_rescan))
         .route("/api/ha/peer/san/sync", post(peer_sync))
         .route("/api/ha/peer/san/list", post(peer_list))
         .route("/api/ha/peer/san/paths", post(peer_paths))
@@ -548,6 +552,25 @@ pub async fn reconcile(state: &Arc<AppState>) -> ApplyReport {
 
     reconcile_nvme(state, &local, &cfg, &tools, &mut rep).await;
 
+    // Fibre Channel: no login; map the LUNs the fabric shows this node.
+    if cfg.enabled && cfg.fc_multipath {
+        let fc_devs: Vec<String> = fc::as_sessions(&fc::scan(std::path::Path::new("/")))
+            .into_iter()
+            .filter(|s| s.logged_in())
+            .flat_map(|s| s.disks.into_iter().map(|d| d.dev))
+            .collect();
+        if !fc_devs.is_empty() {
+            if let Err(e) = tools::Need::Multipath.check(&tools) {
+                missing(&mut rep, e);
+            } else {
+                if mine.is_empty() {
+                    apply_multipath(&cfg, &tools, &mut rep).await;
+                }
+                register_wwids(fc_devs, &mut rep).await;
+            }
+        }
+    }
+
     // Shared VGs deleted or moved off this node: drop the pool, leave the
     // lockspace (the VG and its data stay on the LUN).
     for l in rows::<SharedLvmSpec>(state, kinds::SHARED_LVM).await {
@@ -779,6 +802,7 @@ fn pool_options(l: &SharedLvmSpec) -> LvmPoolOptions {
         shared: true,
         wipe_removed: l.wipe_removed,
         discard_removed: l.discard_removed,
+        snapshot_as_volume_chain: l.snapshot_as_volume_chain,
         ..Default::default()
     }
 }
@@ -1105,6 +1129,9 @@ pub struct NodePaths {
     /// driver loaded.
     #[serde(default)]
     pub native_nvme_multipath: Option<bool>,
+    /// This node's Fibre Channel HBA ports (empty without FC).
+    #[serde(default)]
+    pub fc_hosts: Vec<fc::FcHost>,
     pub luns: Vec<paths::LunView>,
     pub errors: Vec<String>,
 }
@@ -1136,10 +1163,13 @@ async fn collect_paths(state: &AppState) -> NodePaths {
         .filter(|s| nqns.contains(&s.subsysnqn))
         .flat_map(|s| s.namespaces.iter().map(|n| n.dev.clone()))
         .collect();
-    if !t.iscsiadm && !t.multipathd && nvme_devs.is_empty() {
+    let fcv = fc::scan(root);
+    let fc_sessions = fc::as_sessions(&fcv);
+    out.fc_hosts = fcv.hosts;
+    if !t.iscsiadm && !t.multipathd && nvme_devs.is_empty() && fc_sessions.is_empty() {
         return out;
     }
-    let sessions = if t.iscsiadm {
+    let mut sessions = if t.iscsiadm {
         match iscsi::sessions(TOOL_TIMEOUT).await {
             Ok(s) => s,
             Err(e) => {
@@ -1150,6 +1180,8 @@ async fn collect_paths(state: &AppState) -> NodePaths {
     } else {
         Vec::new()
     };
+    // FC paths (one per HBA x target port) join the same LUN rows.
+    sessions.extend(fc_sessions);
     let maps = if t.multipathd {
         match multipath::maps(TOOL_TIMEOUT).await {
             Ok(m) => {
@@ -1164,8 +1196,9 @@ async fn collect_paths(state: &AppState) -> NodePaths {
     } else {
         Vec::new()
     };
-    // Only SAN maps: those with a path from an iSCSI session (or, later,
-    // NVMe-oF/FC); local multipathed disks are not ours to show.
+    // Only SAN maps: those with a path from an iSCSI session, an FC target
+    // port or one of our NVMe-oF subsystems; local multipathed disks are not
+    // ours to show.
     let mut session_devs: HashSet<&str> = sessions
         .iter()
         .flat_map(|s| s.disks.iter().map(|d| d.dev.as_str()))
@@ -1298,6 +1331,9 @@ async fn create_lvm(
     tools::Need::SharedLvm.check(&t).map_err(ApiError::from)?;
     if l.wipe_removed || l.discard_removed {
         tools::Need::Discard.check(&t).map_err(ApiError::from)?;
+    }
+    if l.snapshot_as_volume_chain {
+        tools::Need::VolumeChain.check(&t).map_err(ApiError::from)?;
     }
     let dev = l.device_path().map_err(ApiError::BadRequest)?;
     let base = rows::<SharedLvmSpec>(&state, kinds::SHARED_LVM)
@@ -1658,6 +1694,47 @@ async fn discover_nvme(
         )));
     }
     Ok(Json(NvmeDiscoverAnswer { subsystems, errors }))
+}
+
+/// This node's Fibre Channel view: HBA ports and remote ports with LUNs.
+async fn fc_view() -> Json<fc::FcView> {
+    Json(fc::scan(std::path::Path::new("/")))
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct FcRescanReq {
+    /// SCSI host number of one HBA (`5` for host5); all HBAs when absent.
+    #[serde(default)]
+    host: Option<u32>,
+    /// Defaults to the cluster setting `fc_rescan_mode`.
+    #[serde(default)]
+    mode: Option<fc::FcRescanMode>,
+}
+
+#[derive(Debug, Serialize)]
+struct FcRescanAnswer {
+    hosts: Vec<String>,
+    mode: fc::FcRescanMode,
+}
+
+async fn fc_rescan(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<FcRescanReq>>,
+) -> Result<Json<FcRescanAnswer>, ApiError> {
+    let req = body.map(|Json(b)| b).unwrap_or_default();
+    let mode = match req.mode {
+        Some(m) => m,
+        None => settings(&state).await.fc_rescan_mode,
+    };
+    let root = std::path::Path::new("/");
+    if fc::scan_hosts(root).is_empty() {
+        return Err(ApiError::from(tools::fc_no_hba(
+            "nothing under /sys/class/fc_host",
+        )));
+    }
+    let hosts = fc::rescan(root, req.host, mode).map_err(ApiError::BadRequest)?;
+    Ok(Json(FcRescanAnswer { hosts, mode }))
 }
 
 /// The SAN rows as the declarative spec shows them.

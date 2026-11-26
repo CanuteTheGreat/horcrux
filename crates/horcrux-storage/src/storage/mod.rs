@@ -6,6 +6,7 @@ pub mod directory;
 pub mod glusterfs;
 pub mod iscsi;
 pub mod lvm;
+pub mod lvm_chain;
 pub mod migration;
 pub mod nfs;
 pub mod s3;
@@ -293,6 +294,13 @@ fn parse_lvs_volumes(text: &str, vg: &str) -> Vec<VolumeInfo> {
         });
     }
     out
+}
+
+/// Volume-chain options of an LVM pool that keeps snapshots that way.
+fn chain_opts(pool: &StoragePool) -> Option<&lvm::LvmPoolOptions> {
+    pool.lvm
+        .as_ref()
+        .filter(|o| pool.storage_type == StorageType::Lvm && o.snapshot_as_volume_chain)
 }
 
 fn unsupported(op: &str, t: &StorageType) -> horcrux_common::Error {
@@ -776,11 +784,18 @@ impl StorageManager {
                     .create_volume(&pool.path, volume_name, size_gb)
                     .await?
             }
-            StorageType::Lvm => {
-                self.lvm
-                    .create_volume(&pool.path, volume_name, size_gb)
-                    .await?
-            }
+            StorageType::Lvm => match chain_opts(pool) {
+                Some(o) => {
+                    self.lvm
+                        .chain_create(&pool.path, volume_name, size_gb, o)
+                        .await?
+                }
+                None => {
+                    self.lvm
+                        .create_volume(&pool.path, volume_name, size_gb)
+                        .await?
+                }
+            },
             StorageType::Directory => {
                 self.directory
                     .create_volume(&pool.path, volume_name, size_gb)
@@ -965,7 +980,15 @@ impl StorageManager {
                     ],
                 )
                 .await?;
-                out.extend(parse_lvs_volumes(&text, &pool.path));
+                let mut v = parse_lvs_volumes(&text, &pool.path);
+                if chain_opts(&pool).is_some() {
+                    // Snapshot LVs are part of their volume, not volumes.
+                    v.retain(|x| !lvm_chain::is_snap_lv(&x.name));
+                    for x in &mut v {
+                        x.format = "qcow2".into();
+                    }
+                }
+                out.extend(v);
             }
             StorageType::Ceph => {
                 let text = run_tool("rbd", &["ls", "-l", "--format", "json", &pool.path]).await?;
@@ -1044,6 +1067,11 @@ impl StorageManager {
             StorageType::Zfs => self.zfs.delete_volume(&pool.path, volume_name).await,
             StorageType::Ceph => self.ceph.delete_volume(&pool.path, volume_name).await,
             StorageType::Lvm => match &pool.lvm {
+                Some(o) if o.snapshot_as_volume_chain => {
+                    self.lvm
+                        .chain_delete_volume(&pool.path, volume_name, o)
+                        .await
+                }
                 Some(o) => {
                     self.lvm
                         .delete_volume_with(&pool.path, volume_name, o)
@@ -1152,11 +1180,18 @@ impl StorageManager {
                     .create_snapshot(&pool.path, volume_name, snapshot_name)
                     .await?
             }
-            StorageType::Lvm => {
-                self.lvm
-                    .create_snapshot(&pool.path, volume_name, snapshot_name)
-                    .await?
-            }
+            StorageType::Lvm => match chain_opts(pool) {
+                Some(o) => {
+                    self.lvm
+                        .chain_snapshot(&pool.path, volume_name, snapshot_name, o)
+                        .await?
+                }
+                None => {
+                    self.lvm
+                        .create_snapshot(&pool.path, volume_name, snapshot_name)
+                        .await?
+                }
+            },
             StorageType::Directory => {
                 return Err(horcrux_common::Error::InvalidConfig(
                     "Directory storage does not support snapshots".to_string(),
@@ -1206,6 +1241,46 @@ impl StorageManager {
         Ok(())
     }
 
+    /// The pool and its volume-chain options, for the chain-only calls.
+    async fn chain_pool(&self, pool_id: &str) -> Result<(String, lvm::LvmPoolOptions)> {
+        let pools = self.pools.read().await;
+        let pool = pools.get(pool_id).ok_or_else(|| {
+            horcrux_common::Error::NotFound(format!("Storage pool {} not found", pool_id))
+        })?;
+        match chain_opts(pool) {
+            Some(o) => Ok((pool.path.clone(), o.clone())),
+            None => Err(horcrux_common::Error::InvalidConfig(format!(
+                "Storage pool {pool_id} does not keep snapshots as a volume chain \
+                 (an LVM pool created with snapshot_as_volume_chain)"
+            ))),
+        }
+    }
+
+    /// A volume's snapshot chain (volume-chain LVM pools).
+    pub async fn volume_snapshots(
+        &self,
+        pool_id: &str,
+        volume_name: &str,
+    ) -> Result<lvm_chain::ChainView> {
+        check_names(&[volume_name])?;
+        let (vg, o) = self.chain_pool(pool_id).await?;
+        self.lvm.chain_info(&vg, volume_name, &o).await
+    }
+
+    /// Delete one snapshot of a volume (volume-chain LVM pools).
+    pub async fn delete_volume_snapshot(
+        &self,
+        pool_id: &str,
+        volume_name: &str,
+        snapshot_name: &str,
+    ) -> Result<()> {
+        check_names(&[volume_name, snapshot_name])?;
+        let (vg, o) = self.chain_pool(pool_id).await?;
+        self.lvm
+            .chain_delete_snapshot(&vg, volume_name, snapshot_name, &o)
+            .await
+    }
+
     /// Restore a volume from a snapshot
     pub async fn restore_snapshot(
         &self,
@@ -1230,11 +1305,18 @@ impl StorageManager {
                     .restore_snapshot(&pool.path, volume_name, snapshot_name)
                     .await?
             }
-            StorageType::Lvm => {
-                self.lvm
-                    .restore_snapshot(&pool.path, volume_name, snapshot_name)
-                    .await?
-            }
+            StorageType::Lvm => match chain_opts(pool) {
+                Some(o) => {
+                    self.lvm
+                        .chain_rollback(&pool.path, volume_name, snapshot_name, o)
+                        .await?
+                }
+                None => {
+                    self.lvm
+                        .restore_snapshot(&pool.path, volume_name, snapshot_name)
+                        .await?
+                }
+            },
             StorageType::Directory => {
                 return Err(horcrux_common::Error::InvalidConfig(
                     "Directory storage does not support snapshots".to_string(),

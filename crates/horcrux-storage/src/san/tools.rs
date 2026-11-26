@@ -28,6 +28,9 @@ pub struct ToolStatus {
     pub sanlock: bool,
     pub blkdiscard: bool,
     pub nvme: bool,
+    /// qemu-img, for snapshots as a volume chain.
+    #[serde(default)]
+    pub qemu_img: bool,
 }
 
 impl ToolStatus {
@@ -40,6 +43,7 @@ impl ToolStatus {
             sanlock: have("sanlock"),
             blkdiscard: have("blkdiscard"),
             nvme: have("nvme"),
+            qemu_img: have("qemu-img"),
         }
     }
 }
@@ -53,6 +57,15 @@ pub fn nvme_transport_missing(module: &str, detail: &str) -> horcrux_common::Err
     }
 }
 
+/// No Fibre Channel HBA on this node (nothing under `/sys/class/fc_host`).
+pub fn fc_no_hba(detail: &str) -> horcrux_common::Error {
+    horcrux_common::Error::NodeLacks {
+        reason: "san-fc-no-hba",
+        message: format!("This node has no Fibre Channel HBA: {detail}."),
+        hint: "Install an FC HBA and load its driver (qla2xxx, lpfc, ...); its ports then show up here with their WWPNs.".into(),
+    }
+}
+
 /// A missing SAN facility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Need {
@@ -62,6 +75,8 @@ pub enum Need {
     Discard,
     /// nvme-cli, for NVMe over Fabrics.
     Nvme,
+    /// qemu-img, for snapshots as a volume chain on LVM.
+    VolumeChain,
 }
 
 impl Need {
@@ -98,6 +113,12 @@ impl Need {
                 "This node has no NVMe over Fabrics tool (nvme-cli).",
                 "Install sys-apps/nvme-cli (USE=san on horcrux pulls it).",
             ),
+            Need::VolumeChain => (
+                t.qemu_img,
+                "san-qemu-img-missing",
+                "This node has no qemu-img, needed for snapshots as a volume chain.",
+                "Install app-emulation/qemu (it provides qemu-img), or create the storage without snapshot_as_volume_chain.",
+            ),
         };
         if ok {
             Ok(())
@@ -132,6 +153,7 @@ mod tests {
             (Need::SharedLvm, "san-lvmlockd-missing"),
             (Need::Discard, "san-blkdiscard-missing"),
             (Need::Nvme, "san-nvme-cli-missing"),
+            (Need::VolumeChain, "san-qemu-img-missing"),
         ] {
             match n.check(&none) {
                 Err(horcrux_common::Error::NodeLacks { reason: r, .. }) => assert_eq!(r, reason),
@@ -146,6 +168,7 @@ mod tests {
             sanlock: true,
             blkdiscard: true,
             nvme: true,
+            qemu_img: true,
         };
         assert!(Need::SharedLvm.check(&all).is_ok());
     }

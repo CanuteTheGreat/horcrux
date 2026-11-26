@@ -32,7 +32,7 @@ ip addr replace 10.77.1.1/24 dev hxsana; ip addr replace 10.77.1.2/24 dev hxsana
 ip addr replace 10.77.2.1/24 dev hxsanb; ip addr replace 10.77.2.2/24 dev hxsanb
 mkdir -p /var/lib/san
 targetcli clearconfig confirm=True >/dev/null 2>&1 || true
-targetcli /backstores/fileio create name=lun0 file_or_dev=/var/lib/san/lun0.img size=3G sparse=true >/dev/null
+targetcli /backstores/fileio create name=lun0 file_or_dev=/var/lib/san/lun0.img size=6G sparse=true >/dev/null
 targetcli /backstores/fileio/lun0 set attribute emulate_tpu=1 >/dev/null
 targetcli /iscsi create $IQN >/dev/null
 targetcli /iscsi/$IQN/tpg1/portals delete 0.0.0.0 3260 >/dev/null 2>&1 || true
@@ -146,6 +146,47 @@ sync; sleep 2
 used_after=$(du -k /var/lib/san/lun0.img | cut -f1)
 check "backing-file-shrank" '[ $used_after -lt $((used_before - 400000)) ]' "before ${used_before}K after ${used_after}K"
 
+echo "== snapshots as a volume chain (qcow2 on thick LVs) on the same shared VG"
+api DELETE /san/lvm/sanlvm >/dev/null
+r=$(api POST /san/lvm "{\"id\":\"sanchain\",\"vg_name\":\"vg_hxsan\",\"device\":\"$WWID\",\"snapshot_as_volume_chain\":true}")
+pools=$(api GET /storage/pools)
+CID=$(echo "$pools" | jq_ "[p['id'] for p in d['body'] if p['name']=='sanchain'][0]" 2>/dev/null)
+check "chain-pool-created" '[ -n "$CID" ] && [ "$(echo "$pools" | jq_ "[p[\"lvm\"][\"snapshot_as_volume_chain\"] for p in d[\"body\"] if p[\"name\"]==\"sanchain\"][0]")" = True ]' "$r $pools"
+V=/dev/vg_hxsan/chainvol
+qio() { qemu-io -f qcow2 -c "$1" "$V" >/tmp/hxq.out 2>&1 && ! grep -q "Pattern verification failed" /tmp/hxq.out; }
+snaps() { api GET /storage/pools/$CID/volumes/chainvol/snapshots | jq_ "','.join(d['body']['snapshots'])"; }
+r=$(api POST /storage/pools/$CID/volumes '{"name":"chainvol","size":1}')
+check "chain-volume-is-qcow2-on-lv" '[ -b $V ] && qemu-img info -U --output=json $V | grep -q "\"format\": \"qcow2\""' "$r"
+check "chain-volume-listed-as-qcow2" '[ "$(api GET /storage/pools/$CID/volumes | jq_ "\",\".join(v[\"format\"] for v in d[\"body\"] if v[\"name\"]==\"chainvol\")")" = qcow2 ]'
+qio "write -P 0xaa 0 4M"; qio "write -P 0x11 8M 4M"
+r=$(api POST /storage/pools/$CID/volumes/chainvol/snapshots '{"name":"s1"}')
+check "snapshot-s1-201" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 201 ] && lvs vg_hxsan/snap_chainvol_s1 >/dev/null 2>&1' "$r"
+qio "write -P 0xbb 0 4M"
+api POST /storage/pools/$CID/volumes/chainvol/snapshots '{"name":"s2"}' >/dev/null
+check "chain-is-s1-s2" '[ "$(snaps)" = "s1,s2" ]' "$(snaps)"
+lvcreate -y -l 100%FREE -n hxfill vg_hxsan >/dev/null 2>&1
+r=$(api POST /storage/pools/$CID/volumes/chainvol/snapshots '{"name":"s9"}')
+check "snapshot-on-full-vg-400-volume-intact" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 400 ] && echo "$r" | grep -q "MiB free" && [ -b $V ] && [ "$(snaps)" = "s1,s2" ]' "$r $(lvs vg_hxsan 2>&1)"
+lvremove -y vg_hxsan/hxfill >/dev/null 2>&1
+check "snapshot-lvs-hidden-from-volume-list" '[ "$(api GET /storage/pools/$CID/volumes | jq_ "\",\".join(sorted(v[\"name\"] for v in d[\"body\"]))")" = chainvol ]'
+qio "write -P 0xcc 0 4M"
+check "current-reads-newest-write" 'qio "read -P 0xcc 0 4M"' "$(cat /tmp/hxq.out)"
+r=$(api POST /storage/pools/$CID/volumes/chainvol/snapshots/s1/rollback)
+check "rollback-to-older-refused" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 400 ] && echo "$r" | grep -q "not the newest"' "$r"
+r=$(api POST /storage/pools/$CID/volumes/chainvol/snapshots/s2/rollback)
+check "rollback-to-s2" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 200 ] && qio "read -P 0xbb 0 4M"' "$r $(cat /tmp/hxq.out)"
+r=$(api DELETE /storage/pools/$CID/volumes/chainvol/snapshots/s1)
+check "delete-oldest-snapshot" '[ "$(snaps)" = "s2" ] && ! lvs vg_hxsan/snap_chainvol_s1 >/dev/null 2>&1' "$r"
+check "data-of-deleted-snapshot-kept" 'qio "read -P 0x11 8M 4M" && qio "read -P 0xbb 0 4M"' "$(cat /tmp/hxq.out)"
+api DELETE /storage/pools/$CID/volumes/chainvol/snapshots/s2 >/dev/null
+check "delete-last-snapshot-flattens" '[ "$(snaps)" = "" ] && qio "read -P 0x11 8M 4M" && ! qemu-img info -U $V | grep -q "backing file"' "$(qemu-img info -U $V 2>&1)"
+check "image-consistent" 'qemu-img check -U -f qcow2 $V >/dev/null 2>&1' "$(qemu-img check -U -f qcow2 $V 2>&1 | tail -3)"
+api POST /storage/pools/$CID/volumes/chainvol/snapshots '{"name":"s3"}' >/dev/null
+r=$(api DELETE /storage/pools/$CID/volumes/chainvol)
+check "volume-delete-removes-chain" '[ -z "$(lvs --noheadings -o lv_name vg_hxsan 2>/dev/null | grep chainvol)" ]' "$r $(lvs vg_hxsan 2>&1)"
+r=$(api GET /storage/pools/$PID/volumes/x/snapshots)
+check "snapshots-on-other-pool-400-or-404" 'case "$(echo "$r" | jq_ "d[\"status\"]")" in 400|404) true;; *) false;; esac' "$r"
+
 echo "== missing tool answers 424, not 500"
 mv /usr/sbin/iscsiadm /usr/sbin/iscsiadm.hx-off
 r=$(api POST /san/discover '{"portals":["10.77.1.1"]}')
@@ -153,7 +194,7 @@ mv /usr/sbin/iscsiadm.hx-off /usr/sbin/iscsiadm
 check "discover-424-without-iscsiadm" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 424 ] && echo "$r" | grep -q san-iscsiadm-missing' "$r"
 
 echo "== target delete logs out of every path"
-api DELETE /san/lvm/sanlvm >/dev/null
+api DELETE /san/lvm/sanchain >/dev/null
 vgchange --lockstop vg_hxsan >/dev/null 2>&1; vgchange -an vg_hxsan >/dev/null 2>&1
 api DELETE /san/targets/e2e >/dev/null
 api POST /san/apply >/dev/null
@@ -237,6 +278,13 @@ api DELETE /san/nvme/targets/nv >/dev/null
 api POST /san/apply >/dev/null
 check "nvme-disconnected-after-delete" '[ "$(nctrl)" = 0 ]' "$(nvme list-subsys 2>&1 | head)"
 check "still-no-500-in-log" '! grep -q " 500 " $D/api.log'
+
+echo "== Fibre Channel: no HBA in this VM (QEMU emulates none): empty view, rescan answers 424"
+r=$(api GET /san/fc)
+check "fc-view-empty-without-hba" '[ "$(echo "$r" | jq_ "(d[\"status\"], d[\"body\"][\"hosts\"], d[\"body\"][\"remote_ports\"])")" = "(200, [], [])" ]' "$r"
+r=$(api POST /san/fc/rescan '{}')
+check "fc-rescan-424-without-hba" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 424 ] && echo "$r" | grep -q san-fc-no-hba' "$r"
+check "paths-carry-fc-hosts-key" '[ "$(api GET /san/paths | jq_ "d[\"body\"][\"fc_hosts\"]")" = "[]" ]'
 
 pkill -x horcrux-api || true
 echo "SUMMARY fails=$fails"

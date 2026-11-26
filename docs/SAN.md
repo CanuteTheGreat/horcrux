@@ -1,15 +1,15 @@
-# SAN storage: iSCSI, NVMe over Fabrics, multipath and shared LVM
+# SAN storage: iSCSI, NVMe over Fabrics, Fibre Channel, multipath and shared LVM
 
 Horcrux manages block storage on a SAN for the whole cluster: an iSCSI
 target is configured once, every node logs in on every path the array
 advertises, dm-multipath turns those paths into one device per LUN, and a
 volume group on that LUN is shared by all nodes with node locking. NVMe
 over Fabrics subsystems (NVMe/TCP, NVMe/RDMA) are connected the same way on
-every path, with the kernel's native NVMe multipath. Status: phase 1
-(iSCSI + multipath + shared LVM) and phase 2 (NVMe-oF). Fibre Channel, the
-UI wizard, the per-node SAN page and snapshots as a qcow2 volume chain are
-the next phase (`docs/design/proxmox-9.3-parity.md`,
-item 4).
+every path, with the kernel's native NVMe multipath. Fibre Channel LUNs
+(zoned to a node's HBA) join the same multipath maps and path view.
+Snapshots on a shared thick VG are kept as a qcow2 volume chain. The web UI
+has a SAN page (Storage > SAN, per node) and an "Add SAN storage" wizard.
+Parity notes: `docs/design/proxmox-9.3-parity.md`, item 4.
 
 Build: Cargo feature / USE flag `san` (on in the default build and the
 prebuilt `horcrux-bin`). On `horcrux-bin` the USE flag only pulls the host
@@ -26,6 +26,8 @@ A node without a tool answers **424** with a reason code instead of failing:
 | `san-blkdiscard-missing` | `blkdiscard` | `wipe_removed` / `discard_removed` |
 | `san-nvme-cli-missing` | `nvme` (nvme-cli) | NVMe-oF discovery, connects |
 | `san-nvme-transport-missing` | kernel module `nvme_tcp` / `nvme_rdma` | NVMe-oF on that transport |
+| `san-fc-no-hba` | an FC HBA (nothing in `/sys/class/fc_host`) | FC rescan |
+| `san-qemu-img-missing` | `qemu-img` | snapshots as a volume chain |
 
 The background apply reports the same reasons in `GET /api/san/status`
 (`last_apply.missing`).
@@ -48,6 +50,11 @@ on `/storage`.
 | `GET/POST /api/san/lvm`, `GET/DELETE /api/san/lvm/:id` | shared volume groups used as storage pools on every node |
 | `GET/POST /api/san/nvme/targets`, `GET/PUT/DELETE /api/san/nvme/targets/:id` | NVMe-oF subsystems |
 | `POST /api/san/nvme/discover` `{"transport": "tcp", "addresses": [...]}` | discovery log of the listed discovery controllers: every subsystem and each I/O controller address (nothing is stored) |
+| `GET /api/san/fc` | this node's FC HBA ports (WWPN, WWNN, state, speed, fabric) and the remote ports each sees, with the LUNs behind target ports |
+| `POST /api/san/fc/rescan` `{"host": 5, "mode": "scan"}` | rescan one HBA (or all without `host`); `mode` defaults to the `fc_rescan_mode` setting |
+| `GET/POST /api/storage/pools/:pool/volumes/:vol/snapshots` | snapshot chain of a volume (oldest first) / take `{"name"}` (volume-chain LVM pools) |
+| `DELETE /api/storage/pools/:pool/volumes/:vol/snapshots/:snap` | delete one snapshot (its data merges into the next one) |
+| `POST /api/storage/pools/:pool/volumes/:vol/snapshots/:snap/rollback` | roll back to the newest snapshot |
 
 The declarative config has the same objects in a `san:` section
 (`settings`, `targets`, `shared_lvm`, `nvme_targets`; export/plan/apply,
@@ -143,12 +150,15 @@ default `config_dir`). `/etc/multipath.conf` is never edited, and a file at
 | `blacklist`, `blacklist_exceptions` | `[]` | `{"match":"wwid","wwid":..}`, `{"match":"devnode","devnode":..}`, `{"match":"device","vendor":..,"product":..}` |
 | `reconcile_interval_secs` | `30` | how often each node re-applies (and pulls from peers) |
 | `sanlock_watchdog` | `true` | `false` writes `use_watchdog = 0` to `/etc/sanlock/sanlock.conf` (test beds without a watchdog device only) |
+| `fc_multipath` | `true` | register the WWIDs of LUNs behind online FC target ports on each apply (multipath maps for FC) |
+| `fc_rescan_mode` | `scan` | default of `POST /api/san/fc/rescan`: `scan` or `lip` |
 
 ### Shared LVM
 
 ```json
 {"id": "san-lvm", "vg_name": "vg_san", "device": "36001405d27e5d898829468b90ce4ef8c",
- "wipe_removed": false, "discard_removed": true, "create_vg": true}
+ "wipe_removed": false, "discard_removed": true, "snapshot_as_volume_chain": true,
+ "create_vg": true}
 ```
 
 `device` is the WWID of the multipath map (`/dev/mapper/<wwid>`) or a
@@ -186,6 +196,62 @@ every shared VG):
   is removed anyway (logged); a failed wipe stops the removal.
 * `command_timeout_secs` (60) and `scrub_timeout_secs` (3600) bound the LVM
   and scrub steps.
+
+### Fibre Channel
+
+FC needs no login: the HBA and the fabric zoning decide what a node sees.
+Horcrux reads `/sys/class/fc_host` (HBA ports) and
+`/sys/class/fc_remote_ports` (remote ports, the LUNs under each target port)
+and treats every (HBA, target port) pair as one path. With the settings
+key `fc_multipath` (default true) each apply registers the WWIDs of the
+LUNs behind online target ports, so they get multipath maps like iSCSI
+LUNs, and the path view lists them with transport `fc`, the remote port's
+FC address as `portal` and the HBA's WWPN as `local_address`. A blocked or
+missing remote port, or an HBA that is not `Online`, makes its path
+`failed`. `POST /api/san/fc/rescan` scans the SCSI host for new LUNs
+(`mode: scan`, non-disruptive) or also issues a LIP (`mode: lip`, the HBA
+logs in to the fabric again; multipath carries I/O on the other HBAs).
+`fast_io_fail_tmo_secs` / `dev_loss_tmo_secs` in the multipath settings
+apply to FC remote ports.
+
+QEMU emulates no FC HBA, so FC is covered by unit tests against a sysfs
+fixture tree (`san/fc.rs`) and by the e2e's no-HBA checks (empty view,
+424 rescan), not by a real fabric.
+
+### Snapshots as a volume chain
+
+`snapshot_as_volume_chain: true` on a shared LVM storage (or in the `lvm`
+options of an LVM pool) keeps every volume as a qcow2 image written straight
+onto its thick LV. A snapshot `s1` of `vm-100-disk-0`:
+
+1. renames the current LV to `snap_vm-100-disk-0_s1` (it is now frozen),
+2. creates a new `vm-100-disk-0` LV (sized by `qemu-img measure` for a
+   fully allocated image, so it can always hold every cluster),
+3. writes a qcow2 overlay on it whose backing file is the frozen LV.
+
+Rollback goes to the newest snapshot only (as on Proxmox VE): the current LV
+is removed (with `wipe_removed` / `discard_removed`) and a fresh overlay on
+that snapshot takes its place; for an older one, delete the newer snapshots
+first. Deleting a snapshot rebases its child (the next snapshot or the
+current LV) onto its parent with `qemu-img rebase`, which copies the
+snapshot's data into the child, then removes the snapshot LV. Deleting the
+volume removes the whole chain. Snapshot LVs are hidden from the volume
+list; volumes report format `qcow2`. Every LV of a chain is activated
+exclusively on the node that works on it. A volume that is a VM's disk is
+refused (409), like delete and resize. This needs no LVM CoW snapshots,
+which shared VGs cannot use across nodes.
+
+### Web UI
+
+Storage > SAN (`/storage/san`, `?node=<name>` for another member) shows the
+path view of one node (every LUN with its map, size and each path's state,
+address and local side), the targets, the shared LVM storages and the
+node's FC HBAs with a Rescan button; it refreshes every 5 s. "Add SAN
+storage" (`/storage/san/new`) is a wizard: transport and portals (iSCSI,
+optional CHAP) or discovery controllers (NVMe/TCP) -> the discovered
+targets with every path -> target id (stored and logged in on every node)
+-> the LUN -> storage id, volume group, "Snapshots as volume chain",
+discard/wipe of removed volumes -> review -> finish.
 
 ## Cluster behaviour
 

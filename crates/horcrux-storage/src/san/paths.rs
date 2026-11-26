@@ -26,7 +26,7 @@ pub enum PathState {
 pub struct PathView {
     /// Kernel device (`sdb`).
     pub dev: String,
-    /// `iscsi`, `nvme`, `fc` (FC and NVMe-oF come with later phases).
+    /// `iscsi`, `nvme` or `fc`.
     pub transport: String,
     pub target: Option<String>,
     /// Remote address (`10.0.0.1:3260`).
@@ -97,7 +97,12 @@ pub fn assemble(
         let d = disks.get(dev);
         PathView {
             dev: dev.to_string(),
-            transport: if d.is_some() || dev.starts_with("sd") {
+            transport: if let Some(t) = d
+                .and_then(|d| d.s.transport.as_deref())
+                .filter(|t| *t == "fc")
+            {
+                t.into()
+            } else if d.is_some() || dev.starts_with("sd") {
                 "iscsi".into()
             } else if dev.starts_with("nvme") {
                 "nvme".into()

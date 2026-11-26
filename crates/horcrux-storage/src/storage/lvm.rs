@@ -317,6 +317,310 @@ impl LvmManager {
         Ok(())
     }
 
+    // ------------------------------------------------ snapshots as volume chain
+
+    fn chain_t(opts: &LvmPoolOptions) -> std::time::Duration {
+        std::time::Duration::from_secs(opts.command_timeout_secs.into())
+    }
+
+    fn chain_need() -> Result<()> {
+        crate::san::tools::Need::VolumeChain.check(&crate::san::tools::ToolStatus::probe())
+    }
+
+    /// LV names of the volume chain of `volume` that exist in `vg`.
+    async fn chain_lvs(
+        &self,
+        vg: &str,
+        volume: &str,
+        t: std::time::Duration,
+    ) -> Result<Vec<String>> {
+        let r = crate::san::iscsi::run("lvs", &["--noheadings", "-o", "lv_name", vg], t)
+            .await
+            .map_err(horcrux_common::Error::System)?;
+        if !r.ok {
+            return Err(horcrux_common::Error::System(format!(
+                "lvs {vg}: {}",
+                r.stderr.trim()
+            )));
+        }
+        Ok(r.stdout
+            .lines()
+            .map(str::trim)
+            .filter(|l| {
+                *l == volume
+                    || *l == super::lvm_chain::tmp_lv(volume)
+                    || super::lvm_chain::snap_of(volume, l).is_some()
+            })
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// Activate the chain and read it (snapshots oldest first).
+    pub async fn chain_info(
+        &self,
+        vg: &str,
+        volume: &str,
+        opts: &LvmPoolOptions,
+    ) -> Result<super::lvm_chain::ChainView> {
+        super::check_names(&[volume])?;
+        Self::chain_need()?;
+        let t = Self::chain_t(opts);
+        let lvs = self.chain_lvs(vg, volume, t).await?;
+        if !lvs.iter().any(|l| l == volume) {
+            return Err(horcrux_common::Error::NotFound(format!(
+                "logical volume {vg}/{volume} does not exist"
+            )));
+        }
+        super::lvm_chain::activate(vg, &lvs, opts.shared, t)
+            .await
+            .map_err(horcrux_common::Error::System)?;
+        super::lvm_chain::info_chain(vg, volume, t)
+            .await
+            .map_err(horcrux_common::Error::System)
+    }
+
+    /// New chain volume: an LV sized for a fully allocated qcow2 of
+    /// `size_gb`, with the qcow2 written onto it.
+    pub async fn chain_create(
+        &self,
+        vg: &str,
+        volume: &str,
+        size_gb: u64,
+        opts: &LvmPoolOptions,
+    ) -> Result<String> {
+        super::check_names(&[volume])?;
+        if super::lvm_chain::is_snap_lv(volume) {
+            return Err(horcrux_common::Error::Validation(format!(
+                "volume names starting with {} are reserved for snapshots",
+                super::lvm_chain::SNAP_PREFIX
+            )));
+        }
+        Self::chain_need()?;
+        let t = Self::chain_t(opts);
+        let vbytes = size_gb * (1 << 30);
+        let lv = super::lvm_chain::measure(vbytes, t)
+            .await
+            .map_err(horcrux_common::Error::System)?;
+        let plan = super::lvm_chain::plan_create(vg, volume, vbytes, lv);
+        super::lvm_chain::run_all(&plan[..1], t)
+            .await
+            .map_err(horcrux_common::Error::System)?;
+        if opts.shared {
+            crate::san::lvm_shared::activate_exclusive(vg, volume, t)
+                .await
+                .map_err(horcrux_common::Error::System)?;
+        }
+        if let Err(e) = super::lvm_chain::run_all(&plan[1..], t).await {
+            let _ = self.delete_volume(vg, volume).await;
+            return Err(horcrux_common::Error::System(e));
+        }
+        Ok(super::lvm_chain::dev(vg, volume))
+    }
+
+    /// Refuse up front (400) when the VG cannot hold one more overlay LV
+    /// of `need` bytes: a thick volume chain needs a full-size LV per
+    /// snapshot.
+    async fn chain_need_space(&self, vg: &str, need: u64, t: std::time::Duration) -> Result<()> {
+        let r = crate::san::iscsi::run(
+            "vgs",
+            &[
+                "--noheadings",
+                "--units",
+                "b",
+                "--nosuffix",
+                "-o",
+                "vg_free",
+                vg,
+            ],
+            t,
+        )
+        .await
+        .map_err(horcrux_common::Error::System)?;
+        match super::lvm_chain::parse_vg_free(&r.stdout) {
+            Some(free) if free < need => Err(horcrux_common::Error::InvalidConfig(format!(
+                "volume group {vg} has {} MiB free; this volume chain needs {} MiB for the new \
+                 overlay (a snapshot on thick LVM takes the volume's full size): free space or \
+                 delete an older snapshot first",
+                free >> 20,
+                need.div_ceil(1 << 20)
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Run `cmds`; on a failure run the undo list (best effort) and return
+    /// the failure.
+    async fn chain_run_or_undo(
+        cmds: &[super::lvm_chain::Cmd],
+        undo: &[super::lvm_chain::Cmd],
+        t: std::time::Duration,
+    ) -> Result<()> {
+        if let Err(e) = super::lvm_chain::run_all(cmds, t).await {
+            for u in undo {
+                let _ = super::lvm_chain::run_all(std::slice::from_ref(u), t).await;
+            }
+            return Err(horcrux_common::Error::System(e));
+        }
+        Ok(())
+    }
+
+    /// Snapshot: freeze the current LV as `snap_<volume>_<snap>`, stack a
+    /// new overlay LV on it under the volume's own name. The overlay LV is
+    /// made first (under a temporary name), so a full VG or any failure
+    /// leaves the volume as it was.
+    pub async fn chain_snapshot(
+        &self,
+        vg: &str,
+        volume: &str,
+        snap: &str,
+        opts: &LvmPoolOptions,
+    ) -> Result<()> {
+        super::check_names(&[volume, snap])?;
+        let info = self.chain_info(vg, volume, opts).await?;
+        if info.snapshots.iter().any(|s| s == snap) {
+            return Err(horcrux_common::Error::AlreadyExists(format!(
+                "snapshot {snap} of {volume} exists"
+            )));
+        }
+        let t = Self::chain_t(opts);
+        let vbytes = info.virtual_size_bytes.ok_or_else(|| {
+            horcrux_common::Error::System(format!("{vg}/{volume}: no qcow2 virtual size"))
+        })?;
+        let lv = super::lvm_chain::measure(vbytes, t)
+            .await
+            .map_err(horcrux_common::Error::System)?;
+        self.chain_need_space(vg, lv, t).await?;
+        let tmp = super::lvm_chain::tmp_lv(volume);
+        for (i, step) in super::lvm_chain::plan_snapshot(vg, volume, snap, vbytes, lv)
+            .into_iter()
+            .enumerate()
+        {
+            Self::chain_run_or_undo(std::slice::from_ref(&step.cmd), &step.undo, t).await?;
+            if i == 0 && opts.shared {
+                if let Err(e) = crate::san::lvm_shared::activate_exclusive(vg, &tmp, t).await {
+                    let _ = self.delete_volume(vg, &tmp).await;
+                    return Err(horcrux_common::Error::System(e));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Roll back to the newest snapshot `snap` (older ones: delete the
+    /// newer snapshots first). A fresh overlay on `snap` is built first;
+    /// then the current LV is scrubbed per the pool options and removed, and
+    /// the new overlay takes its name.
+    pub async fn chain_rollback(
+        &self,
+        vg: &str,
+        volume: &str,
+        snap: &str,
+        opts: &LvmPoolOptions,
+    ) -> Result<()> {
+        super::check_names(&[volume, snap])?;
+        let info = self.chain_info(vg, volume, opts).await?;
+        match info.snapshots.last() {
+            Some(s) if s == snap => {}
+            _ if info.snapshots.iter().any(|s| s == snap) => {
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "{snap} is not the newest snapshot of {volume}; delete the newer snapshots \
+                     ({}) first",
+                    info.snapshots
+                        .iter()
+                        .skip_while(|s| *s != snap)
+                        .skip(1)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )))
+            }
+            _ => {
+                return Err(horcrux_common::Error::NotFound(format!(
+                    "no snapshot {snap} of {volume}"
+                )))
+            }
+        }
+        let t = Self::chain_t(opts);
+        let vbytes = info.virtual_size_bytes.unwrap_or(0);
+        let lv = super::lvm_chain::measure(vbytes, t)
+            .await
+            .map_err(horcrux_common::Error::System)?;
+        self.chain_need_space(vg, lv, t).await?;
+        let tmp = super::lvm_chain::tmp_lv(volume);
+        let rm_tmp = vec![vec![
+            "lvremove".to_string(),
+            "-y".into(),
+            format!("{vg}/{tmp}"),
+        ]];
+        let (build, rename) = super::lvm_chain::plan_rollback_overlay(vg, volume, snap, vbytes, lv);
+        Self::chain_run_or_undo(&build[..1], &[], t).await?;
+        if opts.shared {
+            if let Err(e) = crate::san::lvm_shared::activate_exclusive(vg, &tmp, t).await {
+                let _ = self.delete_volume(vg, &tmp).await;
+                return Err(horcrux_common::Error::System(e));
+            }
+        }
+        Self::chain_run_or_undo(&build[1..], &rm_tmp, t).await?;
+        if let Err(e) = self.delete_volume_with(vg, volume, opts).await {
+            let _ = self.delete_volume(vg, &tmp).await;
+            return Err(e);
+        }
+        Self::chain_run_or_undo(&[rename], &[], t).await
+    }
+
+    /// Delete snapshot `snap`: its child is rebased onto its parent (taking
+    /// over `snap`'s data), then `snap`'s LV is removed (scrubbed per the
+    /// pool options).
+    pub async fn chain_delete_snapshot(
+        &self,
+        vg: &str,
+        volume: &str,
+        snap: &str,
+        opts: &LvmPoolOptions,
+    ) -> Result<()> {
+        super::check_names(&[volume, snap])?;
+        let info = self.chain_info(vg, volume, opts).await?;
+        let idx = info
+            .snapshots
+            .iter()
+            .position(|s| s == snap)
+            .ok_or_else(|| {
+                horcrux_common::Error::NotFound(format!("no snapshot {snap} of {volume}"))
+            })?;
+        let rebase = super::lvm_chain::plan_delete_rebase(vg, volume, &info.snapshots, idx)
+            .ok_or_else(|| horcrux_common::Error::System("chain changed".into()))?;
+        // Copying a whole snapshot's data can take a while.
+        let scrub_t = std::time::Duration::from_secs(opts.scrub_timeout_secs.into());
+        super::lvm_chain::run_all(&[rebase], scrub_t)
+            .await
+            .map_err(horcrux_common::Error::System)?;
+        self.delete_volume_with(vg, &super::lvm_chain::snap_lv(volume, snap), opts)
+            .await
+    }
+
+    /// Remove a chain volume with every snapshot LV.
+    pub async fn chain_delete_volume(
+        &self,
+        vg: &str,
+        volume: &str,
+        opts: &LvmPoolOptions,
+    ) -> Result<()> {
+        super::check_names(&[volume])?;
+        let t = Self::chain_t(opts);
+        let lvs = self.chain_lvs(vg, volume, t).await?;
+        if !lvs.iter().any(|l| l == volume) {
+            return Err(horcrux_common::Error::NotFound(format!(
+                "logical volume {vg}/{volume} does not exist"
+            )));
+        }
+        // Current LV first (it references the snapshots), then the snapshots.
+        self.delete_volume_with(vg, volume, opts).await?;
+        for l in lvs.iter().filter(|l| *l != volume) {
+            self.delete_volume_with(vg, l, opts).await?;
+        }
+        Ok(())
+    }
+
     /// Check if LVM is available
     pub fn check_lvm_available() -> bool {
         std::process::Command::new("vgs")
@@ -372,6 +676,13 @@ pub struct LvmPoolOptions {
     /// Deadline for wiping/discarding one volume (default 3600 s).
     #[serde(default = "default_scrub_timeout")]
     pub scrub_timeout_secs: u32,
+    /// Snapshots as a volume chain (default false): volumes are qcow2 images
+    /// written onto their LVs, and a snapshot freezes the LV and stacks a
+    /// new qcow2 overlay LV on it (`storage::lvm_chain`). The way to get
+    /// snapshots on a shared thick VG on SAN storage. Set when the pool is
+    /// created; existing raw volumes are not converted.
+    #[serde(default)]
+    pub snapshot_as_volume_chain: bool,
 }
 
 fn default_cmd_timeout() -> u32 {
@@ -389,6 +700,7 @@ impl Default for LvmPoolOptions {
             discard_removed: false,
             command_timeout_secs: default_cmd_timeout(),
             scrub_timeout_secs: default_scrub_timeout(),
+            snapshot_as_volume_chain: false,
         }
     }
 }
