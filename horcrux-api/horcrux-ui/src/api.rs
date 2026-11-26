@@ -4724,39 +4724,68 @@ pub async fn update_package_database() -> Result<TaskRef, ApiError> {
 // System Management Extensions for Logs, Package Manager, and Diagnostics
 // ============================================================================
 
-// Extended LogEntry structure to support the logs page
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Filters of the system log page (the API's query parameters).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct LogFilters {
     pub level: Option<String>,
     pub service: Option<String>,
     pub search: Option<String>,
     pub limit: Option<u32>,
+    /// Absolute (`2026-11-25 10:00`) or relative (`1h`) start / end.
+    pub since: Option<String>,
+    pub until: Option<String>,
+    /// Minimum priority 0 (emerg) .. 7 (debug).
+    pub priority: Option<u8>,
+    pub unit: Option<String>,
+    /// SYSLOG_IDENTIFIER; `*` is a wildcard.
+    pub identifier: Option<String>,
+    pub kernel: bool,
+    /// `0` current boot, `-1` previous, or a boot id.
+    pub boot: Option<String>,
+    pub node: Option<String>,
+}
+
+impl LogFilters {
+    /// `a=b&c=d` (percent-encoded), without a leading `?`.
+    pub fn query(&self) -> String {
+        let enc = |s: &str| urlencoding::encode(s).into_owned();
+        let mut p: Vec<String> = Vec::new();
+        let mut add = |k: &str, v: &Option<String>| {
+            if let Some(v) = v.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                p.push(format!("{k}={}", enc(v)));
+            }
+        };
+        add("level", &self.level);
+        add("service", &self.service);
+        add("search", &self.search);
+        add("since", &self.since);
+        add("until", &self.until);
+        add("unit", &self.unit);
+        add("identifier", &self.identifier);
+        add("boot", &self.boot);
+        add("node", &self.node);
+        if let Some(l) = self.limit {
+            p.push(format!("limit={l}"));
+        }
+        if let Some(l) = self.priority {
+            p.push(format!("priority={l}"));
+        }
+        if self.kernel {
+            p.push("kernel=true".into());
+        }
+        p.join("&")
+    }
 }
 
 /// Get system logs with extended filtering
 pub async fn get_system_logs(filters: LogFilters) -> Result<Vec<LogEntry>, ApiError> {
-    let mut url = "/system/logs".to_string();
-    let mut params = Vec::new();
-
-    if let Some(level) = filters.level {
-        params.push(format!("level={}", level));
-    }
-    if let Some(service) = filters.service {
-        params.push(format!("service={}", service));
-    }
-    if let Some(search) = filters.search {
-        params.push(format!("search={}", search));
-    }
-    if let Some(limit) = filters.limit {
-        params.push(format!("limit={}", limit));
-    }
-
-    if !params.is_empty() {
-        url.push('?');
-        url.push_str(&params.join("&"));
-    }
-
-    fetch_json(&url).await
+    let q = filters.query();
+    fetch_json(&if q.is_empty() {
+        "/system/logs".to_string()
+    } else {
+        format!("/system/logs?{q}")
+    })
+    .await
 }
 
 /// Clear system logs
@@ -4766,25 +4795,86 @@ pub async fn clear_system_logs() -> Result<(), ApiError> {
 
 /// Export system logs
 pub async fn export_system_logs(filters: LogFilters, format: String) -> Result<String, ApiError> {
-    let mut url = format!("/system/logs/export?format={}", format);
-    let mut params = Vec::new();
-
-    if let Some(level) = filters.level {
-        params.push(format!("level={}", level));
-    }
-    if let Some(service) = filters.service {
-        params.push(format!("service={}", service));
-    }
-    if let Some(search) = filters.search {
-        params.push(format!("search={}", search));
-    }
-
-    if !params.is_empty() {
+    let q = filters.query();
+    let mut url = format!("/system/logs/export?format={format}");
+    if !q.is_empty() {
         url.push('&');
-        url.push_str(&params.join("&"));
+        url.push_str(&q);
     }
-
     fetch_text(&url).await
+}
+
+fn node_query(node: Option<&str>) -> String {
+    match node.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => format!("?node={}", urlencoding::encode(n)),
+        None => String::new(),
+    }
+}
+
+/// One boot of a node (`GET /api/system/logs/boots`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LogBoot {
+    pub index: i64,
+    pub boot_id: String,
+    #[serde(default)]
+    pub first_us: Option<i64>,
+    #[serde(default)]
+    pub last_us: Option<i64>,
+    #[serde(default)]
+    pub first_entry: Option<String>,
+    #[serde(default)]
+    pub last_entry: Option<String>,
+    #[serde(default)]
+    pub source: String,
+}
+
+pub async fn get_log_boots(node: Option<&str>) -> Result<Vec<LogBoot>, ApiError> {
+    fetch_json(&format!("/system/logs/boots{}", node_query(node))).await
+}
+
+/// Units / services to choose from (`GET /api/system/logs/units`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct LogUnits {
+    pub kind: String,
+    pub units: Vec<String>,
+}
+
+pub async fn get_log_units(node: Option<&str>) -> Result<LogUnits, ApiError> {
+    fetch_json(&format!("/system/logs/units{}", node_query(node))).await
+}
+
+/// Which log source a node has and what it cannot give.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct LogInfo {
+    pub node: String,
+    pub source: String,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub limitations: Vec<String>,
+    pub max_lines: usize,
+    pub default_lines: usize,
+    pub follow_idle_secs: u64,
+    pub follow_max_secs: u64,
+}
+
+pub async fn get_log_info(node: Option<&str>) -> Result<LogInfo, ApiError> {
+    fetch_json(&format!("/system/logs/info{}", node_query(node))).await
+}
+
+pub async fn get_log_settings() -> Result<horcrux_common::system_logs::LogSettings, ApiError> {
+    fetch_json("/system/logs/settings").await
+}
+
+pub async fn put_log_settings(
+    s: &horcrux_common::system_logs::LogSettings,
+) -> Result<horcrux_common::system_logs::LogSettings, ApiError> {
+    put_json("/system/logs/settings", s).await
+}
+
+/// Single-use ticket for the live log WebSocket.
+pub async fn get_log_stream_ticket() -> Result<WsTicketResponse, ApiError> {
+    post_json("/system/logs/stream/ticket", &()).await
 }
 
 // Package Manager Extensions
@@ -4894,14 +4984,38 @@ pub async fn generate_diagnostic_report(format: &str) -> Result<String, ApiError
     fetch_text(&format!("/system/diagnostics/report?format={}", format)).await
 }
 
-// Extended LogEntry to support service field and details
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// One system log entry: journald or syslog file, newest first from the list.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct LogEntry {
     pub timestamp: String,
     pub level: String,
     pub service: Option<String>,
     pub message: String,
     pub details: Option<String>,
+    #[serde(default)]
+    pub ts_us: Option<i64>,
+    /// 0 (emerg) .. 7 (debug).
+    #[serde(default)]
+    pub priority: Option<u8>,
+    #[serde(default)]
+    pub priority_name: Option<String>,
+    /// The log file carries no priority; it was guessed from the text.
+    #[serde(default)]
+    pub priority_inferred: bool,
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub identifier: Option<String>,
+    #[serde(default)]
+    pub pid: Option<u32>,
+    #[serde(default)]
+    pub boot_id: Option<String>,
+    #[serde(default)]
+    pub hostname: Option<String>,
+    #[serde(default)]
+    pub kernel: bool,
+    #[serde(default)]
+    pub node: Option<String>,
 }
 
 // ============================================================================

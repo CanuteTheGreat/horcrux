@@ -22,6 +22,7 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         vms: state.vm_manager.list_vms().await,
         console: crate::console::hxc_settings::get(),
         remote_play: crate::api::remote_play::load_settings(state).await,
+        logs: crate::api::system_admin::logs::load_settings(state).await,
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
     }
@@ -139,6 +140,14 @@ async fn run_change(
             crate::api::remote_play::set_settings(state, w).await?;
             Ok(Some(
                 "applied at once (listeners, relay and port forwards)".into(),
+            ))
+        }
+
+        ("logs", Action::Update) => {
+            let w = spec.logs.clone().ok_or("not in spec")?;
+            crate::api::system_admin::logs::set_settings(state, w).await?;
+            Ok(Some(
+                "applied at once (new requests and new live streams)".into(),
             ))
         }
 
