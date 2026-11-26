@@ -116,6 +116,14 @@ src_install() {
 	EOF
 }
 
+pkg_preinst() {
+	# /etc/conf.d/horcrux-api is the HOST's file (admin groups, rate limits, lab ADMIN_PASSWORD): the tarball carries the image's stock copy, which
+	# made every emerge leave a ._cfg0000_horcrux-api that, accepted, drops the host's active lines. Ship it only where none exists yet.
+	if [[ -e ${EROOT}/etc/conf.d/horcrux-api ]]; then
+		rm -f "${ED}"/etc/conf.d/horcrux-api
+	fi
+}
+
 pkg_postinst() {
 	# Enable the fence agent where HA can be configured: a node whose manager starts at boot (server editions, every cluster member: the manager
 	# is enabled on create/join) also gets its fence agent in the default runlevel. A desktop edition without the manager enabled stays as is.

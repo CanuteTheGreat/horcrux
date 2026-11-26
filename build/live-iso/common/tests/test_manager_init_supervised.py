@@ -35,5 +35,18 @@ class ManagerAssetPublished(unittest.TestCase):
         self.assertIn("horcrux-manager-daily-$(uname -m).tar.zst", e)
 
 
+@unittest.skipUnless(os.path.isdir(os.path.join(ROOT, "horcrux-api")), "reads the Horcrux repo tree (vendored copies in other repos skip)")
+class HostConfdNotOverwritten(unittest.TestCase):
+    """pqa laptop:*:config-updates (hogshead, gringotts, madammalkins): every horcrux-bin emerge left /etc/conf.d/._cfg0000_horcrux-api, the image's
+    stock file, which dropped the lab's active lines when accepted"""
+
+    def test_template_drops_the_packaged_confd_where_the_host_has_one(self):
+        e = open(os.path.join(ROOT, "gentoo/app-emulation/horcrux-bin/horcrux-bin-0.1.0.ebuild")).read()
+        m = re.search(r"pkg_preinst\(\) \{(.*?)\n\}", e, re.S)
+        self.assertTrue(m, "pkg_preinst missing")
+        self.assertIn("-e ${EROOT}/etc/conf.d/horcrux-api", m.group(1))
+        self.assertIn('rm -f "${ED}"/etc/conf.d/horcrux-api', m.group(1))
+
+
 if __name__ == "__main__":
     unittest.main()
