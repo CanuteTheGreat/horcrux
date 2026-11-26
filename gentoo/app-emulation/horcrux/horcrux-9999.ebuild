@@ -394,6 +394,10 @@ src_install() {
 	newins "${S}/deploy/config.toml.example" config.toml
 	fperms 0640 /etc/horcrux/config.toml
 
+	# udev must not rewrite the MAC of VM tap/macvtap devices (see the file)
+	insinto /usr/lib/systemd/network
+	doins "${FILESDIR}"/10-horcrux-tap.link
+
 	# Set permissions
 	fowners root:root /var/lib/horcrux
 	fperms 0700 /var/lib/horcrux
