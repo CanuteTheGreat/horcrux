@@ -1392,8 +1392,14 @@ mod tests {
         StorageManager::refresh_capacity(fake_fs, &mut gp);
         assert_eq!((gp.total, gp.available), (10, 4));
 
-        // Block pools (LVM/iSCSI) and S3 aren't statvfs'd.
-        for t in [StorageType::Lvm, StorageType::Iscsi, StorageType::S3] {
+        // LVM pools are measured (by `vgs`, the fake here) like the rest.
+        let mut lp = pool("l", StorageType::Lvm, "vg_x");
+        lp.available = 7;
+        m.pools.write().await.insert("l".into(), lp);
+        assert_eq!(m.get_pool("l").await.unwrap().available, 4);
+
+        // iSCSI (sized at attach) and S3 aren't probed.
+        for t in [StorageType::Iscsi, StorageType::S3] {
             let mut bp = pool("b", t.clone(), "tank/vms");
             bp.available = 7;
             m.pools.write().await.insert("b".into(), bp.clone());

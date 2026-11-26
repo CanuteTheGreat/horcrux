@@ -14,7 +14,8 @@ cd "$WORK"
 rm -f disk.qcow2 key key.pub
 qemu-img create -q -f qcow2 -F qcow2 -b base.qcow2 disk.qcow2 16G
 ssh-keygen -q -t ed25519 -N '' -f key
-cp "$BIN" seed/horcrux-api; cp "$HERE/hx_node.py" "$HERE/san_guest_e2e.sh" seed/
+cp "$BIN" seed/horcrux-api; objcopy --strip-debug seed/horcrux-api 2>/dev/null || true
+cp "$HERE/hx_node.py" "$HERE/san_guest_e2e.sh" seed/
 cat > seed/meta-data <<EOF
 instance-id: hxsan-$(date +%s)
 local-hostname: hxsan

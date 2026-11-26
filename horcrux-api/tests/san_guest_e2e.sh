@@ -82,7 +82,7 @@ check "lvmlocal-owned-with-host-id" 'grep -q "host_id = 1" /etc/lvm/lvmlocal.con
 check "lvmlockd-sees-lockspace" 'lvmlockctl -i 2>/dev/null | grep -q vg_hxsan' "$(lvmlockctl -i 2>&1 | head)"
 pools=$(api GET /storage/pools)
 PID=$(echo "$pools" | jq_ "[p['id'] for p in d['body'] if p['name']=='sanlvm'][0]" 2>/dev/null)
-check "storage-pool-on-shared-vg" '[ -n "$PID" ] && echo "$pools" | grep -q "\"shared\":true"' "$pools"
+check "storage-pool-on-shared-vg" '[ -n "$PID" ] && [ "$(echo "$pools" | jq_ "[(p[\"lvm\"][\"shared\"], p[\"available\"] > 0) for p in d[\"body\"] if p[\"name\"]==\"sanlvm\"][0]")" = "(True, True)" ]' "$pools"
 r=$(api POST /storage/pools/$PID/volumes '{"name":"vm-100-disk-0","size":1}')
 check "volume-created-on-shared-vg" '[ -b /dev/vg_hxsan/vm-100-disk-0 ]' "$r"
 check "volume-active-exclusively" 'lvs --noheadings -o lv_active_exclusively vg_hxsan/vm-100-disk-0 | grep -q "active exclusively"' "$(lvs -o +lv_active_exclusively vg_hxsan 2>&1)"
