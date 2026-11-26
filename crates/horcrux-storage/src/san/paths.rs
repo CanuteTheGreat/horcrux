@@ -173,6 +173,18 @@ pub fn assemble(
         rest.entry(key).or_default().push(dev);
     }
     for (wwid, devs) in rest {
+        // A disk whose WWID already has a map but which multipathd has not
+        // taken into it (it appeared before the WWID was known): it belongs
+        // to that LUN, shown unmapped and not counted as carrying I/O.
+        if let Some(l) = out.iter_mut().find(|l| l.map.is_some() && l.wwid == wwid) {
+            l.paths.extend(
+                devs.iter()
+                    .map(|dev| view_of(dev, PathState::Unmapped, None)),
+            );
+            l.paths.sort_by(|a, b| a.dev.cmp(&b.dev));
+            recount(l);
+            continue;
+        }
         let d = &disks[devs[0]];
         out.push(finish(LunView {
             device: format!("/dev/{}", devs[0]),
@@ -195,17 +207,35 @@ pub fn assemble(
 }
 
 fn finish(mut l: LunView) -> LunView {
+    recount(&mut l);
+    l
+}
+
+fn recount(l: &mut LunView) {
+    // Without a map every disk is a usable path; with one, only the map's
+    // active paths carry I/O.
+    let mapped = l.map.is_some();
     l.active_paths = l
         .paths
         .iter()
-        .filter(|p| matches!(p.state, PathState::Active | PathState::Unmapped))
+        .filter(|p| p.state == PathState::Active || (!mapped && p.state == PathState::Unmapped))
         .count();
     l.failed_paths = l
         .paths
         .iter()
         .filter(|p| p.state == PathState::Failed)
         .count();
-    l
+}
+
+/// Disks that belong to a mapped LUN but are not in its map (the
+/// reconcile loop hands them to `multipathd add path`).
+pub fn unmapped_in_maps(luns: &[LunView]) -> Vec<String> {
+    luns.iter()
+        .filter(|l| l.map.is_some())
+        .flat_map(|l| l.paths.iter())
+        .filter(|p| p.state == PathState::Unmapped)
+        .map(|p| p.dev.clone())
+        .collect()
 }
 
 /// Size of `/sys/block/<dev>` in bytes.
@@ -390,6 +420,22 @@ mod tests {
         // without WWIDs: target + LUN
         let v = assemble(&s, &[], &HashMap::new(), |_| None);
         assert_eq!(v[0].wwid, format!("{IQN}:lun0"));
+    }
+
+    #[test]
+    fn a_disk_left_out_of_its_map_joins_that_lun_unmapped() {
+        let (s, mut m) = four_paths(false);
+        let left_out = m[0].paths.pop().unwrap().dev;
+        let w: HashMap<String, String> = [(left_out.clone(), m[0].wwid.clone())]
+            .into_iter()
+            .collect();
+        let v = assemble(&s, &m, &w, |_| None);
+        assert_eq!(v.len(), 1, "one LUN, never a second phantom one: {v:?}");
+        assert_eq!(v[0].paths.len(), 4);
+        assert_eq!(v[0].active_paths, 3);
+        let p = v[0].paths.iter().find(|p| p.dev == left_out).unwrap();
+        assert_eq!(p.state, PathState::Unmapped);
+        assert_eq!(unmapped_in_maps(&v), vec![left_out]);
     }
 
     #[test]

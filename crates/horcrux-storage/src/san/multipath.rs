@@ -283,6 +283,30 @@ pub async fn add_wwid(wwid: &str, timeout: Duration) -> Result<(), String> {
     Ok(())
 }
 
+/// Make multipathd take a path it skipped (a disk that appeared before
+/// its WWID was registered is never re-evaluated by multipathd itself).
+pub async fn add_path(dev: &str, timeout: Duration) -> Result<(), String> {
+    if dev.is_empty() || !dev.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(format!("bad device {dev:?}"));
+    }
+    let r = super::iscsi::run("multipathd", &["add", "path", dev], timeout).await?;
+    if r.ok && !r.stdout.contains("fail") {
+        Ok(())
+    } else {
+        Err(format!(
+            "multipathd add path {dev}: {} {}",
+            r.stdout.trim(),
+            r.stderr.trim()
+        ))
+    }
+}
+
+/// Wait for udev to finish the events of freshly attached disks.
+pub async fn settle(timeout: Duration) {
+    let secs = format!("--timeout={}", timeout.as_secs().max(1));
+    let _ = super::iscsi::run("udevadm", &["settle", &secs], timeout).await;
+}
+
 /// Make multipathd read the config again.
 pub async fn reconfigure(timeout: Duration) -> Result<(), String> {
     let r = super::iscsi::run("multipathd", &["reconfigure"], timeout).await?;

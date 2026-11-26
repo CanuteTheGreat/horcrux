@@ -62,9 +62,11 @@ rep=$(api POST /san/apply)
 echo "$rep" | head -c 2000; echo
 check "drop-in-written" 'head -1 /etc/multipath/conf.d/horcrux.conf | grep -q "Managed by Horcrux"'
 check "4-iscsi-sessions" '[ "$(iscsiadm -m session 2>/dev/null | grep -c "$IQN")" = 4 ]' "$(iscsiadm -m session 2>&1)"
+p=$(api GET /san/paths)
+check "first-apply-maps-every-path" '[ "$(echo "$p" | jq_ "[(l[\"active_paths\"], len(l[\"paths\"])) for l in d[\"body\"][\"luns\"]]")" = "[(4, 4)]" ]' "$p"
 for i in $(seq 1 30); do
   p=$(api GET /san/paths)
-  [ "$(echo "$p" | jq_ "len([l for l in d['body']['luns'] if l['map']])")" = 1 ] && break
+  [ "$(echo "$p" | jq_ "[l['active_paths'] for l in d['body']['luns'] if l['map']] == [4]")" = True ] && break
   api POST /san/apply >/dev/null; sleep 2
 done
 echo "$p" | head -c 3000; echo

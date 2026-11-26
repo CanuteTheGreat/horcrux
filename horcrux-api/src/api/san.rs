@@ -592,13 +592,17 @@ async fn login_target(state: &AppState, t: &IscsiTargetSpec, rep: &mut ApplyRepo
 /// our own targets (and nothing else, so local disks stay untouched).
 async fn register_wwids(mine: &[&IscsiTargetSpec], rep: &mut ApplyReport) {
     let iqns: HashSet<&str> = mine.iter().map(|t| t.iqn.as_str()).collect();
+    // Disks of sessions that just logged in may still be in udev's queue.
+    multipath::settle(TOOL_TIMEOUT).await;
     let sessions = iscsi::sessions(TOOL_TIMEOUT).await.unwrap_or_default();
     let mut added = false;
+    let mut disk_wwid: Vec<(String, String)> = Vec::new();
     for s in sessions.iter().filter(|s| iqns.contains(s.iqn.as_str())) {
         for d in &s.disks {
             let Some(w) = multipath::wwid_of(&d.dev, TOOL_TIMEOUT).await else {
                 continue;
             };
+            disk_wwid.push((d.dev.clone(), w.clone()));
             if known_wwids().lock().unwrap().contains(&w) {
                 continue;
             }
@@ -614,6 +618,28 @@ async fn register_wwids(mine: &[&IscsiTargetSpec], rep: &mut ApplyReport) {
     }
     if added {
         let _ = multipath::reconfigure(TOOL_TIMEOUT).await;
+    }
+    // A map built from the first path seen leaves the other paths of that
+    // LUN out for good when their uevents came before the WWID was known:
+    // hand every such disk to multipathd, on every pass.
+    let Ok(maps) = multipath::maps(TOOL_TIMEOUT).await else {
+        return;
+    };
+    let mapped: HashSet<&str> = maps
+        .iter()
+        .flat_map(|m| m.paths.iter().map(|p| p.dev.as_str()))
+        .collect();
+    let map_wwids: HashSet<&str> = maps.iter().map(|m| m.wwid.as_str()).collect();
+    for (dev, w) in &disk_wwid {
+        if mapped.contains(dev.as_str()) || !map_wwids.contains(w.as_str()) {
+            continue;
+        }
+        match multipath::add_path(dev, TOOL_TIMEOUT).await {
+            Ok(()) => rep
+                .actions
+                .push(format!("multipath: added path {dev} to {w}")),
+            Err(e) => rep.errors.push(e),
+        }
     }
 }
 
