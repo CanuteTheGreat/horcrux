@@ -1,4 +1,4 @@
-/* errant ui-kit v0.1 - ui.js (optional, no dependencies, ES2017). Progressive enhancement via data-ui-*:
+/* errant ui-kit v0.2 - ui.js (optional, no dependencies, ES2017). Progressive enhancement via data-ui-*:
    <table class="ui-grid" data-ui-grid="vms">  th[data-sort] sorts (data-type="num" for numbers), aria-sort set
    <input data-ui-filter="vms">                filters that grid's rows by text
    <details class="ui-menu" data-ui-columns="vms"> with <label><input type=checkbox value=col> - hides

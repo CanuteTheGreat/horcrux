@@ -1,4 +1,4 @@
-/* errant ui-kit v0.1 - components.css (needs tokens.css first)
+/* errant ui-kit v0.2 - components.css (needs tokens.css first)
    Every class is prefixed ui- and nothing styles bare elements, so a product can adopt it page by page
    next to its existing CSS. Markup contract: ui-kit/README.md. License GPL-3.0-or-later. */
 
@@ -139,11 +139,11 @@
 @keyframes ui-spin { to { transform: rotate(360deg); } }
 
 /* dialog + toast */
-.ui-dialog { border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--e-2); padding: 0; background: var(--c-surface); color: var(--c-ink); width: min(560px, calc(100vw - 32px)); }
+.ui-dialog { margin: auto; border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--e-2); padding: 0; background: var(--c-surface); color: var(--c-ink); width: min(560px, calc(100vw - 32px)); }
 .ui-dialog::backdrop { background: var(--scrim); }
-.ui-dialog > header { padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--c-border); font-weight: 600; font-size: var(--fs-lg); }
-.ui-dialog > .ui-dialog-body { padding: var(--s-4); }
-.ui-dialog > footer { display: flex; justify-content: flex-end; gap: var(--s-2); padding: var(--s-3) var(--s-4); border-top: 1px solid var(--c-border); background: var(--c-sunken); }
+.ui-dialog > header, .ui-dialog > form > header { padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--c-border); font-weight: 600; font-size: var(--fs-lg); }
+.ui-dialog > .ui-dialog-body, .ui-dialog > form > .ui-dialog-body { padding: var(--s-4); }
+.ui-dialog > footer, .ui-dialog > form > footer { display: flex; justify-content: flex-end; gap: var(--s-2); padding: var(--s-3) var(--s-4); border-top: 1px solid var(--c-border); background: var(--c-sunken); }
 .ui-toasts { position: fixed; right: var(--s-4); bottom: var(--s-4); display: grid; gap: var(--s-2); z-index: 400; width: min(380px, calc(100vw - 32px)); }
 .ui-toast { background: var(--c-raised); border: 1px solid var(--c-border); border-radius: var(--r-md); box-shadow: var(--e-2); padding: var(--s-3); }
 .ui-toast.ok { border-color: var(--c-ok); }
