@@ -1,0 +1,13 @@
+# Negative-capability claims on the public site that were REVIEWED and are accurate today (ci/ux-qa/check_site_claims.py).
+# Format: REGEX  # reason (until YYYY-MM-DD)      REGEX is matched case-insensitively against "<page path>|<sentence>".
+# Max 90 days ahead. When a line expires the deploy fails again: re-check the claim against the product, then either close
+# the gap and change the text (delete the line) or extend it with a fresh reason. Never add a line only to get a deploy out.
+^/\|Secure Boot is not supported  # accurate: the boot chain is unsigned today; job horcrux-patronus-secureboot is adding free shim+MOK Secure Boot, then this text changes (until 2026-12-26)
+^/\|Secure Boot must be off  # accurate until the signed boot chain ships (job horcrux-patronus-secureboot) (until 2026-12-26)
+^/roadmap/\|Secure Boot is unsupported  # accurate until the signed boot chain ships (job horcrux-patronus-secureboot) (until 2026-12-26)
+^/\|aarch64 is tested under QEMU emulation only  # accurate disclosure: no arm64/riscv64 hardware in the test lab (until 2027-01-25)
+^/roadmap/\|It is not ready for production use  # accurate: pre-1.0 daily builds, no stable release yet (until 2027-01-25)
+^/roadmap/\|Supported set: x86_64 and aarch64 \(riscv64 listed as unsupported  # accurate: riscv64 has no native builder or hardware test (until 2027-01-25)
+^/roadmap/\|Not yet tracked: 14 days in a row green  # accurate: the stable-channel criterion is not measured yet (until 2027-01-25)
+^/roadmap/\|A build crashed on an Intel machine on 2026-10-28  # accurate per the roadmap; re-check on the Intel lab machine and drop the line once confirmed (until 2026-12-10)
+^/stable-channel/\|Policy to publish before the first sale  # "unsupported versions" = support-scope wording, not a product gap (the page itself is a planning doc: public-pages ledger item) (until 2026-12-26)

@@ -51,6 +51,8 @@ jobs:
           set -e
           python3 site/build.py
           python3 site/check.py
+          # no unreviewed "not supported / must be off / coming soon" claim ships (owner-findings: Secure Boot claim)
+          python3 ci/ux-qa/check_site_claims.py site/dist
           echo "${{ github.sha }}" > site/dist/version.txt
       - name: Build site image (linux/arm64 for ollivanders; COPY-only, no emulation)
         run: |

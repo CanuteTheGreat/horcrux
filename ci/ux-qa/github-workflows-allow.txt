@@ -1,0 +1,3 @@
+# GitHub workflows allowed to run by themselves on the GitHub mirror (ci/ux-qa/check_github_workflows.py). CI is Forgejo.
+# <file>  # reason [(until YYYY-MM-DD)]
+pages.yml  # being deleted on branch cleanup/remove-github-pages-20261126 (merge in flight; Actions are already disabled on the mirror) (until 2026-12-03)
