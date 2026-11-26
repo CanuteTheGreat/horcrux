@@ -66,4 +66,12 @@ use_latest_release = true
 source = "github"
 github = "anchore/grype"
 use_latest_release = true
+
+# Ceph 21 (Umbrella) in the overlay: ::gentoo only has 20.x. Stable releases are x.2.z; a new 21.2.z means copying the new revision
+# of ::gentoo's sys-cluster/ceph ebuild (patch list) and testing the build; a 22.x line is a new ebuild decision, not an auto-bump.
+["sys-cluster/ceph"]
+source = "github"
+github = "ceph/ceph"
+use_max_tag = true
+include_regex = '^v21\.2\.\d+$'
 prefix = "v"
