@@ -1,0 +1,73 @@
+diff -u -r a/src/crypto/isa-l/isa-l_crypto/Makefile.am b/src/crypto/isa-l/isa-l_crypto/Makefile.am
+--- a/src/crypto/isa-l/isa-l_crypto/Makefile.am	2026-11-25 23:44:57.673486536 +0000
++++ b/src/crypto/isa-l/isa-l_crypto/Makefile.am	2026-11-25 23:44:57.673516476 +0000
+@@ -125,8 +125,8 @@
+ EXTRA_DIST += tools/yasm-filter.sh tools/nasm-filter.sh
+ EXTRA_DIST += tools/yasm-cet-filter.sh tools/nasm-cet-filter.sh
+ 
+-AM_CFLAGS = ${my_CFLAGS} ${INCLUDE} $(src_include) ${D}
+-AM_CCASFLAGS = ${yasm_args} ${INCLUDE} $(src_include) ${DEFS} ${D}
++AM_CFLAGS = ${my_CFLAGS} ${INCLUDE} $(src_include) ${DIST_D}
++AM_CCASFLAGS = ${yasm_args} ${INCLUDE} $(src_include) ${DEFS} ${DIST_D}
+ 
+ .asm.s:
+ 	@echo "  MKTMP   " $@;
+diff -u -r a/src/crypto/isa-l/isa-l_crypto/make.inc b/src/crypto/isa-l/isa-l_crypto/make.inc
+--- a/src/crypto/isa-l/isa-l_crypto/make.inc	2026-11-25 23:44:57.673557066 +0000
++++ b/src/crypto/isa-l/isa-l_crypto/make.inc	2026-11-25 23:44:57.673585676 +0000
+@@ -111,7 +111,7 @@
+ CFLAGS   = $(CFLAGS_$(arch)) $(CFLAGS_$(CC)) $(DEBUG) -O2 $(DEFINES) $(INCLUDE)
+ ASFLAGS  = $(ASFLAGS_$(arch)) $(ASFLAGS_$(CC)) $(DEBUG_$(AS)) $(DEFINES) $(INCLUDE)
+ ARFLAGS  = $(ARFLAGS_$(arch))
+-DEFINES += $(addprefix -D , $D)
++DEFINES += $(addprefix -D , ${DIST_D})
+ CLEANFILES += $(O) *.o *.a $(all_tests) $(lib_name) $(so_lib_name)
+ 
+ ifeq ($(filter aarch64 x86_%,$(host_cpu)),)
+@@ -193,7 +193,7 @@
+ 	@echo Completed run: $<
+ 
+ # Other build rules
+-msg = $(if $(DEBUG),DEBUG) $(patsubst 32,32-bit,$(host_cpu)) $D
++msg = $(if $(DEBUG),DEBUG) $(patsubst 32,32-bit,$(host_cpu)) ${DIST_D}
+ 
+ # gcc assembly files
+ $(O)/%.o: $(host_cpu)/%.S
+diff -u -r a/src/isa-l/Makefile.am b/src/isa-l/Makefile.am
+--- a/src/isa-l/Makefile.am	2026-11-25 23:44:57.673635366 +0000
++++ b/src/isa-l/Makefile.am	2026-11-25 23:44:57.673651327 +0000
+@@ -134,11 +134,11 @@
+ EXTRA_DIST += tools/nasm-filter.sh
+ EXTRA_DIST += tools/nasm-cet-filter.sh
+ 
+-AM_CFLAGS = ${my_CFLAGS} ${INCLUDE} $(src_include) ${ARCH} ${D}
++AM_CFLAGS = ${my_CFLAGS} ${INCLUDE} $(src_include) ${ARCH} ${DIST_D}
+ if CPU_AARCH64
+ AM_CCASFLAGS = ${AM_CFLAGS}
+ else
+-AM_CCASFLAGS = ${asm_args} ${INCLUDE} ${src_include} ${DEFS} ${D}
++AM_CCASFLAGS = ${asm_args} ${INCLUDE} ${src_include} ${DEFS} ${DIST_D}
+ endif
+ if CPU_RISCV64
+ AM_CCASFLAGS = ${AM_CFLAGS}
+diff -u -r a/src/isa-l/make.inc b/src/isa-l/make.inc
+--- a/src/isa-l/make.inc	2026-11-25 23:44:57.673687727 +0000
++++ b/src/isa-l/make.inc	2026-11-25 23:44:57.673705947 +0000
+@@ -125,7 +125,7 @@
+ CFLAGS   = $(CFLAGS_$(arch)) $(CFLAGS_$(CC)) $(DEBUG) -O2 $(DEFINES) $(INCLUDE) -D$(host_cpu)
+ ASFLAGS  = $(ASFLAGS_$(arch)) $(ASFLAGS_$(CC)) $(DEBUG_$(AS)) $(DEFINES) $(INCLUDE)
+ ARFLAGS  = $(ARFLAGS_$(arch))
+-DEFINES += $(addprefix -D , $D)
++DEFINES += $(addprefix -D , ${DIST_D})
+ CLEANFILES += $(O) *.o *.a $(all_tests) $(bin_PROGRAMS) $(lib_name) $(so_lib_name) $(all_llvm_fuzz_tests)
+ 
+ # set host_cpu=base_aliases for unsupported CPUs
+@@ -217,7 +217,7 @@
+ 	@echo Completed run: $<
+ 
+ # Other build rules
+-msg = $(if $(DEBUG),DEBUG) $(patsubst 32,32-bit,$(host_cpu)) $D
++msg = $(if $(DEBUG),DEBUG) $(patsubst 32,32-bit,$(host_cpu)) ${DIST_D}
+ 
+ # nasm assembly files
+ $(O)/%.o: %.asm
