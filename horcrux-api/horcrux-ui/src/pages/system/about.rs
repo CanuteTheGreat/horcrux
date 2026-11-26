@@ -80,7 +80,7 @@ fn VersionsCard() -> impl IntoView {
             {move || err.get().map(|e| view! { <div class="alert alert-error">{format!("Could not read the versions: {e}")}</div> })}
             {move || v.get().map(|v| view! {
                 <p class="help-text">{format!("Horcrux {} - versions from the {} package database.", v.horcrux, v.package_db)}</p>
-                <table class="vm-table" id="about-versions-table">
+                <table class="data-table" id="about-versions-table">
                     <thead><tr><th>"Component"</th><th>"Version"</th><th>"Running"</th><th>"Notes"</th></tr></thead>
                     <tbody>
                         {v.components.into_iter().map(|c| {
@@ -88,7 +88,7 @@ fn VersionsCard() -> impl IntoView {
                             view! {
                                 <tr id=id>
                                     <td>{c.name}</td>
-                                    <td>{c.version.unwrap_or_else(|| "not installed".into())}</td>
+                                    <td>{match c.version { Some(v) => view! { <span>{v}</span> }, None => view! { <span class="hx-badge">"Not installed"</span> } }}</td>
                                     <td>{c.running.unwrap_or_default()}</td>
                                     <td>{c.note.unwrap_or_default()}</td>
                                 </tr>
