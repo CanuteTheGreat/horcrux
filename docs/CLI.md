@@ -299,6 +299,20 @@ horcrux cluster add <node-name> <node-address>
 horcrux cluster remove <node-name>
 ```
 
+### Node maintenance (`node maintenance`)
+
+Any cluster member, asked through whichever node the CLI talks to
+(details: [NODE-MAINTENANCE.md](NODE-MAINTENANCE.md)).
+
+```bash
+horcrux node maintenance node-b status
+horcrux node maintenance node-b plan                    # what entering would move
+horcrux node maintenance node-b plan --return origin    # what leaving would bring back
+horcrux node maintenance node-b on                      # drain: refuses while a guest cannot move
+horcrux node maintenance node-b on --force              # ...or keep those guests on node-b
+horcrux node maintenance node-b off --return origin     # origin | rebalance | none
+```
+
 ### High Availability (`ha`)
 
 HA resource management:

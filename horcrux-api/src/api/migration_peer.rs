@@ -952,13 +952,16 @@ async fn commit(
     // go by (they stop a copy that runs on a node the cluster has not
     // placed it on), so it changes here, in the same step in which the
     // source gave the VM up and this node took it; the peers adopt the newer
-    // number with their next sync.
+    // number with their next sync. A migration keeps the requested HA state
+    // (an offline move of a stopped guest leaves it stopped), unlike a
+    // recovery, which starts it.
     #[cfg(feature = "cluster")]
     if let Some(r) = state.ha_manager.get_resource(&vm.id).await {
         if let Ok(local) = state.cluster_manager.get_local_node_name().await {
+            let stopped = !inc.live && !req.start;
             state
                 .ha_manager
-                .set_placement(&vm.id, &local, r.placement_seq + 1, false)
+                .set_home(&vm.id, &local, r.placement_seq + 1, stopped)
                 .await;
         }
     }
