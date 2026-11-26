@@ -210,10 +210,10 @@ pub fn VmHotplug(
                 {move || notice.get().map(|n| view! { <div class="alert alert-info" id="hotplug-notice">{n}</div> })}
                 {move || error.get().map(|e| view! { <div class="alert alert-error" id="hotplug-error">{e}</div> })}
                 <div class="form-row">
-                    <input id="hotplug-cpus" type="number" min="1" placeholder="total CPUs" prop:value=cpus
+                    <input id="hotplug-cpus" aria-label="Total CPUs" type="number" min="1" placeholder="total CPUs" prop:value=cpus
                         on:input=move |ev| cpus.set(event_target_value(&ev))/>
                     <button id="hotplug-cpu-add" type="button" class="btn btn-primary" on:click=add_cpus>"Add CPUs"</button>
-                    <input id="hotplug-mem" type="number" min="128" step="128" placeholder="MB to add" prop:value=mem
+                    <input id="hotplug-mem" aria-label="Memory to add (MB)" type="number" min="128" step="128" placeholder="MB to add" prop:value=mem
                         on:input=move |ev| mem.set(event_target_value(&ev))/>
                     <button id="hotplug-mem-add" type="button" class="btn btn-primary" on:click=add_mem>"Add memory"</button>
                 </div>

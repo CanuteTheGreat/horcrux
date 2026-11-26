@@ -39,6 +39,7 @@ def main():
     except ImportError:
         print("ui_snapshots: Pillow missing, skipped")
         return 0
+    MEDIANCUT = getattr(Image, "Quantize", Image).MEDIANCUT  # Pillow < 9.1 has no Quantize enum
     rows = []
     for combo in COMBOS:
         for page in KEY:
@@ -49,7 +50,7 @@ def main():
             dst = os.path.join(a.baseline, combo, page + ".png")
             if a.write:
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
-                cur.quantize(colors=128, method=Image.Quantize.MEDIANCUT).save(dst, optimize=True)
+                cur.quantize(colors=128, method=MEDIANCUT).save(dst, optimize=True)
                 rows.append({"combo": combo, "page": page, "written": dst})
                 continue
             if not os.path.exists(dst):
@@ -59,7 +60,7 @@ def main():
             if base.size != cur.size:
                 rows.append({"combo": combo, "page": page, "state": "CHANGED", "pct": 100.0, "why": f"size {base.size} -> {cur.size}"})
                 continue
-            diff = ImageChops.difference(base, cur.quantize(colors=128, method=Image.Quantize.MEDIANCUT).convert("RGB")).convert("L")
+            diff = ImageChops.difference(base, cur.quantize(colors=128, method=MEDIANCUT).convert("RGB")).convert("L")
             hist = diff.histogram()
             changed = sum(hist[24:])  # ignore quantization noise
             pct = 100.0 * changed / (cur.width * cur.height)
