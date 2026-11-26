@@ -1098,14 +1098,11 @@ pub fn spawn(state: Arc<AppState>) {
             let arrived = match &known {
                 None => false, // first look: nothing to compare with
                 Some(prev) => now_map.iter().any(|(n, maint)| {
-                    !maint
-                        && match prev.get(n) {
-                            None => true, // joined / came back online
-                            // Leaving maintenance is handled by the node that
-                            // leaves, per its return policy (origin / rebalance
-                            // / none): never a second, competing pass here.
-                            Some(_) => false,
-                        }
+                    // Only a node that joined or came back online counts.
+                    // Leaving maintenance is handled by the node that leaves,
+                    // per its return policy (origin / rebalance / none):
+                    // never a second, competing pass here.
+                    !maint && !prev.contains_key(n)
                 }),
             };
             known = Some(now_map);
