@@ -242,7 +242,7 @@ if [ "$result" = pass ]; then
     # X11 UI-scale checks of gnome-session-openrc >= 50.0-r4). Runs on every desktop ISO, OpenRC and systemd (INIT from the image name).
     name=gnome-vm-gate
     echo "::group::QEMU test $name"
-    with_deadline $DL_QEMU python3 -u "$HERE/gnome-vm-gate.py" --iso "$ISO" --project "$PROJECT" --init "$INIT" --tests "${GNOME_VM_TESTS:-session-lifecycle}" --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -40
+    with_deadline $DL_QEMU python3 -u "$HERE/gnome-vm-gate.py" --iso "$ISO" --project "$PROJECT" --init "$INIT" --tests "${GNOME_VM_TESTS:-session-lifecycle}" --out "$EVI/$name" 2>&1 | tee "$EVI/test-$name.log" | tail -200
     rc=${PIPESTATUS[0]}
     echo "::endgroup::"
     rm -f "$EVI/$name"/install/target*.qcow2 "$EVI/$name"/install/answers.img
