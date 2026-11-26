@@ -670,10 +670,6 @@ pub async fn run() -> anyhow::Result<()> {
                 next,
             )
         }))
-        // API access log: every /api request with caller, client and outcome
-        .layer(axum_middleware::from_fn(move |conn_info, req, next| {
-            api::access_log::record_middleware(access_log.clone(), conn_info, req, next)
-        }))
         // Prometheus: count every request by route pattern and status
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
@@ -681,7 +677,13 @@ pub async fn run() -> anyhow::Result<()> {
         ))
         // Note: Auth middleware will be added per-route or per-group later
         // Serve static files (frontend) - must be last to act as fallback
-        .fallback_service(serve_dir);
+        .fallback_service(serve_dir)
+        // API access log LAST so it is the outermost layer and therefore also
+        // records unmatched /api/* requests that fall through to the static
+        // fallback (an /api 404 is still a call worth logging).
+        .layer(axum_middleware::from_fn(move |conn_info, req, next| {
+            api::access_log::record_middleware(access_log.clone(), conn_info, req, next)
+        }));
 
     // Set up graceful shutdown
     let shutdown_coordinator = shutdown::ShutdownCoordinator::new();
