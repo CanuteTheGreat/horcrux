@@ -468,6 +468,16 @@ def live_commands(n):
     return cmds
 
 
+def live_diag_commands(n):
+    """read-only commands whose output explains a live link that got no address (bond state, links, addresses, dhcpcd)"""
+    cmds = []
+    if is_bond(n):
+        cmds.append(["cat", f"/proc/net/bonding/{n['bond']['name']}"])
+    cmds += [["ip", "-d", "-br", "link", "show"], ["ip", "-br", "addr", "show"],
+             "grep -v '^#' /etc/dhcpcd.conf | grep -v '^$' | tail -n 12", "ps -eo args | grep '[d]hcpcd'"]
+    return cmds
+
+
 def live_teardown(n):
     """undo live_commands (Back on the screen, or a second try with other settings); errors are ignored by the caller"""
     if is_plain(n):

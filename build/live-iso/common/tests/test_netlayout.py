@@ -259,6 +259,9 @@ class Live(unittest.TestCase):
         self.assertEqual(c[-1], ["ip", "link", "set", "bond0.42", "up"])
         self.assertEqual(NL.live_commands(mg()), [])
         self.assertEqual(NL.live_teardown(lacp42())[0], ["ip", "link", "del", "bond0.42"])
+        d = NL.live_diag_commands(lacp42())
+        self.assertEqual(d[0], ["cat", "/proc/net/bonding/bond0"])
+        self.assertNotIn(["cat", "/proc/net/bonding/bond0"], NL.live_diag_commands(mg()))
 
     def fake(self, ips):
         ran, files = [], {"/etc/dhcpcd.conf": "denyinterfaces wlan*\n"}

@@ -190,8 +190,15 @@ def apply_live_link(p, n, prev=None, log=print):
     def write(path, text):
         with open(path, "w") as fh:
             fh.write(text)
-    return NL.apply_live(n, run, read=S.read, write=write, restart_dhcpcd=lambda: initsys.control("restart", "dhcpcd", timeout=60),
-                         nic_ip=S.nic_ip, wait_secs=int(NL.default(p, "live_wait_secs")), prev=prev, log=log)
+    ok, info = NL.apply_live(n, run, read=S.read, write=write, restart_dhcpcd=lambda: initsys.control("restart", "dhcpcd", timeout=60),
+                             nic_ip=S.nic_ip, wait_secs=int(NL.default(p, "live_wait_secs")), prev=prev, log=log)
+    if not ok:
+        # what the kernel and dhcpcd ended up with, so a failed link says why (installer log / console)
+        for cmd in NL.live_diag_commands(n):
+            rc, out = S.sh(cmd, timeout=15)
+            for line in (out or "").strip().splitlines()[:90]:
+                log(f"MGMT-LINK-DIAG {cmd[0] if isinstance(cmd, list) else 'sh'}: {line}")
+    return ok, info
 
 
 def live_link(t, st, step, n, prev):

@@ -323,7 +323,9 @@ name = "bond0"                            # default bond0
 primary = "enp1s0"                        # active-backup / balance-alb / balance-tlb: preferred NIC
 ```
 
-`802.3ad` needs an LACP group on the switch; `active-backup` works on any switch. The installer builds the same link on the live
+`802.3ad` needs an LACP group on the switch and member NICs that report link speed and duplex (Linux keeps an 802.3ad member
+without them down; a virtio-net NIC reports them only when the hypervisor sets `speed=` / `duplex=`, which the
+`MGMT-LINK-DIAG` lines show as `Speed: Unknown`); `active-backup` works on any switch and any NIC. The installer builds the same link on the live
 system first, so DHCP on the tagged VLAN works during the install (`MGMT-LINK-LIVE ok ...` on the console). On the installed node the
 bond and VLAN are configured by the init system's own network stack: netifrc (`/etc/conf.d/net`, service `net.bond0` or
 `net.<nic>` in the default runlevel) on OpenRC, systemd-networkd (`/etc/systemd/network/10-mgmt-*.netdev/.network`) on systemd, and

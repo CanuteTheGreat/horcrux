@@ -34,12 +34,16 @@ def define(args):
     mgmt = ['interfaces = "all"', f"vlan = {vlan}",
             f'bond = {{ mode = "{bond}", miimon = 100' + (', xmit_hash_policy = "layer3+4", lacp_rate = "fast"' if bond == "802.3ad" else "") + " }"]
     answers, key = make_answers("horcrux", mgmt=mgmt)
+
+    def trunk(net):
+        # 1000/full: 802.3ad keeps a member whose speed/duplex is unknown (the virtio-net default) down, on both ends
+        return Nic(net, speed=1000, duplex="full")
     hx = NodeSpec(name="hx", mem=int(args.get("mem", 4096)), cpus=2, iso=args["iso"], iso_media=args.get("media", "cdrom"),
                   firmware=args.get("mode", "bios"), disks=[Disk("24G")], extra_drives=[(answers, "usb")],
-                  nics=[Nic("trunk-a"), Nic("trunk-b")], console="serial-root", login_password=PW, console_menu_key="8",
+                  nics=[trunk("trunk-a"), trunk("trunk-b")], console="serial-root", login_password=PW, console_menu_key="8",
                   ssh_key=key, boot_timeout=420)
     sw = NodeSpec(name="sw", mem=512, cpus=1, iso=args.get("alpine") or cache.fetch(*ALPINE), disks=[Disk("1G")],
-                  nics=[Nic("user", forwards={}), Nic("trunk-a"), Nic("trunk-b")], boot_timeout=240)
+                  nics=[Nic("user", forwards={}), trunk("trunk-a"), trunk("trunk-b")], boot_timeout=240)
 
     def run(m):
         s, n = m.sw, m.hx
@@ -48,10 +52,12 @@ def define(args):
         s.wait_for_shell()
         s.succeed("ip link set eth0 up && (udhcpc -q -n -i eth0 -t 10 >/dev/null 2>&1 || true)",
                   "printf 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main\\nhttps://dl-cdn.alpinelinux.org/alpine/v3.24/community\\n' > /etc/apk/repositories")
-        s.wait_until_succeeds("apk add -q dnsmasq curl iptables", 240, 10)
+        s.wait_until_succeeds("apk add -q dnsmasq curl iptables iproute2", 240, 10)
         s.succeed("modprobe bonding max_bonds=0 && modprobe 8021q && (ip link del bond0 2>/dev/null; true)",
                   f"ip link add bond0 type bond mode {bond} miimon 100" + (" lacp_rate fast xmit_hash_policy layer3+4" if bond == "802.3ad" else ""),
                   "for i in eth1 eth2; do ip link set $i down; ip link set $i master bond0; ip link set $i up; done; ip link set bond0 up",
+                  # busybox ip ignores bond options (the bond would silently be balance-rr): iproute2 is installed above
+                  f"grep -q '^{bond} ' /sys/class/net/bond0/bonding/mode",
                   f"ip link add link bond0 name bond0.{vlan} type vlan id {vlan} && ip addr add {SW_IP}/24 dev bond0.{vlan} && ip link set bond0.{vlan} up",
                   # the VLAN is the node's only network: route + DNS through the helper (the install fetches packages)
                   "sysctl -qw net.ipv4.ip_forward=1 && iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE",

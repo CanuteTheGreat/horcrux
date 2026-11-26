@@ -138,7 +138,8 @@ class Node:
                     net.register(mac, self.name)
                 else:
                     a += ["-netdev", f"bridge,id=n{i},br={net}"]
-            a += ["-device", f"{model},netdev=n{i},mac={mac}"]
+            link = (f",speed={nic.speed}" if nic.speed else "") + (f",duplex={nic.duplex}" if nic.duplex else "")
+            a += ["-device", f"{model},netdev=n{i},mac={mac}{link}"]
         if s.rtc_base:
             a += ["-rtc", f"base={s.rtc_base}"]
         # PCI topology must not differ between the live boot (ISO + answer drive) and the installed boot: the installer records NIC
