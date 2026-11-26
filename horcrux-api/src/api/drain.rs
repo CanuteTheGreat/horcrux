@@ -1866,7 +1866,10 @@ pub async fn maintenance_flags(
     local: &str,
 ) -> HashMap<String, Option<bool>> {
     let mut out = HashMap::new();
-    out.insert(local.to_string(), Some(load_maintenance(state).await.enabled));
+    out.insert(
+        local.to_string(),
+        Some(load_maintenance(state).await.enabled),
+    );
     let peers = peer_nodes(nodes, local);
     let answers = futures::future::join_all(peers.iter().map(|n| async move {
         let r = tokio::time::timeout(
