@@ -1469,6 +1469,14 @@ jobs:
           BASE_URL: https://localhost:8006
         run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/unmanaged_libvirt_banner_e2e.py
 
+      - name: Notification routing tree editor (build, drag between groups, save, reload, test panel)
+        env:
+          BASE_URL: https://localhost:8006
+          HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Notification routing e2e"
+          /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/notification_matchers_e2e.py
+
       - name: UX crawl (every nav page, desktop + phone, light + dark; no JS errors, overlays, dead stat cards, private text)
         # ci/ux-qa/ux_crawl.py: the owner kept finding these by hand (docs/qa/owner-findings.md). Known, tracked
         # failures live in ci/ux-qa/ux-crawl-baseline.json; a NEW failure fails the job.

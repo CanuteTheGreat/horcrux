@@ -430,6 +430,9 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "vault" => need(P::SysModify, "/system"),
         // metrics queries are POSTed but only read
         "metrics" => need(P::SysAudit, "/"),
+        // dry-run of the routing matchers against a sample event: read-only
+        // although POSTed (sending a real event is the plain POST rule)
+        "notifications" if arg(1) == "matchers" && arg(2) == "test" => need(P::SysAudit, "/"),
         "observability" | "webhooks" | "alerts" | "notifications" => {
             read_write(m, P::SysAudit, P::SysModify, "/")
         }
@@ -646,6 +649,24 @@ mod tests {
             priv_of(requirement("GET", "/api/vms/g1/hibernate-status")),
             (P::VmAudit, "/vms/g1".into())
         );
+    }
+
+    #[test]
+    fn notification_matcher_routes_map_to_privileges() {
+        for (m, p, want) in [
+            ("GET", "/api/notifications/matchers", P::SysAudit),
+            ("GET", "/api/notifications/matchers/m1", P::SysAudit),
+            ("POST", "/api/notifications/matchers", P::SysModify),
+            ("PUT", "/api/notifications/matchers/m1", P::SysModify),
+            ("PUT", "/api/notifications/matchers/order", P::SysModify),
+            ("DELETE", "/api/notifications/matchers/m1", P::SysModify),
+            // dry run: POST but read-only
+            ("POST", "/api/notifications/matchers/test", P::SysAudit),
+            // sending a synthetic event really delivers it
+            ("POST", "/api/notifications/events", P::SysModify),
+        ] {
+            assert_eq!(priv_of(requirement(m, p)), (want, "/".into()), "{m} {p}");
+        }
     }
 
     #[test]

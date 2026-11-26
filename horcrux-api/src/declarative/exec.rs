@@ -22,9 +22,35 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         vms: state.vm_manager.list_vms().await,
         console: crate::console::hxc_settings::get(),
         remote_play: crate::api::remote_play::load_settings(state).await,
+        matchers: matchers_by_name().await,
+        channel_names: match crate::api::notifications::store() {
+            Some(s) => s.channel_names().await.into_iter().map(|c| c.1).collect(),
+            None => Vec::new(),
+        },
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
     }
+}
+
+/// Live matchers with their targets as channel names (the spec's form).
+async fn matchers_by_name() -> Vec<horcrux_common::notify::Matcher> {
+    let Some(store) = crate::api::notifications::store() else {
+        return Vec::new();
+    };
+    let names = store.channel_names().await;
+    store
+        .list_matchers()
+        .await
+        .into_iter()
+        .map(|mut m| {
+            m.targets = m
+                .targets
+                .iter()
+                .filter_map(|t| names.iter().find(|c| &c.0 == t).map(|c| c.1.clone()))
+                .collect();
+            m
+        })
+        .collect()
 }
 
 /// Per-VM power overrides by VM name.
@@ -140,6 +166,57 @@ async fn run_change(
             Ok(Some(
                 "applied at once (listeners, relay and port forwards)".into(),
             ))
+        }
+
+        ("notification_matcher", Action::Create | Action::Update) => {
+            let store = crate::api::notifications::store()
+                .ok_or("notification channels are not available on this node")?;
+            let mut m = spec
+                .notification_matchers
+                .iter()
+                .flatten()
+                .find(|m| m.name == c.name)
+                .ok_or("not in spec")?
+                .clone();
+            let names = store.channel_names().await;
+            m.targets = m
+                .targets
+                .iter()
+                .map(|t| {
+                    names
+                        .iter()
+                        .find(|c| &c.1 == t)
+                        .map(|c| c.0.clone())
+                        .ok_or(format!("no notification channel named '{t}'"))
+                })
+                .collect::<Result<_, _>>()?;
+            let existing = store
+                .list_matchers()
+                .await
+                .into_iter()
+                .find(|x| x.name == c.name);
+            match existing {
+                Some(x) => store.update_matcher(&x.id, m).await,
+                None => store.create_matcher(m).await,
+            }
+            .map(|_| None)
+            .map_err(|e| format!("{e:?}"))
+        }
+        ("notification_matcher", Action::Delete) => {
+            let store = crate::api::notifications::store()
+                .ok_or("notification channels are not available on this node")?;
+            let id = store
+                .list_matchers()
+                .await
+                .into_iter()
+                .find(|x| x.name == c.name)
+                .map(|x| x.id)
+                .ok_or("matcher is already gone")?;
+            store
+                .delete_matcher(&id)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
+            Ok(None)
         }
 
         ("storage_pool", Action::Create) => {

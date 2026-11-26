@@ -65,6 +65,11 @@ pub struct Spec {
     /// defaults to saving state to encrypted storage).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_power: Option<GuestPowerSpec>,
+    /// Notification routing matchers (see docs/NOTIFICATIONS.md). Targets
+    /// are channel NAMES. Absent = unmanaged; present = exactly these
+    /// matchers when pruning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_matchers: Option<Vec<horcrux_common::notify::Matcher>>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
@@ -336,6 +341,10 @@ pub struct Live {
     pub vms: Vec<VmConfig>,
     pub console: horcrux_common::console::ConsoleSettings,
     pub remote_play: horcrux_common::remote_play::RemotePlaySettings,
+    /// Notification matchers with targets as channel names, and the names of
+    /// the channels that exist.
+    pub matchers: Vec<horcrux_common::notify::Matcher>,
+    pub channel_names: Vec<String>,
     pub power_node: crate::api::guest_state::NodePolicy,
     /// Per-VM power overrides by VM name (only VMs that have one).
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
@@ -670,6 +679,67 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // Notification matchers, by name (targets are channel names).
+    if let Some(want) = &spec.notification_matchers {
+        let mut seen = BTreeSet::new();
+        for w in want {
+            if !seen.insert(w.name.clone()) {
+                p.errors.push(format!(
+                    "notification_matchers: '{}' is listed twice",
+                    w.name
+                ));
+                continue;
+            }
+            if let Err(e) =
+                horcrux_monitoring::notification_matchers::validate(w, &live.channel_names)
+            {
+                p.errors
+                    .push(format!("notification_matchers.{}: {e}", w.name));
+                continue;
+            }
+            let mut norm = w.clone();
+            norm.id = String::new();
+            match live.matchers.iter().find(|l| l.name == w.name) {
+                None => creates.push(ch(
+                    "notification_matcher",
+                    &w.name,
+                    Action::Create,
+                    vec![format!(
+                        "{} condition(s) -> {}",
+                        w.children.len(),
+                        if w.all_channels {
+                            "every channel".to_string()
+                        } else {
+                            w.targets.join(", ")
+                        }
+                    )],
+                )),
+                Some(l) => {
+                    let mut lnorm = l.clone();
+                    lnorm.id = String::new();
+                    if lnorm != norm {
+                        let a = serde_json::to_value(&lnorm).unwrap_or_default();
+                        let b = serde_json::to_value(&norm).unwrap_or_default();
+                        let mut d = Vec::new();
+                        if let (Some(a), Some(b)) = (a.as_object(), b.as_object()) {
+                            for (k, bv) in b {
+                                if a.get(k) != Some(bv) {
+                                    d.push(format!("{k} changed"));
+                                }
+                            }
+                        }
+                        creates.push(ch("notification_matcher", &w.name, Action::Update, d));
+                    }
+                }
+            }
+        }
+        if prune {
+            for l in live.matchers.iter().filter(|l| !seen.contains(&l.name)) {
+                deletes.push(ch("notification_matcher", &l.name, Action::Delete, vec![]));
+            }
+        }
+    }
+
     // guest power: node defaults and per-VM overrides (by VM name)
     if let Some(gp) = &spec.guest_power {
         let mut d = Vec::new();
@@ -716,6 +786,7 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
             "subnet",
             "vm",
             "guest_power",
+            "notification_matcher",
         ]
         .iter()
         .position(|x| *x == k)
@@ -983,6 +1054,16 @@ pub fn export(live: &Live) -> Spec {
         vms: Some(vms),
         console: Some(live.console.clone()),
         remote_play: Some(live.remote_play.clone()),
+        notification_matchers: Some(
+            live.matchers
+                .iter()
+                .cloned()
+                .map(|mut m| {
+                    m.id = String::new();
+                    m
+                })
+                .collect(),
+        ),
         guest_power: Some(GuestPowerSpec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),

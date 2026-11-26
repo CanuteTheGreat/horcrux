@@ -392,3 +392,98 @@ fn guest_power_rejects_unknown_vms_and_bad_values() {
     assert!(parse("guest_power: {node: {max_parallel: 0}}").is_err());
     assert!(parse("guest_power: {vms: {a: {save_dir: relative}}}").is_err());
 }
+
+#[test]
+fn notification_matchers_are_planned_validated_pruned_and_exported() {
+    use horcrux_common::notify::{MatchNode, Matcher, Severity};
+    let live_m = Matcher {
+        id: "x1".into(),
+        name: "old".into(),
+        targets: vec!["hook".into()],
+        all_channels: false,
+        ..Matcher::default_matcher()
+    };
+    let live = Live {
+        matchers: vec![live_m.clone()],
+        channel_names: vec!["hook".into(), "mail".into()],
+        ..Default::default()
+    };
+    // unchanged (ids are not part of the spec) -> no change
+    let mut same = live_m.clone();
+    same.id = String::new();
+    let s = Spec {
+        notification_matchers: Some(vec![same.clone()]),
+        ..Default::default()
+    };
+    assert!(plan(&s, &live, false).changes.is_empty());
+    // a new matcher and a changed one
+    let mut changed = same.clone();
+    changed.invert = true;
+    let fresh = Matcher {
+        name: "warnings".into(),
+        children: vec![MatchNode::Severity {
+            invert: false,
+            levels: vec![],
+            min: Some(Severity::Warning),
+        }],
+        targets: vec!["mail".into()],
+        all_channels: false,
+        ..Matcher::default_matcher()
+    };
+    let s = Spec {
+        notification_matchers: Some(vec![changed, fresh.clone()]),
+        ..Default::default()
+    };
+    let p = plan(&s, &live, false);
+    assert!(p.errors.is_empty(), "{:?}", p.errors);
+    let got: Vec<_> = p
+        .changes
+        .iter()
+        .map(|c| (c.kind.as_str(), c.name.as_str(), c.action))
+        .collect();
+    assert!(
+        got.contains(&("notification_matcher", "old", Action::Update)),
+        "{got:?}"
+    );
+    assert!(
+        got.contains(&("notification_matcher", "warnings", Action::Create)),
+        "{got:?}"
+    );
+    // prune removes matchers the spec lacks
+    let s = Spec {
+        notification_matchers: Some(vec![fresh.clone()]),
+        ..Default::default()
+    };
+    let p = plan(&s, &live, true);
+    assert!(p
+        .changes
+        .iter()
+        .any(|c| c.name == "old" && c.action == Action::Delete));
+    assert!(!plan(&s, &live, false)
+        .changes
+        .iter()
+        .any(|c| c.action == Action::Delete));
+    // a target that is not a channel, and a bad regex, are plan errors
+    let mut bad = fresh.clone();
+    bad.targets = vec!["nope".into()];
+    bad.children = vec![MatchNode::Field {
+        invert: false,
+        field: "title".into(),
+        regex: "(".into(),
+    }];
+    let s = Spec {
+        notification_matchers: Some(vec![bad]),
+        ..Default::default()
+    };
+    let e = plan(&s, &live, false).errors.join(";");
+    assert!(
+        e.contains("not a notification channel") && e.contains("invalid regex"),
+        "{e}"
+    );
+    // export carries them, without ids, and round-trips through YAML
+    let ex = export(&live);
+    let y = serde_yaml::to_string(&ex).unwrap();
+    assert!(y.contains("notification_matchers:"), "{y}");
+    let back: Spec = serde_yaml::from_str(&y).unwrap();
+    assert_eq!(back.notification_matchers.unwrap()[0].id, "");
+}

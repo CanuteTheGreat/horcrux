@@ -254,6 +254,9 @@ pub fn spawn_command(
         }
         append_log(&u, &format!("TASK {}", rec.status.to_uppercase()));
         save(&rec);
+        if rec.task_type == "package-sync" && rec.status != "stopped" {
+            super::system_admin::packages::sync_finished(rec.status == "ok");
+        }
         // Leave the registry only AFTER the final record is on disk: load()
         // calls a "running" record that is not in the registry "interrupted",
         // so removing first made a poller read an ended task as interrupted

@@ -649,6 +649,28 @@ async fn notify(state: &Arc<AppState>, event: &str, data: serde_json::Value) {
         "node_failed" => crate::webhooks::WebhookEventType::NodeFailed,
         other => crate::webhooks::WebhookEventType::Custom(other.to_string()),
     };
+    // The notification router gets the same event (subtype = event name).
+    let severity = match event {
+        "node_failed" => horcrux_common::notify::Severity::Error,
+        _ => horcrux_common::notify::Severity::Warning,
+    };
+    let mut ev = horcrux_common::notify::Event::new(
+        horcrux_common::notify::EventKind::Ha,
+        severity,
+        format!("HA: {}", event.replace('_', " ")),
+    )
+    .subtype(event)
+    .body(data.to_string());
+    ev.guest_id = data
+        .get("vm_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    ev.node = data
+        .get("to")
+        .or_else(|| data.get("node"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    horcrux_common::notify::emit(ev);
     let _ = state.webhook_manager.trigger_event(kind, data).await;
 }
 
@@ -872,6 +894,14 @@ async fn self_fence_watchdog(state: Arc<AppState>) {
         let ids: Vec<String> = running.iter().map(|r| r.vm_id.clone()).collect();
         for id in &ids {
             tracing::error!("HA: no majority: self-fencing, killing VM {id}");
+            let mut ev = horcrux_common::notify::Event::new(
+                horcrux_common::notify::EventKind::Ha,
+                horcrux_common::notify::Severity::Error,
+                format!("HA: no majority, self-fencing VM {id}"),
+            )
+            .subtype("self_fence");
+            ev.guest_id = Some(id.clone());
+            horcrux_common::notify::emit(ev);
         }
         // SIGKILL all, reset the node if one survives (QEMU stuck in storage I/O)
         let reset = super::ha_fence_agent::fence_kill(&ids, "no majority").await;
@@ -1575,6 +1605,16 @@ async fn move_vm(
         }
         Err(e) => {
             tracing::error!("HA: recovering VM {vm_id} on {target} failed: {e}");
+            let mut ev = horcrux_common::notify::Event::new(
+                horcrux_common::notify::EventKind::Ha,
+                horcrux_common::notify::Severity::Error,
+                format!("HA: recovering VM {vm_id} on {target} failed"),
+            )
+            .subtype("recovery_failed")
+            .body(e.to_string())
+            .node(target.to_string());
+            ev.guest_id = Some(vm_id.to_string());
+            horcrux_common::notify::emit(ev);
             state
                 .ha_manager
                 .note_failure(vm_id, target, format!("recovery on {target} failed: {e}"))
