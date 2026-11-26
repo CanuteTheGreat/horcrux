@@ -936,6 +936,31 @@ impl HaManager {
         self.sync_resource(vm_id).await;
     }
 
+    /// Record that `vm_id` was moved to `node` (placement `seq`) by a
+    /// migration. Unlike [`Self::set_placement`] (a recovery, which always
+    /// means started) the state follows the guest: one that arrived stopped
+    /// (an offline move of an intentionally stopped HA guest) stays stopped
+    /// on its new node instead of being started by HA there.
+    pub async fn set_home(&self, vm_id: &str, node: &str, seq: u64, stopped: bool) {
+        {
+            let mut res = self.resources.write().await;
+            let Some(r) = res.get_mut(vm_id) else { return };
+            if r.placement_seq > seq {
+                return;
+            }
+            r.current_node = Some(node.to_string());
+            r.placement_seq = seq;
+            r.state = if stopped {
+                HaState::Stopped
+            } else {
+                HaState::Started
+            };
+            r.last_state_change = Utc::now();
+            r.restart_count = 0;
+        }
+        self.sync_resource(vm_id).await;
+    }
+
     /// Resources currently placed on `node`.
     pub async fn resources_on(&self, node: &str) -> Vec<HaResource> {
         self.resources
@@ -1817,6 +1842,30 @@ mod tests {
             .unwrap();
         m.enable().await;
         m
+    }
+
+    #[tokio::test]
+    async fn a_migration_keeps_a_stopped_guest_stopped() {
+        let m = manager_with_vm_on("n1", 3).await;
+        m.update_resource_state("vm1", HaState::Stopped, Some("n1".into()))
+            .await
+            .unwrap();
+        let seq = m.get_resource("vm1").await.unwrap().placement_seq;
+        // offline move of the stopped guest: still stopped on n2
+        m.set_home("vm1", "n2", seq + 1, true).await;
+        let r = m.get_resource("vm1").await.unwrap();
+        assert_eq!(r.current_node.as_deref(), Some("n2"));
+        assert_eq!(r.state, HaState::Stopped);
+        assert_eq!(r.placement_seq, seq + 1);
+        assert_eq!(r.relocate_count, 0, "a planned move is no relocation");
+        // a live move of a running guest: started on n3
+        m.set_home("vm1", "n3", seq + 2, false).await;
+        let r = m.get_resource("vm1").await.unwrap();
+        assert_eq!(r.current_node.as_deref(), Some("n3"));
+        assert_eq!(r.state, HaState::Started);
+        // an older placement never wins
+        m.set_home("vm1", "n1", seq, true).await;
+        assert_eq!(m.get_resource("vm1").await.unwrap().current_node.as_deref(), Some("n3"));
     }
 
     #[tokio::test]
