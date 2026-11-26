@@ -76,6 +76,24 @@ WWID=$(echo "$p" | jq_ "[l['wwid'] for l in d['body']['luns'] if l['map']][0]")
 check "map-is-a-real-device" '[ -b /dev/mapper/$WWID ]'
 check "local-disk-not-multipathed" '! multipath -ll 2>/dev/null | grep -qi "QEMU HARDDISK"'
 
+echo "== a path multipathd left out is taken back by the next apply"
+# The race CI hit: a LUN's disk whose uevent came before its WWID was
+# registered never joins the map by itself. Recreate it on purpose, with
+# the background loop parked so only the explicit apply can repair it.
+api PUT /san/settings '{"sanlock_watchdog": true, "reconcile_interval_secs": 3600}' >/dev/null
+sleep 12
+dev=$(echo "$p" | jq_ "[x['dev'] for l in d['body']['luns'] if l['map'] for x in l['paths']][-1]")
+multipathd del path "$dev" >/dev/null 2>&1
+q=$(api GET /san/paths)
+lo=$(echo "$q" | jq_ "[(l['active_paths'], len(l['paths']), [x['state'] for x in l['paths'] if x['dev'] == '$dev']) for l in d['body']['luns']] == [(3, 4, ['unmapped'])]")
+check "left-out-path-stays-in-its-lun" '[ "$lo" = True ]' "$q"
+r=$(api POST /san/apply)
+check "apply-adds-the-left-out-path" 'echo "$r" | grep -q "added path $dev"' "$r"
+q=$(api GET /san/paths)
+a4=$(echo "$q" | jq_ "[l['active_paths'] for l in d['body']['luns']] == [4]")
+check "map-has-4-active-paths-again" '[ "$a4" = True ]' "$q"
+api PUT /san/settings '{"sanlock_watchdog": true, "reconcile_interval_secs": 10}' >/dev/null
+
 echo "== shared LVM on the LUN"
 r=$(api POST /san/lvm "{\"id\":\"sanlvm\",\"vg_name\":\"vg_hxsan\",\"device\":\"$WWID\",\"discard_removed\":true,\"create_vg\":true}")
 echo "$r" | head -c 2500; echo
