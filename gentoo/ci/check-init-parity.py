@@ -79,6 +79,7 @@ def main():
     bad = []
     for cp, pd, f in ebuilds():
         text = open(os.path.join(pd, f)).read()
+        text = re.sub(r"\\\n\s*", " ", text)  # join backslash continuations (multi-line inherit)
         body = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
         has_init, has_unit = bool(INIT_CALL.search(body)), bool(UNIT_CALL.search(body))
         native = cp in SYSTEMD_NATIVE and SYSTEMD_NATIVE[cp] in body
