@@ -1672,7 +1672,8 @@ class Runner:
         rc, out = self.gsh(vm, "ps -eo comm,args | grep -E '^cage' | head -2; cat /run/live-installer/gui-result 2>/dev/null; ps -eo comm | grep -qx cage && echo CAGE-RUNNING-$((40+2))")
         self.step("gui-running-in-cage-kiosk", "CAGE-RUNNING-42" in (out or ""), (out or "")[-120:].replace("\n", " "))
         # AT-SPI: the accessibility tree must expose the sidebar, the headline widgets and the buttons
-        want = ["Next", "Abort", "High contrast", "Larger text", "Server (default)", "1  Keyboard", "11  Finish"]
+        netadv = a.project != "horcrux" and bool(installer_profile().get("net_bonds_vlans"))   # wan-lan profiles with the bonds/VLANs screen have one step more
+        want = ["Next", "Abort", "High contrast", "Larger text", "Server (default)", "1  Keyboard", f"{12 if netadv else 11}  Finish"]
         n, missing = 0, want
         for _ in range(10):                       # the toolkit registers with the accessibility bus a few seconds after the first frame
             n, missing = self.gnames(vm, *want)
@@ -1773,6 +1774,9 @@ class Runner:
             self.gfocus(vm, "LAN address/prefix")
             self.gkey(vm, "ctrl", "a")
             self.gtype(vm, f"{a.lan_ip}/24")
+        if netadv:                                       # optional bonds / VLANs / management network page: defaults = plain ports
+            self.gnext(vm, "netadv")
+            self.gshot(vm, "netadv", "Bonds (LAGG), VLANs and management network (off by default)")
         self.gnext(vm, "services")
         self.gshot(vm, "services", "Services")
         self.gnext(vm, "hardening")
