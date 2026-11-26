@@ -782,7 +782,14 @@ pub async fn drain_node(state: &Arc<AppState>, reason: &str, timeout_secs: u64) 
             .clone()
             .filter(|_| prev.enabled)
             .or(Some(started.clone())),
-        reason: Some(reason.to_string()),
+        // An administrator's maintenance keeps its reason when the host is
+        // shut down in it (drain on shutdown): the next boot leaves only a
+        // maintenance that the shutdown itself started.
+        reason: if prev.enabled {
+            prev.reason.clone()
+        } else {
+            Some(reason.to_string())
+        },
         drain: Some(Run {
             kind: "drain".into(),
             started_at: started.clone(),
@@ -1268,6 +1275,9 @@ pub async fn set_local_maintenance(
             let mut m = load_maintenance(state).await;
             m.enabled = true;
             m.since = m.since.or(Some(now()));
+            if !cur.enabled {
+                m.reason = Some("maintenance".into());
+            }
             m.drain = Some(Run {
                 kind: "drain".into(),
                 started_at: now(),
