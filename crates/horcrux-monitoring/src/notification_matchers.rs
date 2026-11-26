@@ -423,38 +423,30 @@ mod tests {
     #[test]
     fn validation_rejects_bad_trees() {
         assert!(validate_node(&sev_min("bogus")).is_err());
-        assert!(
-            validate_node(&MatchNode::Field {
-                field: "nope".into(),
-                regex: "x".into()
-            })
-            .is_err()
-        );
-        assert!(
-            validate_node(&MatchNode::Field {
-                field: "body".into(),
-                regex: "(".into()
-            })
-            .is_err()
-        );
-        assert!(
-            validate_node(&MatchNode::Calendar {
-                weekdays: vec![7],
-                start: None,
-                end: None,
-                utc_offset_minutes: 0
-            })
-            .is_err()
-        );
-        assert!(
-            validate_node(&MatchNode::Calendar {
-                weekdays: vec![],
-                start: Some("25:00".into()),
-                end: Some("06:00".into()),
-                utc_offset_minutes: 0
-            })
-            .is_err()
-        );
+        assert!(validate_node(&MatchNode::Field {
+            field: "nope".into(),
+            regex: "x".into()
+        })
+        .is_err());
+        assert!(validate_node(&MatchNode::Field {
+            field: "body".into(),
+            regex: "(".into()
+        })
+        .is_err());
+        assert!(validate_node(&MatchNode::Calendar {
+            weekdays: vec![7],
+            start: None,
+            end: None,
+            utc_offset_minutes: 0
+        })
+        .is_err());
+        assert!(validate_node(&MatchNode::Calendar {
+            weekdays: vec![],
+            start: Some("25:00".into()),
+            end: Some("06:00".into()),
+            utc_offset_minutes: 0
+        })
+        .is_err());
         assert!(validate_node(&MatchNode::Event { any_of: vec![] }).is_err());
         let mut deep = MatchNode::All { children: vec![] };
         for _ in 0..20 {
