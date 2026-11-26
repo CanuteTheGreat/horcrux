@@ -393,6 +393,9 @@ print(json.dumps({"applied": applied, "mode": [w, h], "was": logical[0][2]}))
             "systemctl --user list-units --all --no-pager 'org.gnome.SettingsDaemon.XSettings*' 'gnome-session-x11*' 2>&1 | cut -c1-200",
             "journalctl --user -b --no-pager 2>&1 | grep -iE 'xwayland|xsettings|x11 services|native scal' | tail -40 | cut -c1-260",
             "gsettings get org.gnome.mutter experimental-features; gsettings get org.gnome.desktop.interface scaling-factor",
+            "journalctl --user -b --no-pager -u org.gnome.SettingsDaemon.XSettings.service 2>&1 | tail -15 | cut -c1-240",
+            "journalctl --user -b --no-pager 2>&1 | grep -iE 'gnome-shell.*(scal|monitor|layout)|mutter' | tail -12 | cut -c1-240",
+            "for d in :0 :1; do echo $d; DISPLAY=$d XAUTHORITY=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* | head -1) sh -c 'xrandr --current 2>&1 | head -4; xprop -root _XSETTINGS_SETTINGS 2>&1 | cut -c1-80; xdpyinfo 2>&1 | grep -E dimensions'; done; command -v xrandr xprop xdpyinfo",
         ]
         for c in cmds:
             self.diag_line(n, f"root$ {c[:50]}", vm.out(c).strip()[-1200:])

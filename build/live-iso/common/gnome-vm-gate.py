@@ -150,7 +150,7 @@ def main():
                 for line in p.stdout:
                     lf.write(line)
                     if line.startswith(("[PASS]", "[FAIL]", "RESULT", "Traceback")) or "Error" in line[:60]:
-                        print(f"  {name}: {line.rstrip()[:260]}", flush=True)
+                        print(f"  {name}: {line.rstrip()[:(3000 if 'diag-x11' in line else 260)]}", flush=True)
                 p.wait()
             print(f"[{'PASS' if p.returncode == 0 else 'FAIL'}] gnome-vm-gate {name} (exit {p.returncode})", flush=True)
             if p.returncode != 0:
