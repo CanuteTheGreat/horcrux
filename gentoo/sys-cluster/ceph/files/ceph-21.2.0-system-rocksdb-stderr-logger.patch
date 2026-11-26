@@ -1,0 +1,24 @@
+--- a/src/kv/RocksDBStore.cc
++++ b/src/kv/RocksDBStore.cc
+@@ -25,7 +25,20 @@
+ #include "rocksdb/merge_operator.h"
+ 
+ #include "common/version.h"
+-#include "rocksdb/util/stderr_logger.h"
++#include <cstdarg>
++#include <cstdio>
++#include "rocksdb/env.h"
++namespace rocksdb {
++// system RocksDB does not install util/stderr_logger.h
++class StderrLogger : public Logger {
++ public:
++  using Logger::Logv;
++  void Logv(const char* format, va_list ap) override {
++    vfprintf(stderr, format, ap);
++    fputc('\n', stderr);
++  }
++};
++}
+ 
+ #include "common/Clock.h" // for ceph_clock_now()
+ #include "common/perf_counters.h"
