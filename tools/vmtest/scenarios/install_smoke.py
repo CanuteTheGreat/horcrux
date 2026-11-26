@@ -51,6 +51,9 @@ def define(args):
             m.check("zfs-pool-hostid-matches-system", "Mismatch between pool hostid" not in full, full[:600])
             hid = n.succeed("hostid; od -An -tx1 /etc/hostid; img=$(ls -t /boot/initramfs-*.img | head -1); lsinitrd -f etc/hostid $img > /tmp/ird-hostid && cmp /tmp/ird-hostid /etc/hostid && echo initramfs-hostid-same")
             m.check("zfs-initramfs-carries-the-system-hostid", "initramfs-hostid-same" in hid and not hid.startswith("00000000"), hid)
+            # every later initramfs (a kernel update's dracut run) keeps the file too
+            cf = n.succeed("cat /etc/dracut.conf.d/92-horcrux-hostid.conf")
+            m.check("zfs-dracut-config-keeps-hostid-for-kernel-updates", "install_items" in cf and "/etc/hostid" in cf, cf)
         out = n.succeed("cat /etc/os-release; qfile -q /usr/lib/os-release")
         kv = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?$', out, re.M))
         good = bool(kv.get("VERSION_ID") and kv.get("BUILD_ID") and kv.get("VARIANT_ID")) and kv.get("ID_LIKE") == "gentoo" \
