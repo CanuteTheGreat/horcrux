@@ -93,7 +93,7 @@ pub fn HostPciPanel(hardware: RwSignal<VmHardware>, running: Signal<bool>) -> im
                 <p class="form-help" id="vm-hostpci-none">"No host devices assigned."</p>
             })}
             <div class="form-row">
-                <select id="vm-hostpci-pick" prop:value=pick on:change=move |ev| pick.set(event_target_value(&ev))>
+                <select id="vm-hostpci-pick" aria-label="PCI device on this node" prop:value=pick on:change=move |ev| pick.set(event_target_value(&ev))>
                     <option value="">"device on this node..."</option>
                     {move || pci.get().into_iter()
                         .filter(|d| d.vms.is_empty() && d.class_name != "bridge" && d.iommu_group.is_some() && (d.vfio || d.class_name == "gpu"))
@@ -111,7 +111,7 @@ pub fn HostPciPanel(hardware: RwSignal<VmHardware>, running: Signal<bool>) -> im
                     on:click=move |_| { add(pick.get_untracked()); pick.set(String::new()); }>"Add"</button>
             </div>
             <div class="form-row">
-                <input id="vm-hostpci-manual" type="text" placeholder="0000:01:00.0 or mediated device UUID"
+                <input id="vm-hostpci-manual" type="text" class="w-wide" aria-label="PCI address or mediated device UUID" placeholder="0000:01:00.0 or mediated device UUID"
                     prop:value=manual on:input=move |ev| manual.set(event_target_value(&ev))/>
                 <button type="button" class="btn" id="vm-hostpci-add-manual" disabled={move || running.get()}
                     on:click=move |_| { add(manual.get_untracked()); manual.set(String::new()); }>"Add by address"</button>

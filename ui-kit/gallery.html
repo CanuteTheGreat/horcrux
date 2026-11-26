@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>ui-kit gallery</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<style>
+  body { margin: 0; }
+  .g-wrap { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+  .g-side { background: var(--c-sunken); border-right: 1px solid var(--c-border); padding: var(--s-2) 0; }
+  .g-main { padding: var(--s-4) var(--s-5); max-width: 1100px; }
+  @media (max-width: 700px) { .g-wrap { grid-template-columns: 1fr; } .g-side { display: none; } .g-main { padding: var(--s-3); } }
+</style>
+</head>
+<body class="ui-root">
+<div class="g-wrap">
+  <nav class="g-side" aria-label="Resources">
+    <div class="ui-tree-heading">Resources</div>
+    <ul class="ui-tree">
+      <li><a href="#" class="active"><span class="ui-dot ok"></span>Datacenter</a>
+        <ul>
+          <li><a href="#"><span class="ui-dot ok"></span>node-a</a>
+            <ul>
+              <li><a href="#"><span class="ui-dot ok"></span>web-frontend <span class="ui-mono ui-muted">vm-100</span></a></li>
+              <li><a href="#"><span class="ui-dot off"></span>build-runner <span class="ui-mono ui-muted">vm-102</span></a></li>
+              <li><a href="#"><span class="ui-dot warn"></span>media-server <span class="ui-mono ui-muted">vm-105</span></a></li>
+            </ul>
+          </li>
+          <li><a href="#"><span class="ui-dot crit"></span>node-b</a></li>
+        </ul>
+      </li>
+      <li><details open><summary>Storage</summary><ul><li><a href="#">Disks</a></li><li><a href="#">Pools</a></li></ul></details></li>
+    </ul>
+  </nav>
+  <main class="g-main">
+    <div class="ui-page-header">
+      <div><h1>Component gallery</h1><p class="ui-sub">ui-kit v0.1 · tokens.css + components.css + ui.js</p></div>
+      <div class="ui-actions"><button class="ui-btn primary">Create</button><button class="ui-btn">Import</button><button class="ui-btn danger">Delete</button></div>
+    </div>
+
+    <div class="ui-banner warn"><strong>Heads up:</strong> two guests are not managed yet. <button class="ui-btn sm">Import</button></div>
+
+    <div class="ui-panels">
+      <section class="ui-panel"><div class="ui-panel-head"><h2>Summary</h2><a href="#">Details</a></div>
+        <div class="ui-panel-body"><dl class="ui-kv"><dt>Status</dt><dd><span class="ui-badge ok"><span class="ui-dot ok"></span>running</span></dd>
+          <dt>CPU</dt><dd><div class="ui-usage"><span class="track"><i style="width:34%"></i></span><span class="val">34%</span></div></dd>
+          <dt>Memory</dt><dd><div class="ui-usage warn"><span class="track"><i style="width:81%"></i></span><span class="val">81%</span></div></dd>
+          <dt>Disk</dt><dd><div class="ui-usage crit"><span class="track"><i style="width:93%"></i></span><span class="val">93%</span></div></dd>
+          <dt>Uptime</dt><dd>5d 16h</dd></dl></div></section>
+      <section class="ui-panel"><div class="ui-panel-head"><h2>Badges</h2></div>
+        <div class="ui-panel-body ui-actions"><span class="ui-badge ok">ok</span><span class="ui-badge info">info</span><span class="ui-badge warn">warning</span><span class="ui-badge crit">critical</span><span class="ui-badge busy"><span class="ui-dot busy"></span>migrating</span><span class="ui-badge">stopped</span></div></section>
+    </div>
+
+    <div class="ui-tabs" data-ui-tabs role="tablist">
+      <button role="tab" aria-selected="true" aria-controls="t-grid">Grid</button>
+      <button role="tab" aria-selected="false" aria-controls="t-form" tabindex="-1">Form + wizard</button>
+      <button role="tab" aria-selected="false" aria-controls="t-log" tabindex="-1">Log</button>
+    </div>
+
+    <div id="t-grid" role="tabpanel">
+      <div class="ui-toolbar">
+        <div><input class="ui-input" type="search" data-ui-filter="g" placeholder="Filter" aria-label="Filter"></div>
+        <div><details class="ui-menu" data-ui-columns="g"><summary class="ui-btn sm">Columns</summary>
+          <div class="ui-menu-items"><label><input type="checkbox" value="cpu"> CPUs</label><label><input type="checkbox" value="mem"> Memory</label></div></details></div>
+      </div>
+      <div class="ui-grid-wrap"><table class="ui-grid" data-ui-grid="g">
+        <thead><tr><th data-sort>ID</th><th data-sort>Name</th><th data-sort>Status</th><th data-sort data-type="num" class="num" data-col="cpu">CPUs</th><th data-sort data-type="num" class="num" data-col="mem">Memory GiB</th></tr></thead>
+        <tbody>
+          <tr><td class="ui-mono">vm-100</td><td>web-frontend</td><td><span class="ui-badge ok">running</span></td><td class="num" data-col="cpu">2</td><td class="num" data-col="mem">2</td></tr>
+          <tr aria-selected="true"><td class="ui-mono">vm-101</td><td>postgres-primary</td><td><span class="ui-badge ok">running</span></td><td class="num" data-col="cpu">4</td><td class="num" data-col="mem">8</td></tr>
+          <tr><td class="ui-mono">vm-102</td><td>build-runner</td><td><span class="ui-badge">stopped</span></td><td class="num" data-col="cpu">8</td><td class="num" data-col="mem">16</td></tr>
+          <tr><td class="ui-mono">vm-105</td><td>media-server</td><td><span class="ui-badge warn">paused</span></td><td class="num" data-col="cpu">2</td><td class="num" data-col="mem">4</td></tr>
+        </tbody></table>
+        <div class="ui-grid-foot"><span>4 of 4</span><span>Click a column to sort</span></div></div>
+      <div class="ui-panel" style="margin-top:var(--s-4)"><div class="ui-grid-state">No backups yet. <a href="#">Create a backup job</a></div></div>
+    </div>
+
+    <div id="t-form" role="tabpanel" hidden>
+      <ol class="ui-steps"><li class="done">General</li><li aria-current="step">OS</li><li>Disks</li><li>CPU</li><li>Network</li><li>Confirm</li></ol>
+      <div class="ui-panel"><div class="ui-panel-body ui-form-grid">
+        <div class="ui-field"><label for="f1">Name</label><input id="f1" class="ui-input" value="web-frontend"><span class="ui-hint">Letters, digits and dashes.</span></div>
+        <div class="ui-field"><label for="f2">Memory (MiB)</label><input id="f2" class="ui-input" value="12" aria-invalid="true"><span class="ui-error">At least 64 MiB.</span></div>
+        <div class="ui-field"><label for="f3">ISO image</label><select id="f3" class="ui-input"><option>debian-13.iso</option></select></div>
+      </div></div>
+    </div>
+
+    <div id="t-log" role="tabpanel" hidden>
+      <div class="ui-log" data-ui-log>
+        <div class="boot">-- boot 3f2a --</div>
+        <div><span class="ts">Nov 25 14:02:11</span>systemd: Started Horcrux API.</div>
+        <div class="p-notice"><span class="ts">Nov 25 14:02:12</span>horcrux-api: listening on :443</div>
+        <div class="p-warn"><span class="ts">Nov 25 14:03:40</span>zfs: pool tank is 81% full</div>
+        <div class="p-err"><span class="ts">Nov 25 14:05:02</span>qemu: vm-105 guest agent not answering</div>
+        <div class="p-debug"><span class="ts">Nov 25 14:05:03</span>scheduler: tick</div>
+      </div>
+    </div>
+
+    <div class="ui-toasts"><div class="ui-toast ok">VM vm-100 started.</div></div>
+  </main>
+</div>
+<script src="ui.js"></script>
+</body>
+</html>

@@ -7,6 +7,9 @@
     <link data-trunk rel="rust" data-target-name="horcrux-ui" data-cargo-profile-release="wasm-release" />
     <link data-trunk rel="css" href="style/main.css">
     <link data-trunk rel="css" href="style/utilities.css">
+    <!-- shared ui-kit (also used by Patronus): tokens + ui- components, then the Horcrux layer -->
+    <link data-trunk rel="css" href="../../ui-kit/tokens.css">
+    <link data-trunk rel="css" href="../../ui-kit/components.css">
     <link data-trunk rel="css" href="style/ui-system.css">
     <link data-trunk rel="copy-dir" href="assets/fonts">
     <!-- fetched before the load event, so a page that renders text after hydrating never aborts a font download -->
