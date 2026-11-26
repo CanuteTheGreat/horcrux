@@ -7,7 +7,7 @@ Every stage is a small unit with
   * apply(inst)  - perform them on the target (Installer, see system.py)
 
 Stage ids (UI order): keymap, hostname, disk, extract, rootpass, desktop (only with a hardware profile
-that ships a desktop), netconfig, services, hardening, use_flags, finish.  `extract` and `finish` have no form.  Disk and extract run first when installing
+that ships a desktop), netconfig, netadv (Patronus: bonds, VLANs, management network), services, hardening, use_flags, finish.  `extract` and `finish` have no form.  Disk and extract run first when installing
 (APPLY_ORDER); everything else writes into the extracted system.
 
 The install type (Server by default; Workstation is reserved for a future desktop profile) is part of
@@ -429,6 +429,8 @@ class NetconfigStage(Stage):
     def plan(self, ctx):
         c = ctx.c
         out = []
+        if ctx.wanlan and S.netvirt.enabled(ctx.p) and S.netvirt.in_use(c):
+            return S.netvirt.plan_lines(c) + ([" (Wi-Fi WAN)"] if c["wifi"] else [])
         if ctx.wanlan:
             w, l = c["wan"], c["lan"]
             out.append(f"WAN {w['iface'] or '-'}: " + (w["address"] if w["mode"] == "static" else "DHCP") + (" (Wi-Fi)" if c["wifi"] else ""))
@@ -438,6 +440,121 @@ class NetconfigStage(Stage):
             out.append(f"Management NIC {n['iface'] or '-'}: " + (f"{n['address']} gw {n['gateway']} dns {n['dns']}" if n["mode"] == "static" else "DHCP")
                        + (" (Wi-Fi)" if c["wifi"] else ""))
         return out
+
+
+class NetAdvStage(Stage):
+    """Optional: a bond (LAGG / LACP), VLAN tags on WAN / LAN, PPPoE and a dedicated management network (netvirt.py).
+
+    Rendered by the GUI's generic form page and the text installer's form (one definition); the answer file sets the same keys."""
+    id, title, short = "netadv", "Bonds, VLANs and management network", "LAGG / VLAN"
+    intro = ("Optional. Combine ports into a bond (LAGG; LACP needs a switch with LACP), put the WAN, the LAN or a separate management "
+             "network on VLAN tags, or log in to the ISP with PPPoE. The firewall sets them up itself at its first boot, so it is reachable "
+             "on the right network without a console. Leave it off for one plain WAN port and one plain LAN port.")
+
+    def applies(self, ctx):
+        return ctx.wanlan and S.netvirt.enabled(ctx.p)
+
+    def fields(self, ctx):
+        NV = S.netvirt
+        c = NV.defaults(ctx.c)
+        wired = [(n["name"], S.nic_line(n)) for n in ctx.nics if not n.get("wifi")]
+        b = c["bonds"][0] if c["bonds"] else {"members": [], "mode": NV.DEFAULT_BOND_MODE, "hash": NV.DEFAULT_HASH, "lacp_rate": NV.DEFAULT_LACP_RATE}
+        bname = b.get("name", "bond0")
+        on = lambda key: "bond" if c[key].get("iface") == bname and c["bonds"] else ("none" if not c[key].get("iface") else "port")
+        m = c["mgmt_net"]
+        mg_on = "none" if not m.get("iface") else ("bond" if m["iface"] == bname and c["bonds"] else m["iface"])
+        use = lambda v: bool(v.get("use"))
+        has_bond = lambda v: use(v) and bool(v.get("bond_members"))
+        w = c["wan"]
+        return [
+            Field("use", "Set up a bond, VLANs, PPPoE or a management network", "check", NV.in_use(c)),
+            Field("bond_members", "Bond (LAGG) member ports", "multi", list(b["members"]), wired, visible=use,
+                  hint="Space toggles a port. Two or more ports become bond0; leave all off for no bond", optional=True),
+            Field("bond_mode", "Bond mode", "choice", b["mode"], NV.BOND_MODES, visible=has_bond),
+            Field("bond_hash", "Transmit hash policy", "choice", b.get("hash") or NV.DEFAULT_HASH, NV.HASH_POLICIES, advanced=True,
+                  visible=lambda v: has_bond(v) and v.get("bond_mode") != "active-backup"),
+            Field("lacp_rate", "LACP rate", "choice", b.get("lacp_rate") or NV.DEFAULT_LACP_RATE, NV.LACP_RATES, advanced=True,
+                  visible=lambda v: has_bond(v) and v.get("bond_mode") == "802.3ad"),
+            Field("wan_on", "WAN runs on", "choice", on("wan") if on("wan") != "none" else "port",
+                  [("port", f"the WAN port ({w.get('iface') or 'chosen before'})"), ("bond", "the bond")], visible=has_bond),
+            Field("wan_vlan", "WAN VLAN tag (0 = untagged)", "text", str(w.get("vlan") or 0), validate=lambda v, a: NV.vlan_problem(v), visible=use, width=8),
+            Field("wan_pppoe", "WAN logs in with PPPoE", "check", w.get("mode") == "pppoe", visible=use),
+            Field("pppoe_user", "PPPoE user name", "text", w.get("pppoe_user", ""), visible=lambda v: use(v) and v.get("wan_pppoe")),
+            Field("pppoe_password", "PPPoE password", "password", w.get("pppoe_password", ""), visible=lambda v: use(v) and v.get("wan_pppoe")),
+            Field("lan_on", "LAN runs on", "choice", on("lan") if on("lan") != "none" else "port",
+                  [("port", f"the LAN port ({c['lan'].get('iface') or 'chosen before'})"), ("bond", "the bond"), ("none", "no LAN")], visible=use),
+            Field("lan_vlan", "LAN VLAN tag (0 = untagged)", "text", str(c["lan"].get("vlan") or 0), validate=lambda v, a: NV.vlan_problem(v),
+                  visible=use, width=8),
+            Field("mgmt_on", "Management network", "choice", mg_on, [("none", "none: SSH and the web UI stay on the LAN"), ("bond", "on the bond")] + wired,
+                  visible=use, hint="SSH and the web UI move to this network (port or VLAN)"),
+            Field("mgmt_vlan", "Management VLAN tag (0 = untagged)", "text", str(m.get("vlan") or 0), validate=lambda v, a: NV.vlan_problem(v),
+                  visible=lambda v: use(v) and v.get("mgmt_on") != "none", width=8),
+            Field("mgmt_addr", "Management address/prefix", "text", m.get("address") or "", validate=lambda v, a: S.cidr_problem(v),
+                  visible=lambda v: use(v) and v.get("mgmt_on") != "none", hint="The firewall's own address there, e.g. 10.20.0.1/24"),
+            Field("mgmt_gw", "Management gateway (optional)", "text", m.get("gateway") or "", optional=True,
+                  validate=lambda v, a: S.ip_problem(v, a.get("mgmt_addr")), visible=lambda v: use(v) and v.get("mgmt_on") != "none"),
+            Field("mgmt_only", "SSH and the web UI answer only on the management network", "check", bool(m.get("only", True)),
+                  visible=lambda v: use(v) and v.get("mgmt_on") != "none"),
+        ]
+
+    def _apply(self, c, v):
+        NV = S.netvirt
+        NV.defaults(c)
+        # the plain ports chosen on the interface screen, remembered so switching back from the bond restores them
+        for k in ("wan", "lan"):
+            if c[k].get("iface") and not NV.bond(c, c[k]["iface"]):
+                c[k]["_port"] = c[k]["iface"]
+        if not v.get("use"):
+            c["bonds"] = []
+            for k in ("wan", "lan"):
+                c[k]["vlan"] = 0
+                c[k]["iface"] = c[k].get("_port", c[k].get("iface", ""))
+            if c["wan"].get("mode") == "pppoe":
+                c["wan"]["mode"] = "dhcp"
+            c["mgmt_net"].update({"iface": "", "vlan": 0, "address": "", "gateway": ""})
+            return c
+        members = list(v.get("bond_members") or [])
+        c["bonds"] = []
+        if members:
+            NV.add_bond(c, members, v.get("bond_mode"), v.get("bond_hash") if v.get("bond_mode") != "active-backup" else "",
+                        v.get("lacp_rate") if v.get("bond_mode") == "802.3ad" else "", name="bond0")
+        for k in ("wan", "lan"):
+            where = v.get(f"{k}_on", "port")
+            if k == "wan" and not members:
+                where = "port"
+            c[k]["iface"] = "bond0" if (where == "bond" and members) else ("" if where == "none" else c[k].get("_port", ""))
+            c[k]["vlan"] = int(v.get(f"{k}_vlan") or 0) if not NV.vlan_problem(v.get(f"{k}_vlan") or 0) else 0
+        if v.get("wan_pppoe"):
+            c["wan"].update({"mode": "pppoe", "pppoe_user": v.get("pppoe_user", "").strip(), "pppoe_password": v.get("pppoe_password", "")})
+        elif c["wan"].get("mode") == "pppoe":
+            c["wan"]["mode"] = "dhcp"
+        mo = v.get("mgmt_on", "none")
+        if mo == "none" or (mo == "bond" and not members):
+            c["mgmt_net"].update({"iface": "", "vlan": 0, "address": "", "gateway": ""})
+        else:
+            c["mgmt_net"].update({"iface": "bond0" if mo == "bond" else mo, "vlan": int(v.get("mgmt_vlan") or 0) if not NV.vlan_problem(v.get("mgmt_vlan") or 0) else 0,
+                                  "mode": "static", "address": (v.get("mgmt_addr") or "").strip(), "gateway": (v.get("mgmt_gw") or "").strip(),
+                                  "only": bool(v.get("mgmt_only", True))})
+        return c
+
+    def validate(self, ctx, v):
+        import copy
+        trial = self._apply(copy.deepcopy(S.netvirt.defaults(ctx.c)), v)
+        if v.get("use") and v.get("bond_members") and len(v["bond_members"]) < 2:
+            return "A bond needs at least two ports (or leave all ports off for no bond)."
+        if v.get("use") and v.get("mgmt_on", "none") == "none" and not S.netvirt.in_use(trial):
+            return "Nothing to set up: choose a bond, a VLAN tag, PPPoE or a management network, or untick the first box."
+        p = S.netvirt.problems(ctx.p, trial, [n["name"] for n in ctx.nics] if ctx.nics else None)
+        return p[0] if p else None
+
+    def commit(self, ctx, v):
+        self._apply(ctx.c, v)
+
+    def plan(self, ctx):
+        return []           # the netconfig stage plans (and applies) the whole network
+
+    def apply(self, inst):
+        pass                # written by the netconfig stage (Installer.write_roles -> netvirt.apply_bootstrap)
 
 
 class ServicesStage(Stage):
@@ -676,12 +793,12 @@ class GnomeStage(Stage):
         pass            # desktop.apply runs from Installer.profile_extras
 
 
-STAGES = [KeymapStage(), HostnameStage(), DiskStage(), ExtractStage(), RootpassStage(), DesktopStage(), T2Stage(), GnomeStage(), NetconfigStage(),
+STAGES = [KeymapStage(), HostnameStage(), DiskStage(), ExtractStage(), RootpassStage(), DesktopStage(), T2Stage(), GnomeStage(), NetconfigStage(), NetAdvStage(),
           ServicesStage(), HardeningStage(), UseFlagsStage(), MachineStage(), FinishStage()]
 BY_ID = {s.id: s for s in STAGES}
 UI_ORDER = [s.id for s in STAGES]
 # disks must exist and be extracted before anything is written into the new system
-APPLY_ORDER = ["disk", "extract", "keymap", "hostname", "rootpass", "desktop", "t2", "gnome", "netconfig", "services", "hardening", "use_flags", "machine", "finish"]
+APPLY_ORDER = ["disk", "extract", "keymap", "hostname", "rootpass", "desktop", "t2", "gnome", "netconfig", "netadv", "services", "hardening", "use_flags", "machine", "finish"]
 
 
 def stage_list(ctx, ui_only=False):

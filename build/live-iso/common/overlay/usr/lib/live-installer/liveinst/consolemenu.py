@@ -74,7 +74,7 @@ def apply_iface_config(text, iface, mode, address="", gateway="", dns=""):
 def apply_roles(text, wan, lan):
     """Set wan_interface / lan_interface in the [network] section of patronus.toml text."""
     lines = [l for l in text.splitlines() if not re.match(r"\s*(wan_interfaces?|lan_interfaces?)\s*=", l)
-             and l.strip() != "# written by live-installer"]
+             and l.strip() not in ("# written by live-installer", "# written by live-installer / console menu")]
     roles = ["# written by live-installer / console menu"]
     if wan:
         roles.append(f'wan_interface = "{wan}"')

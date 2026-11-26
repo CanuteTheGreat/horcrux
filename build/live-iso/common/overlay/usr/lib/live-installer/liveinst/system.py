@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, initsys, luksroot, portageperms, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
+from . import arch, hwprofile, initsys, luksroot, netvirt, portageperms, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -519,6 +519,7 @@ def _default_fs(profile):
 def default_config(profile):
     fs, fs_why = _default_fs(profile)
     c = _default_config(profile, fs, fs_why)
+    netvirt.defaults(c)
     apply_encryption_policy(profile, c)
     return c
 
@@ -643,10 +644,14 @@ def config_from_answers(profile, path):
         if "dns" in src:
             v = src["dns"]
             c[sect]["dns"] = " ".join(v) if isinstance(v, list) else v
+        if src.get("iface") == "none":
+            c[sect]["iface"] = ""
+            c[sect]["_none"] = True
+    netvirt.from_answers(c, n)
     return c
 
 
-def validate_config(profile, c, unattended=False, require_secret=True):
+def validate_config(profile, c, unattended=False, nic_names=None, require_secret=True):
     """Return a list of problems (empty = ok)."""
     errs = testmachine.problems(c)
     testmachine.normalize(c)            # no-op unless the explicit test-machine choice is set (xfs-luks -> xfs, no passphrases)
@@ -734,6 +739,7 @@ def validate_config(profile, c, unattended=False, require_secret=True):
                     errs.append(f"{s} gateway: " + ip_problem(n["gateway"], n["address"]))
                 if n.get("dns") and dns_problem(n["dns"]):
                     errs.append(f"{s} dns: " + dns_problem(n["dns"]))
+    errs += netvirt.problems(profile, c, nic_names)
     return errs
 
 
@@ -1309,9 +1315,12 @@ class Installer:
         dh = ["# written by live-installer"]
         wifi = c.get("wifi")
         mgmt = [("mgmt", "Management")] if p["network_mode"] != "wan-lan" else [("wan", "WAN"), ("lan", "LAN")]
+        # bonds / VLANs / a management network / PPPoE: the product's own network stack creates and addresses them at the
+        # first boot from the bootstrap file (write_roles); the system dhcpcd gets no static block for them
+        store_net = netvirt.enabled(p) and netvirt.in_use(c)
         for key, _lbl in mgmt:
             n = c[key]
-            if not n.get("iface"):
+            if not n.get("iface") or store_net:
                 continue
             if n.get("mode") == "static":
                 dh += ["", f"interface {n['iface']}", f"static ip_address={n['address']}"]
@@ -1344,7 +1353,11 @@ class Installer:
         wan = c["wan"].get("iface") or (c["wifi"] and c["wifi"].get("iface")) or ""
         lan = c["lan"].get("iface") or ""
         from .consolemenu import apply_roles
-        open(path, "w").write(apply_roles(txt, wan, lan))
+        if netvirt.enabled(self.p) and netvirt.in_use(c):
+            open(path, "w").write(netvirt.apply_bootstrap(txt, c))
+            self.log("first-boot network written to /etc/patronus/patronus.toml: " + "; ".join(netvirt.plan_lines(c)[:-1]))
+        else:
+            open(path, "w").write(apply_roles(txt, wan, lan))
         self.run(["chgrp", "patronus", "/etc/patronus/patronus.toml"], chroot=True, check=False)
         self.run(["chmod", "0640", "/etc/patronus/patronus.toml"], chroot=True, check=False)
 
