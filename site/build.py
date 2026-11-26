@@ -21,9 +21,15 @@ SRC = f"https://github.com/CanuteTheGreat/{CFG['repo']}"
 # Help center articles for this product (errant.solutions/help/, built from errant-solutions-web help-src/)
 HELP = f"https://errant.solutions/help/{CFG['key']}/"
 BLOB = SRC + "/blob/main/"
+# Ways to give, all live (owner-run): the product's support page on errant.solutions (Stripe tip / monthly, BTCPay crypto,
+# business plans) and GitHub Sponsors. Addresses on other hosts on purpose; only link things that exist.
+SUPPORT = f"https://errant.solutions/support/{CFG['key']}/"
+GH_SPONSORS = "https://github.com/sponsors/CanuteTheGreat"
+# The version shown on the site is the workspace version in Cargo.toml, so the page can never show a stale hand-kept copy.
+VERSION = re.search(r'(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"',
+                    open(os.path.join(ROOT, "Cargo.toml"), encoding="utf-8").read()).group(1)
+CFG["status"] = CFG["status"].replace("{version}", VERSION)
 TREE = SRC + "/tree/main/"
-# Support page for this product (tips and monthly sponsorship: Stripe Checkout, run by errant.solutions). An address on another host on purpose.
-SUPPORT = f"https://errant.solutions/support/{CFG['key']}"
 
 def rel(frm, to):
     """relative URL from page dir `frm` ('' = root) to site path `to` (dir pages end with '/')."""
@@ -79,16 +85,20 @@ def page(page_dir, title, body, active="", desc=None):
     items = [("download", (r("") .rstrip("/") + "/#download") if page_dir else "#download", "Download"),
              ("docs", r("docs/"), "Docs"), ("roadmap", r("roadmap/"), "Roadmap"),
              ("updates", r("docs/update-policy/"), "Updates"),
-             ("source", SRC, "Source"), ("support", SUPPORT, "Support")]
+             ("source", SRC, "Source"),
+             ("donate", (r("").rstrip("/") + "/#support") if page_dir else "#support", "Donate")]
     cur = ' aria-current="page"'
-    nav = "".join(f'<a href="{h}"{cur if k == active else ""}>{t}</a>' for k, h, t in items)
+    don = ' class="nav-donate"'
+    nav = "".join(f'<a href="{h}"{cur if k == active else ""}{don if k == "donate" else ""}>{t}</a>' for k, h, t in items)
     d = html.escape(desc or CFG["tagline"])
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)} - {CFG['name']}</title>
 <meta name="description" content="{d}">
-<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <link rel="icon" href="{r('assets/favicon.ico')}" sizes="any">
 <link rel="apple-touch-icon" href="{r('assets/apple-touch-icon.png')}">
 <link rel="stylesheet" href="{r('assets/style.css')}">
@@ -96,12 +106,12 @@ def page(page_dir, title, body, active="", desc=None):
 <header class="top"><div class="wrap bar">
 <a class="brand" href="{r('') if page_dir else './'}"><img src="{r('assets/mark.png')}" alt="" width="32" height="32"><span>{CFG['name']}</span></a>
 <nav aria-label="Main">{nav}</nav></div></header>
-<div class="banner"><div class="wrap">Pre-1.0 software ({CFG['version']}). {CFG['banner']}</div></div>
+<div class="banner"><div class="wrap">Pre-1.0 software (version {VERSION}). {CFG['banner']}</div></div>
 {body}
 <footer><div class="wrap foot">
 <p>{CFG['name']} is a free, GPL-3.0 project by <a href="https://errant.solutions/">Errant Solutions</a>.
 Source: <a href="{SRC}">GitHub</a>.</p>
-<p>Commercial support: planned after 1.0. Nothing is for sale today. <a href="{SUPPORT}">Support the project</a>.</p>
+<p class="give-foot"><strong>Donate:</strong> <a href="{SUPPORT}#tip">one-time tip</a> &middot; <a href="{SUPPORT}#monthly">monthly</a> &middot; <a href="{GH_SPONSORS}">GitHub Sponsors</a> &middot; <a href="{SUPPORT}#crypto">Bitcoin / Monero</a>. Support plans for businesses: yearly, best-effort email support, no SLA (<a href="{SUPPORT}#plans">plans</a>). A paid stable update channel is planned after 1.0.</p>
 <p class="policies"><a href="{HELP}">Help center</a> &middot; <a href="{r('docs/privacy/')}">Privacy</a> &middot; <a href="{r('docs/update-policy/')}">Updates and support policy</a> &middot; <a href="{r('licenses/THIRD-PARTY-LICENSES.txt')}">Open-source licenses</a></p></div></footer>
 </body></html>
 """
@@ -200,8 +210,10 @@ def main():
     land = f"""<main>
 <section class="hero"><div class="wrap herogrid">
 <div><h1>{CFG['name']}</h1><p class="lead">{CFG['lead']}</p>
-<p class="cta"><a class="btn" href="#download">Get a daily build</a> <a class="btn ghost" href="{rel('', 'roadmap/')}">Roadmap to 1.0</a> <a class="btn ghost" href="{rel('', 'docs/')}">Docs</a> <a class="btn ghost" href="{SUPPORT}">Support the project</a></p></div>
+<p class="cta"><a class="btn" href="#download">Get a daily build</a> <a class="btn ghost" href="{rel('', 'roadmap/')}">Roadmap to 1.0</a> <a class="btn ghost" href="{rel('', 'docs/')}">Docs</a></p></div>
 <img class="logo" src="{rel('', 'assets/logo.png')}" alt="{CFG['name']} logo" width="{CFG['logo_w']}" height="{CFG['logo_h']}"></div></section>
+<section class="wrap givebar" aria-label="Donate"><div class="box"><p><strong>{CFG['name']} is free and built by one person.</strong> If it is useful to you, a one-time tip or a small monthly sponsorship keeps the daily builds and the test machines going.</p>
+<p class="cta tight"><a class="btn" href="#support">&#9829; Ways to give</a> <a class="btn ghost" href="{SUPPORT}#tip">One-time tip</a> <a class="btn ghost" href="{SUPPORT}#monthly">Monthly</a></p></div></section>
 <section class="wrap"><h2>What it is</h2>{CFG['what_html']}</section>
 <section class="wrap"><h2>Status: pre-1.0</h2><p>{CFG['status']}</p>
 <div class="two"><div><h3>What CI proves today</h3><ul>{feats}</ul></div><div><h3>What is not done</h3><ul>{gaps}</ul></div></div>
@@ -225,13 +237,20 @@ sha256sum -c {CFG['key']}-server-openrc-daily-x86_64.iso.sha256</code></pre>
 <strong>Init</strong> is the init system: <code>openrc</code> or <code>systemd</code>. Both are offered for each edition and architecture; a systemd image appears in the table above once its build has passed the same QEMU tests (until then the table says so).
 <strong>Channel</strong> is <code>daily</code> (the rolling test build) or a release tag. <strong>Arch</strong> is <code>x86_64</code> or <code>aarch64</code>.
 Older download names (for example <code>{CFG['key']}-daily-x86_64.iso</code>) still work: they redirect (HTTP 301) to the new name.</p></section>
-<section class="wrap"><h2>The installer</h2><p>A text-mode wizard, on a VGA screen or a serial console. These are real captures from the CI test. A graphical installer is in progress.</p><div class="shots">{sh}</div></section>
-<section class="wrap" id="support"><h2>Support {CFG['name']}</h2>
-<p>{CFG['name']} is free software and stays free: every feature is in the free build, and nobody gets a different version for paying. It is built by one person. If it saves you time, you can help keep the work going with a one-time tip or a small monthly sponsorship.</p>
-<p>The money pays for the real test machines and hosting behind the daily builds and for the time to keep building. Payment is by card (and the wallets Stripe offers) on Stripe's own checkout page; you get a receipt by email, and no account is needed. You can cancel a monthly sponsorship at any time.</p>
-<p class="cta"><a class="btn" href="{SUPPORT}#tip">Leave a tip</a> <a class="btn ghost" href="{SUPPORT}#monthly">Sponsor monthly</a></p></section>
-<section class="wrap"><h2>Commercial support</h2>
-<p><strong>Planned after 1.0.</strong> The idea, in the style of Proxmox: an optional paid stable update channel with email support in business hours, best effort, no 24/7 guarantee. The free channel stays complete, with every feature. Nothing is for sale now and there is no sign-up. The <a href="{rel('', 'stable-channel/')}">design</a> is public, and it only starts after a stable 1.0 and a period of real use.</p></section>
+<section class="wrap"><h2>The installer</h2><p>The default boot entry starts a graphical installer; a text wizard (VGA screen or serial console) and an unattended install from an answer file run the same steps. All three are tested in QEMU on every daily build. These are real captures of the text wizard from the CI test.</p><div class="shots">{sh}</div></section>
+<section class="wrap" id="support"><h2>Support {CFG['name']}: donate</h2>
+<p>{CFG['name']} is free software and stays free: every feature is in the free build, and nobody gets a different version for paying. It is built by one person. Donations pay for the real test machines and hosting behind the daily builds, and for the time to keep building.</p>
+<div class="give">
+<div class="card"><h3>One-time tip</h3><p>Any amount, by card or the wallets Stripe offers, on Stripe's own checkout page. Receipt by email, no account needed.</p><a class="btn" href="{SUPPORT}#tip">Leave a tip</a></div>
+<div class="card"><h3>Monthly sponsor</h3><p>A small amount every month through Stripe. You can cancel it yourself at any time.</p><a class="btn" href="{SUPPORT}#monthly">Sponsor monthly</a></div>
+<div class="card"><h3>GitHub Sponsors</h3><p>Already on GitHub? Sponsor once or monthly from your GitHub account.</p><a class="btn ghost" href="{GH_SPONSORS}">Sponsor on GitHub</a></div>
+<div class="card"><h3>Bitcoin or Monero</h3><p>On our own BTCPay Server: no exchange or payment company in between, no account or email. The page lists the coins that are ready right now.</p><a class="btn ghost" href="{SUPPORT}#crypto">Donate with crypto</a></div>
+</div>
+<p>Other ways to help, worth as much as money: try a daily build and <a href="{SRC}/issues">report what breaks</a>, or star the project on <a href="{SRC}">GitHub</a>.</p></section>
+<section class="wrap" id="plans"><h2>Support plans for businesses</h2>
+<p>Running {CFG['name']} at work? A yearly plan gives your team <strong>best-effort email support</strong> with a first-reply target: <strong>Plus $99</strong> (about 5 business days), <strong>Business $499</strong> (about 3) or <strong>Priority $1,499</strong> (about 1) per year. It is not an SLA: no guaranteed response or fix time, no phone line, no on-site visits. {CFG['name']} stays free and identical for everyone; a plan buys support, not features. Cancel any time yourself.</p>
+<p class="cta"><a class="btn" href="{SUPPORT}#plans">See the plans</a> <a class="btn ghost" href="https://errant.solutions/support/terms/">Plan terms</a></p>
+<p>Separately, a paid stable update channel is <strong>planned after 1.0</strong>, in the style of Proxmox; the free channel stays complete. Nothing of that is for sale yet. The <a href="{rel('', 'stable-channel/')}">design</a> is public.</p></section>
 </main>"""
     write("index.html", page("", CFG["name"], land, "", CFG["tagline"]))
     nf = page("", "Not found", '<main class="wrap doc"><h1>Page not found</h1><p><a href="/">Back to the start page</a>.</p></main>')

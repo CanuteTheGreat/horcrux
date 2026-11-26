@@ -2,25 +2,26 @@
  "key": "horcrux",
  "repo": "horcrux",
  "name": "Horcrux",
- "version": "0.1.x",
  "banner": "Daily builds for testing. Not for production.",
  "tagline": "Horcrux is a free, Gentoo-based hypervisor and server OS with a web UI: VMs, containers and clusters, headless by default, with an optional desktop. Pre-1.0.",
  "lead": "A headless Gentoo-based hypervisor/server OS with a web UI, in the style of Proxmox VE: virtual machines, containers, storage and clusters, written in Rust. A desktop is an optional edition on top.",
  "logo_w": 340,
  "logo_h": 340,
- "what_html": "<p>Horcrux manages QEMU/KVM, LXD and Incus virtual machines and LXC, LXD, Incus, Docker and Podman containers from one web UI, CLI and API. It adds clustering with live migration and HA, a distributed firewall, backups and RBAC. It is built for Gentoo: the ebuild and USE flags choose which backends get compiled in.</p><p>The server image is the product: it installs and runs with no display (serial console or SSH, answer-file install, web UI on port 8006). A GNOME desktop is an optional edition layered on the same core, for laptops and workstations; nothing personal or machine-specific is in a public image.</p><p>It is a one-person project in early development. It aims at Proxmox VE-style functionality; it does not claim parity yet.</p>",
- "status": "Horcrux is version 0.1.x. APIs, configuration and on-disk formats can still change between builds. Use test hardware or a VM.",
+ "what_html": "<p>Horcrux manages QEMU/KVM virtual machines and Incus (preferred), LXD, LXC, Podman (preferred) and Docker containers from one web UI, CLI, API and Terraform provider. It adds clustering with live migration and HA, an nftables firewall and SDN, ZFS, Ceph, LVM, directory and iSCSI storage, backups, RBAC with PAM, LDAP, Active Directory and OpenID Connect logins plus TOTP and passkeys, and a gaming-VM wizard with GPU hand-off. It is built for Gentoo: the ebuild and USE flags choose which backends get compiled in, and every image comes in an OpenRC and a systemd variant.</p><p>The server image is the product: it installs and runs with no display (serial console or SSH, answer-file install, web UI on port 8006). On ZFS every update is taken as a boot environment, so the previous system is one boot-menu entry away. Updates are automatic by default, in a nightly window, and running guests keep running. A GNOME desktop is an optional edition layered on the same core, for laptops and workstations; nothing personal or machine-specific is in a public image.</p><p>It is a one-person project in early development, measured against Proxmox VE: the <a href=\"https://github.com/CanuteTheGreat/horcrux/blob/main/docs/design/proxmox-9.3-parity.md\">Proxmox VE 9.3 parity review</a> lists, item by item, what Horcrux has and what is still missing. It does not claim parity.</p>",
+ "status": "Horcrux is at version {version}, published as daily builds of the main branch. APIs, configuration and on-disk formats can still change between builds. Use test hardware or a VM.",
  "works": [
-  "Daily ISO: a QEMU test boots it, installs it (unattended, serial wizard and VGA wizard, ext4, XFS and ZFS mirror, UEFI and BIOS), reboots from disk and logs in to the web UI.",
-  "Nightly tests on real QEMU/KVM guests: snapshots, backup and restore, API restarts and crashes, live migration, HA failover on 3 nodes, save state on host shutdown.",
-  "Unit and integration tests against real services (LDAP, OIDC, nftables, CNI, Docker, k3s) on every change."
+  "Daily ISOs for x86_64 and aarch64, OpenRC and systemd: QEMU tests install each one with the graphical installer, the text wizard and an answer file (ext4, XFS and ZFS; UEFI and BIOS), reboot from disk and log in to the web UI. Only images that pass are published, each signed and with an SBOM.",
+  "ZFS boot environments: a snapshot before every update and a menu entry per environment; a QEMU test upgrades a package on an encrypted ZFS install, rolls it back with horcrux-be rollback and checks that VM and user files are untouched.",
+  "Nightly tests on real QEMU/KVM guests: snapshots, backup and restore, API restarts and crashes, live migration, HA failover on 3 nodes, save state on host shutdown. A weekly test installs Windows 11 unattended through the gaming-VM wizard.",
+  "Integration tests against real services, not mocks: LDAP, OIDC, PAM, nftables firewall and SDN, CNI, Docker, Incus and LXC, k3s with Helm, and a single-node Ceph cluster.",
+  "Portable binaries: built for x86-64-v2 and generic arm64 and booted on a conservative CPU model in every test."
  ],
  "gaps": [
-  "No stable release. No upgrade or rollback test of an installed system yet.",
-  "The graphical installer is in progress; today the installer is a text wizard.",
+  "No stable release yet, so there is no release-to-release upgrade test either.",
+  "Not at Proxmox VE 9.3 parity: SAN multipath (iSCSI, FC, NVMe-oF) and third-party storage plugins are missing; Ceph release selection at install is in progress (see the parity review).",
   "Secure Boot is not supported.",
-  "Real-hardware testing has only just started and has already found bugs (a CPU-specific crash, fixed on main).",
-  "aarch64 is built and tested only under QEMU emulation (no real arm64 hardware yet); riscv64 is not built."
+  "aarch64 is tested under QEMU emulation only; riscv64 binaries are cross-compiled but not tested on hardware.",
+  "No independent security review has been done yet."
  ],
  "isos": [
   [
