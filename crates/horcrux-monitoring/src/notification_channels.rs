@@ -837,7 +837,7 @@ impl NotificationChannelStore {
             .await
             .iter()
             .filter(|c| c.enabled)
-            .filter(|c| routed.as_ref().map_or(true, |ids| ids.contains(&c.id)))
+            .filter(|c| routed.as_ref().is_none_or(|ids| ids.contains(&c.id)))
             .cloned()
             .collect();
         let (mut delivered, mut failed) = (0, 0);
