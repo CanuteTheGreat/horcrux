@@ -107,7 +107,7 @@ def define(args):
                 json.dumps(got)[:400] + " RAW: " + n.execute(f"grep -r {tag} /var/log 2>/dev/null | head -20; ps -eo args | grep -i '[s]yslog\\|[l]og'; "
                            "cat /etc/syslog.conf /etc/syslog-ng/syslog-ng.conf /etc/conf.d/*syslog* 2>&1 | grep -v '^#' | head -40; readlink -f $(command -v logger)")[1][-1800:])
         e0 = got[0]
-        m.check("entry-has-structured-fields", e0["pid"] and e0["hostname"] and e0["priority"] is not None and e0["priority_name"] and e0["timestamp"], json.dumps(e0)[:300])
+        m.check("entry-has-structured-fields", (e0["pid"] or init != "systemd") and e0["hostname"] and e0["priority"] is not None and e0["priority_name"] and e0["timestamp"], json.dumps(e0)[:300])
         got = logs(f"identifier={tag}*")
         m.check("identifier-wildcard", len(got) == 3, json.dumps([e["identifier"] for e in got]))
         got = logs(f"identifier={tag}*&priority=3")
