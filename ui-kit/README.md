@@ -1,4 +1,4 @@
-# ui-kit v0.1 (shared by Horcrux and Patronus)
+# ui-kit v0.2 (shared by Horcrux and Patronus)
 
 Framework-neutral design system: plain CSS custom properties, `ui-`-prefixed component classes, and an
 optional dependency-free `ui.js`. No fonts, no branding, no build step, no npm. The design rules (density,
@@ -72,6 +72,9 @@ colour = state only, live panels, keyboard) are in `docs/design/ui-system.md`.
 <!-- dialog (native <dialog>), toast -->
 <dialog class="ui-dialog"><header>Delete VM</header><div class="ui-dialog-body">...</div>
   <footer><button class="ui-btn">Cancel</button><button class="ui-btn danger solid">Delete</button></footer></dialog>
+<!-- the parts may also sit in one <form> directly inside the dialog (Enter submits, `required` validates):
+     <dialog class="ui-dialog"><form method="dialog"><header>..</header><div class="ui-dialog-body">..</div><footer>..</footer></form></dialog>
+     .ui-dialog sets margin:auto itself, so a page-level `* { margin: 0 }` reset doesn't pin it top-left. -->
 <div class="ui-toasts"><div class="ui-toast ok">VM started.</div></div>
 
 <!-- log viewer: p-crit/p-err/p-warn/p-notice/p-debug rows, .boot separators; data-ui-log follows the end -->
@@ -79,8 +82,12 @@ colour = state only, live panels, keyboard) are in `docs/design/ui-system.md`.
   <div class="p-warn"><span class="ts">14:03:40</span>pool tank is 81% full</div></div>
 ```
 
-## Stability (v0.1)
+## Changes
+
+- v0.2: `ui-dialog` header/body/footer also match inside a direct child `<form>`; `.ui-dialog` sets `margin: auto`.
+
+## Stability (v0.2)
 
 Stable: tokens, `ui-btn`, `ui-badge`, `ui-dot`, `ui-panel`, `ui-kv`, `ui-toolbar`, `ui-grid`, `ui-tabs`,
 `ui-steps`, `ui-field`, `ui-banner`, `ui-empty`, `ui-log`, `ui-usage`. May still change: `ui-tree` nesting
-depth styles, `ui-dialog`, `ui-toast`, `ui-menu`, charts (not in v0.1).
+depth styles, `ui-dialog`, `ui-toast`, `ui-menu`, charts (not in v0.2).

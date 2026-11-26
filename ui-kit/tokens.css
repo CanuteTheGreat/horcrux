@@ -1,4 +1,4 @@
-/* errant ui-kit v0.1 - tokens.css
+/* errant ui-kit v0.2 - tokens.css
    Framework-neutral design tokens shared by Horcrux (Leptos) and Patronus (askama templates).
    CSS custom properties only. Light by default; dark follows the device (prefers-color-scheme) unless
    <html data-theme="light|dark"> overrides it. Accent presets: <html data-accent="cobalt|garnet|graphite">.
