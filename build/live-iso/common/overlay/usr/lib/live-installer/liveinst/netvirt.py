@@ -364,7 +364,7 @@ def apply_bootstrap(text, c):
     w = device(c["wan"]) or ((c.get("wifi") or {}).get("iface") or "")
     if c["wan"].get("mode") == "pppoe":
         w = device(c["wan"])                # the parent; the first boot moves the role to the ppp device
-    t = apply_roles(strip_tables(text, {"network.bond", "network.vlan", "firstboot"}), w, device(c["lan"]))
+    t = apply_roles(strip_tables(text, {"network.bond", "network.vlan", "firstboot"}), w, device(c["lan"]), c.get("opt") or [])
     t = "\n".join(x for x in t.splitlines() if not re.match(r"\s*mgmt_interfaces?\s*=", x)) + "\n"
     mg = device(c["mgmt_net"])
     if mg:
@@ -375,7 +375,7 @@ def apply_bootstrap(text, c):
                 j = i + 1
                 if j < len(lines) and lines[j].startswith("# written by live-installer"):
                     j += 1
-                while j < len(lines) and re.match(r"\s*(wan_interface|lan_interface)\s*=", lines[j]):
+                while j < len(lines) and re.match(r"\s*(wan_interface|lan_interface|opt_interfaces)\s*=", lines[j]):
                     j += 1
                 lines.insert(j, f"mgmt_interface = {_q(mg)}")
                 done = True

@@ -137,6 +137,75 @@ class Answers(unittest.TestCase):
         c["disks"], c["zfs_pool"] = ["/dev/vda", "/dev/vdb", "/dev/vdc", "/dev/vdd"], "raidz1"
         self.assertTrue(any("reserved" in e for e in S.validate_config(PROFILE, c)))
 
+    def test_opt_interfaces_and_update_channel_from_answers(self):
+        fw = dict(FW, update_channels=["stable", "testing", "development"], update_channel_file="/etc/patronus/patronus.toml")
+        text = """
+            [global]
+            hostname = "fw.example.com"
+            root_password_hash = "$6$salt$%s"
+            [network.wan]
+            iface = "eth0"
+            [network.lan]
+            iface = "eth1"
+            [network]
+            opt = ["eth2", "eth3"]
+            [update]
+            channel = "testing"
+        """ % ("a" * 86)
+        c = self.cfg(text, fw)
+        self.assertEqual(c["opt"], ["eth2", "eth3"])
+        self.assertEqual(c["update_channel"], "testing")
+        nics = ["eth0", "eth1", "eth2", "eth3"]
+        self.assertEqual(S.opt_problems(fw, c, nics), [])
+        self.assertIsNone(S.updchan.problem(fw, c["update_channel"]))
+        self.assertTrue(any("no interface eth3" in e for e in S.opt_problems(fw, c, nics[:3])))
+        c["opt"] = ["eth1"]
+        self.assertTrue(any("already the WAN or LAN" in e for e in S.opt_problems(fw, c, nics)))
+        c["opt"] = ["eth2", "eth2"]
+        self.assertTrue(any("listed twice" in e for e in S.opt_problems(fw, c, nics)))
+        self.assertTrue(any("OPT interfaces exist only" in e for e in S.opt_problems(PROFILE, c, nics)))
+        bad = self.cfg(text.replace('"testing"', '"nightly"'), fw)
+        self.assertTrue(any("update channel 'nightly'" in e for e in S.validate_config(fw, bad)))
+        plain = self.cfg(text.replace('channel = "testing"', ""), fw)
+        self.assertEqual(plain["update_channel"], "stable")             # the profile's first channel is the default
+        self.assertEqual(S.default_config(fw)["update_channel"], "stable")
+        self.assertEqual(S.default_config(FW)["update_channel"], "")     # no update_channels: nothing chosen, nothing written
+        self.assertIsNotNone(S.updchan.problem(FW, "stable"))
+
+    def test_update_channel_toml(self):
+        U = S.updchan
+        shipped = '[system]\nhostname = "x"\n\n[update]\n# Where updates come from\n# channel = "stable"            # stable | testing\n# overlay_uri = "u"\n\n[dns]\nenabled = false\n'
+        t = U.apply_toml(shipped, "testing")
+        self.assertEqual(U.read_toml(t), "testing")
+        self.assertIn('# channel = "stable"', t)                        # the documentation comment stays
+        self.assertLess(t.index('channel = "testing"'), t.index("[dns]"))
+        self.assertTrue(t.endswith("[dns]\nenabled = false\n"))
+        t2 = U.apply_toml(t, "development")
+        self.assertEqual(U.read_toml(t2), "development")
+        self.assertEqual(t2.count("\nchannel ="), 1)
+        import tomllib
+        self.assertEqual(tomllib.loads(t2)["update"]["channel"], "development")
+        self.assertEqual(tomllib.loads(t2)["dns"]["enabled"], False)
+        fresh = U.apply_toml('[system]\nhostname = "x"\n', "stable")
+        self.assertEqual(tomllib.loads(fresh)["update"]["channel"], "stable")
+        self.assertEqual(U.read_toml('[update]\n[dns]\nchannel = "x"\n'), "")  # a key of another section is not the channel
+        bare = U.apply_toml("", "stable")
+        self.assertEqual(tomllib.loads(bare), {"update": {"channel": "stable"}})
+
+    def test_update_channel_stage_and_plan(self):
+        fw = dict(FW, update_channels=["stable", "testing"], update_channel_file="/etc/patronus/patronus.toml",
+                  services=["patronus-web", "chronyd"], services_optional=["chronyd"])
+        ctx = ST.Ctx.__new__(ST.Ctx)
+        ctx.p, ctx.c = fw, dict(S._default_config(fw, "xfs", ""), update_channel="stable", services_off=[])
+        st = ST.BY_ID["services"]
+        f = {x.key: x for x in st.fields(ctx)}
+        self.assertEqual([k for k, _ in f["update_channel"].options], ["stable", "testing"])
+        self.assertIsNotNone(st.validate(ctx, {"update_channel": "nightly"}))
+        st.commit(ctx, {"opt": ["chronyd"], "update_channel": "testing"})
+        self.assertIn("Update channel: testing", st.plan(ctx))
+        ctx.p = dict(FW, services=["patronus-web"], services_optional=[])
+        self.assertNotIn("update_channel", {x.key for x in st.fields(ctx)})
+
     def test_zfs_pool_name_rules(self):
         from liveinst import zfsroot as Z
         self.assertEqual(Z.pool_name({}), "rpool")
@@ -222,6 +291,108 @@ class ConsoleMenuLogic(unittest.TestCase):
         t2 = CM.apply_roles("", "eth9", "")
         self.assertEqual(CM.read_roles(t2), ("eth9", ""))
 
+    def test_dhcpcd_ipv6_modes(self):
+        st = CM.apply_iface_config("", "eth1", "static", "192.168.1.1/24", v6="static", v6_address="2001:db8:1::1/64")
+        self.assertIn("static ip_address=192.168.1.1/24", st)
+        self.assertIn("static ip6_address=2001:db8:1::1/64", st)
+        self.assertIn("noipv6rs", st)
+        off = CM.apply_iface_config(st, "eth1", "dhcp", v6="none")
+        self.assertIn("interface eth1", off)
+        self.assertIn("noipv6", off)
+        self.assertNotIn("ip6_address", off)
+        self.assertNotIn("192.168.1.1", off)
+        auto = CM.apply_iface_config(off, "eth1", "dhcp")
+        self.assertNotIn("interface eth1", auto)          # plain DHCP + IPv6 auto = dhcpcd's defaults, no stanza
+        self.assertEqual(auto.count("BEGIN console-menu eth1"), 1)
+        with self.assertRaises(ValueError):
+            CM.dhcpcd_block("eth1", "dhcp", v6="slaac")
+        self.assertIsNone(CM.ipv6_problem("2001:db8::2/64"))
+        for bad in ("2001:db8::2", "192.168.1.1/24", "nonsense/64"):
+            self.assertIsNotNone(CM.ipv6_problem(bad), bad)
+
+    def test_roles_with_opt_interfaces(self):
+        t = CM.apply_roles("[network]\nwan_interface = \"a\"\n", "eth0", "eth1", ["eth2", "eth3"])
+        self.assertEqual(CM.read_roles(t), ("eth0", "eth1"))
+        self.assertEqual(CM.read_opts(t), ["eth2", "eth3"])
+        self.assertIn('opt_interfaces = ["eth2", "eth3"]', t)
+        kept = CM.apply_roles(t, "eth1", "eth0")          # None = keep the OPT list
+        self.assertEqual(CM.read_opts(kept), ["eth2", "eth3"])
+        cleared = CM.apply_roles(t, "eth0", "eth1", [])
+        self.assertEqual(CM.read_opts(cleared), [])
+        self.assertNotIn("opt_interfaces", cleared)
+        import tomllib
+        self.assertEqual(tomllib.loads(t)["network"]["opt_interfaces"], ["eth2", "eth3"])
+
+    def test_profile_console_items(self):
+        prof = dict(PROFILE, console_items=[
+            {"key": "20", "title": "Update", "run": ["prod", "update", "check"], "then": ["prod", "update", "apply"]},
+            {"key": "3", "title": "clashes", "run": ["x"]},
+            {"key": "21", "title": "no argv", "run": "rm -rf /"},
+            {"key": "22", "title": "Import", "ask": "File", "run": ["prod", "import", "{answer}", "--plan"],
+             "then": [["prod", "import", "{answer}", "--yes"], ["prod", "apply"]], "confirm": "Import it?"},
+            {"key": "23", "title": "Revision", "show": ["prod", "revs"], "ask": "Id", "run": ["prod", "show", "{answer}"]}])
+        items, bad = CM.console_items(prof, [k for k, _ in CM.Console.MENU])
+        self.assertEqual([i["key"] for i in items], ["20", "22", "23"])
+        self.assertEqual(len(bad), 2)
+        self.assertEqual(CM.fill_argv(items[1]["run"], "/mnt/usb/config.xml; reboot"),
+                         ["prod", "import", "/mnt/usb/config.xml; reboot", "--plan"])     # one argv element: never a shell
+        import io
+        ran = []
+        orig = CM.subprocess.run
+        CM.subprocess.run = lambda argv, *a, **k: ran.append(argv)
+        try:
+            it = iter(["/mnt/usb/c.xml", "y"])
+            c = CM.Console(prof, inp=lambda prompt="": next(it), out=io.StringIO())
+            c.run_item(items[1])
+            self.assertEqual(ran, [["prod", "import", "/mnt/usb/c.xml", "--plan"], ["prod", "import", "/mnt/usb/c.xml", "--yes"], ["prod", "apply"]])
+            ran.clear()
+            it = iter(["7"])
+            c.run_item(items[2])
+            self.assertEqual(ran, [["prod", "revs"], ["prod", "show", "7"]])
+            ran.clear()
+            it = iter(["n"])
+            c.run_item(items[0])
+            self.assertEqual(ran, [["prod", "update", "check"]])                  # no yes: the follow-up never runs
+            out = io.StringIO()
+            c.out = out
+            orig_header = c.header
+            c.header = lambda: None
+            c.show_menu()
+            menu = out.getvalue()
+            self.assertIn("20) Update", menu)
+            self.assertIn("13) Turn SSH on or off", menu)
+            self.assertLess(menu.index("20) Update"), menu.index(" 0) Log out"))
+            c.header = orig_header
+        finally:
+            CM.subprocess.run = orig
+
+    def test_ssh_toggle_uses_the_init_abstraction(self):
+        import io
+        calls = []
+        orig_sh = CM.S.sh
+        state = {"on": True}
+        CM.S.sh = lambda cmd, timeout=60: (calls.append(cmd), (0 if state["on"] else 3, "started" if state["on"] else ""))[1]
+        try:
+            for init in ("openrc", "systemd"):
+                calls.clear()
+                state["on"] = True
+                it = iter(["y"])
+                c = CM.Console(PROFILE, inp=lambda prompt="": next(it), out=io.StringIO())
+                c.init = init
+                env = os.environ.pop("SSH_CONNECTION", None)
+                c.ssh_toggle()
+                if env:
+                    os.environ["SSH_CONNECTION"] = env
+                flat = [" ".join(x) for x in calls]
+                if init == "openrc":
+                    self.assertIn("rc-service sshd stop", flat)
+                    self.assertIn("rc-update del sshd default", flat)
+                else:
+                    self.assertTrue(any(f.startswith("systemctl stop") for f in flat), flat)
+                    self.assertTrue(any(f.startswith("systemctl disable") for f in flat), flat)
+        finally:
+            CM.S.sh = orig_sh
+
     def test_host_validation(self):
         for good in ("example.com", "10.0.0.1", "fe80::1", "a"):
             self.assertTrue(CM.host_ok(good), good)
@@ -264,6 +435,36 @@ class ConsoleMenuFlows(unittest.TestCase):
         c = CM.Console(self.prof, inp=lambda prompt="": next(it), out=io.StringIO())
         c.secret = lambda prompt: next(it)
         return c
+
+    def test_assign_wan_lan_opt_stores_roles_through_the_product(self):
+        import io
+        root = tempfile.mkdtemp() + "/"
+        os.makedirs(root + "etc/patronus")
+        open(root + "etc/patronus/patronus.toml", "w").write('[system]\nhostname = "x"\n\n[network]\n')
+        nics = [{"name": n, "wifi": False} for n in ("eth0", "eth1", "eth2", "eth3")]
+        calls, ran = [], []
+        orig = (CM.S.list_nics, CM.S.bring_up, CM.S.sh, CM.subprocess.run, CM.time.sleep, CM.S.nic_line)
+        try:
+            CM.S.list_nics, CM.S.bring_up, CM.S.nic_line = (lambda: nics), (lambda n: None), (lambda n: n["name"])
+            CM.S.sh = lambda cmd, timeout=60: (calls.append(cmd), (0, ""))[1]
+            CM.time.sleep = lambda s: None
+
+            class R:
+                returncode, stdout, stderr = 0, "interface eth2 -> OPT1\n", ""
+            CM.subprocess.run = lambda argv, *a, **k: (ran.append(argv), R())[1]
+            prof = dict(FW, roles_sync_cmd=["patronus", "interfaces", "assign", "--from-bootstrap"], web_service="")
+            it = iter(["1", "2", "3", "n", "n"])           # WAN eth0, LAN eth1, OPT1 eth2, no more OPT, addresses later
+            out = io.StringIO()
+            c = CM.Console(prof, inp=lambda prompt="": next(it), out=out, root=root)
+            c.assign()
+            t = open(root + "etc/patronus/patronus.toml").read()
+            self.assertEqual(CM.read_roles(t), ("eth0", "eth1"))
+            self.assertEqual(CM.read_opts(t), ["eth2"])
+            self.assertEqual(ran, [["patronus", "interfaces", "assign", "--from-bootstrap"]])
+            self.assertIn("OPT1=eth2", out.getvalue())
+            self.assertIn("interface eth2 -> OPT1", out.getvalue())
+        finally:
+            CM.S.list_nics, CM.S.bring_up, CM.S.sh, CM.subprocess.run, CM.time.sleep, CM.S.nic_line = orig
 
     def test_reset_password_updates_db_and_drops_sessions(self):
         import sqlite3

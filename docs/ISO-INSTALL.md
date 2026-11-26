@@ -297,6 +297,9 @@ zfs_raid = "mirror"                       # with filesystem = "zfs": single | mi
                                           #   | raidz1 (3+ disks) | raidz2 (4+ disks); list every disk in disks = [...]
 # zfs_pool = "rpool"                      # root pool name (default rpool; a letter first, then letters/digits/_-.:)
 
+# [update]                                # products whose profile has update_channels (Patronus): the update channel,
+# channel = "stable"                      #   one of the profile's list (first = default); shown on the Services page + summary
+
 [network.management]
 mode = "static"                           # or "dhcp"
 iface = "auto"                            # NIC name, or auto = first wired NIC with a link
@@ -600,6 +603,15 @@ turns the menu off.
 | 9 Web UI URL and status | URL, uptime, service states, root fs, effective SSH settings, latest backups. |
 | 10 Restore a configuration backup | Lists `/var/backups/horcrux/*.tar.gz` and `*.tar.gz` on any attached USB stick. Refuses archives of another product, with paths outside the product's config paths, or with links; takes a `pre-restore` backup first. |
 | 11 Create a configuration backup | `/var/backups/horcrux/horcrux-config-manual-<time>.tar.gz` (consistent SQLite copy while the service runs), optionally copied to a USB stick. |
+| 12 Restart the web UI | Restarts the web service through the init system (OpenRC or systemd) and waits until its port listens again. |
+| 13 Turn SSH on or off | Shows whether sshd runs; stops + disables or enables + starts it (now and at boot). Warns first when you are connected over SSH. |
+| 14 Live system view | `top` (q returns to the menu). |
+| Product items | A product adds its own items with `console_items` in its installer profile (key, title, `run` argv, optional `show` argv, `ask` question whose answer fills `{answer}` as ONE argument, `confirm` + `then` argv run only after a yes). They are listed after 14; a key that clashes with a built-in one is ignored. |
+
+Option 2 also asks for IPv6: `a`uto (router advertisements / DHCPv6, dhcpcd's default), `s`tatic (address/prefix,
+`static ip6_address` + `noipv6rs`) or `n`one (`noipv6`). On a WAN/LAN product, option 1 asks for WAN, LAN and then any
+number of OPT interfaces (OPT1, OPT2 ...; `n` when done) and writes `opt_interfaces = [...]` next to
+`wan_interface`/`lan_interface`; a profile `roles_sync_cmd` (argv) then hands the new roles to the product at once.
 
 Screens (real QEMU captures from the CI run, UEFI, VGA console): the login on a protected console, then the menu.
 

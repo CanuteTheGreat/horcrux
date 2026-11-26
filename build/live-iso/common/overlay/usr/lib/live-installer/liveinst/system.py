@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import time
 
-from . import arch, hwprofile, initsys, luksroot, netvirt, portageperms, portableswap, secretcheck, testmachine, tpmunlock, zfsswap
+from . import arch, hwprofile, initsys, luksroot, netvirt, portageperms, portableswap, secretcheck, testmachine, tpmunlock, updchan, zfsswap
 
 LOG = "/var/log/live-installer.log"
 
@@ -519,6 +519,8 @@ def _default_fs(profile):
 def default_config(profile):
     fs, fs_why = _default_fs(profile)
     c = _default_config(profile, fs, fs_why)
+    from . import updchan
+    c["update_channel"] = updchan.default(profile)
     netvirt.defaults(c)
     apply_encryption_policy(profile, c)
     return c
@@ -551,6 +553,8 @@ def _default_config(profile, fs, fs_why):
         "mgmt": {"iface": "", "mode": "dhcp", "address": "", "gateway": "", "dns": ""},
         "wan": {"iface": "", "mode": "dhcp", "address": "", "gateway": "", "dns": ""},
         "lan": {"iface": "", "mode": "static", "address": "192.168.1.1/24"},
+        "opt": [],                    # wan-lan products: OPT1, OPT2 ... interfaces (role only; addresses are set after install)
+        "update_channel": "",         # products with update_channels (updchan.py)
         "wifi": None,
         "root_password": "", "root_hash": "", "web_password": "",
         "ssh_keys": [], "ssh_password_auth": False, "email": "",
@@ -649,7 +653,11 @@ def config_from_answers(profile, path):
         if src.get("iface") == "none":
             c[sect]["iface"] = ""
             c[sect]["_none"] = True
+    opt = n.get("opt", [])
+    c["opt"] = [opt] if isinstance(opt, str) else [str(x) for x in opt]
     netvirt.from_answers(c, n)
+    from . import updchan
+    updchan.from_answers(c, a, profile)
     return c
 
 
@@ -744,7 +752,29 @@ def validate_config(profile, c, unattended=False, nic_names=None, require_secret
                     errs.append(f"{s} gateway: " + ip_problem(n["gateway"], n["address"]))
                 if n.get("dns") and dns_problem(n["dns"]):
                     errs.append(f"{s} dns: " + dns_problem(n["dns"]))
+    errs += opt_problems(profile, c, nic_names)
+    from . import updchan
+    if updchan.problem(profile, c.get("update_channel", "")):
+        errs.append(updchan.problem(profile, c.get("update_channel", "")))
     errs += netvirt.problems(profile, c, nic_names)
+    return errs
+
+
+def opt_problems(profile, c, nic_names=None):
+    """OPT interfaces: wan-lan products only, distinct, not the WAN/LAN port, present on this machine (when the NIC list is known)"""
+    opts = c.get("opt") or []
+    if not opts:
+        return []
+    if profile["network_mode"] != "wan-lan":
+        return ["network.opt: OPT interfaces exist only on WAN/LAN products"]
+    errs = []
+    if len(set(opts)) != len(opts):
+        errs.append("network.opt: an interface is listed twice")
+    for o in opts:
+        if o in (c["wan"].get("iface"), c["lan"].get("iface")):
+            errs.append(f"network.opt: {o} is already the WAN or LAN interface")
+        elif nic_names is not None and o not in nic_names:
+            errs.append(f"network.opt: no interface {o} on this machine ({', '.join(nic_names) or 'none found'})")
     return errs
 
 
@@ -1350,6 +1380,23 @@ class Installer:
             self.log(f"removed the pinned interface-name from {n_pinned} NetworkManager profile(s)")
         if p["network_mode"] == "wan-lan":
             self.write_roles()
+        self.write_update_channel()
+
+    def write_update_channel(self):
+        """the update channel picked at install, into the product's config file ([update] channel; updchan.py)"""
+        from . import updchan
+        ch = self.c.get("update_channel", "")
+        if not (updchan.enabled(self.p) and ch):
+            return
+        rel = self.p["update_channel_file"]
+        path = self.target + rel
+        txt = open(path).read() if os.path.exists(path) else ""
+        st = os.stat(path) if os.path.exists(path) else None
+        open(path, "w").write(updchan.apply_toml(txt, ch))
+        if st:
+            os.chown(path, st.st_uid, st.st_gid)
+            os.chmod(path, st.st_mode & 0o7777)
+        self.log(f"update channel: {ch} ({rel} [update])")
 
     def write_roles(self):
         c = self.c
@@ -1362,7 +1409,9 @@ class Installer:
             open(path, "w").write(netvirt.apply_bootstrap(txt, c))
             self.log("first-boot network written to /etc/patronus/patronus.toml: " + "; ".join(netvirt.plan_lines(c)[:-1]))
         else:
-            open(path, "w").write(apply_roles(txt, wan, lan))
+            open(path, "w").write(apply_roles(txt, wan, lan, c.get("opt") or []))
+        if c.get("opt"):
+            self.log("OPT interfaces: " + ", ".join(f"OPT{i}={o}" for i, o in enumerate(c["opt"], 1)))
         self.run(["chgrp", "patronus", "/etc/patronus/patronus.toml"], chroot=True, check=False)
         self.run(["chmod", "0640", "/etc/patronus/patronus.toml"], chroot=True, check=False)
 
