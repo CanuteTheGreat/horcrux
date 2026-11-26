@@ -15,7 +15,7 @@
 
 **Website and docs: [horcrux.errant.solutions](https://horcrux.errant.solutions)**
 
-**Support the project:** Horcrux is free and stays free. If it saves you time, you can leave a one-time tip or a small monthly sponsorship at [errant.solutions/support/horcrux](https://errant.solutions/support/horcrux).
+**Support the project:** Horcrux is free and stays free. If it saves you time, you can leave a one-time tip, a monthly sponsorship or a crypto donation at [errant.solutions/support/horcrux](https://errant.solutions/support/horcrux/), or sponsor on [GitHub Sponsors](https://github.com/sponsors/CanuteTheGreat).
 
 **[Documentation](docs/)** | **[Roadmap to 1.0](docs/ROADMAP.md)** | **[API reference](docs/API_DOCS.md)** | **[Installation](docs/INSTALLATION.md)** | **[Docker guide](docs/DOCKER.md)**
 
@@ -46,7 +46,7 @@ It differs from Proxmox in a few deliberate ways:
 - **Gentoo-native:** ebuilds and USE flags select which features get built.
 - **Rust throughout**, including the web UI (Leptos/WASM).
 
-Commercial support is **planned after a stable 1.0** (a paid stable update channel with best-effort email support; the free channel stays complete). Design: [docs/stable-channel.md](docs/stable-channel.md).
+Yearly **support plans for businesses** (best-effort email support, no SLA) are available: [errant.solutions/support/horcrux/#plans](https://errant.solutions/support/horcrux/#plans). A paid stable update channel is **planned after a stable 1.0** (the free channel stays complete). Design: [docs/stable-channel.md](docs/stable-channel.md).
 
 ## Current status
 
