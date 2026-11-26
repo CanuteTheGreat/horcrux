@@ -89,7 +89,7 @@ Each architecture has its own job, its own assets and its own status marker (`da
 `daily-status-server-openrc-aarch64`), so a failing arch never blocks the other. Test evidence is attached per arch
 (`horcrux-<desktop env>-<init>-daily-<arch>-test-evidence.tgz`). Build one yourself on a native host: `ARCH=aarch64 build/live-iso/build.sh -o ./iso`
 (`ALLOW_EMULATED=1` is needed to build a foreign arch under qemu-user; not supported for the app stage).
-On arm64 machines the ISO is written to the stick exactly as on x86 (`dd`); firmware must be UEFI (Secure Boot off).
+On arm64 machines the ISO is written to the stick exactly as on x86 (`dd`); firmware must be UEFI (Secure Boot on or off: see [Secure Boot](#secure-boot)).
 Test it in QEMU: `qemu-system-aarch64 -machine virt -cpu max -m 4G -drive if=pflash,format=raw,readonly=on,file=AAVMF_CODE.fd -drive if=pflash,format=raw,file=VARS.fd -device qemu-xhci -device usb-storage,drive=iso -drive if=none,id=iso,file=horcrux-server-openrc-daily-aarch64.iso,format=raw -device virtio-gpu-pci -device usb-kbd -serial stdio`.
 
 **riscv64** is not in CI: there is no RISC-V runner, the official binhost has only ~600 riscv64 packages (about 40 of the
@@ -493,16 +493,18 @@ passphrase once, same boot id, marker and process back, `zpool status` clean, sc
 
 ## Secure Boot
 
-**Not supported yet - turn Secure Boot OFF in the firmware setup before booting this ISO.**
-The ISO uses an unsigned GRUB and an unsigned Gentoo distribution kernel; no shim/MOK chain is
-shipped. With Secure Boot on, firmware will refuse `BOOTX64.EFI` ("Secure Boot violation" /
-"Access Denied"). Nothing else needs to change in the firmware. The installed system is also
-unsigned, so keep Secure Boot off after installing.
+**Supported, with a one-time key enrollment** (x86_64 and arm64; free, no paid signing). The ISO boots through shim
+(Microsoft-signed) into our GRUB and kernel, signed with our own key. The first time you boot it with Secure Boot on, shim
+shows *"Verification failed: (0x1A) Security Violation"* and opens MokManager: press Enter, press a key, choose **Enroll
+key from disk**, pick the USB stick, then **ENROLL_THIS_KEY_IN_MOKMANAGER.cer**, **Continue**, **Yes**, **Reboot**. The
+installer then boots with Secure Boot on, and so does the installed system (it gets the same chain plus a machine key for
+kernel updates, enrolled once at its first reboot with the password shown at the end of the install). Leaving Secure Boot
+off also works. Details, the certificate fingerprint and the configuration options: [SECURE-BOOT.md](SECURE-BOOT.md).
 
 ## Target-hardware notes
 
 **Lenovo ThinkBook 16 G6 IRL (NVMe, UEFI, Intel Wi-Fi AX203)** - expected to work, **not yet tested on the real laptop**:
-firmware setup: **F2** (or **Fn+F2**), or the **Novo button** (with the laptop off) -> *BIOS Setup* -> Security -> Secure Boot -> *Disabled*;
+firmware setup: **F2** (or **Fn+F2**), or the **Novo button** (with the laptop off) -> *BIOS Setup*; Secure Boot can stay enabled (one-time key enrollment, see [Secure Boot](#secure-boot));
 **F12** for the one-time boot menu, pick the USB stick (UEFI entry).
 The kernel is Gentoo's generic distribution kernel with the full `linux-firmware` set; the AX203 Wi-Fi needs `iwlwifi` firmware (included; use `iwctl`
 or the installer's Wi-Fi screen). Intel SOF audio firmware (`sof-firmware`) and the Intel CPU microcode (loaded early from the initramfs) ship in the Desktop image
@@ -510,7 +512,7 @@ or the installer's Wi-Fi screen). Intel SOF audio firmware (`sof-firmware`) and 
 
 **Surface Pro (gen 1, Ivy Bridge i5-3317U, 4 GB, UEFI + Secure Boot, no Ethernet)** - **not tested on the real device**:
 power off, hold *Volume Down* while pressing power to boot from USB (use a USB hub/adapter for the stick);
-to disable Secure Boot hold *Volume Up* while powering on -> Security -> Secure Boot -> Disabled.
+Secure Boot can stay on (enroll the key once, see [Secure Boot](#secure-boot)); the firmware menu is *Volume Up* while powering on.
 The ISO is built for generic x86-64 (no AVX2 requirement; the Surface test runs `-cpu IvyBridge`), so it runs on Ivy Bridge. 4 GB RAM is enough for the live
 system and installer (the live root is a RAM overlay; the image is read from the stick). There is **no wired NIC**: the
 installer works offline (installs from the image), but the web UI needs the network afterwards - plug a USB Ethernet
@@ -619,7 +621,7 @@ stale copy are caught.
 
 * The installed system's `/etc/fstab` lists no `/boot` or ESP entry (the installer writes the root only through the kernel command line), so the rescue menu finds those partitions by their labels (`boot`, `ESP`).
 * Rescue / forensic mode and Try-it-live are tested on x86_64 (UEFI + BIOS). aarch64 and riscv64 use the same code paths (arch-aware GRUB target / UART names) but are not exercised by the boot-modes test yet; memtest86+ is x86 only.
-* **Secure Boot**: not supported (see above). A shim + MOK-enrolment chain (own signing key for GRUB and the kernel) is the next step.
+* **Secure Boot**: needs the one-time MokManager enrollment (see above); enrollment-free (turnkey) Secure Boot needs our own Microsoft-signed shim, see [secure-boot/shim-review.md](secure-boot/shim-review.md). riscv64 images are unsigned (no signed shim exists for it).
 * **Real hardware**: only QEMU/KVM (OVMF + SeaBIOS, USB-storage and CD boot) is tested automatically. The ThinkBook and Surface Pro notes above are expectations, not results. In particular untested: Wi-Fi scan/connect (needs a real adapter; the code path is exercised only by unit logic), the *Auto-detect (replug the cable)* link detection, NVMe/eMMC device naming (`part_path` is unit-tested), the large console font on high-DPI panels (`setfont ter-v32n` when the framebuffer is >= 1600 px wide), touch/Type Cover input.
 * The installer is text mode (curses); the graphical installer (see above) shares its stages and falls back to it when no display works.
 * Installer language: only the *installed system's* locale/keymap are selectable; the wizard text is English.

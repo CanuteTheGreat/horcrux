@@ -30,9 +30,20 @@ while read -r disk esp boot _; do
     rsync -aqx --delete --exclude lost+found --exclude /efi --exclude /grub/grub.cfg /boot/ "$d/boot/" || rc=1
     mkdir -p "$d/boot/grub"
     sed "s/$src/$boot/g" /boot/grub/grub.cfg > "$d/boot/grub/grub.cfg.new" && mv "$d/boot/grub/grub.cfg.new" "$d/boot/grub/grub.cfg" || rc=1
+    if ls /boot/efi/EFI/BOOT/mm*.efi >/dev/null 2>&1; then
+        # Secure Boot layout (shim + signed GRUB, installer secureboot.py): copy the signed files as they are (grub-install
+        # would write an unsigned GRUB) and point this ESP's grub.cfg at THIS drive's /boot copy
+        mkdir -p "$d/efi/EFI/BOOT"
+        for f in /boot/efi/EFI/BOOT/*.EFI /boot/efi/EFI/BOOT/*.efi /boot/efi/ENROLL_THIS_KEY_IN_MOKMANAGER.cer; do
+            [ -f "$f" ] || continue
+            case $f in */ENROLL_*) cp "$f" "$d/efi/" ;; *) cp "$f" "$d/efi/EFI/BOOT/" ;; esac || rc=1
+        done
+        sed "s/$src/$boot/g" /boot/efi/EFI/BOOT/grub.cfg > "$d/efi/EFI/BOOT/grub.cfg" || rc=1
+    else
     # the ESP of this drive: GRUB whose prefix points at THIS drive's /boot copy
     grub-install --target="$efi_target" --efi-directory="$d/efi" --boot-directory="$d/boot" \
         --bootloader-id=Horcrux --removable >/dev/null || { echo "horcrux-boot-sync: grub-install for $disk failed" >&2; rc=1; }
+    fi
     sync
     umount "$d/efi" "$d/boot"
     [ "$mode" = "--init" ] && echo "horcrux-boot-sync: drive $n ($disk) bootable"

@@ -566,6 +566,8 @@ def _default_config(profile, fs, fs_why):
         "services_off": [], "ssh_enabled": True,
         "sysctl_hardening": bool(profile.get("sysctl_hardening", True)),
         "use": {"preset": "recommended", "flags": {}},
+        # UEFI Secure Boot (secureboot.py): auto = shim + signed GRUB/kernel whenever the image is signed; machine key for updates
+        "secure_boot": "auto", "secure_boot_key": "", "secure_boot_cert": "", "secure_boot_mok_password": "", "secure_boot_machine_key": True,
     }
 
 
@@ -648,6 +650,15 @@ def config_from_answers(profile, path):
             c[sect]["iface"] = ""
             c[sect]["_none"] = True
     netvirt.from_answers(c, n)
+    sb = a.get("secure_boot", {})
+    if sb:
+        c["secure_boot"] = str(sb.get("mode", "auto")).lower()
+        base = os.path.dirname(os.path.abspath(path))
+        for k in ("key", "cert"):
+            if sb.get(k):
+                c[f"secure_boot_{k}"] = sb[k] if os.path.isabs(sb[k]) else os.path.join(base, sb[k])
+        c["secure_boot_mok_password"] = str(sb.get("mok_password", ""))
+        c["secure_boot_machine_key"] = bool(sb.get("machine_key", True))
     return c
 
 
@@ -663,6 +674,10 @@ def validate_config(profile, c, unattended=False, nic_names=None, require_secret
     if bad_off:
         errs.append("services.disable may only name optional services: " + ", ".join(bad_off))
     errs += use_problems(profile, c)
+    from . import secureboot
+    sbp = secureboot.mode_problem(c, efi_boot())
+    if sbp:
+        errs.append(sbp)
     if c["fs"] not in profile["filesystems"]:
         errs.append(f"filesystem {c['fs']} not offered ({', '.join(profile['filesystems'])})")
     if hostname_problem(c["hostname"]):
@@ -1380,6 +1395,9 @@ class Installer:
         for dev in L.values():
             self.run(f"blkid -s UUID -o value {dev}", check=False)
         self.run("udevadm trigger --subsystem-match=block --action=change; udevadm settle --timeout=10; true", check=False)
+        from . import secureboot
+        sb = secureboot.active(self)
+        c["secure_boot_used"] = sb
         if self.efi:
             for i, disk in enumerate(c["disks"]):
                 if i and self.zfs():
@@ -1389,7 +1407,14 @@ class Installer:
                 if i:
                     os.makedirs(f"{T}{mnt}", exist_ok=True)
                     self.run(["mount", l[1], T + mnt])
-                self.run(["grub-install", f"--target={arch.boot()['efi_target']}", f"--efi-directory={mnt}", f"--bootloader-id={p['title']}", "--removable"], chroot=True)
+                if sb:
+                    # Secure Boot chain: shim -> our signed GRUB (all modules embedded) -> signed kernel; grub-install would put an
+                    # unsigned GRUB there. The ESP grub.cfg finds this disk's /boot by UUID.
+                    secureboot.install_esp(self, T + mnt, fsuuid(l[2]))
+                else:
+                    self.run(["grub-install", f"--target={arch.boot()['efi_target']}", f"--efi-directory={mnt}", f"--bootloader-id={p['title']}", "--removable"], chroot=True)
+            if sb:
+                secureboot.finish(self)
         else:
             for disk in c["disks"]:
                 self.run(["grub-install", "--target=i386-pc", disk], chroot=True)

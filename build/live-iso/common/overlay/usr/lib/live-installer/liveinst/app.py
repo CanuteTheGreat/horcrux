@@ -545,7 +545,11 @@ def s_done(t, st, step):
              ("Console", "root  /  the same password")]
     if c.get("recovery_key"):
         lines.append(("Recovery key", c["recovery_key"]))
+    from . import secureboot
+    lines += secureboot.done_lines(c)
     f = [Field(k, k, "info", v) for k, v in lines]
+    if c.get("secure_boot_mok_password"):
+        f.append(Field("msb", secureboot.DONE_NOTE, "label", "", hint="warn"))
     if c.get("recovery_key"):
         f.append(Field("mrk", "Write the recovery key down. The TPM unlocks the disk by itself; the key is only needed if the TPM ever refuses (it is not stored anywhere).", "label", "", hint="warn"))
     f.append(Field("m", "Installation successful. Remove the installation medium, then reboot.", "label", "", hint="warn"))
