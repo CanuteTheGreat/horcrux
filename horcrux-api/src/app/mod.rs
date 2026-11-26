@@ -644,6 +644,7 @@ pub async fn run() -> anyhow::Result<()> {
         ));
 
     let access_log = api::access_log::init(&horcrux_config);
+    let fallback_log = access_log.clone();
 
     // Build main app with public and protected routes
     let app = Router::new()
@@ -685,7 +686,14 @@ pub async fn run() -> anyhow::Result<()> {
         ))
         // Note: Auth middleware will be added per-route or per-group later
         // Serve static files (frontend) - must be last to act as fallback
-        .fallback_service(serve_dir);
+        // The fallback is added after the layers above, so they do not wrap
+        // it: give it the access log itself, so an unknown /api path (404)
+        // is recorded like every other failed call.
+        .fallback_service(Router::new().fallback_service(serve_dir).layer(
+            axum_middleware::from_fn(move |conn_info, req, next| {
+                api::access_log::record_middleware(fallback_log.clone(), conn_info, req, next)
+            }),
+        ));
 
     // Set up graceful shutdown
     let shutdown_coordinator = shutdown::ShutdownCoordinator::new();
