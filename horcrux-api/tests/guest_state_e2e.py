@@ -310,10 +310,10 @@ import threading
 res = {}
 t = threading.Thread(target=lambda: res.update(out=guests_cmd("stop")))
 t.start()
-for _ in range(100):   # stall the writer of the memory image: the migration cannot finish
-    if sh("pgrep -f '[c]at > .*vmstate.tmp' | head -1 | xargs -r kill -STOP; pgrep -f '[c]at > .*vmstate.tmp' || true"):
-        break
-    time.sleep(0.1)
+# stall the writer of the memory image so the migration cannot finish. The poll runs on the
+# node itself every 10 ms (one ssh round trip per poll let a fast save finish before the stall).
+sh("for i in $(seq 1 1500); do p=$(pgrep -f '[c]at > .*vmstate.tmp' | head -1); "
+   "[ -n \"$p\" ] && { kill -STOP $p; echo stopped; break; }; sleep 0.01; done; true", ok=False)
 t.join(300)
 sh("pkill -CONT -f '[c]at > .*vmstate.tmp'; true", ok=False)
 out = res.get("out", "")
