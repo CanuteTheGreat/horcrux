@@ -226,19 +226,23 @@ pub async fn record_middleware(
     let who = Who::default();
     request.extensions_mut().insert(who.clone());
     let method = request.method().to_string();
-    let header = |n: &str| {
-        request
-            .headers()
-            .get(n)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.chars().take(200).collect::<String>())
+    // Scoped so no borrow of the request (its body is not Sync) lives
+    // across the await below.
+    let (client, user_agent) = {
+        let header = |n: &str| {
+            request
+                .headers()
+                .get(n)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.chars().take(200).collect::<String>())
+        };
+        let client = client_address(
+            &peer.ip().to_string(),
+            header("x-forwarded-for").as_deref(),
+            &log.trusted,
+        );
+        (client, header("user-agent"))
     };
-    let client = client_address(
-        &peer.ip().to_string(),
-        header("x-forwarded-for").as_deref(),
-        &log.trusted,
-    );
-    let user_agent = header("user-agent");
     let started = Instant::now();
     let ts_ms = now_ms();
     let response = next.run(request).await;
@@ -247,7 +251,11 @@ pub async fn record_middleware(
         .get(axum::http::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok());
-    let (user, auth) = match who.0.lock().unwrap().clone() {
+    let named = {
+        let guard = who.0.lock().unwrap();
+        guard.clone()
+    };
+    let (user, auth) = match named {
         Some((u, a)) => (Some(u), Some(a)),
         None => (None, None),
     };
