@@ -1469,6 +1469,11 @@ jobs:
           BASE_URL: https://localhost:8006
         run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/unmanaged_libvirt_banner_e2e.py
 
+      - name: Management link page (empty state, live warnings, NIC picker, save)
+        env:
+          BASE_URL: https://localhost:8006
+        run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/mgmt_link_e2e.py
+
       - name: UX crawl (every nav page, desktop + phone, light + dark; no JS errors, overlays, dead stat cards, private text)
         # ci/ux-qa/ux_crawl.py: the owner kept finding these by hand (docs/qa/owner-findings.md). Known, tracked
         # failures live in ci/ux-qa/ux-crawl-baseline.json; a NEW failure fails the job.

@@ -16,6 +16,7 @@ import tempfile
 import time
 
 from . import initsys
+from . import netlayout as NL
 from . import system as S
 
 BACKUP_DIR_FMT = "/var/backups/{name}"
@@ -277,6 +278,10 @@ class Console:
             ip = S.nic_ip(n["name"]) or "-"
             link = "wifi" if n["wifi"] else ("up" if S.carrier(n["name"]) else "no link")
             self.say(f" {role:<5}{n['name']:<10}{link:<8}{ip}")
+        m = self.mgmt()
+        if m is not None and not NL.is_plain(m):
+            l3 = NL.l3_iface(m)
+            self.say(f" {'MGMT':<5}{l3:<10}{'up' if S.carrier(l3) else 'no link':<8}{S.nic_ip(l3) or '-'}   ({NL.describe(m)})")
         self.say("")
         self.say(f" Web UI: {self.web_url()}   (user: " + ("a system user in wheel/" + self.p.get("web_admin_group", "horcrux-admin") if self.p.get("web_auth") == "pam" else "admin") + ")")
         self.say("")
@@ -286,7 +291,7 @@ class Console:
         ("4", "Reset to factory defaults"), ("5", "Power off"), ("6", "Reboot"), ("7", "Ping host"), ("8", "Shell"),
         ("9", "Show web UI URL and status"), ("10", "Restore a configuration backup"), ("11", "Create a configuration backup"),
         ("12", "Restart the web UI"), ("13", "Turn SSH on or off"), ("14", "Live system view (top, q quits)"),
-        ("0", "Log out"),
+        ("15", "Management link: bond / VLAN"), ("0", "Log out"),
     ]
 
     def items(self):
@@ -297,6 +302,8 @@ class Console:
     def show_menu(self):
         self.header()
         for k, t in self.MENU[:-1] + [(i["key"], i["title"]) for i in self.items()] + self.MENU[-1:]:
+            if k == "15" and self.p["network_mode"] == "wan-lan":
+                continue                        # a firewall assigns WAN/LAN instead (option 1)
             if k == "3" and self.p.get("web_auth") == "pam":
                 t = "Reset a user password"          # the web UI signs in system users: this is chpasswd, not a web database
             self.say(f"  {k:>2}) {t}")
@@ -308,6 +315,8 @@ class Console:
                 "12": self.restart_web, "13": self.ssh_toggle, "14": self.top}
         for it in self.items():
             acts[it["key"]] = (lambda it=it: self.run_item(it))
+        if self.p["network_mode"] != "wan-lan":
+            acts["15"] = self.mgmt_link
         while True:
             self.show_menu()
             try:
@@ -402,8 +411,88 @@ class Console:
         self.say("Backups: " + (", ".join(sorted(os.listdir(self.backup_dir))[-3:]) if os.path.isdir(self.backup_dir) else "none yet"))
 
     # -- 1 / 2 interfaces ----------------------------------------------------------
+    def record_path(self):
+        return self.root + NL.default(self.p, "record").format(name=self.name).lstrip("/")
+
+    def mgmt(self):
+        """the management link recorded by the installer (None = none recorded: an older install, one NIC)"""
+        try:
+            return NL.from_record(json.loads(S.read(self.record_path()) or "null") or {}, self.p) if S.read(self.record_path()) else None
+        except (ValueError, TypeError):
+            return None
+
+    def mgmt_link(self):
+        """12: change the NICs, bond mode and VLAN tag of the management link (written for this init, applied now)"""
+        if self.p["network_mode"] == "wan-lan":
+            return
+        old = self.mgmt() or NL.ensure({"iface": "", "mode": "dhcp", "address": "", "gateway": "", "dns": ""}, self.p)
+        self.say("Current management link: " + NL.describe(old) + (f"  (address on {NL.l3_iface(old)})" if NL.l3_iface(old) else ""))
+        nics = S.list_nics()
+        for i, n in enumerate(nics, 1):
+            self.say(f"  {i}) {S.nic_line(n)}")
+        names = {str(i): n["name"] for i, n in enumerate(nics, 1)}
+        v = self.ask("NIC(s) for the management link, space separated (two or more = a bond)", " ".join(old["ifaces"]))
+        ifaces = [names.get(x, x) for x in re.split(r"[\s,]+", v.strip()) if x]
+        new = NL.ensure({k: old.get(k, "") for k in ("mode", "address", "gateway", "dns")}, self.p)
+        new.update({"iface": ifaces[0] if ifaces else "", "ifaces": ifaces, "bond": dict(old["bond"])})
+        if len(ifaces) > 1:
+            self.say("Bond modes: " + ", ".join(NL.BOND_MODES))
+            new["bond"]["mode"] = self.ask("Bond mode", old["bond"]["mode"])
+            if new["bond"]["mode"] in NL.HASH_MODES:
+                new["bond"]["xmit_hash_policy"] = self.ask("Transmit hash policy (" + ", ".join(NL.HASH_POLICIES) + ")",
+                                                           old["bond"]["xmit_hash_policy"])
+            if new["bond"]["mode"] == "802.3ad":
+                new["bond"]["lacp_rate"] = self.ask("LACP rate (slow/fast)", old["bond"]["lacp_rate"])
+            mi = self.ask("Link check interval in ms (miimon)", str(old["bond"]["miimon"]))
+            new["bond"]["miimon"] = int(mi) if mi.isdigit() else mi
+        new["vlan"] = NL.vlan_int(self.ask("VLAN tag 1-4094 (0 = untagged)", str(old["vlan"] or 0)))
+        errs = NL.problems(new, nics)
+        if errs:
+            for e in errs:
+                self.say("  " + e)
+            return
+        self.say("New management link: " + NL.describe(new) + f"  (address on {NL.l3_iface(new)}, " +
+                 (new["address"] if new["mode"] == "static" else "DHCP") + ")")
+        if os.environ.get("SSH_CONNECTION"):
+            self.say("WARNING: you are logged in over SSH; the session drops if the new link does not come up.")
+        if not self.yes("Write and apply it now?", False):
+            return
+        self.write_mgmt(old, new)
+
+    def write_mgmt(self, old, new, run=None, live=True):
+        """write the new layout for this system's stack (old record's `stack`: dhcpcd + netifrc/networkd, or NetworkManager) and apply it"""
+        run = run or (lambda cmd: S.sh(cmd, timeout=60))
+        rec = json.loads(S.read(self.record_path()) or "{}") if S.read(self.record_path()) else {}
+        nm = rec.get("stack") == "networkmanager"
+        rel = "/" + NL.default(self.p, "record").format(name=self.name).lstrip("/")
+        for line in NL.write_target(self.root, new, initsys.target_init(self.root), run, rel, nm=nm, old=old):
+            self.say("  " + line)
+        if nm:
+            if live:
+                run(["nmcli", "connection", "reload"])
+                rc, o = run(["nmcli", "connection", "up", NL.NM_PREFIX + (NL.link_parent(new) if NL.is_bond(new) and not new["vlan"] else NL.l3_iface(new))])
+                self.say("Management link: " + ("up" if rc == 0 else o.strip()[-160:]))
+            return
+        path = self.root + DHCPCD.lstrip("/")
+        txt = open(path).read() if os.path.exists(path) else ""
+        old_l3, new_l3 = NL.l3_iface(old), NL.l3_iface(new)
+        txt = NL.apply_dhcpcd(txt, new)
+        if old_l3 and old_l3 != new_l3:
+            txt = strip_iface_stanza(txt, old_l3)
+        if new_l3:
+            txt = apply_iface_config(txt, new_l3, new.get("mode", "dhcp"), new.get("address", ""), new.get("gateway", ""), new.get("dns", ""))
+        open(path, "w").write(txt)
+        if not live:
+            return
+        ok, info = NL.apply_live(new, lambda c, chk: S.sh(c, timeout=30), restart_dhcpcd=lambda: S.sh(self.svc_cmd("restart", "dhcpcd"), timeout=90),
+                                 nic_ip=S.nic_ip, wait_secs=int(NL.default(self.p, "live_wait_secs")), prev=old)
+        self.say(("Management link up: " + (info or new_l3)) if ok else ("Not up yet: " + info))
+
     def pick_nic(self, prompt, allow_none=False, allow_detect=True):
         nics = S.list_nics()
+        m = self.mgmt()
+        if m is not None and not NL.is_plain(m) and NL.l3_iface(m):
+            nics = nics + [{"name": NL.l3_iface(m), "mac": NL.describe(m)[:40], "wifi": False, "driver": "", "model": ""}]
         if not nics:
             self.say("No network interface found. Plug in a NIC (USB Ethernet works) or check the firmware message:")
             self.say("  dmesg | grep -i firmware")
@@ -907,10 +996,44 @@ class Console:
         self.say("Configuration restored; web service restarted.")
 
 
+def mgmt_cli(con, args, out=sys.stdout, nics=None):
+    """non-interactive management link tool for the product's API (horcrux-api PUT /api/network/management):
+    --mgmt-show prints the recorded layout; --mgmt-apply FILE (or - for stdin) validates a record, writes it for this init and, with
+    --live, applies it now. Prints one JSON object; exit 0 = written, 2 = refused (errors listed)."""
+    if args[0] == "--mgmt-show":
+        m = con.mgmt()
+        out.write(json.dumps({"recorded": m is not None, "record": NL.record(m) if m else None}) + "\n")
+        return 0
+    src = args[1] if len(args) > 1 else "-"
+    rec = json.load(sys.stdin if src == "-" else open(src))
+    new = NL.from_record(rec, con.p)
+    nics = S.list_nics() if nics is None else nics
+    errs = NL.problems(new, nics)
+    if new.get("mode") == "static":
+        for k, fn in (("address", S.cidr_problem), ("gateway", lambda v: S.ip_problem(v, new["address"]) if v else None),
+                      ("dns", lambda v: S.dns_problem(v) if v else None)):
+            e = fn(new.get(k, ""))
+            if e:
+                errs.append(f"{k}: {e}")
+    if not new["ifaces"]:
+        errs.append("interfaces: at least one NIC")
+    if errs:
+        out.write(json.dumps({"ok": False, "errors": errs}) + "\n")
+        return 2
+    old = con.mgmt() or NL.ensure({"iface": new["iface"], "ifaces": [new["iface"]], "mode": "dhcp", "address": "", "gateway": "", "dns": ""}, con.p)
+    con.out = sys.stderr                    # progress lines; stdout stays one JSON object
+    con.write_mgmt(old, new, live="--live" in args)
+    out.write(json.dumps({"ok": True, "applied": "--live" in args, "record": NL.record(new)}) + "\n")
+    return 0
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
     if os.geteuid() != 0:
         print("The console menu must run as root.")
         return 1
-    os.environ["CONSOLE_MENU_INNER"] = "1"
     p = S.load_profile()
+    if argv and argv[0] in ("--mgmt-show", "--mgmt-apply"):
+        return mgmt_cli(Console(p, out=sys.stderr), argv)
+    os.environ["CONSOLE_MENU_INNER"] = "1"
     return Console(p).loop()

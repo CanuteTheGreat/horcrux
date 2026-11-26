@@ -468,6 +468,9 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
             ("apply", "POST") => need(P::SysModify, "/"),
             _ => read_write(m, P::SysAudit, P::SysModify, "/"),
         },
+        // The node's own management link (bond / VLAN carrying its address):
+        // changing it can cut the node off, so it needs node-wide rights.
+        "network" if arg(1) == "management" => read_write(m, P::SysAudit, P::SysModify, "/nodes"),
         "firewall" | "cni" | "network-policies" | "sdn" | "network" => {
             if arg(1) == "check" {
                 need(P::SdnAudit, "/sdn")
@@ -677,6 +680,23 @@ mod tests {
                 "{m} {p}"
             );
         }
+    }
+
+    #[test]
+    fn management_link_needs_node_rights() {
+        assert_eq!(
+            priv_of(requirement("GET", "/api/network/management")),
+            (P::SysAudit, "/nodes".into())
+        );
+        assert_eq!(
+            priv_of(requirement("PUT", "/api/network/management")),
+            (P::SysModify, "/nodes".into())
+        );
+        // host bridges keep their SDN rights
+        assert_eq!(
+            priv_of(requirement("POST", "/api/network/bridges")),
+            (P::SdnAllocate, "/sdn".into())
+        );
     }
 
     #[test]

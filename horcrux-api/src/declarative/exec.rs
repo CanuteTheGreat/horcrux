@@ -25,6 +25,10 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         security: crate::api::security::load_settings(state).await,
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
+        management_network: tokio::fs::read_to_string(&state.config.management_network.record_path)
+            .await
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok()),
     }
 }
 
@@ -132,6 +136,16 @@ async fn run_change(
                 "applies to new console sessions; enabling/disabling the D-Bus display \
                  takes effect at each VM's next start"
                     .into(),
+            ))
+        }
+
+        ("management_network", Action::Update) => {
+            let w = spec.management_network.clone().ok_or("not in spec")?;
+            crate::api::mgmt_net::run_tool(&state.config.management_network, &w, false)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
+            Ok(Some(
+                "written for the node's init system; takes effect at the next boot".into(),
             ))
         }
 

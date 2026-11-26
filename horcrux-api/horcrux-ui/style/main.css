@@ -1370,3 +1370,19 @@ td .actions { flex-wrap: nowrap; }
 }
 .hardening-table td { vertical-align: top; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+/* Management Link page (pages/mgmt_link.rs): key/value state card, NIC picker, actions row. */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .75rem; }
+.card-head h2 { font-size: 1.15rem; margin: 0; }
+.plain-list { margin: 0; padding-left: 1.1rem; }
+.kv-table { width: 100%; border-collapse: collapse; }
+.kv-table th { text-align: left; width: 11rem; color: var(--secondary); font-weight: 600; padding: .5rem .75rem; vertical-align: top; }
+.kv-table td { padding: .5rem .75rem; overflow-wrap: anywhere; }
+.kv-table tr + tr { border-top: 1px solid var(--border); }
+.mgmt-link fieldset { border: 0; padding: 0; margin: 0 0 1rem; min-width: 0; }
+.mgmt-link legend { font-weight: 600; margin-bottom: .5rem; }
+.nic-pick { display: flex; flex-wrap: wrap; gap: .5rem; }
+.nic-choice { display: inline-flex; align-items: center; gap: .45rem; border: 1px solid var(--border); border-radius: 6px; padding: .4rem .7rem; cursor: pointer; background: var(--surface); }
+.nic-choice .nic-meta { color: var(--secondary); font-size: .8rem; }
+.mgmt-link .form-actions { align-items: center; flex-wrap: wrap; margin-top: 1rem; }
+.check-inline { display: inline-flex; align-items: center; gap: .4rem; }
+@media (max-width: 600px) { .kv-table th { width: 7.5rem; } }
