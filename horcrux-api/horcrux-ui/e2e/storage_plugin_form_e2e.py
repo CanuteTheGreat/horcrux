@@ -153,7 +153,7 @@ def main():
             expect(form.locator("input[data-key=sync_every]")).to_have_count(0)
             log("ok - a depends_on field appears only when its condition holds")
 
-            page.locator(".modal .form-group", has_text="Name").locator("input").first.fill("e2e-plugin-pool")
+            page.locator(".modal .form-group:has(> label:text-is('Pool ID')) > input").fill("e2e-plugin-pool")
             form.locator("input[data-key=server]").fill("storage.example.org")
             form.locator("input[data-key=token]").fill("t0ken")
             quota.fill("1000")
