@@ -18,6 +18,8 @@ DIST = os.path.join(HERE, "dist")
 # build if any built file mentions it). ISO downloads are stable URLs on this site (/download/..., nginx 302s them to
 # the GitHub release assets, see nginx.conf), so the visible links stay on the product domain.
 SRC = f"https://github.com/CanuteTheGreat/{CFG['repo']}"
+# Help center articles for this product (errant.solutions/help/, built from errant-solutions-web help-src/)
+HELP = f"https://errant.solutions/help/{CFG['key']}/"
 BLOB = SRC + "/blob/main/"
 TREE = SRC + "/tree/main/"
 # Support page for this product (tips and monthly sponsorship: Stripe Checkout, run by errant.solutions). An address on another host on purpose.
@@ -100,7 +102,7 @@ def page(page_dir, title, body, active="", desc=None):
 <p>{CFG['name']} is a free, GPL-3.0 project by <a href="https://errant.solutions/">Errant Solutions</a>.
 Source: <a href="{SRC}">GitHub</a>.</p>
 <p>Commercial support: planned after 1.0. Nothing is for sale today. <a href="{SUPPORT}">Support the project</a>.</p>
-<p class="policies"><a href="{r('docs/privacy/')}">Privacy</a> &middot; <a href="{r('docs/update-policy/')}">Updates and support policy</a> &middot; <a href="{r('licenses/THIRD-PARTY-LICENSES.txt')}">Open-source licenses</a></p></div></footer>
+<p class="policies"><a href="{HELP}">Help center</a> &middot; <a href="{r('docs/privacy/')}">Privacy</a> &middot; <a href="{r('docs/update-policy/')}">Updates and support policy</a> &middot; <a href="{r('licenses/THIRD-PARTY-LICENSES.txt')}">Open-source licenses</a></p></div></footer>
 </body></html>
 """
 
