@@ -49,8 +49,8 @@ impl Default for LogSettings {
             query_timeout_secs: 30,
             syslog_tail_bytes: 8 * 1024 * 1024,
             syslog_files: vec![
-                "/var/log/messages".into(),
                 "/var/log/syslog".into(),
+                "/var/log/messages".into(),
                 "/var/log/everything/current".into(),
             ],
             wtmp_path: "/var/log/wtmp".into(),

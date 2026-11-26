@@ -1,8 +1,8 @@
 # System Log viewer
 
 Page: **Node > System Log** (`/system/logs`). It reads the node's own log: journald when the host runs it (systemd
-images), otherwise the syslog file the logger writes (`/var/log/messages`, `syslog` or `everything/current`; the OpenRC
-images use sysklogd). In a cluster the node picker shows another node's log, fetched over the peer API.
+images), otherwise the syslog file the logger writes (`/var/log/syslog`, `messages` or `everything/current`; the OpenRC
+images use sysklogd, whose `messages` file leaves out errors, so `syslog` - everything - is read first). In a cluster the node picker shows another node's log, fetched over the peer API.
 
 ## What the page does
 
@@ -57,7 +57,7 @@ config (`docs/design/declarative-config.md`):
 | `max_scan_lines` | 200000 | lines scanned while looking for matches |
 | `query_timeout_secs` | 30 | journalctl / peer answer time |
 | `syslog_tail_bytes` | 8 MiB | how much of a syslog file is searched |
-| `syslog_files` | messages, syslog, everything/current | files tried in order |
+| `syslog_files` | syslog, messages, everything/current | files tried in order |
 | `wtmp_path` | /var/log/wtmp | login records for reboots |
 | `kmsg_path` | /dev/kmsg | kernel ring buffer, read for kernel messages of the current boot when the logger does not write them (empty = never) |
 | `follow_poll_ms` | 1000 | live mode look interval |

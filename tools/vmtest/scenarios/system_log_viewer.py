@@ -103,7 +103,9 @@ def define(args):
                   f"logger -t {tag}other -p user.warning '{tag}other a warning'")
         time.sleep(2)
         got = logs(f"identifier={tag}")
-        m.check("identifier-exact", len(got) == 2 and all(e["identifier"] == tag for e in got), json.dumps(got)[:400])
+        m.check("identifier-exact", len(got) == 2 and all(e["identifier"] == tag for e in got),
+                json.dumps(got)[:400] + " RAW: " + n.execute(f"grep -r {tag} /var/log 2>/dev/null | head -20; ps -eo args | grep -i '[s]yslog\\|[l]og'; "
+                           "cat /etc/syslog.conf /etc/syslog-ng/syslog-ng.conf /etc/conf.d/*syslog* 2>&1 | grep -v '^#' | head -40; readlink -f $(command -v logger)")[1][-1800:])
         e0 = got[0]
         m.check("entry-has-structured-fields", e0["pid"] and e0["hostname"] and e0["priority"] is not None and e0["priority_name"] and e0["timestamp"], json.dumps(e0)[:300])
         got = logs(f"identifier={tag}*")
@@ -132,7 +134,7 @@ def define(args):
         m.check("kernel-only-returns-kernel-lines", len(k) > 0 and all(e["kernel"] for e in k), f"{len(k)} lines; first: {json.dumps(k[:1])[:250]}")
 
         m.phase("live stream: a line logged after the client connected")
-        n.succeed(f"nohup python3 /root/hx_logws.py follow 'identifier={tag}live' 25 > /tmp/live.out 2>&1 &")
+        n.succeed(f"{env}nohup python3 /root/hx_logws.py follow 'identifier={tag}live' 25 > /tmp/live.out 2>&1 &")
         time.sleep(6)
         n.succeed(f"logger -t {tag}live -p user.notice '{tag} live line'; logger -t {tag}elsewhere 'not this stream'")
         time.sleep(8)

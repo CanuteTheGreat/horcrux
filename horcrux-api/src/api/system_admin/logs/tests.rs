@@ -405,3 +405,27 @@ fn the_tail_of_a_big_file_drops_the_cut_line() {
     assert_eq!(t, vec!["line two".to_string(), "line three".into()]);
     assert_eq!(tail_lines(&p, 1000).len(), 3);
 }
+
+#[tokio::test]
+async fn syslog_is_read_before_messages_because_sysklogd_messages_drops_errors() {
+    let root = Root::new();
+    root.put(
+        "var/log/messages",
+        "Oct  2 07:01:10 gw cron[12]: info only in messages\n",
+    );
+    root.put(
+        "var/log/syslog",
+        "Oct  2 07:01:10 gw cron[12]: info only in messages\nOct  2 07:01:11 gw app[3]: error: only in syslog\n",
+    );
+    let s = settings();
+    let got = read_local(
+        &Filters {
+            limit: Some(100),
+            ..filters()
+        },
+        &s,
+    )
+    .await
+    .unwrap();
+    assert_eq!(got.len(), 2, "{got:?}");
+}

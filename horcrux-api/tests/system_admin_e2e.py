@@ -175,6 +175,8 @@ def main():
     expect(400, "POST", "/system/services/a;b/start")
 
     step("system log")
+    if os.path.exists("/var/log/syslog"):
+        os.remove("/var/log/syslog")  # the viewer prefers it over messages; this test feeds messages
     with open("/var/log/messages", "w") as f:
         f.write("Oct  2 07:01:09 gw sshd[411]: Failed password for root\n")
         f.write("Oct  2 07:01:10 gw cron[12]: job started\n")
