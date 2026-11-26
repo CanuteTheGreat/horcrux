@@ -203,6 +203,15 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .await?;
 
+    // Notification matchers (routing trees from alerts/events to channels),
+    // see notification_matchers.rs.
+    run_migration(
+        pool,
+        "029_create_notification_matchers_table",
+        MIGRATION_029_CREATE_NOTIFICATION_MATCHERS,
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -1229,5 +1238,16 @@ CREATE INDEX idx_auth_challenges_expires ON auth_challenges(expires_at);
 CREATE TABLE auth_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+"#;
+
+const MIGRATION_029_CREATE_NOTIFICATION_MATCHERS: &str = r#"
+CREATE TABLE notification_matchers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    rule TEXT NOT NULL,
+    targets TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 "#;

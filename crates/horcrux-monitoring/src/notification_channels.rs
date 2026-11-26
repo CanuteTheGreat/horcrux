@@ -11,6 +11,7 @@
 
 use crate::alerts::{Alert, AlertSeverity};
 use crate::db::Database;
+use crate::notification_matchers::{self, Matcher, SampleEvent};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -477,6 +478,7 @@ impl From<StoreError> for crate::error::ApiError {
 pub struct NotificationChannelStore {
     db: Arc<Database>,
     channels: RwLock<Vec<NotificationChannel>>,
+    matchers: RwLock<Vec<Matcher>>,
     http: reqwest::Client,
 }
 
@@ -524,9 +526,32 @@ impl NotificationChannelStore {
                 failure_count: r.get::<i64, _>("failure_count") as u32,
             });
         }
+        let mut matchers = Vec::new();
+        let mrows = sqlx::query(
+            "SELECT id, name, enabled, rule, targets FROM notification_matchers ORDER BY created_at",
+        )
+        .fetch_all(db.pool())
+        .await
+        .map_err(db_err)?;
+        for r in mrows {
+            let id: String = r.get("id");
+            let rule: String = r.get("rule");
+            let targets: String = r.get("targets");
+            match (serde_json::from_str(&rule), serde_json::from_str(&targets)) {
+                (Ok(rule), Ok(targets)) => matchers.push(Matcher {
+                    id,
+                    name: r.get("name"),
+                    enabled: r.get::<i64, _>("enabled") != 0,
+                    rule,
+                    targets,
+                }),
+                _ => tracing::error!("notification matcher {} is unreadable", id),
+            }
+        }
         Ok(Self {
             db,
             channels: RwLock::new(channels),
+            matchers: RwLock::new(matchers),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(20))
                 .build()
@@ -698,15 +723,121 @@ impl NotificationChannelStore {
         Ok(result)
     }
 
-    /// Deliver a fired alert to every enabled channel. Returns
-    /// (delivered, failed) channel counts.
+    /// Channels that would receive `ev` right now: every enabled channel when
+    /// no matcher is enabled, else the targets of the matching matchers.
+    pub async fn route_ids(&self, ev: &SampleEvent) -> (Option<Vec<String>>, Vec<String>) {
+        let routed = {
+            let ms = self.matchers.read().await;
+            notification_matchers::route(&ms, ev, Utc::now())
+        };
+        let matched: Vec<String> = {
+            let now = Utc::now();
+            self.matchers
+                .read()
+                .await
+                .iter()
+                .filter(|m| m.enabled && notification_matchers::evaluate(&m.rule, ev, now))
+                .map(|m| m.id.clone())
+                .collect()
+        };
+        (routed, matched)
+    }
+
+    pub async fn list_matchers(&self) -> Vec<Matcher> {
+        self.matchers.read().await.clone()
+    }
+
+    fn check_matcher(m: &Matcher, channels: &[NotificationChannel]) -> Result<(), StoreError> {
+        if m.name.trim().is_empty() {
+            return Err(StoreError::Invalid("matcher name is required".into()));
+        }
+        if m.targets.is_empty() {
+            return Err(StoreError::Invalid(
+                "a matcher needs at least one target channel".into(),
+            ));
+        }
+        for t in &m.targets {
+            if !channels.iter().any(|c| &c.id == t) {
+                return Err(StoreError::Invalid(format!(
+                    "target channel '{}' does not exist",
+                    t
+                )));
+            }
+        }
+        notification_matchers::validate_node(&m.rule).map_err(StoreError::Invalid)
+    }
+
+    async fn save_matcher(&self, m: &Matcher, created_at: &str) -> Result<(), StoreError> {
+        let rule = serde_json::to_string(&m.rule).map_err(|e| StoreError::Db(e.to_string()))?;
+        let targets =
+            serde_json::to_string(&m.targets).map_err(|e| StoreError::Db(e.to_string()))?;
+        sqlx::query(
+            "INSERT INTO notification_matchers (id, name, enabled, rule, targets, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, enabled = excluded.enabled,
+               rule = excluded.rule, targets = excluded.targets",
+        )
+        .bind(&m.id)
+        .bind(&m.name)
+        .bind(m.enabled as i64)
+        .bind(rule)
+        .bind(targets)
+        .bind(created_at)
+        .execute(self.db.pool())
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    pub async fn create_matcher(&self, mut m: Matcher) -> Result<Matcher, StoreError> {
+        let channels = self.channels.read().await.clone();
+        Self::check_matcher(&m, &channels)?;
+        m.id = uuid::Uuid::new_v4().to_string();
+        self.save_matcher(&m, &Utc::now().to_rfc3339()).await?;
+        self.matchers.write().await.push(m.clone());
+        Ok(m)
+    }
+
+    pub async fn update_matcher(&self, id: &str, mut m: Matcher) -> Result<Matcher, StoreError> {
+        let channels = self.channels.read().await.clone();
+        Self::check_matcher(&m, &channels)?;
+        let mut ms = self.matchers.write().await;
+        let slot = ms
+            .iter_mut()
+            .find(|x| x.id == id)
+            .ok_or_else(|| StoreError::NotFound(format!("matcher '{}' not found", id)))?;
+        m.id = id.to_string();
+        self.save_matcher(&m, &Utc::now().to_rfc3339()).await?;
+        *slot = m.clone();
+        Ok(m)
+    }
+
+    pub async fn delete_matcher(&self, id: &str) -> Result<(), StoreError> {
+        let mut ms = self.matchers.write().await;
+        let before = ms.len();
+        ms.retain(|m| m.id != id);
+        if ms.len() == before {
+            return Err(StoreError::NotFound(format!("matcher '{}' not found", id)));
+        }
+        sqlx::query("DELETE FROM notification_matchers WHERE id = ?")
+            .bind(id)
+            .execute(self.db.pool())
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Deliver a message to the channels the matchers select (every enabled
+    /// channel when no matcher is enabled). Returns (delivered, failed).
     pub async fn dispatch(&self, msg: &Message) -> (usize, usize) {
+        let (routed, _) = self.route_ids(&SampleEvent::from_message(msg)).await;
         let channels: Vec<NotificationChannel> = self
             .channels
             .read()
             .await
             .iter()
             .filter(|c| c.enabled)
+            .filter(|c| routed.as_ref().map_or(true, |ids| ids.contains(&c.id)))
             .cloned()
             .collect();
         let (mut delivered, mut failed) = (0, 0);

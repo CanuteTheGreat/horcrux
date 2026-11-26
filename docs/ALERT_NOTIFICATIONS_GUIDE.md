@@ -795,3 +795,35 @@ On **Monitoring > Alert Center**:
 *Guide Version: 1.0.0*
 *Last Updated: 2025-10-10*
 *Horcrux Version: 0.1.0+*
+
+## Matchers: route alerts to chosen channels
+
+By default every alert goes to every enabled channel. Once at least one
+matcher is enabled, only the channels named in the targets of the matchers
+that match are used. Disable or delete all matchers to go back to
+send-to-all.
+
+A matcher is `{name, enabled, rule, targets}`; `targets` are channel ids and
+`rule` is a tree of `all` / `any` / `not` groups with these leaves:
+
+| leaf | fields |
+|---|---|
+| `severity` | `min` (info, warning, critical: that level and above) and/or `any_of` |
+| `event` | `any_of`: alert, alert_test, backup, update, ha, ... |
+| `field` | `field` (title, body, severity, event, rule, target), `regex` (unanchored) |
+| `calendar` | `weekdays` (0 = Monday..6 = Sunday, empty = all), `start` / `end` (`HH:MM`, start after end wraps midnight), `utc_offset_minutes` |
+
+```
+POST /api/notifications/matchers
+{"name":"page on critical, office hours off",
+ "rule":{"op":"all","children":[
+   {"op":"severity","min":"critical"},
+   {"op":"not","child":{"op":"calendar","weekdays":[0,1,2,3,4],"start":"09:00","end":"17:00","utc_offset_minutes":-480}}]},
+ "targets":["<pagerduty channel id>"]}
+```
+
+Also `GET /api/notifications/matchers`, `PUT` / `DELETE /api/notifications/matchers/:id`,
+and `POST /api/notifications/matchers/test` with a sample event
+(`{"severity":"critical","event":"alert","rule":"cpu","target":"vm-100"}`),
+which returns the matching matchers and the channels that would receive it
+without sending anything.

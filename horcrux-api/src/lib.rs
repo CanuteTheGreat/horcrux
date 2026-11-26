@@ -103,6 +103,7 @@ pub mod metrics_collector;
 pub use horcrux_monitoring::metrics_explorer;
 pub use horcrux_monitoring::monitoring;
 pub use horcrux_monitoring::notification_channels;
+pub use horcrux_monitoring::notification_matchers;
 pub use horcrux_monitoring::observability;
 
 // Console access

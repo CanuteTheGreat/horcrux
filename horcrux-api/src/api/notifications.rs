@@ -2,6 +2,7 @@
 
 use crate::error::{ApiError, ErrorResponse};
 use crate::notification_channels::{NotificationChannel, NotificationChannelStore};
+use crate::notification_matchers::{Matcher, SampleEvent};
 use crate::AppState;
 use axum::{
     extract::Path,
@@ -23,6 +24,15 @@ pub fn routes(store: Arc<NotificationChannelStore>) -> Router<Arc<AppState>> {
             get(get_channel).put(update_channel).delete(delete_channel),
         )
         .route("/api/notifications/channels/:id/test", post(test_channel))
+        .route(
+            "/api/notifications/matchers",
+            get(list_matchers).post(create_matcher),
+        )
+        .route(
+            "/api/notifications/matchers/:id",
+            axum::routing::put(update_matcher).delete(delete_matcher),
+        )
+        .route("/api/notifications/matchers/test", post(test_matchers))
         .layer(Extension(store))
 }
 
@@ -80,4 +90,63 @@ async fn test_channel(
         )
             .into_response()),
     }
+}
+
+async fn list_matchers(Extension(store): Store) -> Json<Vec<Matcher>> {
+    Json(store.list_matchers().await)
+}
+
+async fn create_matcher(
+    Extension(store): Store,
+    Json(m): Json<Matcher>,
+) -> Result<(StatusCode, Json<Matcher>), ApiError> {
+    Ok((StatusCode::CREATED, Json(store.create_matcher(m).await?)))
+}
+
+async fn update_matcher(
+    Extension(store): Store,
+    Path(id): Path<String>,
+    Json(m): Json<Matcher>,
+) -> Result<Json<Matcher>, ApiError> {
+    Ok(Json(store.update_matcher(&id, m).await?))
+}
+
+async fn delete_matcher(
+    Extension(store): Store,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    store.delete_matcher(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Serialize)]
+struct MatcherTestResult {
+    /// false: no matcher is enabled, so every enabled channel gets the event.
+    routed_by_matchers: bool,
+    matched_matchers: Vec<String>,
+    channels: Vec<String>,
+}
+
+/// Evaluate a sample event against the saved matchers now; nothing is sent.
+async fn test_matchers(
+    Extension(store): Store,
+    Json(ev): Json<SampleEvent>,
+) -> Json<MatcherTestResult> {
+    let (routed, matched) = store.route_ids(&ev).await;
+    let enabled: Vec<String> = store
+        .list()
+        .await
+        .into_iter()
+        .filter(|c| c.enabled)
+        .map(|c| c.id)
+        .collect();
+    let channels = match &routed {
+        Some(ids) => enabled.into_iter().filter(|i| ids.contains(i)).collect(),
+        None => enabled,
+    };
+    Json(MatcherTestResult {
+        routed_by_matchers: routed.is_some(),
+        matched_matchers: matched,
+        channels,
+    })
 }
