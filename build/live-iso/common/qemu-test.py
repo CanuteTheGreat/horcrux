@@ -1461,6 +1461,7 @@ class Runner:
         kb.key("TAB"); kb.key("TAB"); kb.key("ENTER", 1)
         if p == "horcrux":
             wait(r"\] Management network", "06-management-network")
+            kb.key("TAB")                                  # -> VLAN tag (one NIC: no 'Bond with' row; empty = untagged)
             kb.key("TAB")                                  # -> IP configuration
             if a.static_ip:
                 kb.key("RIGHT")                            # static

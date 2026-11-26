@@ -16,13 +16,14 @@ PROJECTS = {
 }
 
 
-def answer_toml(project, pubkey, pwhash, lan_ip="10.77.0.1", fs="ext4", luks=None):
+def answer_toml(project, pubkey, pwhash, lan_ip="10.77.0.1", fs="ext4", luks=None, mgmt=()):
+    """mgmt: extra TOML lines for [network.management] (Horcrux), e.g. interfaces / vlan / an inline bond table"""
     p, P = project, PROJECTS[project]
     L = ["[global]", 'keyboard = "us"', 'timezone = "Europe/Berlin"', f'hostname = "{p}-vmt.test.lan"', 'email = "ops@example.test"',
          f'root_password_hash = "{pwhash}"', f'ssh_keys = ["{pubkey}"]', "ssh_password_auth = false", "console_menu_open = false",
          "", "[disk]", f'filesystem = "{fs}"', *([f'luks_passphrase = "{luks}"'] if luks else []), 'disks = ["/dev/vda"]', "", "[user]", f'name = "{P["web_user"]}"', f'password_hash = "{pwhash}"', "",
          "[hardening]", "ssh = true", "sysctl = true", "", "[use_flags]", 'preset = "minimal"', ""]
-    L += ["[network.management]", 'mode = "dhcp"'] if p == "horcrux" else ["[network.wan]", 'mode = "dhcp"', "", "[network.lan]", f'address = "{lan_ip}/24"']
+    L += ["[network.management]", 'mode = "dhcp"', *mgmt] if p == "horcrux" else ["[network.wan]", 'mode = "dhcp"', "", "[network.lan]", f'address = "{lan_ip}/24"']
     return "\n".join(L) + "\n"
 
 

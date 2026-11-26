@@ -24,6 +24,10 @@ class Nic:
     subnet: Optional[str] = None           # user NICs: own NAT subnet (e.g. "10.77.0.0/24", QEMU host = .2); needed for a 2nd user NIC
     guest_ip: Optional[str] = None         # user NICs: guest address the forwards point at (default: the DHCP lease)
     model: str = "virtio-net-pci"
+    # link speed (Mb/s) + duplex the NIC reports to the guest. virtio-net reports none by default, and Linux 802.3ad bonding keeps a
+    # member without speed/duplex DOWN ("failed to get link speed/duplex"): LACP scenarios set e.g. speed=1000, duplex="full".
+    speed: Optional[int] = None
+    duplex: Optional[str] = None
 
 
 @dataclass
@@ -32,6 +36,7 @@ class Network:
     kind: str = "hub"             # hub: user-space switch with fault injection; bridge: host bridge (root, no faults)
     bridge: Optional[str] = None
     pcap: bool = True
+    vlans: tuple = ()             # hub only: carry only these 802.1Q VLAN ids (+ LACP/STP control frames); untagged frames dropped
 
 
 @dataclass

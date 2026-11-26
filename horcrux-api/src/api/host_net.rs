@@ -128,7 +128,7 @@ async fn run(program: &str, args: &[&str]) -> Result<(), String> {
 }
 
 /// Global addresses of interface `dev` (`ip -j addr`).
-async fn addresses(dev: &str) -> Vec<String> {
+pub(crate) async fn addresses(dev: &str) -> Vec<String> {
     ip_json(&["-j", "addr", "show", "dev", dev])
         .await
         .as_array()
