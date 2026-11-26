@@ -1865,7 +1865,10 @@ mod tests {
         assert_eq!(r.state, HaState::Started);
         // an older placement never wins
         m.set_home("vm1", "n1", seq, true).await;
-        assert_eq!(m.get_resource("vm1").await.unwrap().current_node.as_deref(), Some("n3"));
+        assert_eq!(
+            m.get_resource("vm1").await.unwrap().current_node.as_deref(),
+            Some("n3")
+        );
     }
 
     #[tokio::test]
