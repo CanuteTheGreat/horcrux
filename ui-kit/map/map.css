@@ -1,10 +1,20 @@
 /* ui-kit/map v0.1 (docs/design/infra-map.md). Scoped to .ui-map; uses ui-kit tokens with fallbacks so it
    also works on pages that have not adopted the kit yet. */
-.ui-map { --m-ink: var(--c-ink, #1f2933); --m-muted: var(--c-muted, #5c6b7a); --m-line: var(--c-border, #d5dbe1);
-  --m-surface: var(--c-surface, #fff); --m-sunken: var(--c-sunken, #f3f5f7); --m-accent: var(--c-accent, #2563eb);
+.ui-map { --m-ink: var(--c-ink, var(--ink, #1f2933)); --m-muted: var(--c-muted, var(--muted, #5c6b7a));
+  --m-line: var(--c-border, var(--line, #d5dbe1)); --m-surface: var(--c-surface, var(--card-bg, #fff));
+  --m-sunken: var(--c-sunken, var(--surface-2, #f3f5f7)); --m-accent: var(--c-accent, var(--accent, #2563eb));
+  --m-warn-bg: var(--c-warn-bg, var(--warn-bg, #fef3c7)); --m-crit-bg: var(--c-crit-bg, var(--bad-bg, #fee2e2));
+  --m-info-bg: var(--c-info-bg, var(--info-bg, #dbeafe));
   display: block; color: var(--m-ink); font-size: 14px; }
-@media (prefers-color-scheme: dark) { .ui-map { --m-ink: var(--c-ink, #e4e9ee); --m-muted: var(--c-muted, #9aa8b6);
-  --m-line: var(--c-border, #334150); --m-surface: var(--c-surface, #1a2129); --m-sunken: var(--c-sunken, #12171d); } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ui-map { --m-ink: var(--c-ink, var(--ink, #e4e9ee));
+  --m-muted: var(--c-muted, var(--muted, #9aa8b6)); --m-line: var(--c-border, var(--line, #334150));
+  --m-surface: var(--c-surface, var(--card-bg, #1a2129)); --m-sunken: var(--c-sunken, var(--surface-2, #12171d));
+  --m-warn-bg: var(--c-warn-bg, var(--warn-bg, #3a2a05)); --m-crit-bg: var(--c-crit-bg, var(--bad-bg, #3b1010));
+  --m-info-bg: var(--c-info-bg, var(--info-bg, #0f2440)); } }
+:root[data-theme="dark"] .ui-map { --m-ink: var(--c-ink, var(--ink, #e4e9ee)); --m-muted: var(--c-muted, var(--muted, #9aa8b6));
+  --m-line: var(--c-border, var(--line, #334150)); --m-surface: var(--c-surface, var(--card-bg, #1a2129));
+  --m-sunken: var(--c-sunken, var(--surface-2, #12171d)); --m-warn-bg: var(--c-warn-bg, var(--warn-bg, #3a2a05));
+  --m-crit-bg: var(--c-crit-bg, var(--bad-bg, #3b1010)); --m-info-bg: var(--c-info-bg, var(--info-bg, #0f2440)); }
 .ui-map-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 10px; }
 .ui-map-filter { flex: 1 1 220px; min-width: 0; }
 .ui-map-summary { color: var(--m-muted); font-size: 0.9em; }
@@ -20,9 +30,9 @@
 .ui-map-export .ui-menu-items button { text-align: left; background: none; border: 0; padding: 6px 8px; color: var(--m-ink); font: inherit; cursor: pointer; }
 .ui-map-export .ui-menu-items button:hover { background: var(--m-sunken); }
 .ui-map-findings .ui-banner { display: block; padding: 10px 12px; border-radius: 6px; margin: 0 0 8px; border: 1px solid var(--c-warn, #b45309);
-  background: var(--c-warn-bg, #fef3c7); color: var(--c-ink, #3b2a06); }
-.ui-map-findings .ui-banner.crit { border-color: var(--c-crit, #b91c1c); background: var(--c-crit-bg, #fee2e2); }
-.ui-map-findings .ui-banner.info { border-color: var(--c-info, #1d4ed8); background: var(--c-info-bg, #dbeafe); }
+  background: var(--m-warn-bg); color: var(--m-ink); }
+.ui-map-findings .ui-banner.crit { border-color: var(--c-crit, #dc2626); background: var(--m-crit-bg); }
+.ui-map-findings .ui-banner.info { border-color: var(--c-info, #2563eb); background: var(--m-info-bg); }
 .ui-map-findings .ui-banner .ui-btn { margin-left: 8px; }
 .ui-map-stage { overflow: auto; max-width: 100%; border: 1px solid var(--m-line); border-radius: 8px; background: var(--m-sunken); -webkit-overflow-scrolling: touch; }
 .ui-map-stage svg { display: block; margin: 0 auto; }

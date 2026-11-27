@@ -2,7 +2,7 @@
 """Gate for the shared map component (ui-kit/map): size budget, class prefix, pure-function tests.
 
 * map.js <= 24 KB and map.css <= 6 KB as served (unminified): the router tier serves them too;
-* every class map.css defines starts with ui-map (scoped) or styles a kit class inside .ui-map;
+* every selector in map.css is scoped to .ui-map (optionally behind a :root theme qualifier);
 * `node test.js` passes (layout + Mermaid export); skipped with a notice when node is missing.
 """
 import pathlib, re, shutil, subprocess, sys
@@ -34,7 +34,8 @@ def selectors(text):
 for sel in selectors(css):
     for part in sel.split(","):
         part = part.strip()
-        if part and not part.startswith(".ui-map"):
+        # theme qualifiers on :root are allowed in front of a .ui-map selector
+        if part and not (part.startswith(".ui-map") or (part.startswith(":root") and " .ui-map" in part)):
             bad.append(f"map.css: selector not scoped to .ui-map: {part}")
 node = shutil.which("node") or shutil.which("nodejs")
 if node:

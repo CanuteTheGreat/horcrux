@@ -79,8 +79,9 @@
   }
   function colors(host) {
     var cs = getComputedStyle(host), v = function (n, d) { return (cs.getPropertyValue(n) || '').trim() || d; };
-    return { ink: v('--c-ink', '#1f2933'), muted: v('--c-muted', '#5c6b7a'), line: v('--c-border-strong', '#9aa5b1'),
-      surface: v('--c-surface', '#ffffff'), sunken: v('--c-sunken', '#f3f5f7'), accent: v('--c-accent', '#2563eb'),
+    // --m-* come from map.css (kit tokens, else the product's own, else a palette per colour scheme)
+    return { ink: v('--m-ink', '#1f2933'), muted: v('--m-muted', '#5c6b7a'), line: v('--c-border-strong', v('--m-line', '#9aa5b1')),
+      surface: v('--m-surface', '#ffffff'), sunken: v('--m-sunken', '#f3f5f7'), accent: v('--m-accent', '#2563eb'),
       ok: v('--c-ok-solid', '#15803d'), crit: v('--c-crit-solid', '#b91c1c'), warn: v('--c-warn-solid', '#b45309'), off: v('--c-neutral-solid', '#64748b') };
   }
   function trunc(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '\u2026' : s; }
@@ -257,6 +258,9 @@
       });
     }
     function schedule(s) { clearTimeout(st.timer); if (s > 0) st.timer = setTimeout(function () { if (document.hidden) schedule(s); else load(); }, s * 1000); }
+    // the SVG carries resolved colours (so exports look the same): redraw when the scheme changes
+    if (window.matchMedia) { var mq = window.matchMedia('(prefers-color-scheme: dark)'); if (mq.addEventListener) mq.addEventListener('change', draw); }
+    if (window.MutationObserver) new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-accent'] });
     load();
     return { reload: load, graph: function () { return st.graph; }, stop: function () { clearTimeout(st.timer); } };
   }
