@@ -92,6 +92,7 @@ net-misc/openvswitch
 
 # nftables firewall (recommended)
 net-firewall/nftables
+net-firewall/conntrack-tools
 
 # iptables (legacy)
 net-firewall/iptables

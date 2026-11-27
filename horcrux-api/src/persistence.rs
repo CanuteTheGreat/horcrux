@@ -89,6 +89,16 @@ pub async fn load_persisted_managers(
     // VM/container rules are live as soon as they are added; rebuild their
     // nftables chains from the stored copy (the kernel ruleset does not
     // survive a host reboot).
+    // Microsegmentation profiles live in the security settings; they must
+    // be known before the guest chains are rebuilt.
+    if let Some(sec) = crate::db::config_store::ConfigStore::new(database)
+        .load_values::<horcrux_common::security::SecuritySettings>("security_settings")
+        .await
+        .ok()
+        .and_then(|v| v.into_iter().next())
+    {
+        firewall.set_microseg_quiet(sec.microseg);
+    }
     firewall.reapply_guest_rules().await;
     let storage_mgr = Arc::new(
         storage::StorageManager::with_database(database.clone())

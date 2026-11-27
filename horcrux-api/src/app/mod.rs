@@ -1969,6 +1969,9 @@ pub(crate) async fn start_vm_by_id(state: &Arc<AppState>, id: &str) -> Result<Vm
     #[cfg(feature = "cluster")]
     ha_user_intent(&state, &id, ha::HaState::Started).await;
     emit_vm_state(&state, &vm, &old_status).await;
+    // Its microsegmentation profile is installed again: the macvtap NICs
+    // (not bridge ports) only exist while the VM runs.
+    api::security::microseg::on_guest_start(&state, &format!("vm:{id}")).await;
     // A gaming VM still installing Windows: its answer disc goes once the
     // installed guest's agent answers.
     if let Some(d) = vm.disks.first().map(|d| std::path::PathBuf::from(&d.path)) {
@@ -2051,6 +2054,7 @@ async fn delete_vm(
     {
         tracing::warn!("VM {id} deleted, but its firewall rules stayed: {e}");
     }
+    api::security::microseg::forget_guest(&state, &format!("vm:{id}")).await;
 
     // Broadcast VM deleted event
     let username = auth_user
@@ -3144,6 +3148,7 @@ async fn delete_container(
     {
         tracing::warn!("container {id} deleted, but its firewall rules stayed: {e}");
     }
+    api::security::microseg::forget_guest(&state, &format!("container:{id}")).await;
 
     // Broadcast container deleted event
     state

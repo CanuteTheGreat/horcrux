@@ -55,6 +55,7 @@ net-misc/networkmanager
 net-misc/openssh
 net-misc/bridge-utils
 net-dns/*
+net-firewall/conntrack-tools
 net-firewall/nftables
 net-vpn/wireguard-tools
 net-print/*

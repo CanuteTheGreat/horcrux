@@ -50,7 +50,7 @@ fn download(name: &str, mime: &str, text: &str) {
 
 /// In-app link with exact active state (query strings count), no full reload.
 #[component]
-fn NavLink(
+pub(crate) fn NavLink(
     #[prop(into)] href: String,
     #[prop(into)] class: Signal<String>,
     active: Signal<bool>,
@@ -95,7 +95,7 @@ fn CountBadges(counts: SeverityCounts) -> impl IntoView {
 }
 
 #[component]
-fn SecurityTabs(active: &'static str) -> impl IntoView {
+pub(crate) fn SecurityTabs(active: &'static str) -> impl IntoView {
     let tab = |href: &'static str, id: &'static str, label: &'static str| {
         let on = id == active;
         let cls = if on { "tab active" } else { "tab" };
@@ -106,6 +106,7 @@ fn SecurityTabs(active: &'static str) -> impl IntoView {
             {tab("/security", "overview", "Overview")}
             {tab("/security/vulnerabilities", "vulns", "Vulnerabilities")}
             {tab("/security/hardening", "hardening", "Hardening")}
+            {tab("/security/microsegmentation", "mseg", "Microsegmentation")}
             {tab("/security/settings", "settings", "Settings")}
         </nav>
     }
@@ -787,6 +788,7 @@ pub fn SecuritySettingsPage() -> impl IntoView {
             {move || s.get().map(|cur| {
                 let v = cur.vuln_scan.clone();
                 let h = cur.hardening.clone();
+                let m = cur.microseg.clone();
                 view! {
                     <form class="card settings-form" on:submit=move |e| { e.prevent_default(); if let Some(x) = s.get_untracked() { save.dispatch(x) } }>
                         <h2>"Vulnerability scanning"</h2>
@@ -899,6 +901,37 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                             <input id="sec-h-file" type="text" prop:value=h.sysctl_file.clone()
                                 on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.hardening.sysctl_file = c.clone())) }/>
                             <small class="form-help">"Read at boot by OpenRC's sysctl service and systemd-sysctl."</small>
+                        </div>
+                        <h2>"Microsegmentation"</h2>
+                        <p class="help-text">"Per-guest profiles are edited under Microsegmentation; they are part of this section too (security.microseg.profiles)."</p>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-m-on"><input id="sec-m-on" type="checkbox" prop:checked=m.enabled
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.microseg.enabled = c)) }/>" Enforce guest profiles on this node"</label>
+                                <small class="form-help">"Off removes every profile from the kernel; the stored profiles stay."</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-m-log"><input id="sec-m-log" type="checkbox" prop:checked=m.log_denied
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.microseg.log_denied = c)) }/>" Log dropped flows"</label>
+                                <small class="form-help">"Feeds the denied list of the flow view."</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-m-infra"><input id="sec-m-infra" type="checkbox" prop:checked=m.allow_infrastructure
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.microseg.allow_infrastructure = c)) }/>" Let ARP, IPv6 neighbour discovery and DHCP through"</label>
+                                <small class="form-help">"Turn off only for guests with fixed addresses."</small>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-m-flows">"Flows shown"</label>
+                                <input id="sec-m-flows" type="number" min="1" max="10000" prop:value=m.flow_limit.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.microseg.flow_limit = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-m-rate">"Logged drops per second, per guest"</label>
+                                <input id="sec-m-rate" type="number" min="1" max="1000" prop:value=m.log_rate_per_second.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.microseg.log_rate_per_second = c)) }/>
+                            </div>
                         </div>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary" disabled=move || save.pending().get()>"Save"</button>

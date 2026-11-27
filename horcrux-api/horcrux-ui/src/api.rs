@@ -8021,10 +8021,55 @@ pub async fn delete_boot_environment(path: &str) -> Result<(), ApiError> {
 // ============================================================================
 
 pub use horcrux_common::security::{
+    GuestProfile, MicrosegSettings, MsegDefault, MsegFlowView, MsegGuestRow, MsegPeer,
+    MsegPutAnswer, MsegRuleHit, MsegTemplate, MsegTemplateInfo,
+};
+pub use horcrux_common::security::{
     HardeningApplyRequest, HardeningApplyResult, HardeningReport, HardeningRuleResult, RuleStatus,
     ScanRequest, ScanResult, ScanStatus, ScanSummary, ScanTarget, ScanTargetKind, SecurityOverview,
     SecuritySettings, Severity, SeverityCounts,
 };
+
+pub async fn get_microseg_templates() -> Result<Vec<MsegTemplateInfo>, ApiError> {
+    fetch_json("/security/microseg/templates").await
+}
+
+pub async fn list_microseg_guests() -> Result<Vec<MsegGuestRow>, ApiError> {
+    fetch_json("/security/microseg/guests").await
+}
+
+pub async fn get_microseg_profile(key: &str) -> Result<GuestProfile, ApiError> {
+    fetch_json(&format!("/security/microseg/guests/{key}")).await
+}
+
+pub async fn put_microseg_profile(key: &str, p: &GuestProfile) -> Result<MsegPutAnswer, ApiError> {
+    put_json(&format!("/security/microseg/guests/{key}"), p).await
+}
+
+pub async fn delete_microseg_profile(key: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/security/microseg/guests/{key}")).await
+}
+
+pub async fn apply_microseg_profile(key: &str) -> Result<Vec<String>, ApiError> {
+    post_json(
+        &format!("/security/microseg/guests/{key}/apply"),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+pub async fn get_microseg_rules(key: &str) -> Result<Vec<MsegRuleHit>, ApiError> {
+    fetch_json(&format!("/security/microseg/guests/{key}/rules")).await
+}
+
+pub async fn get_microseg_flows(key: &str, ip: &str) -> Result<MsegFlowView, ApiError> {
+    let q = if ip.trim().is_empty() {
+        String::new()
+    } else {
+        format!("?ip={}", ip.trim())
+    };
+    fetch_json(&format!("/security/microseg/guests/{key}/flows{q}")).await
+}
 
 pub async fn get_security_overview() -> Result<SecurityOverview, ApiError> {
     fetch_json("/security/overview").await

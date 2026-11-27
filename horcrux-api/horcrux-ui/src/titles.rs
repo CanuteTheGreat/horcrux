@@ -82,6 +82,7 @@ fn exact(path: &str) -> Option<&'static str> {
         "/security" => "Security",
         "/security/vulnerabilities" => "Vulnerabilities",
         "/security/hardening" => "Hardening",
+        "/security/microsegmentation" => "Microsegmentation",
         "/security/settings" => "Security Settings",
         "/tasks" => "Tasks",
         "/gpu" => "GPU / PCI Passthrough",
@@ -158,6 +159,7 @@ pub fn title_for(path: &str, subject: Option<&str>) -> String {
     } else {
         match segs.as_slice() {
             ["vms", id] => named(id),
+            ["security", "microsegmentation", key] => format!("{} · Microsegmentation", named(key)),
             ["security", "vulnerabilities", id] => format!("Scan {} · Vulnerabilities", named(id)),
             ["vms", id, "console"] => format!("{} · Console", named(id)),
             ["vms", id, "hardware"] => format!("{} · Hardware", named(id)),

@@ -11,8 +11,11 @@
 //! * `GET  /api/security/hardening/report?format=text|html|json` download
 //! * `POST /api/security/hardening/apply|revert`    {rules?, dry_run?}
 //!
+//! * `/api/security/microseg/...`                   guest microsegmentation (see `microseg.rs`)
+//!
 //! Reads need Sys.Audit, changes Sys.Modify (privileges.rs area `security`).
 pub mod hardening;
+pub mod microseg;
 pub mod vmscan;
 pub mod vulnscan;
 
@@ -52,6 +55,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/security/hardening/report", get(hardening_report))
         .route("/api/security/hardening/apply", post(hardening_apply))
         .route("/api/security/hardening/revert", post(hardening_revert))
+        .merge(microseg::routes())
 }
 
 // ------------------------------------------------------------ settings
@@ -80,15 +84,28 @@ pub async fn load_settings(state: &AppState) -> SecuritySettings {
 
 /// Validate and store (API and declarative apply).
 pub async fn set_settings(state: &AppState, s: SecuritySettings) -> Result<(), String> {
+    set_settings_warn(state, s).await.map(|_| ())
+}
+
+/// Like [`set_settings`], also installing the microsegmentation profiles
+/// into the kernel; returns what could not be installed.
+pub async fn set_settings_warn(
+    state: &AppState,
+    s: SecuritySettings,
+) -> Result<Vec<String>, String> {
     s.validate()?;
     crate::db::config_store::ConfigStore::new(&state.database)
         .put(SETTINGS_KIND, "default", &s)
         .await
         .map_err(|e| e.to_string())?;
     if let Ok(mut c) = cell().lock() {
-        *c = Some(s);
+        *c = Some(s.clone());
     }
-    Ok(())
+    let warnings = state.firewall_manager.set_microseg(s.microseg).await;
+    for w in &warnings {
+        tracing::warn!("microsegmentation: {w}");
+    }
+    Ok(warnings)
 }
 
 async fn get_settings(State(state): State<Arc<AppState>>) -> Json<SecuritySettings> {

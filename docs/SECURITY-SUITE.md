@@ -100,6 +100,41 @@ security:
       kernel-aslr: "2"
 ```
 
+## Microsegmentation
+
+Security > Microsegmentation puts a default-deny firewall around one VM or container, on every network card it has
+(bridges, SDN networks, macvtap). Open a guest, pick a template and allow what it needs:
+
+| Template | Inbound | Outbound |
+|---|---|---|
+| Web server | tcp 80 and 443 from anywhere | DNS, NTP, tcp 80 and 443 |
+| Database | the database ports from the groups you list, nobody else | DNS, NTP |
+| Isolated lab | the lab network | the lab network |
+| Pentest box | callbacks from the lab network; the groups you list may manage it | the lab network only |
+| Custom | only what you allow | only what you allow |
+
+A group is an IP set (`+office`), an alias or an address range from Firewall objects; "Allow from a group" and "Allow to a group" add a
+rule for it. Answers to allowed connections always pass. The guest page counts the packets every rule matched (the "default deny"
+row is what was dropped) and lists the tracked flows and the flows dropped recently. Rules you stored for the guest under
+Firewall keep working and run before the profile. Removing a profile makes the guest unrestricted again.
+
+Notes: rules cover IPv4 (IPv6 is dropped except neighbour discovery); a macvtap card is filtered on its device without connection
+tracking (replies to allowed flows pass, new flows follow the rules), and its filter is installed when the VM starts. The flow
+view needs `net-firewall/conntrack-tools` where the kernel has no `/proc/net/nf_conntrack` (pulled in by USE=security).
+
+```yaml
+security:
+  microseg:
+    profiles:
+      "vm:100":
+        template: database
+        allow_from: [{group: "+app-servers", protocol: any, dport: ""}]
+        ports: "5432"
+      "vm:210":
+        template: pentest_box
+        lab_network: "10.99.0.0/24"
+```
+
 ## Settings reference
 
 `GET/PUT /api/security/settings`, declarative `security:` (`docs/design/declarative-config.md`).
@@ -125,6 +160,12 @@ security:
 | `vuln_scan.vm_disk_scan` | `true` | scan stopped VMs from a read-only disk mount |
 | `vuln_scan.vm_agent_scan` | `true` | scan running VMs from the guest agent's inventory |
 | `vuln_scan.vm_mount_timeout_secs` | `120` | give up a stopped-VM disk mount after this long (10-3600) |
+| `microseg.enabled` | `true` | enforce the guest profiles; off removes them from the kernel, profiles stay stored |
+| `microseg.log_denied` | `true` | rate-limited kernel log line for dropped flows (feeds the flow view) |
+| `microseg.log_rate_per_second` | `10` | logged drops per second and guest (1-1000) |
+| `microseg.allow_infrastructure` | `true` | ARP, IPv6 neighbour discovery and DHCP pass in a default-deny direction |
+| `microseg.flow_limit` | `500` | most flows the flow view returns (1-10000) |
+| `microseg.profiles` | `{}` | guest key (`vm:100`, `container:web1`) -> profile: `enabled`, `template` (`custom`, `web_server`, `database`, `isolated_lab`, `pentest_box`), `default_in`/`default_out` (`deny`), `allow_from`/`allow_to` (`group`, `protocol`, `dport`, `comment`), `lab_network`, `ports`, `macvtap_devices`, `comment` |
 | `hardening.exclude` | `[]` | rule ids not checked or applied |
 | `hardening.overrides` | `{}` | rule id -> wanted sysctl value |
 | `hardening.sysctl_file` | `/etc/sysctl.d/60-horcrux-hardening.conf` | the managed drop-in |
@@ -146,3 +187,9 @@ security:
 | `GET /api/security/hardening/report?format=html\|text\|json` | report download | Sys.Audit |
 | `POST /api/security/hardening/apply` `{rules?, dry_run?}` | apply the named (or every failing automatic) rule | Sys.Modify |
 | `POST /api/security/hardening/revert` `{rules?, dry_run?}` | revert the named (or every applied) rule | Sys.Modify |
+| `GET /api/security/microseg/templates` | the profile templates | Sys.Audit |
+| `GET /api/security/microseg/guests` | every VM and container with its profile and dropped packets | Sys.Audit |
+| `GET /api/security/microseg/guests/:key`, `PUT`, `DELETE` | one profile (`vm:100`); PUT validates, installs and answers `{profile, warnings}` | Sys.Audit / Sys.Modify |
+| `POST /api/security/microseg/guests/:key/apply` | install the profile into the kernel again | Sys.Modify |
+| `GET /api/security/microseg/guests/:key/rules` | per-rule hit counters | Sys.Audit |
+| `GET /api/security/microseg/guests/:key/flows?ip=` | tracked and dropped flows | Sys.Audit |

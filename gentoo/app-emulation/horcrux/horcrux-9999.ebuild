@@ -135,7 +135,10 @@ RDEPEND="
 
 	nas? ( sys-apps/acl )
 
-	security? ( app-containers/grype )
+	security? (
+		app-containers/grype
+		net-firewall/conntrack-tools
+	)
 "
 
 # Build dependencies

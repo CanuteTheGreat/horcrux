@@ -526,6 +526,14 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Firewall apply (real nftables)"
           bash horcrux-api/tests/firewall_nft_e2e.sh target/debug/horcrux-api
 
+      - name: Guest microsegmentation (real nftables, bridge and namespaces)
+        # Default-deny guest profiles in a privileged sibling: a denied flow is
+        # dropped, an allowed one passes, group rules follow IP set changes and
+        # the per-rule hit counters move.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Guest microsegmentation (real nftables)"
+          bash horcrux-api/tests/microseg_e2e.sh target/debug/horcrux-api
+
       - name: Podman e2e (container + stack suites against real Podman, no Docker)
         # Podman is the preferred OCI runtime. The Test job's own container tests use the runner's
         # Docker daemon (kept: Docker is the secondary runtime); this runs the same lifecycle and

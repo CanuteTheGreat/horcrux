@@ -281,6 +281,7 @@ async fn run_change(
             {
                 return Ok(Some(format!("deleted, but its firewall rules stayed: {x}")));
             }
+            crate::api::security::microseg::forget_guest(state, &format!("vm:{id}")).await;
             Ok(None)
         }
         ("guest_power", Action::Update | Action::Delete) => {

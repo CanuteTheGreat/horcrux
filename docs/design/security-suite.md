@@ -14,7 +14,7 @@ works the same on OpenRC and systemd, and degrades to a clear "not installed, he
 
 | Capability | Proxmox VE 9.x | VMware vSphere 9 / VCF | Nutanix AOS/AHV | Hyper-V / Azure Local | Horcrux |
 |---|---|---|---|---|---|
-| Host/guest firewall | yes (nftables proxmox-firewall, VM/CT rules, security groups, IPsets) | NSX (separate product), distributed firewall | Flow Network Security (microsegmentation, licensed) | Windows Firewall, SDN ACLs | yes (nftables, security groups, firewall objects); microsegmentation templates planned (phase 3) |
+| Host/guest firewall | yes (nftables proxmox-firewall, VM/CT rules, security groups, IPsets) | NSX (separate product), distributed firewall | Flow Network Security (microsegmentation, licensed) | Windows Firewall, SDN ACLs | yes (nftables, security groups, firewall objects); microsegmentation: per-guest default-deny profiles, templates, group rules, hit counters, flow view (phase 3, shipped) |
 | Two-factor / SSO | TOTP, WebAuthn, recovery keys, OpenID Connect, LDAP/AD | SSO, MFA through identity federation | SAML, MFA via IdP | AD, Entra | TOTP/WebAuthn, PAM, LDAP, OIDC realms |
 | API / admin access log | task log + syslog, no per-request API log | vCenter events, syslog | audit log | event log | per-request API access log (`/api/access-log`), audit log |
 | Host hardening baseline + report | none (docs only) | Security Configuration and Hardening Guide, compliance through Aria Operations packs | SCMA: STIG baseline checked hourly and self-healed | Secured-core, OSConfig security baseline with drift control | **Horcrux baseline (phase 1)**: CIS-derived, hypervisor-safe, apply/revert, scheduled re-check with regression alerts, HTML/text/JSON report |
@@ -120,6 +120,65 @@ caps. VM rows appear in Security > Vulnerabilities; the VM detail page shows a
 Security tab/badge. The guest SBOM format is verified against real Grype
 (reports real deb CVEs with fix versions from a hand-built CycloneDX SBOM).
 
+## Guest microsegmentation (phase 3, shipped)
+
+Security > Microsegmentation puts a default-deny firewall around one VM or container, per NIC,
+on top of the existing nftables firewall and firewall objects (IP sets, aliases, macros).
+Code: `crates/horcrux-sdn/src/firewall/microseg.rs` (pure plan + command builder, parsers),
+`nftables.rs` (installs it), `horcrux-api/src/api/security/microseg.rs` (API),
+`horcrux-ui/src/pages/security_mseg.rs`, types in `horcrux-common/src/security.rs`.
+
+**Model.** A profile (`security.microseg.profiles["vm:100"]`, so the declarative `security:` section
+manages it) has a template, a default action per direction (deny), `allow_from` / `allow_to`
+groups (an IP set `+name`, an alias or a CIDR), a lab network and a port list. `plan()` expands it into
+ordinary firewall rules; the guest's stored rules stay and run first.
+
+| Template | Inbound | Outbound |
+|---|---|---|
+| web server | tcp 80,443 (or `ports`) from anywhere | DNS, NTP, tcp 80/443 |
+| database | tcp `ports` (3306,5432) from the listed groups only | DNS, NTP |
+| isolated lab | the lab network | the lab network |
+| pentest box | callbacks from the lab network, the listed groups may manage it | the lab network only (a default-allow outbound is refused by validation) |
+| custom | `allow_from` | `allow_to` |
+
+**Enforcement per NIC.** VM taps and container veths of every bridge and SDN vnet are matched by the guest's
+stable device prefix in the `bridge` family (`vm-<id>-in/out`, `ct-<id>-in/out` chains jumped to from
+`forward`/`input`/`output`), so a new NIC or a restarted VM is covered without a re-apply. Each direction
+starts with `ct state established,related accept` and `ct state invalid drop`, then ARP, IPv6
+neighbour discovery and DHCP (setting `allow_infrastructure`), then the rules, then a rate-limited log rule
+(`hx-mseg: <guest>/<dir> `) and `counter drop`. Macvtap NICs are not bridge ports, so they get the same
+rules as `netdev` hooks on the device (`ingress` = from the guest, `egress` = to it). Those hooks run
+before connection tracking, so replies are matched statelessly (any TCP segment except a first SYN,
+ICMP answers, UDP replies mirrored from the accepted UDP rules). The VM start path re-applies the
+profile because the macvtap device only exists while the VM runs. IPv4 rules only, as the rest of the
+firewall; IPv6 is dropped by default except neighbour discovery.
+
+**Counters and flows.** Every rule carries `counter` and a `hx:<rule id>` comment; `nft -j list chain` gives
+packets and bytes per rule (API `.../rules`, UI table). The flow view joins tracked flows (`/proc/net/nf_conntrack`,
+else `conntrack -L`; optional `?ip=`) with the dropped flows read back from the kernel log by the guest's prefix.
+
+**Verification.** `horcrux-api/tests/microseg_e2e.sh` (CI step "Guest microsegmentation") runs the real API in a privileged
+container with a bridge and network namespaces: a denied flow is dropped and an allowed one passes for every
+template, group membership changes take effect without an apply, counters move, stored rules coexist, macvtap-style
+device filters work, and switching the feature off removes everything.
+
+### Benchmark (public documentation, checked 2026-11-27)
+
+| | Proxmox VE firewall | VMware NSX distributed firewall | Horcrux |
+|---|---|---|---|
+| Enforcement point | per-VM/CT NIC firewall flag; bridge-level iptables or, in the new `proxmox-firewall`, nftables | per vNIC at the hypervisor ("Applied To") | per guest, per NIC, nftables (bridge family; netdev for macvtap) |
+| Default | per-VM IN policy, shipped examples use `IN DROP / OUT ACCEPT` | default rule (allow or deny), micro-segmentation designed as default-deny | default deny both ways, per-direction override |
+| Grouping | security groups, IP sets, aliases | groups with tag, name or other dynamic membership; identity-based groups | IP sets, aliases, CIDRs (static; no tag-based membership yet) |
+| Templates | none (security groups are rule bundles) | policy templates, partner and context profiles | web server, database, isolated lab, pentest box, custom |
+| Rule hit counters | none in the UI (iptables/nft counters only on the CLI) | per-rule hit count in Firewall Insights | per rule, in the guest page, live |
+| Flow view | conntrack logging option | traffic analysis (a separate, licensed intelligence tier) | tracked flows + dropped flows per guest |
+| Layer 7 / identity | no | context profiles, identity firewall | no (gap) |
+| Cost | free | licensed | free |
+
+Sources: pve.proxmox.com/wiki/Firewall; techdocs.broadcom.com (Firewall Insights, "hit counts of the distributed
+firewall rule"); kb.expedient.com ("controls traffic in and out of each vNIC individually"). Known gaps against NSX:
+tag/attribute-based dynamic groups and identity or application-aware rules; guests are keyed by id, groups are address based.
+
 ## Later phases (one job each)
 
 | Phase | Item | Notes |
@@ -131,6 +190,6 @@ Security tab/badge. The guest SBOM format is verified against real Grype
 | 2 | Pentest VM template library | Kali, Parrot, Pentoo as first-class templates (download + checksum/signature check, cloud-init or answer files where the distro supports it, sensible hardware defaults, isolated network by default) |
 | 3 | Security dashboard + events | one page joining access log (hx-api-access-log), audit log, failed logins, baseline drift and scan results; alerting through hx-notification-matchers |
 | 3 | Guest provisioning secrets | cloud-init/unattend passwords and keys referenced from an encrypted secrets store, never stored in VM config or exports; rotation |
-| 3 | Microsegmentation templates | per-guest default-deny profiles and "allow only from these groups" templates on the existing firewall objects, with a hit-count view |
+| 3 | Microsegmentation templates | **shipped**: see "Guest microsegmentation" below |
 | 3 | Container runtime detection | Falco-class (eBPF, Apache-2.0) rules for containers on the node, optional and resource-capped |
 | 4 | Guest introspection (research) | VMI-based (LibVMI) read-only checks, off by default; go/no-go spike with measured overhead |

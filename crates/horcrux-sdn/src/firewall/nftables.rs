@@ -373,6 +373,7 @@ impl NftablesManager {
             &horcrux_common::vm_tap_prefix(vm_id),
             rules,
             [jumps_present; 3],
+            None,
         )
     }
 
@@ -390,6 +391,7 @@ impl NftablesManager {
             &horcrux_common::ct_veth_prefix(ct_id),
             rules,
             [jumps_present; 3],
+            None,
         )
     }
 
@@ -401,6 +403,8 @@ impl NftablesManager {
         rules: &[FirewallRule],
         // Jumps already installed in forward / input / output.
         jumps_present: [bool; 3],
+        // Microsegmentation profile of the guest (default deny, counters).
+        plan: Option<&super::microseg::Plan>,
     ) -> Vec<Vec<String>> {
         let t = self.table_name.clone();
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
@@ -423,22 +427,40 @@ impl NftablesManager {
             s(&["flush", "chain", "bridge", &t, &cin]),
             s(&["flush", "chain", "bridge", &t, &cout]),
         ]);
-        let mut sorted: Vec<&FirewallRule> = rules.iter().filter(|r| r.enabled).collect();
-        sorted.sort_by_key(|r| r.position);
-        for r in sorted {
-            let chain = match r.direction {
-                super::Direction::In => &cin,
-                super::Direction::Out => &cout,
-            };
-            for expr in self.build_nft_rules(r) {
-                cmds.push(vec![
-                    "add".into(),
-                    "rule".into(),
-                    "bridge".into(),
-                    t.clone(),
-                    chain.clone(),
-                    expr,
-                ]);
+        if let Some(plan) = plan {
+            let key = kind.comment(id);
+            for (dir, chain) in [(super::Direction::In, &cin), (super::Direction::Out, &cout)] {
+                for expr in super::microseg::chain_body(plan, &key, dir, rules, true, &|r| {
+                    self.build_nft_rules(r)
+                }) {
+                    cmds.push(vec![
+                        "add".into(),
+                        "rule".into(),
+                        "bridge".into(),
+                        t.clone(),
+                        chain.clone(),
+                        expr,
+                    ]);
+                }
+            }
+        } else {
+            let mut sorted: Vec<&FirewallRule> = rules.iter().filter(|r| r.enabled).collect();
+            sorted.sort_by_key(|r| r.position);
+            for r in sorted {
+                let chain = match r.direction {
+                    super::Direction::In => &cin,
+                    super::Direction::Out => &cout,
+                };
+                for expr in self.build_nft_rules(r) {
+                    cmds.push(vec![
+                        "add".into(),
+                        "rule".into(),
+                        "bridge".into(),
+                        t.clone(),
+                        chain.clone(),
+                        expr,
+                    ]);
+                }
             }
         }
         let comment = format!("comment \"{}\"", kind.comment(id));
@@ -490,7 +512,13 @@ impl NftablesManager {
             .unwrap_or_default()
     }
 
-    async fn sync_guest(&self, kind: GuestKind, id: &str, rules: &[FirewallRule]) -> Result<()> {
+    async fn sync_guest(
+        &self,
+        kind: GuestKind,
+        id: &str,
+        rules: &[FirewallRule],
+        plan: Option<&super::microseg::Plan>,
+    ) -> Result<()> {
         let tag = format!("\"{}\"", kind.comment(id));
         let mut present = [false; 3];
         for (i, base) in BASE_CHAINS.iter().enumerate() {
@@ -500,7 +528,7 @@ impl NftablesManager {
             GuestKind::Vm => horcrux_common::vm_tap_prefix(id),
             GuestKind::Container => horcrux_common::ct_veth_prefix(id),
         };
-        let cmds = self.guest_ruleset_commands(kind, id, &prefix, rules, present);
+        let cmds = self.guest_ruleset_commands(kind, id, &prefix, rules, present, plan);
         for cmd in cmds {
             let args: Vec<&str> = cmd.iter().map(String::as_str).collect();
             self.nft(&args).await?;
@@ -515,13 +543,135 @@ impl NftablesManager {
     }
 
     /// Install VM `vm_id`'s firewall rules (see `vm_ruleset_commands`).
-    pub async fn sync_vm_rules(&self, vm_id: &str, rules: &[FirewallRule]) -> Result<()> {
-        self.sync_guest(GuestKind::Vm, vm_id, rules).await
+    pub async fn sync_vm_rules(
+        &self,
+        vm_id: &str,
+        rules: &[FirewallRule],
+        plan: Option<&super::microseg::Plan>,
+    ) -> Result<()> {
+        self.sync_guest(GuestKind::Vm, vm_id, rules, plan).await
     }
 
     /// Install container `ct_id`'s firewall rules (see `ct_ruleset_commands`).
-    pub async fn sync_ct_rules(&self, ct_id: &str, rules: &[FirewallRule]) -> Result<()> {
-        self.sync_guest(GuestKind::Container, ct_id, rules).await
+    pub async fn sync_ct_rules(
+        &self,
+        ct_id: &str,
+        rules: &[FirewallRule],
+        plan: Option<&super::microseg::Plan>,
+    ) -> Result<()> {
+        self.sync_guest(GuestKind::Container, ct_id, rules, plan)
+            .await
+    }
+
+    /// Name of the netdev table that holds macvtap device filters.
+    pub const NETDEV_TABLE: &'static str = "hxmseg";
+
+    /// Install (`plan` = Some) or remove (None) the netdev-family filters
+    /// of a guest's macvtap devices. A device that does not exist yet is an
+    /// error naming it (the profile is applied again when the VM starts).
+    pub async fn sync_netdev(
+        &self,
+        guest_key: &str,
+        devices: &[String],
+        rules: &[FirewallRule],
+        plan: Option<&super::microseg::Plan>,
+    ) -> Result<()> {
+        let Some(plan) = plan else {
+            self.remove_netdev(devices).await;
+            return Ok(());
+        };
+        let mut missing = Vec::new();
+        for d in devices {
+            if !std::path::Path::new("/sys/class/net").join(d).exists() {
+                missing.push(d.clone());
+            }
+        }
+        let present: Vec<String> = devices
+            .iter()
+            .filter(|d| !missing.contains(d))
+            .cloned()
+            .collect();
+        let cmds = super::microseg::netdev_commands(
+            Self::NETDEV_TABLE,
+            guest_key,
+            &present,
+            plan,
+            rules,
+            &|r| self.build_nft_rules(r),
+        );
+        for cmd in cmds {
+            let args: Vec<&str> = cmd.iter().map(String::as_str).collect();
+            self.nft(&args).await?;
+        }
+        if !missing.is_empty() {
+            return Err(horcrux_common::Error::System(format!(
+                "macvtap device(s) {} do not exist yet; the profile is installed on them once the VM runs",
+                missing.join(", ")
+            )));
+        }
+        Ok(())
+    }
+
+    /// Delete the netdev chains of `devices` (best effort).
+    pub async fn remove_netdev(&self, devices: &[String]) {
+        for d in devices {
+            for suffix in ["in", "out"] {
+                let _ = self
+                    .nft(&[
+                        "delete",
+                        "chain",
+                        "netdev",
+                        Self::NETDEV_TABLE,
+                        &super::microseg::netdev_chain(d, suffix),
+                    ])
+                    .await;
+            }
+        }
+    }
+
+    /// Per-rule hit counters of a guest's chains (bridge chains and the
+    /// netdev chains of its macvtap devices).
+    pub async fn guest_hits(
+        &self,
+        kind: GuestKind,
+        id: &str,
+        devices: &[String],
+    ) -> Vec<horcrux_common::security::MsegRuleHit> {
+        let key = kind.comment(id);
+        let (cin, cout) = kind.chains(id);
+        let mut out = Vec::new();
+        for (chain, dir) in [(cin, "in"), (cout, "out")] {
+            let json = self.chain_json("bridge", &self.table_name, &chain).await;
+            out.extend(super::microseg::parse_hits(&json, &key, dir));
+        }
+        for d in devices {
+            for (suffix, dir) in [("in", "in"), ("out", "out")] {
+                let json = self
+                    .chain_json(
+                        "netdev",
+                        Self::NETDEV_TABLE,
+                        &super::microseg::netdev_chain(d, suffix),
+                    )
+                    .await;
+                let mut hits = super::microseg::parse_hits(&json, &key, dir);
+                for h in &mut hits {
+                    h.rule_id = format!("{} ({d})", h.rule_id);
+                }
+                out.extend(hits);
+            }
+        }
+        out
+    }
+
+    async fn chain_json(&self, family: &str, table: &str, chain: &str) -> String {
+        Command::new("nft")
+            .args(["-j", "list", "chain", family, table, chain])
+            .output()
+            .await
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
     }
 
     /// The `forward` jump handles belonging to a guest (from `nft -a list`).

@@ -244,3 +244,76 @@ async fn scans_and_hardening_work_end_to_end() {
     let (s, _) = a.get(&format!("/security/scans/{id}")).await;
     assert_eq!(s, 404);
 }
+
+/// Microsegmentation API without a kernel firewall (the CI Test container has
+/// no CAP_NET_ADMIN; the real-nft behaviour is microseg_e2e.sh): templates,
+/// validation, the guest list, the settings keys and the refusals.
+#[tokio::test]
+async fn microsegmentation_api_validates_and_lists() {
+    let dir = scratch("security-microseg");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let a = srv.api().await;
+
+    let (s, t) = a.get("/security/microseg/templates").await;
+    assert_eq!(s, 200, "{t}");
+    let ids: Vec<&str> = t
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["id"].as_str().unwrap())
+        .collect();
+    for want in [
+        "custom",
+        "web_server",
+        "database",
+        "isolated_lab",
+        "pentest_box",
+    ] {
+        assert!(ids.contains(&want), "{ids:?}");
+    }
+    let (s, v) = a.get("/security/microseg/guests").await;
+    assert_eq!(s, 200, "{v}");
+    assert!(v.is_array());
+
+    // Defaults of the new settings.
+    let (s, set) = a.get("/security/settings").await;
+    assert_eq!(s, 200, "{set}");
+    assert_eq!(set["microseg"]["enabled"], true);
+    assert_eq!(set["microseg"]["log_denied"], true);
+    assert_eq!(set["microseg"]["flow_limit"], 500);
+    assert_eq!(set["microseg"]["profiles"], json!({}));
+    let mut bad = set.clone();
+    bad["microseg"]["flow_limit"] = json!(0);
+    assert_eq!(a.put("/security/settings", bad).await.0, 400);
+    let mut bad = set.clone();
+    bad["microseg"]["profiles"] = json!({"host:x": {}});
+    assert_eq!(a.put("/security/settings", bad).await.0, 400);
+    let mut bad = set.clone();
+    bad["microseg"]["profiles"] = json!({"vm:1": {"template": "isolated_lab"}});
+    let (s, v) = a.put("/security/settings", bad).await;
+    assert_eq!(s, 400, "an isolated lab needs its lab network: {v}");
+    assert!(v.to_string().contains("lab_network"), "{v}");
+
+    // Profiles of guests that do not exist, bad keys, missing profile.
+    let profile = json!({"template": "web_server"});
+    let (s, v) = a
+        .put("/security/microseg/guests/vm:nope", profile.clone())
+        .await;
+    assert_eq!(s, 404, "{v}");
+    let (s, _) = a.put("/security/microseg/guests/node:x", profile).await;
+    assert_eq!(s, 400);
+    let (s, _) = a.get("/security/microseg/guests/vm:nope").await;
+    assert_eq!(s, 404);
+    assert_eq!(a.delete("/security/microseg/guests/vm:nope").await, 404);
+    let (s, _) = a.get("/security/microseg/guests/vm:nope/rules").await;
+    assert_eq!(s, 200, "no profile = no counters, not an error");
+    let (s, v) = a.get("/security/microseg/guests/vm:nope/flows").await;
+    assert_eq!(s, 200, "{v}");
+    assert!(v["flows"].is_array() && v["denied"].is_array());
+    let (s, _) = a
+        .get("/security/microseg/guests/vm:1/flows?ip=1.2.3.4;x")
+        .await;
+    assert_eq!(s, 400);
+}

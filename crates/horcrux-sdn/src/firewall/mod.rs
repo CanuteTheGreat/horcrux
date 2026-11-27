@@ -1,5 +1,6 @@
 //! Firewall management module
 //! Provides distributed firewall with datacenter, node, VM, and container level rules
+pub mod microseg;
 mod nftables;
 pub mod objects;
 mod security_groups;
@@ -42,7 +43,7 @@ pub enum FirewallAction {
 }
 
 /// Traffic direction
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Direction {
     In,  // Incoming
@@ -123,6 +124,9 @@ pub struct FirewallManager {
     container_rules: Arc<RwLock<HashMap<String, Vec<FirewallRule>>>>,
     security_groups: Arc<RwLock<HashMap<String, SecurityGroup>>>,
     nftables: nftables::NftablesManager,
+    /// Microsegmentation settings and per-guest profiles (owned by the
+    /// security settings; installed with `set_microseg`).
+    mseg: Arc<std::sync::RwLock<horcrux_common::security::MicrosegSettings>>,
     /// Host chains (`dc`, `node`) that have been applied, so object changes
     /// can refresh them.
     applied_host: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
@@ -145,6 +149,7 @@ impl FirewallManager {
             container_rules: Arc::new(RwLock::new(HashMap::new())),
             security_groups: Arc::new(RwLock::new(HashMap::new())),
             nftables: nftables::NftablesManager::new(),
+            mseg: Arc::default(),
             applied_host: Arc::default(),
             store: None,
         }
@@ -227,6 +232,19 @@ impl FirewallManager {
         for (id, rules) in self.container_rules.read().await.iter() {
             if !rules.is_empty() {
                 scopes.push(FirewallScope::Container(id.clone()));
+            }
+        }
+        for key in self
+            .mseg
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .profiles
+            .keys()
+        {
+            if let Some(scope) = FirewallScope::from_key(key) {
+                if !scopes.contains(&scope) {
+                    scopes.push(scope);
+                }
             }
         }
         for scope in scopes {
@@ -333,8 +351,7 @@ impl FirewallManager {
                 drop(rules);
                 // Reinstall this VM's whole rule set (bridge family, matched
                 // on the VM's tap devices).
-                let all = self.list_rules(FirewallScope::Vm(vm_id.clone())).await;
-                self.nftables.sync_vm_rules(&vm_id, &all).await?;
+                self.sync_scope(&FirewallScope::Vm(vm_id.clone())).await?;
             }
             FirewallScope::Container(ct_id) => {
                 let mut rules = self.container_rules.write().await;
@@ -346,10 +363,8 @@ impl FirewallManager {
                 drop(rules);
                 // Reinstall this container's whole rule set (bridge family,
                 // matched on the container's stable host-side veths).
-                let all = self
-                    .list_rules(FirewallScope::Container(ct_id.clone()))
-                    .await;
-                self.nftables.sync_ct_rules(&ct_id, &all).await?;
+                self.sync_scope(&FirewallScope::Container(ct_id.clone()))
+                    .await?;
             }
         }
 
@@ -382,8 +397,7 @@ impl FirewallManager {
                 }
 
                 drop(rules);
-                let all = self.list_rules(FirewallScope::Vm(vm_id.clone())).await;
-                self.nftables.sync_vm_rules(&vm_id, &all).await?;
+                self.sync_scope(&FirewallScope::Vm(vm_id.clone())).await?;
             }
             FirewallScope::Container(ct_id) => {
                 let mut rules = self.container_rules.write().await;
@@ -392,10 +406,8 @@ impl FirewallManager {
                 }
 
                 drop(rules);
-                let all = self
-                    .list_rules(FirewallScope::Container(ct_id.clone()))
-                    .await;
-                self.nftables.sync_ct_rules(&ct_id, &all).await?;
+                self.sync_scope(&FirewallScope::Container(ct_id.clone()))
+                    .await?;
             }
         }
 
@@ -502,10 +514,139 @@ impl FirewallManager {
                 self.nftables.apply_host_rules("node", &rules).await?;
                 self.applied_host.lock().unwrap().insert("node".into());
             }
-            FirewallScope::Vm(vm_id) => self.nftables.sync_vm_rules(vm_id, &rules).await?,
-            FirewallScope::Container(ct_id) => self.nftables.sync_ct_rules(ct_id, &rules).await?,
+            FirewallScope::Vm(_) | FirewallScope::Container(_) => self.sync_scope(&scope).await?,
         }
         Ok(())
+    }
+
+    // ---- microsegmentation ---------------------------------------------
+
+    /// The plan of a guest's profile (None = unmanaged, disabled, or the
+    /// feature is off).
+    fn guest_plan(&self, key: &str) -> Option<microseg::Plan> {
+        let m = self.mseg.read().unwrap_or_else(|e| e.into_inner());
+        if !m.enabled {
+            return None;
+        }
+        let p = m.profiles.get(key)?;
+        p.enabled.then(|| microseg::plan(p, &m))
+    }
+
+    fn profile_devices(&self, key: &str) -> Vec<String> {
+        self.mseg
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .profiles
+            .get(key)
+            .map(|p| p.macvtap_devices.clone())
+            .unwrap_or_default()
+    }
+
+    /// The current microsegmentation settings.
+    pub fn microseg(&self) -> horcrux_common::security::MicrosegSettings {
+        self.mseg.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Load the settings without touching the kernel (start-up, before
+    /// [`FirewallManager::reapply_guest_rules`] installs everything).
+    pub fn set_microseg_quiet(&self, new: horcrux_common::security::MicrosegSettings) {
+        *self.mseg.write().unwrap_or_else(|e| e.into_inner()) = new;
+    }
+
+    /// Install a guest's rule set (stored rules + profile) into the kernel.
+    async fn sync_scope(&self, scope: &FirewallScope) -> Result<()> {
+        let rules = self.list_rules(scope.clone()).await;
+        let key = scope.key();
+        let plan = self.guest_plan(&key);
+        match scope {
+            FirewallScope::Vm(id) => {
+                self.nftables
+                    .sync_vm_rules(id, &rules, plan.as_ref())
+                    .await?
+            }
+            FirewallScope::Container(id) => {
+                self.nftables
+                    .sync_ct_rules(id, &rules, plan.as_ref())
+                    .await?
+            }
+            _ => return Ok(()),
+        }
+        let devices = self.profile_devices(&key);
+        if !devices.is_empty() {
+            self.nftables
+                .sync_netdev(&key, &devices, &rules, plan.as_ref())
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Replace the microsegmentation settings and bring the kernel in line:
+    /// profiled guests are (re)installed, guests whose profile went away or
+    /// whose feature was switched off lose theirs. Returns one warning per
+    /// guest that could not be installed (no nft, device missing, ...).
+    pub async fn set_microseg(
+        &self,
+        new: horcrux_common::security::MicrosegSettings,
+    ) -> Vec<String> {
+        let old = std::mem::replace(
+            &mut *self.mseg.write().unwrap_or_else(|e| e.into_inner()),
+            new.clone(),
+        );
+        let mut warnings = Vec::new();
+        let mut keys: Vec<String> = old.profiles.keys().cloned().collect();
+        for k in new.profiles.keys() {
+            if !keys.contains(k) {
+                keys.push(k.clone());
+            }
+        }
+        for key in keys {
+            let Some(scope) = FirewallScope::from_key(&key) else {
+                continue;
+            };
+            // Devices of the old profile that the new one no longer lists.
+            let gone: Vec<String> = old
+                .profiles
+                .get(&key)
+                .map(|p| p.macvtap_devices.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| {
+                    !new.enabled
+                        || new
+                            .profiles
+                            .get(&key)
+                            .map(|p| !p.macvtap_devices.contains(d))
+                            .unwrap_or(true)
+                })
+                .collect();
+            self.nftables.remove_netdev(&gone).await;
+            if let Err(e) = self.sync_scope(&scope).await {
+                warnings.push(format!("{key}: {e}"));
+            }
+        }
+        warnings
+    }
+
+    /// Per-rule hit counters of one guest.
+    pub async fn microseg_hits(
+        &self,
+        scope: &FirewallScope,
+    ) -> Vec<horcrux_common::security::MsegRuleHit> {
+        let key = scope.key();
+        let devices = self.profile_devices(&key);
+        match scope {
+            FirewallScope::Vm(id) => {
+                self.nftables
+                    .guest_hits(nftables::GuestKind::Vm, id, &devices)
+                    .await
+            }
+            FirewallScope::Container(id) => {
+                self.nftables
+                    .guest_hits(nftables::GuestKind::Container, id, &devices)
+                    .await
+            }
+            _ => Vec::new(),
+        }
     }
 
     // ---- IP sets, aliases, host options -------------------------------
@@ -727,6 +868,13 @@ impl FirewallManager {
             }
             _ => {}
         }
+        let devices = self.profile_devices(&scope.key());
+        self.nftables.remove_netdev(&devices).await;
+        self.mseg
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .profiles
+            .remove(&scope.key());
         if let Err(e) = self.nftables.remove_guest(kind, &id).await {
             tracing::warn!("firewall of {} not removed from nftables: {e}", scope.key());
         }

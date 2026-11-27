@@ -470,13 +470,420 @@ impl HardeningSettings {
 pub struct SecuritySettings {
     pub vuln_scan: VulnScanSettings,
     pub hardening: HardeningSettings,
+    pub microseg: MicrosegSettings,
 }
 
 impl SecuritySettings {
     pub fn validate(&self) -> Result<(), String> {
         self.vuln_scan.validate()?;
-        self.hardening.validate()
+        self.hardening.validate()?;
+        self.microseg.validate()
     }
+}
+
+// ------------------------------------------------------ microsegmentation
+
+/// Ready-made per-guest firewall profile (docs/design/security-suite.md,
+/// "Guest microsegmentation").
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MsegTemplate {
+    /// Only what `allow_from` / `allow_to` and the defaults say.
+    #[default]
+    Custom,
+    /// Web ports in from anywhere; DNS, NTP and HTTPS out.
+    WebServer,
+    /// Database ports in from the listed groups only; DNS and NTP out.
+    Database,
+    /// Talks to its lab network and nothing else, both ways.
+    IsolatedLab,
+    /// Outbound only to its lab network; lab hosts may call back; the
+    /// listed groups may manage it.
+    PentestBox,
+}
+
+impl MsegTemplate {
+    pub const ALL: [MsegTemplate; 5] = [
+        MsegTemplate::Custom,
+        MsegTemplate::WebServer,
+        MsegTemplate::Database,
+        MsegTemplate::IsolatedLab,
+        MsegTemplate::PentestBox,
+    ];
+    pub fn id(&self) -> &'static str {
+        match self {
+            MsegTemplate::Custom => "custom",
+            MsegTemplate::WebServer => "web_server",
+            MsegTemplate::Database => "database",
+            MsegTemplate::IsolatedLab => "isolated_lab",
+            MsegTemplate::PentestBox => "pentest_box",
+        }
+    }
+    pub fn title(&self) -> &'static str {
+        match self {
+            MsegTemplate::Custom => "Custom",
+            MsegTemplate::WebServer => "Web server",
+            MsegTemplate::Database => "Database",
+            MsegTemplate::IsolatedLab => "Isolated lab",
+            MsegTemplate::PentestBox => "Pentest box",
+        }
+    }
+    pub fn description(&self) -> &'static str {
+        match self {
+            MsegTemplate::Custom => {
+                "Default deny in and out; only the groups you allow below are reachable."
+            }
+            MsegTemplate::WebServer => {
+                "HTTP and HTTPS in from anywhere; DNS, NTP and HTTPS out. Everything else is dropped."
+            }
+            MsegTemplate::Database => {
+                "Database ports in from the allowed groups only; DNS and NTP out. Nothing else in or out."
+            }
+            MsegTemplate::IsolatedLab => {
+                "Talks to the lab network in both directions and nothing else."
+            }
+            MsegTemplate::PentestBox => {
+                "Outbound only to the lab network, so a scan can never leave it; lab hosts may call back; the allowed groups may manage it."
+            }
+        }
+    }
+    /// Needs `lab_network` set.
+    pub fn needs_lab_network(&self) -> bool {
+        matches!(self, MsegTemplate::IsolatedLab | MsegTemplate::PentestBox)
+    }
+    /// Default ports of the template (`ports` overrides), "" = none.
+    pub fn default_ports(&self) -> &'static str {
+        match self {
+            MsegTemplate::WebServer => "80,443",
+            MsegTemplate::Database => "3306,5432",
+            MsegTemplate::PentestBox => "",
+            _ => "",
+        }
+    }
+}
+
+/// Default action of one direction when no rule matched.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MsegDefault {
+    Allow,
+    #[default]
+    Deny,
+}
+
+/// "Allow from / to group X": `group` is an address, a CIDR, an alias or an
+/// IP set written `+name` (the firewall objects).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct MsegPeer {
+    pub group: String,
+    /// `any` (default), `tcp`, `udp` or `icmp`.
+    pub protocol: String,
+    /// Port, range (`8000-8100`) or list (`80,443`); empty = any port.
+    pub dport: String,
+    pub comment: String,
+}
+
+impl Default for MsegPeer {
+    fn default() -> Self {
+        Self {
+            group: String::new(),
+            protocol: "any".into(),
+            dport: String::new(),
+            comment: String::new(),
+        }
+    }
+}
+
+/// The microsegmentation profile of one guest (`vm:<id>` or
+/// `container:<id>`). It is installed per NIC of that guest: on every tap
+/// or veth of a bridge or SDN vnet, and on the macvtap devices listed in
+/// `macvtap_devices`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct GuestProfile {
+    pub enabled: bool,
+    pub template: MsegTemplate,
+    /// Inbound / outbound action when nothing matched (default deny).
+    pub default_in: MsegDefault,
+    pub default_out: MsegDefault,
+    pub allow_from: Vec<MsegPeer>,
+    pub allow_to: Vec<MsegPeer>,
+    /// Lab network of `isolated_lab` / `pentest_box`.
+    pub lab_network: String,
+    /// Template port list override (`web_server`: the served ports,
+    /// `database`: the database ports, `pentest_box`: callback ports,
+    /// empty = any).
+    pub ports: String,
+    /// Host-side macvtap devices of the guest's macvtap NICs (they are not
+    /// bridge ports, so they are filtered on the device itself).
+    pub macvtap_devices: Vec<String>,
+    pub comment: String,
+}
+
+impl Default for GuestProfile {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            template: MsegTemplate::Custom,
+            default_in: MsegDefault::Deny,
+            default_out: MsegDefault::Deny,
+            allow_from: Vec::new(),
+            allow_to: Vec::new(),
+            lab_network: String::new(),
+            ports: String::new(),
+            macvtap_devices: Vec::new(),
+            comment: String::new(),
+        }
+    }
+}
+
+/// Microsegmentation settings (`security.microseg`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct MicrosegSettings {
+    /// Master switch: off removes every profile from the kernel (the
+    /// stored profiles stay).
+    pub enabled: bool,
+    /// Rate-limited kernel log line for every dropped flow (feeds the
+    /// flow view's denied list).
+    pub log_denied: bool,
+    /// Per-guest default-deny still lets ARP, IPv6 neighbour discovery and
+    /// DHCP through; turning it off needs static addressing.
+    pub allow_infrastructure: bool,
+    /// Most flows the flow view returns.
+    pub flow_limit: u32,
+    /// Logged drops per second per guest chain (nft `limit rate`).
+    pub log_rate_per_second: u32,
+    /// Profiles by guest key (`vm:100`, `container:web1`).
+    pub profiles: BTreeMap<String, GuestProfile>,
+}
+
+impl Default for MicrosegSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            log_denied: true,
+            allow_infrastructure: true,
+            flow_limit: 500,
+            log_rate_per_second: 10,
+            profiles: BTreeMap::new(),
+        }
+    }
+}
+
+/// Prefix of the kernel log line written for a dropped flow.
+pub const MSEG_LOG_PREFIX: &str = "hx-mseg: ";
+
+fn valid_group(g: &str) -> bool {
+    let g = g.trim();
+    !g.is_empty()
+        && g.len() <= 64
+        && g.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '/' | '+' | '_' | '-'))
+}
+
+fn valid_ports(p: &str) -> bool {
+    let p = p.trim();
+    if p.is_empty() {
+        return true;
+    }
+    p.split(',').all(|part| {
+        let part = part.trim();
+        let mut it = part.splitn(2, '-');
+        let ok = |s: &str| s.parse::<u16>().map(|n| n > 0).unwrap_or(false);
+        match (it.next(), it.next()) {
+            (Some(a), None) => ok(a),
+            (Some(a), Some(b)) => {
+                ok(a) && ok(b) && a.parse::<u16>().unwrap_or(0) <= b.parse::<u16>().unwrap_or(0)
+            }
+            _ => false,
+        }
+    })
+}
+
+/// A guest key is `vm:<id>` or `container:<id>`.
+pub fn valid_guest_key(k: &str) -> bool {
+    match k.split_once(':') {
+        Some((kind, id)) => {
+            matches!(kind, "vm" | "container")
+                && !id.is_empty()
+                && id.len() <= 64
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        }
+        None => false,
+    }
+}
+
+impl MsegPeer {
+    pub fn validate(&self, what: &str) -> Result<(), String> {
+        if !valid_group(&self.group) {
+            return Err(format!(
+                "{what}.group: an address, CIDR, alias or +ipset (letters, digits, . : / + _ -)"
+            ));
+        }
+        if !matches!(self.protocol.as_str(), "any" | "tcp" | "udp" | "icmp") {
+            return Err(format!("{what}.protocol: any, tcp, udp or icmp"));
+        }
+        if !valid_ports(&self.dport) {
+            return Err(format!(
+                "{what}.dport: a port, a range 1-2 or a list 80,443"
+            ));
+        }
+        if !self.dport.trim().is_empty() && !matches!(self.protocol.as_str(), "tcp" | "udp") {
+            return Err(format!("{what}.dport: ports need protocol tcp or udp"));
+        }
+        if self.comment.len() > 120 || self.comment.contains(['"', '\n', '\r']) {
+            return Err(format!("{what}.comment: at most 120 characters, no quotes"));
+        }
+        Ok(())
+    }
+}
+
+impl GuestProfile {
+    pub fn validate(&self, key: &str) -> Result<(), String> {
+        let w = format!("microseg.profiles.{key}");
+        if self.allow_from.len() > 64 || self.allow_to.len() > 64 {
+            return Err(format!(
+                "{w}: at most 64 allow_from and 64 allow_to entries"
+            ));
+        }
+        for (i, p) in self.allow_from.iter().enumerate() {
+            p.validate(&format!("{w}.allow_from[{i}]"))?;
+        }
+        for (i, p) in self.allow_to.iter().enumerate() {
+            p.validate(&format!("{w}.allow_to[{i}]"))?;
+        }
+        if self.template.needs_lab_network() && !valid_group(&self.lab_network) {
+            return Err(format!(
+                "{w}.lab_network: required for the {} template (CIDR, alias or +ipset)",
+                self.template.id()
+            ));
+        }
+        if !self.lab_network.is_empty() && !valid_group(&self.lab_network) {
+            return Err(format!("{w}.lab_network: a CIDR, alias or +ipset"));
+        }
+        if !valid_ports(&self.ports) {
+            return Err(format!("{w}.ports: a port, a range 1-2 or a list 80,443"));
+        }
+        if self.template == MsegTemplate::PentestBox && self.default_out == MsegDefault::Allow {
+            return Err(format!(
+                "{w}.default_out: a pentest box never defaults to allow outbound (it must not leave its lab)"
+            ));
+        }
+        if self.template == MsegTemplate::IsolatedLab
+            && (self.default_out == MsegDefault::Allow || self.default_in == MsegDefault::Allow)
+        {
+            return Err(format!(
+                "{w}: an isolated lab denies by default in both directions"
+            ));
+        }
+        if self.macvtap_devices.len() > 8 {
+            return Err(format!("{w}.macvtap_devices: at most 8"));
+        }
+        for d in &self.macvtap_devices {
+            if d.is_empty()
+                || d.len() > 15
+                || !d
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+            {
+                return Err(format!(
+                    "{w}.macvtap_devices: interface names (max 15 characters)"
+                ));
+            }
+        }
+        if self.comment.len() > 200 || self.comment.contains(['\n', '\r']) {
+            return Err(format!("{w}.comment: one line, at most 200 characters"));
+        }
+        Ok(())
+    }
+}
+
+impl MicrosegSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(1..=10_000).contains(&self.flow_limit) {
+            return Err("microseg.flow_limit: 1 to 10000".into());
+        }
+        if !(1..=1000).contains(&self.log_rate_per_second) {
+            return Err("microseg.log_rate_per_second: 1 to 1000".into());
+        }
+        if self.profiles.len() > 2000 {
+            return Err("microseg.profiles: at most 2000".into());
+        }
+        for (k, p) in &self.profiles {
+            if !valid_guest_key(k) {
+                return Err(format!(
+                    "microseg.profiles.{k}: the key is vm:<id> or container:<id>"
+                ));
+            }
+            p.validate(k)?;
+        }
+        Ok(())
+    }
+}
+
+/// One template for the UI picker.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MsegTemplateInfo {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub needs_lab_network: bool,
+    pub default_ports: String,
+    /// What the template allows, as readable lines.
+    pub allows: Vec<String>,
+}
+
+/// Hit counter of one rule of a guest's chain.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MsegRuleHit {
+    pub guest: String,
+    /// `in` (to the guest) or `out` (from the guest).
+    pub direction: String,
+    pub rule_id: String,
+    pub action: String,
+    /// The rule as nft shows it.
+    pub rule: String,
+    pub packets: u64,
+    pub bytes: u64,
+}
+
+/// One tracked flow (conntrack) in the flow view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MsegFlow {
+    pub proto: String,
+    pub src: String,
+    pub dst: String,
+    pub sport: String,
+    pub dport: String,
+    pub state: String,
+    pub packets: u64,
+    pub bytes: u64,
+}
+
+/// One dropped flow from the kernel log.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MsegDenied {
+    pub time: String,
+    pub iface_in: String,
+    pub iface_out: String,
+    pub src: String,
+    pub dst: String,
+    pub proto: String,
+    pub sport: String,
+    pub dport: String,
+}
+
+/// Answer of `GET /api/security/microseg/guests/:key/flows`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MsegFlowView {
+    pub flows: Vec<MsegFlow>,
+    pub denied: Vec<MsegDenied>,
+    /// Why a part is empty (no conntrack, no kernel log access).
+    pub notes: Vec<String>,
 }
 
 /// Result of one hardening rule.
@@ -940,4 +1347,33 @@ mod tests {
         assert_eq!(encrypted_fstype("crypto_LUKS"), Some("LUKS"));
         assert_eq!(encrypted_fstype("ext4"), None);
     }
+}
+
+/// One row of the guest list (`GET /api/security/microseg/guests`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MsegGuestRow {
+    /// `vm:<id>` or `container:<id>`.
+    pub key: String,
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+    pub running: bool,
+    /// Template id of its profile, `None` = no profile (unmanaged).
+    pub template: Option<String>,
+    pub profile_enabled: bool,
+    /// The kernel enforces it (profile on, feature on).
+    pub enforced: bool,
+    /// Packets dropped by the default-deny rules so far.
+    pub dropped_packets: u64,
+    /// Host devices of its macvtap NICs.
+    pub macvtap_devices: Vec<String>,
+}
+
+/// Answer of `PUT /api/security/microseg/guests/:key`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MsegPutAnswer {
+    pub profile: GuestProfile,
+    /// What the kernel could not take (no nft, a macvtap device that does
+    /// not exist yet).
+    pub warnings: Vec<String>,
 }
