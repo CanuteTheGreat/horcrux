@@ -9,6 +9,9 @@
   #bar { display: flex; gap: .5rem; align-items: center; padding: .35rem .6rem; background: #161b22; border-bottom: 1px solid #2a313b; }
   #bar button, #bar a { background: #222a35; color: #d8dee6; border: 1px solid #36404d; border-radius: 4px; padding: .2rem .6rem; font: inherit; cursor: pointer; text-decoration: none; }
   #bar button:hover, #bar a:hover { background: #2c3644; }
+  #bar select { background: #222a35; color: #d8dee6; border: 1px solid #36404d; border-radius: 4px; padding: .15rem .3rem; font: inherit; }
+  #bar [hidden] { display: none; }
+  #prof-wrap { white-space: nowrap; color: #8b96a5; }
   #status { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #stats { color: #8b96a5; font-variant-numeric: tabular-nums; }
   #wrap { position: absolute; top: 37px; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; }
@@ -23,6 +26,9 @@
   <strong>Horcrux Console</strong>
   <span id="status" data-state="starting">Connecting...</span>
   <span id="stats"></span>
+  <button id="btn-raise" hidden></button>
+  <label id="prof-wrap" hidden title="Stream profile: how sharp and how smooth the picture is, and how much bandwidth it may use">Profile
+    <select id="profile"></select></label>
   <button id="btn-cad" title="Send Ctrl+Alt+Del">Ctrl+Alt+Del</button>
   <button id="btn-full" title="Full screen">Full screen</button>
   <a id="classic" href="#" title="VNC, SPICE or serial console">Classic console</a>
@@ -46,7 +52,72 @@
     state: "starting", hello: null, guest: { width: 0, height: 0 }, codec: null,
     framesDecoded: 0, rttMs: null, inputToFrameMs: [], inputToFrameCount: 0, inputToReceiveMs: [], framesSinceInput: [], stages: [], pendingTiming: null, lastError: null, denied: [],
     server: null, link: null, refreshHz: null,
+    defaultProfile: null, activeProfile: null, requestedProfile: null, profiles: [],
   };
+  const mbitText = (k) => (k / 1000).toFixed(k >= 10000 ? 0 : 1) + " Mbit/s";
+
+  // ---- stream profile ----
+  // The node's default applies unless this browser picked another one for
+  // this VM (kept per VM, or ?profile= in the address). The status bar
+  // names the active profile, says whether it is the default, and offers
+  // the change inline: a picker, plus a one-click "next profile up" when
+  // the profile is what caps the stream.
+  const profileSel = document.getElementById("profile");
+  const raiseBtn = document.getElementById("btn-raise");
+  const PROFILE_KEY = "hxc.profile." + VM;
+  const profileLabel = (n) => n ? n.charAt(0).toUpperCase() + n.slice(1) : "?";
+  function chosenProfile() {
+    const q = new URLSearchParams(location.search).get("profile");
+    if (q) return q;
+    try { return localStorage.getItem(PROFILE_KEY); } catch { return null; }
+  }
+  function switchProfile(name) {
+    const def = hxc.defaultProfile;
+    try { if (name === def) localStorage.removeItem(PROFILE_KEY); else localStorage.setItem(PROFILE_KEY, name); } catch {}
+    const u = new URL(location.href);
+    if (name === def) u.searchParams.delete("profile"); else u.searchParams.set("profile", name);
+    location.replace(u.toString());
+  }
+  hxc.switchProfile = switchProfile;
+  function profileWords(p) {
+    if (!p) return "the profile";
+    return p === hxc.defaultProfile ? "the default " + profileLabel(p) + " profile" : "the " + profileLabel(p) + " profile you picked";
+  }
+  function setupProfiles(st) {
+    const list = Array.isArray(st.profiles) ? st.profiles : [];
+    hxc.defaultProfile = st.profile || null;
+    hxc.profiles = list;
+    const want = chosenProfile();
+    hxc.activeProfile = list.some((p) => p.name === want) ? want : hxc.defaultProfile;
+    hxc.requestedProfile = hxc.activeProfile && hxc.activeProfile !== hxc.defaultProfile ? hxc.activeProfile : null;
+    if (!list.length) return;
+    profileSel.textContent = "";
+    for (const p of list) {
+      const o = document.createElement("option");
+      o.value = p.name;
+      o.textContent = profileLabel(p.name) + (p.default ? " (default)" : "") + ": up to " + p.max_fps + " fps, " + mbitText(p.max_bitrate_kbps);
+      o.selected = p.name === hxc.activeProfile;
+      profileSel.appendChild(o);
+    }
+    profileSel.onchange = () => switchProfile(profileSel.value);
+    document.getElementById("prof-wrap").hidden = false;
+  }
+  function updateRaise() {
+    const l = hxc.link, cur = hxc.profiles.find((p) => p.name === hxc.activeProfile);
+    let next = null;
+    if (l && l.target && l.target.limit === "profile" && cur) {
+      for (const p of hxc.profiles) {
+        if (p.max_bitrate_kbps > cur.max_bitrate_kbps && (!next || p.max_bitrate_kbps < next.max_bitrate_kbps)) next = p;
+      }
+    }
+    hxc.raiseTo = next ? next.name : null;
+    raiseBtn.hidden = !next;
+    if (next) {
+      raiseBtn.textContent = "Use " + profileLabel(next.name) + " (up to " + next.max_fps + " fps, " + mbitText(next.max_bitrate_kbps) + ")";
+      raiseBtn.title = "The " + profileLabel(cur.name) + " profile is what limits the picture now; switch this console to " + profileLabel(next.name);
+      raiseBtn.onclick = () => switchProfile(next.name);
+    }
+  }
   function setState(s, text) {
     hxc.state = s; statusEl.dataset.state = s; statusEl.textContent = text;
   }
@@ -82,7 +153,7 @@
     const r = await fetch(API + "/ticket", {
       method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conn_id: connId }),
+      body: JSON.stringify(hxc.requestedProfile ? { conn_id: connId, profile: hxc.requestedProfile } : { conn_id: connId }),
     });
     if (!r.ok) throw new Error("ticket: " + r.status + " " + (await r.text()));
     return r.json();
@@ -347,8 +418,9 @@
   function ctlMsg(m) {
     if (m.t === "hello") {
       hxc.hello = m; hxc.codec = m.codec;
+      if (m.profile) hxc.activeProfile = m.profile;
       if (m.width) hxc.guest = { width: m.width, height: m.height };
-      setState("connected", "Connected: " + (m.codec || "?") + " via " + (m.encoder || "?") + ", " + m.profile + (m.input ? "" : " (view only)"));
+      setState("connected", "Connected: " + (m.codec || "?") + " via " + (m.encoder || "?") + ", " + profileWords(m.profile) + (m.input ? "" : " (view only)"));
     } else if (m.t === "layout") {
       hxc.guest = { width: m.width, height: m.height };
     } else if (m.t === "pong") {
@@ -365,10 +437,11 @@
       else hxc.pendingTiming = { m, at: now };
     } else if (m.t === "link") {
       hxc.link = m;
+      updateRaise();
     } else if (m.t === "source") {
       hxc.videoSource = m.video;
       if (m.width) hxc.guest = { width: m.width, height: m.height };
-      setState("connected", "Connected: " + (hxc.codec || "?") + " encoded in the guest, " + (hxc.hello ? hxc.hello.profile : ""));
+      setState("connected", "Connected: " + (hxc.codec || "?") + " encoded in the guest, " + profileWords(hxc.hello ? hxc.hello.profile : hxc.activeProfile));
     } else if (m.t === "guest_tools") {
       // automatic install through the guest agent; the session switches
       // to the tools by itself when they answer
@@ -395,11 +468,11 @@
   // is sent and what limits it.
   function linkText() {
     const l = hxc.link; if (!l) return "";
-    const mbit = (k) => (k / 1000).toFixed(k >= 10000 ? 0 : 1) + " Mbit/s";
+    const mbit = mbitText;
     let t = " | " + (l.path === "relay" ? "via relay (WAN)" : l.path === "direct" ? "direct" : "");
     if (l.estimate_kbps) t += ", link ~" + mbit(l.estimate_kbps);
     if (l.target) {
-      const why = { link: "the link", uplink: "the node's upload", profile: "the profile", floor: "the minimum" }[l.target.limit] || l.target.limit;
+      const why = { link: "the link", uplink: "the node's upload", profile: profileWords(hxc.activeProfile), floor: "the minimum" }[l.target.limit] || l.target.limit;
       t += ", sending " + l.target.width + "x" + l.target.height + " " + l.target.fps + " fps at " + mbit(l.target.kbps) + " (limited by " + why + ")";
     }
     const s = hxc.server;
@@ -407,6 +480,7 @@
     return t;
   }
   hxc.linkText = linkText;
+  hxc.ctlMsg = (m) => ctlMsg(m); // diagnostics and tests feed control messages
   // Display refresh rate (frames are paced to it): count animation frames.
   function measureRefresh() {
     let n = 0; const t0 = performance.now();
@@ -428,6 +502,7 @@
     const st = await status();
     hxc.status = st;
     if (!st.available) { fail(st.reason || "The Horcrux Console is not available for this VM"); return; }
+    setupProfiles(st);
     const sig = await openSignalling();
     hxc.connId = sig.connId;
     const t = await ticket(sig.connId);

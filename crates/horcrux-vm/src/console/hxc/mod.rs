@@ -228,8 +228,39 @@ pub struct Availability {
     pub enabled: bool,
     pub vm_has_dbus_display: bool,
     pub encoder: encode::EncoderCaps,
+    /// The node's default profile (used when the client does not pick one).
     pub profile: ConsoleProfile,
     pub prefer_classic: bool,
+    /// Every profile a client may pick, with the limits it streams at, so
+    /// a viewer can name the active one and offer the others inline.
+    pub profiles: Vec<ProfileSummary>,
+}
+
+/// One pickable console profile and its stream limits (from the node's
+/// `[console]` settings).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProfileSummary {
+    pub name: ConsoleProfile,
+    pub max_fps: u32,
+    pub max_bitrate_kbps: u32,
+    /// The node's default profile.
+    pub default: bool,
+}
+
+/// The profiles of `settings`, in `ConsoleProfile::ALL` order.
+pub fn profile_summaries(settings: &ConsoleSettings) -> Vec<ProfileSummary> {
+    ConsoleProfile::ALL
+        .into_iter()
+        .map(|p| {
+            let s = settings.profile(p);
+            ProfileSummary {
+                name: p,
+                max_fps: s.max_fps,
+                max_bitrate_kbps: s.max_bitrate_kbps,
+                default: p == settings.default_profile,
+            }
+        })
+        .collect()
 }
 
 /// Was this run of the VM started with the D-Bus display?
@@ -272,6 +303,7 @@ pub async fn availability(settings: &ConsoleSettings, disk: Option<PathBuf>) -> 
         encoder,
         profile: settings.default_profile,
         prefer_classic: settings.prefer_classic,
+        profiles: profile_summaries(settings),
     }
 }
 
@@ -326,6 +358,24 @@ pub async fn candidate_ips(settings: &ConsoleSettings, host: Option<&str>) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_summaries_list_every_profile_and_mark_the_default() {
+        let mut st = ConsoleSettings {
+            default_profile: ConsoleProfile::Gaming,
+            ..ConsoleSettings::default()
+        };
+        st.gaming.max_fps = 90;
+        let v = profile_summaries(&st);
+        assert_eq!(v.len(), ConsoleProfile::ALL.len());
+        let g = v.iter().find(|p| p.name == ConsoleProfile::Gaming).unwrap();
+        assert!(g.default);
+        assert_eq!(g.max_fps, 90, "limits come from the node's settings");
+        assert_eq!(v.iter().filter(|p| p.default).count(), 1);
+        let j = serde_json::to_value(&v[0]).unwrap();
+        assert_eq!(j["name"], "desktop");
+        assert_eq!(j["default"], false);
+    }
 
     fn ticket(user: &str, conn: &str) -> HxcTicket {
         HxcTicket {

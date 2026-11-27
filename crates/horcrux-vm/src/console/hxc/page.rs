@@ -37,4 +37,18 @@ mod tests {
         assert!(h.contains("maxRetransmits: 0"));
         assert!(h.contains("console.offer"));
     }
+
+    #[test]
+    fn status_bar_names_the_profile_and_offers_the_change() {
+        let h = html("x");
+        // the limit names the active profile and whether it is the default,
+        // never a bare "the profile" the user never chose
+        assert!(!h.contains("profile: \"the profile\""));
+        assert!(h.contains("\"the default \" + profileLabel(p)"));
+        // the change is offered right there: a picker and a one-click raise
+        assert!(h.contains("<select id=\"profile\">"));
+        assert!(h.contains("id=\"btn-raise\""));
+        // a picked profile reaches the ticket
+        assert!(h.contains("profile: hxc.requestedProfile"));
+    }
 }

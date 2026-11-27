@@ -153,6 +153,9 @@ mod tests {
                 match std::io::Read::read(&mut s2, &mut b) {
                     Ok(0) => break,
                     Ok(_) => continue,
+                    // a signal for another test in this process (SIGCHLD from a
+                    // spawned child) interrupts the blocking read: not a failure
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(e) => panic!("the node kept a silent guest's connection: {e}"),
                 }
             }
