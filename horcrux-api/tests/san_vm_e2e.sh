@@ -51,6 +51,7 @@ set +e
 $S 'sudo bash /root/san_guest_e2e.sh /root/horcrux-api /root/hx_node.py' 2>&1 | tee guest.log
 rc=${PIPESTATUS[0]}
 $S 'sudo tail -80 /var/lib/hxsan-e2e/api.log' > api-tail.log 2>&1
+if [ "${HXSAN_KEEP:-0}" = 1 ]; then echo "HXSAN_KEEP: VM left running (ssh -p $SSH_PORT debian@127.0.0.1 -i $WORK/key)"; echo "EXIT_E2E=$rc"; wait $QPID; fi
 $S 'sudo poweroff' >/dev/null 2>&1
 sleep 5
 echo "EXIT_E2E=$rc"

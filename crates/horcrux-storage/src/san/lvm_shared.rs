@@ -150,16 +150,44 @@ pub async fn create_shared_vg(vg: &str, dev: &str, t: Duration) -> Result<(), St
     // No separate pvcreate: it needs lvmlockd's global lock, which only
     // exists once the first shared VG does (lvmlockd(8), "Initial set up");
     // vgcreate initializes the device itself.
-    let r = run(
-        "vgcreate",
-        &["--shared", "--locktype", "sanlock", vg, dev],
-        t,
-    )
-    .await?;
-    if !r.ok {
-        return Err(fail("vgcreate --shared", &r));
+    //
+    // vgcreate activates the internal `lvmlock` LV on the map at once. While
+    // multipathd is still reloading the map (a path that just joined it, the
+    // reconcile right before) or udev still probes it, that table load gets
+    // EBUSY ("reload ioctl ... Device or resource busy") and vgcreate leaves
+    // an orphan PV behind (seen in the KVM e2e on Debian 13, 2 of 3 runs).
+    // So wait for udev to settle first, and on EBUSY settle and try again; the
+    // orphan PV is taken over by the next vgcreate.
+    let mut last = String::new();
+    for attempt in 0..BUSY_RETRIES {
+        let _ = run("udevadm", &["settle", "--timeout=30"], t).await;
+        if attempt > 0 {
+            tokio::time::sleep(BUSY_BACKOFF * attempt).await;
+        }
+        let r = run(
+            "vgcreate",
+            &["--shared", "--locktype", "sanlock", vg, dev],
+            t,
+        )
+        .await?;
+        if r.ok {
+            return Ok(());
+        }
+        last = fail("vgcreate --shared", &r);
+        if !is_busy(&r.stderr) {
+            break;
+        }
     }
-    Ok(())
+    Err(last)
+}
+
+/// vgcreate retries on a busy map (see `create_shared_vg`).
+const BUSY_RETRIES: u32 = 4;
+const BUSY_BACKOFF: Duration = Duration::from_secs(2);
+
+/// Does LVM's error say a device-mapper table load hit EBUSY?
+pub fn is_busy(stderr: &str) -> bool {
+    stderr.contains("Device or resource busy")
 }
 
 /// Join this node to the VG's lockspace (idempotent).
@@ -239,6 +267,8 @@ mod tests {
         assert!(c.starts_with(HEADER));
         assert!(c.contains("global {\n\tuse_lvmlockd = 1\n}\n"));
         assert!(c.ends_with("local {\n\thost_id = 7\n}\n"));
+        assert!(is_busy("  device-mapper: reload ioctl on  (253:1) failed: Device or resource busy\n  Failed to activate new LV vg/lvmlock."));
+        assert!(!is_busy("  Physical volume /dev/x not found"));
         assert_eq!(render_sanlock_conf(true), None);
         assert!(render_sanlock_conf(false)
             .unwrap()

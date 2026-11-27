@@ -147,6 +147,7 @@ used_after=$(du -k /var/lib/san/lun0.img | cut -f1)
 check "backing-file-shrank" '[ $used_after -lt $((used_before - 400000)) ]' "before ${used_before}K after ${used_after}K"
 
 echo "== a VM's disks on the shared VG: volumes vm-<id>-disk-<n>, side files kept out of /dev"
+has_lv() { lvs --noheadings -o lv_name vg_hxsan 2>/dev/null | tr -d ' ' | grep -qx "$1"; }
 vmj() { api GET /vms/201 | jq_ "$1"; }
 r=$(api POST /vms "{\"id\":\"201\",\"name\":\"san-vm\",\"hypervisor\":\"qemu\",\"architecture\":\"x86_64\",\"cpus\":1,\"memory\":128,\"disk_size\":1,\"status\":\"stopped\",\"display\":{\"protocol\":\"none\"},\"hardware\":{},\"disks\":[{\"path\":\"\",\"size_gb\":1,\"disk_type\":\"virtio\",\"cache\":\"none\",\"storage\":\"$PID\"}]}")
 check "vm-created-with-disk0-on-shared-vg" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 201 ] && [ -b /dev/vg_hxsan/vm-201-disk-0 ]' "$r $(lvs vg_hxsan 2>&1)"
@@ -157,7 +158,7 @@ qemu-io -f qcow2 -c "write -P 0xab 0 1M" $D/images/pattern.qcow2 >/dev/null
 r=$(api POST /vms/201/import-disk "{\"source\":\"$D/images/pattern.qcow2\"}")
 qemu-io -f raw -c "read -P 0xab 0 1M" /dev/vg_hxsan/vm-201-disk-0 > /tmp/hxsan-imp.out 2>&1
 check "import-disk-writes-into-the-lv" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 200 ] && grep -q "^read 1048576" /tmp/hxsan-imp.out && ! grep -q "verification failed" /tmp/hxsan-imp.out' "$r $(cat /tmp/hxsan-imp.out)"
-check "import-left-no-file-in-dev" '[ -z "$(find /dev/vg_hxsan/ -mindepth 1 ! -name "vm-201-disk-*" 2>/dev/null)" ]' "$(ls -la /dev/vg_hxsan/)"
+check "import-left-no-file-in-dev" '[ -z "$(find /dev/vg_hxsan/ -mindepth 1 ! -name "vm-201-disk-*" ! -name lvmlock 2>/dev/null)" ]' "$(ls -la /dev/vg_hxsan/)"
 r=$(api POST /vms/201/disks "{\"size_gb\":1,\"bus\":\"virtio\",\"storage\":\"$PID\"}")
 check "add-disk-makes-vm-201-disk-1" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 201 ] && [ -b /dev/vg_hxsan/vm-201-disk-1 ] && [ "$(vmj "d[\"body\"][\"disks\"][1][\"path\"]")" = /dev/vg_hxsan/vm-201-disk-1 ]' "$r"
 r=$(api PUT /vms/201/disks/1 '{"size_gb": 2}')
@@ -166,19 +167,19 @@ r=$(api POST /vms/201/start)
 for i in $(seq 1 30); do pgrep -f "[f]ile=/dev/vg_hxsan/vm-201-disk-0,format=raw" >/dev/null && break; sleep 1; done
 check "vm-runs-on-the-lv" 'pgrep -f "[f]ile=/dev/vg_hxsan/vm-201-disk-0,format=raw" >/dev/null && pgrep -f "[f]ile=/dev/vg_hxsan/vm-201-disk-1,format=raw" >/dev/null' "$r $(tail -5 $D/api.log)"
 check "qmp-socket-in-the-vm-dir" '[ -S $D/vms/blk/vg_hxsan--vm-201-disk-0.qmp.sock ]' "$(ls $D/vms/blk/ 2>&1)"
-check "nothing-but-lvs-in-dev" '[ -z "$(find /dev/vg_hxsan/ -mindepth 1 ! -name "vm-201-disk-*" 2>/dev/null)" ]' "$(ls -la /dev/vg_hxsan/)"
+check "nothing-but-lvs-in-dev" '[ -z "$(find /dev/vg_hxsan/ -mindepth 1 ! -name "vm-201-disk-*" ! -name lvmlock 2>/dev/null)" ]' "$(ls -la /dev/vg_hxsan/)"
 r=$(api POST /storage/pools/$PID/volumes/vm-201-disk-0/resize '{"size": 3}')
 check "volume-of-a-vm-refused-409" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 409 ]' "$r"
 api POST /vms/201/stop '{"force": true}' >/dev/null
 for i in $(seq 1 60); do pgrep -f "[f]ile=/dev/vg_hxsan/vm-201-disk-0" >/dev/null || break; sleep 1; done
 check "vm-stopped" '! pgrep -f "[f]ile=/dev/vg_hxsan/vm-201-disk-0" >/dev/null'
 r=$(api DELETE "/vms/201/disks/1?delete_file=true")
-check "remove-disk-deletes-its-volume" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 200 ] && ! lvs vg_hxsan/vm-201-disk-1 >/dev/null 2>&1' "$r $(lvs vg_hxsan 2>&1)"
+check "remove-disk-deletes-its-volume" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 200 ] && ! has_lv vm-201-disk-1' "$r $(lvs vg_hxsan 2>&1)"
 r=$(api DELETE /vms/201)
-check "vm-delete-deletes-its-volume" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 204 ] && ! lvs vg_hxsan/vm-201-disk-0 >/dev/null 2>&1' "$r $(lvs vg_hxsan 2>&1)"
+check "vm-delete-deletes-its-volume" '[ "$(api GET /vms/201 | jq_ "d[\"status\"]")" = 404 ] && ! has_lv vm-201-disk-0' "$r $(lvs vg_hxsan 2>&1)"
 check "vm-side-files-gone" '[ -z "$(ls $D/vms/blk/ 2>/dev/null | grep vm-201)" ]' "$(ls -la $D/vms/blk/ 2>&1)"
 r=$(api POST /vms "{\"id\":\"202\",\"name\":\"bad\",\"hypervisor\":\"qemu\",\"architecture\":\"x86_64\",\"cpus\":1,\"memory\":128,\"disk_size\":999,\"status\":\"stopped\",\"display\":{\"protocol\":\"none\"},\"hardware\":{},\"disks\":[{\"path\":\"/dev/sda\",\"size_gb\":999,\"disk_type\":\"virtio\",\"storage\":\"$PID\"}]}")
-check "too-big-disk-refused-and-nothing-left" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 400 ] && ! lvs vg_hxsan/vm-202-disk-0 >/dev/null 2>&1 && [ "$(api GET /vms/202 | jq_ "d[\"status\"]")" = 404 ]' "$r"
+check "too-big-disk-refused-and-nothing-left" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 400 ] && ! has_lv vm-202-disk-0 && [ "$(api GET /vms/202 | jq_ "d[\"status\"]")" = 404 ]' "$r"
 
 echo "== snapshots as a volume chain (qcow2 on thick LVs) on the same shared VG"
 api DELETE /san/lvm/sanlvm >/dev/null
@@ -227,8 +228,8 @@ for i in $(seq 1 30); do pgrep -f "[f]ile=/dev/vg_hxsan/vm-203-disk-0,format=qco
 check "chain-vm-runs-qcow2-on-lv" 'pgrep -f "[f]ile=/dev/vg_hxsan/vm-203-disk-0,format=qcow2" >/dev/null' "$(tail -5 $D/api.log)"
 api POST /vms/203/stop '{"force": true}' >/dev/null
 for i in $(seq 1 60); do pgrep -f "[f]ile=/dev/vg_hxsan/vm-203-disk-0" >/dev/null || break; sleep 1; done
-api DELETE /vms/203 >/dev/null
-check "chain-vm-delete-removes-the-lv" '! lvs vg_hxsan/vm-203-disk-0 >/dev/null 2>&1' "$(lvs vg_hxsan 2>&1)"
+r=$(api DELETE /vms/203)
+check "chain-vm-delete-removes-the-lv" '[ "$(api GET /vms/203 | jq_ "d[\"status\"]")" = 404 ] && ! has_lv vm-203-disk-0' "$r $(lvs -a vg_hxsan 2>&1)"
 check "snapshots-on-other-pool-400-or-404" 'case "$(echo "$r" | jq_ "d[\"status\"]")" in 400|404) true;; *) false;; esac' "$r"
 
 echo "== missing tool answers 424, not 500"

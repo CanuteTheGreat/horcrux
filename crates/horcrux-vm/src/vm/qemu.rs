@@ -1805,7 +1805,10 @@ impl QemuManager {
             .filter(|d| !horcrux_common::is_block_volume_path(&d.path))
             .map(|d| PathBuf::from(&d.path))
             .collect();
-        disks.rotate_left(1);
+        // (every disk may be a block volume: nothing to rotate then)
+        if !disks.is_empty() {
+            disks.rotate_left(1);
+        }
         for disk in disks {
             match tokio::fs::remove_file(&disk).await {
                 Ok(()) => {}
@@ -3412,6 +3415,19 @@ esac
         v.status = VmStatus::Running;
         assert!(mgr.delete_vm(&v).await.is_err());
         assert!(v.disk_path.exists());
+        // A VM whose only disk is a block-pool volume: nothing is unlinked
+        // (the API deletes the volume through its pool) and nothing panics.
+        let mut v = temp_vm(dir.path(), "blk");
+        v.disk_path = PathBuf::from("/dev/hx-test-vg/vm-blk-disk-0");
+        v.disks = vec![horcrux_common::VmDisk {
+            path: "/dev/hx-test-vg/vm-blk-disk-0".into(),
+            size_gb: 1,
+            disk_type: "virtio".into(),
+            storage: Some("san".into()),
+            format: Some("raw".into()),
+            ..Default::default()
+        }];
+        mgr.delete_vm(&v).await.expect("block-volume VM deleted");
     }
 
     #[tokio::test]

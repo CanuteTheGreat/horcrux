@@ -364,7 +364,7 @@ impl VmManager {
         }
         // The first free <id>-disk<N>.qcow2 (a removed disk's number may
         // be reused once its file is gone).
-        if spec.storage.is_some() != spec.dir.is_some() {
+        if spec.volume.is_none() && spec.storage.is_some() != spec.dir.is_some() {
             return Err(Error::Validation(
                 "a disk on a storage pool needs the pool's directory".into(),
             ));

@@ -1085,8 +1085,15 @@ async fn discover(Json(req): Json<DiscoverReq>) -> Result<Json<DiscoverAnswer>, 
     tools::Need::Iscsi
         .check(&tools::ToolStatus::probe())
         .map_err(ApiError::from)?;
-    let (targets, errors) = iscsi::discover(&ps, TOOL_TIMEOUT).await;
+    // sendtargets discovery goes through iscsid: on a node where nothing
+    // has started it yet (first SAN on a fresh install; iscsid.conf's
+    // startup command is distribution specific and may not exist here)
+    // start it now, through the node's init system, as apply does.
+    let mut rep = ApplyReport::default();
+    ensure_service("iscsid", &mut rep).await;
+    let (targets, mut errors) = iscsi::discover(&ps, TOOL_TIMEOUT).await;
     if targets.is_empty() && !errors.is_empty() {
+        errors.extend(rep.errors);
         return Err(ApiError::BadRequest(format!(
             "no portal answered: {}",
             errors.join("; ")
