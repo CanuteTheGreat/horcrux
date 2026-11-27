@@ -19,6 +19,11 @@ on:
     - cron: '23 * * * *'
   workflow_dispatch:
 
+# Serialize runs (push trigger vs hourly poll) so they do not race on the overlay ref; never cancel a started run.
+concurrency:
+  group: overlay-sync
+  cancel-in-progress: false
+
 jobs:
   split-and-push:
     name: Publish gentoo/ as horcrux-overlay
@@ -46,12 +51,20 @@ jobs:
           tip=$(git subtree split --prefix=gentoo)
           echo "overlay tip $tip"
           OV=git@git.canutethegreat.com:CanuteTheGreat/horcrux-overlay.git
+          # The overlay remote can move between our fetch and our push (push-triggered run racing the hourly poll, or another bump):
+          # a rejected push is retried from a fresh fetch (3 attempts); never forced.
           # History rewrites on the way to main (rebased chain branches) change the split commit ids; the overlay repo must still only ever
           # fast-forward: when its tip is not an ancestor of the new split, push a merge commit that carries the split's tree.
-          git fetch -q "$OV" main && remote=$(git rev-parse FETCH_HEAD) || remote=""
-          if [ -z "$remote" ] || git merge-base --is-ancestor "$remote" "$tip"; then push=$tip
-          elif [ "$(git rev-parse "$remote^{tree}")" = "$(git rev-parse "$tip^{tree}")" ]; then echo "overlay already has this tree"; rm -f ~/.ssh/overlay_key; exit 0
-          else push=$(git commit-tree "$tip^{tree}" -p "$remote" -p "$tip" -m "sync gentoo/ from main $(git rev-parse HEAD)"); echo "merge commit $push (overlay history diverged from the split)"
-          fi
-          git push "$OV" "$push:refs/heads/main"
+          pushed=0
+          for attempt in 1 2 3; do
+            remote=""
+            git fetch -q "$OV" main && remote=$(git rev-parse FETCH_HEAD) || remote=""
+            if [ -z "$remote" ] || git merge-base --is-ancestor "$remote" "$tip"; then push=$tip
+            elif [ "$(git rev-parse "$remote^{tree}")" = "$(git rev-parse "$tip^{tree}")" ]; then echo "overlay already has this tree"; rm -f ~/.ssh/overlay_key; exit 0
+            else push=$(git commit-tree "$tip^{tree}" -p "$remote" -p "$tip" -m "sync gentoo/ from main $(git rev-parse HEAD)"); echo "merge commit $push (overlay history diverged from the split)"
+            fi
+            if git push "$OV" "$push:refs/heads/main"; then pushed=1; break; fi
+            echo "push attempt $attempt rejected (overlay moved?); re-fetching"; sleep $((attempt * 5))
+          done
+          if [ "$pushed" != 1 ]; then rm -f ~/.ssh/overlay_key; echo "::error::overlay push failed after 3 attempts"; exit 1; fi
           rm -f ~/.ssh/overlay_key
