@@ -60,6 +60,10 @@ MODS = "part_gpt ext2 fat normal linux search search_fs_uuid configfile echo tes
 PREV = "0.0.1-previous"   # kernel version label of the "previous kernel" entry (same kernel binary, other path)
 TIMEOUT = 5
 ERR_PAUSE = 10            # GRUB's "Press any key to continue..." after a failed entry (grub_wait_after_message, 10 s)
+# Loaded-runner headroom for the per-kernel budget on KVM (slack is 0 there). Measured: run 6909 (server-systemd-x86_64, KVM,
+# busy shared runner) took 39.9 s menu->kernel against a 35 s budget, every other case passed; 15 s covers that with margin. The
+# failure this gate exists for (GRUB stuck at a menu with no countdown) never starts a kernel at all, so it is still caught.
+KVM_LOAD_HEADROOM = 15
 LOAD = 10                 # reading ~20 MB of kernel through GRUB's EFI disk driver + decompression up to the first console line (KVM)
 RESULTS = []
 
@@ -450,7 +454,7 @@ def run_mk_cases(img, a, slack, only):
 
 
 def judge(img, c, d, disk, start, slack, mark, restart_budget):
-    budget = TIMEOUT + 10 + LOAD + ERR_PAUSE * c["fails"] + slack
+    budget = TIMEOUT + 10 + LOAD + ERR_PAUSE * c["fails"] + slack + KVM_LOAD_HEADROOM
     if c["want"] == "STUCK":
         txt, took, exited, since = boot(img, disk, d, "1", limit=budget + 60, mark=mark)
         step(f"{c['name']}: control - without fallback a failed default leaves GRUB at a menu with no countdown",
