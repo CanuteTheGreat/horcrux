@@ -2933,6 +2933,13 @@ async fn vm_hardware_iso_library_and_bridges_read_into_ui_types() {
     let token = login(&c).await;
     let opts: api::VmHostOptions = fetch(&c, &token, "/vms/host-options").await;
     let _: Vec<api::BridgeInfo> = fetch(&c, &token, "/network/bridges").await;
+    let ifaces: Vec<api::HostInterface> = fetch(&c, &token, "/network/interfaces").await;
+    assert!(
+        ifaces
+            .iter()
+            .all(|i| i.kind != "veth" && i.kind != "tap" && i.name != "lo"),
+        "guest ports and loopback are not host interfaces: {ifaces:?}"
+    );
 
     // ISO library: download from a URL -> listed as downloading, then ready.
     let iso_bytes = vec![0x5au8; 300_000];

@@ -480,6 +480,10 @@ Authorization: Bearer <token>
 
 ### Host bridges
 
+- `GET /api/network/interfaces[?all=1]`: the host's NICs, Wi-Fi, bonds, VLANs,
+  bridges and tunnels (kind, state, carrier, MAC, MTU, speed, master, VLAN
+  parent/tag, addresses) and whether each can be a bridge port (with the
+  reason when not). Guest tap/veth ports only with `all=1`.
 - `GET /api/network/bridges`: every Linux bridge (ports, addresses, VLAN
   filtering, `managed`).
 - `POST /api/network/bridges` `{"name": "vmbr0", "vlan_aware": true,

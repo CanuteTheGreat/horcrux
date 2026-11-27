@@ -101,6 +101,146 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/network/bridges", get(list).post(create))
         .route("/api/network/bridges/:name", delete(remove).put(update))
+        .route("/api/network/interfaces", get(list_interfaces))
+}
+
+/// One host network interface (Infrastructure > Host Bridges > Network
+/// interfaces), the way Proxmox lists a node's NICs, bonds and VLANs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HostInterface {
+    pub name: String,
+    /// physical, wireless, bond, vlan, bridge, wireguard, veth, tap, virtual
+    pub kind: String,
+    /// up, down, lowerlayerdown, unknown, ... (kernel operstate, lower case)
+    pub state: String,
+    /// Link detected (cable / carrier).
+    pub carrier: bool,
+    pub mac: Option<String>,
+    pub mtu: u32,
+    /// Negotiated speed (physical NICs with a link).
+    pub speed_mbps: Option<u32>,
+    /// Bridge or bond it is enslaved to.
+    pub master: Option<String>,
+    /// VLAN interfaces: parent device and tag.
+    pub vlan_parent: Option<String>,
+    pub vlan_id: Option<u16>,
+    pub addresses: Vec<String>,
+    /// Can be added as a port of a new bridge: a wired NIC, bond or VLAN
+    /// without an address and not already in a bridge/bond.
+    pub bridge_port_ok: bool,
+    /// Why it can't be a bridge port (shown as a hint).
+    pub bridge_port_note: Option<String>,
+}
+
+/// Classify one entry of `ip -j -d link show`; `addresses` and `speed`
+/// come from elsewhere (`ip -j addr`, sysfs).
+pub fn interface_from_link(
+    l: &serde_json::Value,
+    addresses: Vec<String>,
+    speed_mbps: Option<u32>,
+    wireless: bool,
+) -> Option<HostInterface> {
+    let name = l["ifname"].as_str()?.to_string();
+    if l["link_type"].as_str() == Some("loopback") {
+        return None;
+    }
+    let info_kind = l["linkinfo"]["info_kind"].as_str().unwrap_or("");
+    let kind = match info_kind {
+        "bridge" => "bridge",
+        "bond" => "bond",
+        "vlan" => "vlan",
+        "wireguard" => "wireguard",
+        "veth" => "veth",
+        "tun" | "tap" => "tap",
+        "" if l["parentbus"].is_string() || l["parentdev"].is_string() => {
+            if wireless {
+                "wireless"
+            } else {
+                "physical"
+            }
+        }
+        _ => "virtual",
+    }
+    .to_string();
+    let flags: Vec<&str> = l["flags"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|f| f.as_str()).collect())
+        .unwrap_or_default();
+    let master = l["master"].as_str().map(String::from);
+    let (vlan_parent, vlan_id) = if kind == "vlan" {
+        (
+            l["link"].as_str().map(String::from),
+            l["linkinfo"]["info_data"]["id"].as_u64().map(|v| v as u16),
+        )
+    } else {
+        (None, None)
+    };
+    let note = if !matches!(kind.as_str(), "physical" | "bond" | "vlan") {
+        Some(match kind.as_str() {
+            "wireless" => "Wi-Fi interfaces cannot join a Linux bridge".to_string(),
+            "bridge" => "already a bridge".to_string(),
+            _ => "not a wired uplink".to_string(),
+        })
+    } else if let Some(m) = &master {
+        Some(format!("already a port of {m}"))
+    } else if !addresses.is_empty() {
+        Some("carries a host address: moving it into a bridge would cut the host off".into())
+    } else {
+        None
+    };
+    Some(HostInterface {
+        state: l["operstate"].as_str().unwrap_or("unknown").to_lowercase(),
+        carrier: flags.contains(&"LOWER_UP"),
+        mac: l["address"]
+            .as_str()
+            .filter(|_| l["link_type"].as_str() == Some("ether"))
+            .map(String::from),
+        mtu: l["mtu"].as_u64().unwrap_or(0) as u32,
+        speed_mbps: speed_mbps.filter(|_| kind == "physical" || kind == "bond"),
+        bridge_port_ok: note.is_none(),
+        bridge_port_note: note,
+        name,
+        kind,
+        master,
+        vlan_parent,
+        vlan_id,
+        addresses,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct InterfacesQuery {
+    /// Also list guest plumbing (veth/tap ports of VMs and containers).
+    #[serde(default)]
+    all: bool,
+}
+
+/// `GET /api/network/interfaces[?all=1]`: the host's NICs, bonds, VLANs,
+/// bridges and tunnels. Guest ports (tap/veth) only with `all`.
+async fn list_interfaces(
+    axum::extract::Query(q): axum::extract::Query<InterfacesQuery>,
+) -> Json<Vec<HostInterface>> {
+    let links = ip_json(&["-j", "-d", "link", "show"]).await;
+    let mut out = Vec::new();
+    for l in links.as_array().cloned().unwrap_or_default() {
+        let Some(name) = l["ifname"].as_str().map(String::from) else {
+            continue;
+        };
+        let sys = std::path::Path::new("/sys/class/net").join(&name);
+        let speed = std::fs::read_to_string(sys.join("speed"))
+            .ok()
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .filter(|s| *s > 0)
+            .map(|s| s as u32);
+        let wireless = sys.join("wireless").exists() || sys.join("phy80211").exists();
+        let addrs = addresses(&name).await;
+        if let Some(i) = interface_from_link(&l, addrs, speed, wireless) {
+            if q.all || !matches!(i.kind.as_str(), "veth" | "tap") {
+                out.push(i);
+            }
+        }
+    }
+    Json(out)
 }
 
 async fn ip_json(args: &[&str]) -> serde_json::Value {
@@ -537,6 +677,48 @@ mod tests {
             port_vlans: BTreeMap::new(),
             comment: None,
         }
+    }
+
+    #[test]
+    fn host_interfaces_are_classified() {
+        let nic = serde_json::json!({"ifname":"enp1s0","flags":["BROADCAST","UP","LOWER_UP"],"mtu":1500,
+            "operstate":"UP","link_type":"ether","address":"d4:a2:cd:00:00:01","parentbus":"pci"});
+        let i = interface_from_link(&nic, vec![], Some(1000), false).unwrap();
+        assert_eq!(
+            (i.kind.as_str(), i.state.as_str(), i.carrier, i.speed_mbps),
+            ("physical", "up", true, Some(1000))
+        );
+        assert!(i.bridge_port_ok);
+        // the host's own uplink must not be offered as a bridge port
+        let i = interface_from_link(&nic, vec!["10.0.0.5/24".into()], None, false).unwrap();
+        assert!(!i.bridge_port_ok && i.bridge_port_note.unwrap().contains("host address"));
+        let wifi = serde_json::json!({"ifname":"wlan0","flags":["BROADCAST"],"mtu":1500,"operstate":"DOWN",
+            "link_type":"ether","address":"aa:bb:cc:00:00:02","parentbus":"pci"});
+        let i = interface_from_link(&wifi, vec![], None, true).unwrap();
+        assert_eq!(
+            (i.kind.as_str(), i.carrier, i.bridge_port_ok),
+            ("wireless", false, false)
+        );
+        let vlan = serde_json::json!({"ifname":"enp1s0.20","link":"enp1s0","flags":["UP"],"mtu":1500,"operstate":"UP",
+            "link_type":"ether","address":"d4:a2:cd:00:00:01","linkinfo":{"info_kind":"vlan","info_data":{"protocol":"802.1Q","id":20}}});
+        let i = interface_from_link(&vlan, vec![], None, false).unwrap();
+        assert_eq!(
+            (i.kind.as_str(), i.vlan_parent.as_deref(), i.vlan_id),
+            ("vlan", Some("enp1s0"), Some(20))
+        );
+        let port = serde_json::json!({"ifname":"eth2","master":"vmbr0","flags":["UP"],"mtu":1500,"operstate":"UP",
+            "link_type":"ether","parentbus":"pci"});
+        let i = interface_from_link(&port, vec![], None, false).unwrap();
+        assert_eq!(
+            i.bridge_port_note.as_deref(),
+            Some("already a port of vmbr0")
+        );
+        let wg = serde_json::json!({"ifname":"wg0","flags":["UP"],"mtu":1380,"operstate":"UNKNOWN","link_type":"none",
+            "linkinfo":{"info_kind":"wireguard"}});
+        let i = interface_from_link(&wg, vec![], None, false).unwrap();
+        assert_eq!((i.kind.as_str(), i.mac.is_none()), ("wireguard", true));
+        let lo = serde_json::json!({"ifname":"lo","link_type":"loopback"});
+        assert!(interface_from_link(&lo, vec![], None, false).is_none());
     }
 
     #[test]

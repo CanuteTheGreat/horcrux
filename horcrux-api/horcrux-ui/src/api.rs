@@ -7199,6 +7199,38 @@ pub async fn list_bridges() -> Result<Vec<BridgeInfo>, ApiError> {
     fetch_json("/network/bridges").await
 }
 
+/// A host network interface (`GET /api/network/interfaces`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct HostInterface {
+    pub name: String,
+    pub kind: String,
+    pub state: String,
+    #[serde(default)]
+    pub carrier: bool,
+    #[serde(default)]
+    pub mac: Option<String>,
+    #[serde(default)]
+    pub mtu: u32,
+    #[serde(default)]
+    pub speed_mbps: Option<u32>,
+    #[serde(default)]
+    pub master: Option<String>,
+    #[serde(default)]
+    pub vlan_parent: Option<String>,
+    #[serde(default)]
+    pub vlan_id: Option<u16>,
+    #[serde(default)]
+    pub addresses: Vec<String>,
+    #[serde(default)]
+    pub bridge_port_ok: bool,
+    #[serde(default)]
+    pub bridge_port_note: Option<String>,
+}
+
+pub async fn list_host_interfaces() -> Result<Vec<HostInterface>, ApiError> {
+    fetch_json("/network/interfaces").await
+}
+
 pub async fn create_bridge(b: &NewBridge) -> Result<NewBridge, ApiError> {
     post_json("/network/bridges", b).await
 }

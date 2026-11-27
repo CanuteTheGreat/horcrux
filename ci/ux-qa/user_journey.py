@@ -531,6 +531,13 @@ def main():
                     expect(sid, f"{name}-no-raw-error", not re.search(r"\b(panicked|stack trace|Internal Server Error|NaN|undefined)\b", t), f"{path} shows a raw error/NaN")
                     red = page.evaluate(REDUNDANT_EMPTY_JS)
                     expect(sid, f"{name}-empty-state-no-redundant-button", not red, f"{path}: empty state points at the form above and repeats it with a button: {red}")
+                    if path == "/network/bridges":
+                        # the host's NICs are listed (like a Proxmox node's Network view), not only bridges
+                        page.wait_for_selector("#iface-table .iface-row", timeout=15000)
+                        n_if = page.locator("#iface-table .iface-row").count()
+                        expect(sid, "host-interfaces-listed", n_if > 0, "Host Bridges does not list the host's network interfaces")
+                        guest = page.locator("#iface-table .iface-row[data-iface^='tap'], #iface-table .iface-row[data-iface^='veth']").count()
+                        expect(sid, "host-interfaces-no-guest-ports", guest == 0, f"{guest} guest tap/veth ports listed as host interfaces")
                     if path == "/storage" and page.locator(".storage-card").count():
                         styled = page.evaluate("""() => ['.storage-overview', '.storage-grid', '.usage-labels']
                             .map(s => document.querySelector(s)).every(e => e && ['grid', 'flex'].includes(getComputedStyle(e).display))""")

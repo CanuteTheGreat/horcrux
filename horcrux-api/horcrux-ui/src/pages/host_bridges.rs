@@ -1,13 +1,15 @@
 //! Infrastructure > Host Bridges (`/network/bridges`): the Linux bridges VM
 //! network cards attach to; create and delete Horcrux-managed ones.
 use crate::api::{
-    create_bridge, delete_bridge, list_bridges, set_bridge_trunk_vlans, BridgeInfo, NewBridge,
+    create_bridge, delete_bridge, list_bridges, list_host_interfaces, set_bridge_trunk_vlans,
+    BridgeInfo, HostInterface, NewBridge,
 };
 use leptos::*;
 
 #[component]
 pub fn HostBridgesPage() -> impl IntoView {
     let (bridges, set_bridges) = create_signal(Vec::<BridgeInfo>::new());
+    let (ifaces, set_ifaces) = create_signal(Vec::<HostInterface>::new());
     let (error, set_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
     let name = create_rw_signal(String::new());
@@ -21,6 +23,10 @@ pub fn HostBridgesPage() -> impl IntoView {
             match list_bridges().await {
                 Ok(l) => set_bridges.set(l),
                 Err(e) => set_error.set(Some(e.message)),
+            }
+            // Older nodes lack the route: the table just stays empty.
+            if let Ok(l) = list_host_interfaces().await {
+                set_ifaces.set(l);
             }
         });
     };
@@ -112,7 +118,25 @@ pub fn HostBridgesPage() -> impl IntoView {
                 <div class="form-group"><label for="bridge-address">"Host address (optional)"</label><input id="bridge-address" type="text" placeholder="10.10.0.1/24"
                     prop:value=address on:input=move |ev| address.set(event_target_value(&ev))/></div>
                 <div class="form-group"><label for="bridge-ports">"Ports (optional)"</label><input id="bridge-ports" type="text" placeholder="eth1"
-                    prop:value=ports on:input=move |ev| ports.set(event_target_value(&ev))/></div>
+                    prop:value=ports on:input=move |ev| ports.set(event_target_value(&ev))/>
+                    {move || {
+                        let free: Vec<String> = ifaces.get().into_iter().filter(|i| i.bridge_port_ok).map(|i| i.name).collect();
+                        if free.is_empty() {
+                            view! { <small class="form-help" id="bridge-ports-none">"No free wired interface (each one carries a host address or is already in a bridge): leave empty for a host-only bridge."</small> }.into_view()
+                        } else {
+                            view! { <div class="bridge-port-picks" id="bridge-port-picks">
+                                <small class="form-help">"Free interfaces: "</small>
+                                {free.into_iter().map(|n| {
+                                    let n2 = n.clone();
+                                    let on = move || split_list(&ports.get()).contains(&n2);
+                                    let n3 = n.clone();
+                                    view! { <button type="button" class="btn btn-sm bridge-port-pick" class:btn-primary=on data-port=n.clone()
+                                        on:click=move |_| ports.set(toggle_port(&ports.get(), &n3))>{n.clone()}</button> }
+                                }).collect_view()}
+                            </div> }.into_view()
+                        }
+                    }}
+                </div>
                 <div class="form-group"><label for="bridge-trunk">"Trunk VLANs (optional)"</label><input id="bridge-trunk" type="text" placeholder="20,30,100-110"
                     prop:value=trunk on:input=move |ev| trunk.set(event_target_value(&ev))/></div>
                 <label>
@@ -179,7 +203,109 @@ pub fn HostBridgesPage() -> impl IntoView {
                     }}
                 </tbody>
             </table>
+
+            <h2>"Network interfaces"</h2>
+            <p class="form-help">"Every interface of this host. Wired NICs, bonds and VLANs without an address can be a bridge port (pick them in the form above); guest ports (tap/veth) are not listed."</p>
+            <table class="vm-table" id="iface-table">
+                <thead>
+                    <tr><th>"Name"</th><th>"Type"</th><th>"State"</th><th>"MAC"</th><th>"Speed"</th><th>"MTU"</th><th>"Addresses"</th><th>"Member of"</th><th>"Bridge port"</th></tr>
+                </thead>
+                <tbody>
+                    {move || {
+                        let list = ifaces.get();
+                        if list.is_empty() {
+                            view! { <tr><td colspan="9" class="no-data">"Loading interfaces..."</td></tr> }.into_view()
+                        } else {
+                            list.into_iter().map(|i| {
+                                let state = iface_state(&i);
+                                let state_cls = if i.state == "up" && i.carrier { "status-running" } else if i.state == "down" { "status-stopped" } else { "status-unknown" };
+                                view! {
+                                    <tr class="iface-row" data-iface=i.name.clone()>
+                                        <td><strong>{i.name.clone()}</strong></td>
+                                        <td>{iface_kind_label(&i)}</td>
+                                        <td><span class=state_cls>{state}</span></td>
+                                        <td><code>{i.mac.clone().unwrap_or_default()}</code></td>
+                                        <td>{i.speed_mbps.map(speed_label).unwrap_or_default()}</td>
+                                        <td>{i.mtu}</td>
+                                        <td>{i.addresses.join(", ")}</td>
+                                        <td>{i.master.clone().unwrap_or_default()}</td>
+                                        <td title=i.bridge_port_note.clone().unwrap_or_default()>
+                                            {if i.bridge_port_ok { "available".to_string() } else { i.bridge_port_note.clone().unwrap_or_else(|| "no".into()) }}
+                                        </td>
+                                    </tr>
+                                }
+                            }).collect_view()
+                        }
+                    }}
+                </tbody>
+            </table>
         </div>
+    }
+}
+
+/// Add `port` to the comma separated `list`, or remove it if present.
+fn toggle_port(list: &str, port: &str) -> String {
+    let mut v = split_list(list);
+    if let Some(i) = v.iter().position(|p| p == port) {
+        v.remove(i);
+    } else {
+        v.push(port.to_string());
+    }
+    v.join(", ")
+}
+
+fn iface_kind_label(i: &HostInterface) -> String {
+    match i.kind.as_str() {
+        "physical" => "Network card".into(),
+        "wireless" => "Wi-Fi".into(),
+        "bond" => "Bond".into(),
+        "vlan" => match (&i.vlan_parent, i.vlan_id) {
+            (Some(p), Some(id)) => format!("VLAN {id} on {p}"),
+            _ => "VLAN".into(),
+        },
+        "bridge" => "Bridge".into(),
+        "wireguard" => "WireGuard".into(),
+        other => other.to_string(),
+    }
+}
+
+fn iface_state(i: &HostInterface) -> String {
+    match (i.state.as_str(), i.carrier) {
+        ("up", true) | ("unknown", true) => "up".into(),
+        ("down", _) => "down".into(),
+        (_, false) => "no link".into(),
+        (s, _) => s.to_string(),
+    }
+}
+
+fn speed_label(mbps: u32) -> String {
+    if mbps >= 1000 && mbps.is_multiple_of(1000) {
+        format!("{} Gb/s", mbps / 1000)
+    } else {
+        format!("{mbps} Mb/s")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_picks_toggle_and_labels() {
+        assert_eq!(toggle_port("", "eth1"), "eth1");
+        assert_eq!(toggle_port("eth1, eth2", "eth1"), "eth2");
+        assert_eq!(toggle_port("eth2", "eth1"), "eth2, eth1");
+        assert_eq!(speed_label(2500), "2500 Mb/s");
+        assert_eq!(speed_label(10000), "10 Gb/s");
+        let mut i = HostInterface {
+            kind: "vlan".into(),
+            vlan_parent: Some("eth0".into()),
+            vlan_id: Some(20),
+            ..Default::default()
+        };
+        assert_eq!(iface_kind_label(&i), "VLAN 20 on eth0");
+        i.state = "lowerlayerdown".into();
+        assert_eq!(iface_state(&i), "no link");
     }
 }
 
