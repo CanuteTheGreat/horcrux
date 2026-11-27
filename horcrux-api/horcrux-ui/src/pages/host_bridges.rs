@@ -2,8 +2,8 @@
 //! network cards attach to; create and delete Horcrux-managed ones.
 use crate::api::{
     create_bond, create_bridge, create_vlan, delete_bond, delete_bridge, delete_vlan, list_bonds,
-    list_bridges, list_host_interfaces, list_vlans, set_bridge_trunk_vlans, BridgeInfo,
-    HostInterface, ManagedBond, ManagedVlan, NewBridge,
+    list_bridges, list_host_interfaces, list_vlans, set_bridge_trunk_vlans, update_bridge,
+    BridgeInfo, HostInterface, ManagedBond, ManagedVlan, NewBridge,
 };
 use leptos::*;
 
@@ -13,6 +13,11 @@ pub fn HostBridgesPage() -> impl IntoView {
     let (ifaces, set_ifaces) = create_signal(Vec::<HostInterface>::new());
     let (vlans, set_vlans) = create_signal(Vec::<ManagedVlan>::new());
     let (bonds, set_bonds) = create_signal(Vec::<ManagedBond>::new());
+    // Inline edit of a managed bridge: Some(name) while its row is open.
+    let editing = create_rw_signal(None::<String>);
+    let ed_addr = create_rw_signal(String::new());
+    let ed_ports = create_rw_signal(String::new());
+    let ed_comment = create_rw_signal(String::new());
     let bond_name = create_rw_signal(String::new());
     let bond_mode = create_rw_signal("active-backup".to_string());
     let bond_slaves = create_rw_signal(String::new());
@@ -183,6 +188,22 @@ pub fn HostBridgesPage() -> impl IntoView {
         });
     };
 
+    let save_edit = move |_| {
+        let Some(n) = editing.get() else { return };
+        let (a, p, c) = (ed_addr.get(), split_list(&ed_ports.get()), ed_comment.get());
+        spawn_local(async move {
+            match update_bridge(&n, a.trim(), &p, c.trim()).await {
+                Ok(_) => {
+                    set_notice.set(Some(format!("Bridge {n} updated")));
+                    set_error.set(None);
+                    editing.set(None);
+                }
+                Err(e) => set_error.set(Some(e.message)),
+            }
+            reload();
+        });
+    };
+
     let remove_vlan = move |n: String| {
         if !web_sys::window()
             .and_then(|w| {
@@ -293,6 +314,11 @@ pub fn HostBridgesPage() -> impl IntoView {
                                     .map(|v| v.join(","))
                                     .unwrap_or_default();
                                 let n2 = b.name.clone();
+                                let n3 = b.name.clone();
+                                let n4 = b.name.clone();
+                                let cur_addr = b.addresses.first().cloned().unwrap_or_default();
+                                let cur_ports = b.ports.iter().filter(|p| !p.starts_with("tap") && !p.starts_with("veth")).cloned().collect::<Vec<_>>().join(", ");
+                                let cur_comment = b.comment.clone().unwrap_or_default();
                                 let aware = b.vlan_aware;
                                 view! {
                                     <tr class="bridge-row" data-bridge=b.name.clone()>
@@ -304,6 +330,14 @@ pub fn HostBridgesPage() -> impl IntoView {
                                         <td>{b.addresses.join(", ")}</td>
                                         <td>{if managed { "Horcrux" } else { "host config" }}</td>
                                         <td>
+                                            <button class="btn btn-sm bridge-edit" disabled=!managed
+                                                title=if managed { "Change the address, ports or comment" } else { "Part of the host's own network configuration" }
+                                                on:click=move |_| {
+                                                    ed_addr.set(cur_addr.clone());
+                                                    ed_ports.set(cur_ports.clone());
+                                                    ed_comment.set(cur_comment.clone());
+                                                    editing.set(Some(n3.clone()));
+                                                }>"Edit"</button>
                                             <button class="btn btn-sm bridge-trunk-edit" disabled=!(managed && aware)
                                                 title="Set the VLAN ids carried on this bridge's uplink ports"
                                                 on:click=move |_| edit_trunk(n2.clone(), first_ports.clone())>"Trunk VLANs"</button>
@@ -312,6 +346,21 @@ pub fn HostBridgesPage() -> impl IntoView {
                                                 on:click=move |_| remove(n.clone())>"Delete"</button>
                                         </td>
                                     </tr>
+                                    {move || (editing.get().as_deref() == Some(n4.as_str())).then(|| view! {
+                                        <tr class="bridge-edit-row"><td colspan="8">
+                                            <div class="form-row fields">
+                                                <div class="form-group"><label for="bridge-edit-address">"Host address"</label><input id="bridge-edit-address" type="text" placeholder="none"
+                                                    prop:value=ed_addr on:input=move |ev| ed_addr.set(event_target_value(&ev))/></div>
+                                                <div class="form-group"><label for="bridge-edit-ports">"Ports"</label><input id="bridge-edit-ports" type="text" placeholder="none"
+                                                    prop:value=ed_ports on:input=move |ev| ed_ports.set(event_target_value(&ev))/></div>
+                                                <div class="form-group"><label for="bridge-edit-comment">"Comment"</label><input id="bridge-edit-comment" type="text"
+                                                    prop:value=ed_comment on:input=move |ev| ed_comment.set(event_target_value(&ev))/></div>
+                                                <button id="bridge-edit-save" class="btn btn-primary" on:click=save_edit>"Save"</button>
+                                                <button class="btn" on:click=move |_| editing.set(None)>"Cancel"</button>
+                                            </div>
+                                            <small class="form-help">"Changes apply to the running bridge at once; the new address is added before the old one is removed."</small>
+                                        </td></tr>
+                                    })}
                                 }
                             }).collect_view()
                         }

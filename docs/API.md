@@ -500,7 +500,8 @@ Authorization: Bearer <token>
 - `POST /api/network/bridges` `{"name": "vmbr0", "vlan_aware": true,
   "address": "10.10.0.1/24", "ports": ["eth1"]}`: create a bridge; Horcrux
   re-creates it when it starts. A port that carries an IP address is refused.
-- `PUT /api/network/bridges/:name` `{"trunk_vlans": ["20","30","100-110"]}` (also
+- `PUT /api/network/bridges/:name` `{"address": "10.10.0.1/24"}` ("" removes it; the new address is
+  added before the old one goes), `{"trunk_vlans": ["20","30","100-110"]}` (also
   `ports`, `port_vlans`, `comment`; omitted fields keep their value): change the
   ports / trunk VLANs of a managed bridge on the live kernel bridge.
 - `DELETE /api/network/bridges/:name`: managed bridges only, refused while a VM

@@ -7184,6 +7184,21 @@ pub struct NewBridge {
 }
 
 /// PUT /api/network/bridges/:name - change the trunk VLANs on the live bridge.
+/// PUT /api/network/bridges/:name with the editable fields of a managed
+/// bridge (address "" removes it; ports replace the list).
+pub async fn update_bridge(
+    name: &str,
+    address: &str,
+    ports: &[String],
+    comment: &str,
+) -> Result<serde_json::Value, ApiError> {
+    put_json(
+        &format!("/network/bridges/{}", urlencoding::encode(name)),
+        &serde_json::json!({ "address": address, "ports": ports, "comment": comment }),
+    )
+    .await
+}
+
 pub async fn set_bridge_trunk_vlans(
     name: &str,
     vlans: &[String],

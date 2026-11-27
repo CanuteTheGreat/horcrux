@@ -991,6 +991,8 @@ async fn create(
 /// (fields left out keep their value).
 #[derive(Debug, Deserialize)]
 struct BridgeUpdate {
+    /// New host address (CIDR); "" removes it.
+    address: Option<String>,
     ports: Option<Vec<String>>,
     trunk_vlans: Option<Vec<String>>,
     port_vlans: Option<BTreeMap<String, Vec<String>>>,
@@ -1020,10 +1022,25 @@ async fn update(
         b.port_vlans = t;
     }
     if u.comment.is_some() {
-        b.comment = u.comment;
+        b.comment = u.comment.filter(|c| !c.trim().is_empty());
+    }
+    if let Some(a) = u.address {
+        b.address = Some(a.trim().to_string()).filter(|a| !a.is_empty());
     }
     validate(&b).map_err(ApiError::BadRequest)?;
     let live = std::path::Path::new("/sys/class/net").join(&name).exists();
+    if live && b.address != old.address {
+        // Add the new address before removing the old one, so a session that
+        // reaches the host over this bridge is never left without a route.
+        if let Some(a) = &b.address {
+            run("ip", &["addr", "add", a, "dev", &name])
+                .await
+                .map_err(ApiError::Internal)?;
+        }
+        if let Some(a) = &old.address {
+            let _ = run("ip", &["addr", "del", a, "dev", &name]).await;
+        }
+    }
     if live {
         for p in b.ports.iter().filter(|p| !old.ports.contains(p)) {
             if !std::path::Path::new("/sys/class/net").join(p).exists() {
