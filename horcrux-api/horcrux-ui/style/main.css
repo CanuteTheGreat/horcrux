@@ -1420,3 +1420,4 @@ td .actions { flex-wrap: nowrap; }
 .vm-power-bar .vm-power-state { margin-right: 0.5rem; font-size: 0.95rem; }
 .vm-power-bar + .alert { margin-top: 0.25rem; }
 .new-vm-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+.vm-power-bar > .btn { display: inline-flex; align-items: center; box-sizing: border-box; height: 2.25rem; }

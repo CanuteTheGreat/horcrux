@@ -179,7 +179,7 @@ def run_vm(page):
     expect(page.locator("#vm-image")).to_have_attribute("placeholder", re.compile("debian/12"))
     page.fill("#vm-image", "ubuntu/24.04")
     page.locator("button[type=submit]").click()
-    page.wait_for_url(f"{BASE}/vms", timeout=600000)
+    page.wait_for_url(re.compile(rf"{re.escape(BASE)}/vms/(?!create$)[^/]+$"), timeout=600000)
     vm = next(v for v in api("GET", "/vms")[1] if v["name"] == VM)
     vid = vm["id"]
     assert vm["hypervisor"] == "incus", vm

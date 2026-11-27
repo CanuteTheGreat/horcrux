@@ -14,9 +14,70 @@ fn hypervisor_from(value: &str) -> VmHypervisor {
     }
 }
 
+/// The first free `vm-<N>` ID from 100 up (Proxmox offers the next free VMID the same way).
+pub fn next_free_vm_id(existing: &[String]) -> String {
+    (100u32..)
+        .map(|n| format!("vm-{n}"))
+        .find(|id| !existing.iter().any(|e| e == id))
+        .unwrap_or_else(|| "vm-100".into())
+}
+
+/// Why `id` can't be a new VM's ID (same rules as the server), or `None`.
+pub fn vm_id_problem(id: &str, existing: &[String]) -> Option<String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Some("Enter a VM ID".into());
+    }
+    if id.len() > 64 {
+        return Some("The VM ID can have at most 64 characters".into());
+    }
+    if id.starts_with('-') || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Some("The VM ID can only contain letters, digits and hyphens (not first)".into());
+    }
+    if existing.iter().any(|e| e == id) {
+        return Some(format!("A VM with the ID {id} already exists"));
+    }
+    None
+}
+
+/// Why `name` is not a valid VM name (same rules as the server), or `None`.
+pub fn vm_name_problem(name: &str) -> Option<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Some("Enter a name".into());
+    }
+    if name.len() > 255 {
+        return Some("The name can have at most 255 characters".into());
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Some("The name can only contain letters, digits, '-' and '_'".into());
+    }
+    None
+}
+
 #[component]
 pub fn VmCreate() -> impl IntoView {
     let (name, set_name) = create_signal(String::new());
+    // VM ID: the next free one, editable (like Proxmox's VM ID field).
+    let (vm_id, set_vm_id) = create_signal(String::new());
+    let (id_touched, set_id_touched) = create_signal(false);
+    let (existing_ids, set_existing_ids) = create_signal(Vec::<String>::new());
+    let (start_after, set_start_after) = create_signal(false);
+    let (name_touched, set_name_touched) = create_signal(false);
+    spawn_local(async move {
+        if let Ok(vms) = api::get_vms().await {
+            let ids: Vec<String> = vms.into_iter().map(|v| v.id).collect();
+            if !id_touched.get_untracked() {
+                set_vm_id.set(next_free_vm_id(&ids));
+            }
+            set_existing_ids.set(ids);
+        }
+    });
+    let id_problem = move || vm_id_problem(&vm_id.get(), &existing_ids.get());
+    let name_problem = move || vm_name_problem(&name.get());
     let cpus = create_rw_signal(2u64);
     let memory = create_rw_signal(2048u64);
     let disk_size = create_rw_signal(32u64);
@@ -124,13 +185,19 @@ pub fn VmCreate() -> impl IntoView {
 
     let submit = move |ev: ev::SubmitEvent| {
         ev.prevent_default();
+        set_name_touched.set(true);
+        set_id_touched.set(true);
+        if let Some(p) = name_problem().or_else(id_problem) {
+            set_error.set(Some(p));
+            return;
+        }
 
         set_creating.set(true);
         set_error.set(None);
 
         let config = VmConfig {
-            id: format!("vm-{}", chrono::Utc::now().timestamp()),
-            name: name.get(),
+            id: vm_id.get().trim().to_string(),
+            name: name.get().trim().to_string(),
             hypervisor: hypervisor.get(),
             memory: memory.get(),
             cpus: cpus.get() as u32,
@@ -178,8 +245,19 @@ pub fn VmCreate() -> impl IntoView {
                 other => other,
             };
             match created {
-                Ok(_) => {
-                    navigate("/vms", Default::default());
+                // Straight to the new VM's page (power controls, console), started if asked.
+                Ok(vm) => {
+                    if start_after.get_untracked() {
+                        if let Err(e) = api::start_vm(&vm.id).await {
+                            set_error.set(Some(format!(
+                                "VM {} was created, but starting it failed: {}",
+                                vm.id, e.message
+                            )));
+                            set_creating.set(false);
+                            return;
+                        }
+                    }
+                    navigate(&format!("/vms/{}", vm.id), Default::default());
                 }
                 Err(e) => {
                     set_error.set(Some(e.message));
@@ -202,8 +280,25 @@ pub fn VmCreate() -> impl IntoView {
                         required
                         placeholder="my-vm"
                         on:input=move |ev| set_name.set(event_target_value(&ev))
+                        on:blur=move |_| set_name_touched.set(true)
                         prop:value=name
                     />
+                    {move || (name_touched.get()).then(name_problem).flatten().map(|p| view! { <small class="error-text" id="vm-name-problem">{p}</small> })}
+                </div>
+
+                <div class="form-group">
+                    <label for="vm-id">"VM ID"</label>
+                    <input
+                        id="vm-id"
+                        type="text"
+                        required
+                        on:input=move |ev| { set_id_touched.set(true); set_vm_id.set(event_target_value(&ev)); }
+                        prop:value=vm_id
+                    />
+                    {move || match id_problem() {
+                        Some(p) if id_touched.get() => view! { <small class="error-text" id="vm-id-problem">{p}</small> }.into_view(),
+                        _ => view! { <small>"Names the VM's disk files; the next free ID is filled in."</small> }.into_view(),
+                    }}
                 </div>
 
                 <div class="form-group">
@@ -340,8 +435,16 @@ pub fn VmCreate() -> impl IntoView {
                         reload_options=Callback::new(move |_: ()| load_options(false))/>
                 </Show>
 
+                <div class="form-group">
+                    <label class="checkbox" for="vm-start-after">
+                        <input type="checkbox" id="vm-start-after" prop:checked=start_after
+                            on:change=move |ev| set_start_after.set(event_target_checked(&ev))/>
+                        " Start after created"
+                    </label>
+                </div>
+
                 {move || error.get().map(|err| view! {
-                    <p class="error">"Error: " {err}</p>
+                    <p class="error" role="alert">{err}</p>
                 })}
 
                 <div class="form-actions">
@@ -356,5 +459,37 @@ pub fn VmCreate() -> impl IntoView {
                 </div>
             </form>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_next_free_id_skips_taken_ones() {
+        assert_eq!(next_free_vm_id(&[]), "vm-100");
+        let taken: Vec<String> = ["vm-100", "vm-101", "vm-103", "kali"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(next_free_vm_id(&taken), "vm-102");
+    }
+
+    #[test]
+    fn ids_and_names_follow_the_server_rules() {
+        let taken = vec!["vm-100".to_string()];
+        assert!(vm_id_problem("vm-101", &taken).is_none());
+        assert!(vm_id_problem("vm-100", &taken)
+            .unwrap()
+            .contains("already exists"));
+        for bad in ["", "-x", "a b", "a/b", "a.b"] {
+            assert!(vm_id_problem(bad, &taken).is_some(), "{bad}");
+        }
+        assert!(vm_id_problem(&"a".repeat(65), &taken).is_some());
+        assert!(vm_name_problem("web_1-a").is_none());
+        for bad in ["", "a b", "a/b", "../x"] {
+            assert!(vm_name_problem(bad).is_some(), "{bad}");
+        }
     }
 }

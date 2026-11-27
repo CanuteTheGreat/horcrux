@@ -392,9 +392,10 @@ def main():
             j.shot("create-vm-filled")
             page.click("button[type=submit]:has-text('Create VM')")
             try:
-                page.wait_for_function("() => location.pathname === '/vms'", timeout=60000)
+                # Create opens the new VM's own page (power controls, console), like Proxmox selects it
+                page.wait_for_function("() => /^\\/vms\\/[^/]+$/.test(location.pathname) && location.pathname !== '/vms/create'", timeout=60000)
             except Exception:  # noqa: BLE001
-                finding("j3-create-vm", "created", "creating the VM did not return to the VM list: " + j.text()[-300:].replace("\n", " "))
+                finding("j3-create-vm", "created", "creating the VM did not open the new VM's page: " + j.text()[-300:].replace("\n", " "))
             page.wait_for_timeout(1500)
             j.shot("vm-list-after-create")
             vm = vm_by_name(VM_NAME)

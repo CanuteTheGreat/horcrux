@@ -775,14 +775,14 @@ def main():
                 and vm_posts.append(f"-> {r.status} {r.url}"))
         page.locator("button[type=submit]").click()
         try:
-            page.wait_for_url(f"{BASE}/vms", timeout=120000)
+            page.wait_for_url(re.compile(rf"{re.escape(BASE)}/vms/(?!create$)[^/]+$"), timeout=120000)
         except Exception:
             # Say WHY the form did not navigate (error banner, disabled button, requests seen).
             err = page.locator("p.error")
             banner = err.first.inner_text() if err.count() else "(no error banner)"
             btn = page.locator("button[type=submit]").first
             raise AssertionError(
-                f"Create VM did not navigate to /vms from {page.url}: banner={banner!r}; "
+                f"Create VM did not open the new VM's page from {page.url}: banner={banner!r}; "
                 f"submit disabled={btn.is_disabled()}; text={btn.inner_text()!r}; "
                 f"POST /api/vms seen: {vm_posts or 'none'}") from None
         dvm = next(v for v in api_get("/api/vms", token()) if v["name"] == DISP_VM)

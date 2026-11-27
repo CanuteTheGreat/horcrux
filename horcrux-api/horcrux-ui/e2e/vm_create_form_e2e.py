@@ -11,6 +11,7 @@ upload + download share the form's component).
 import hashlib
 import http.server
 import json
+import re
 import os
 import socket
 import ssl
@@ -240,7 +241,7 @@ def main():
         page.select_option("#vm-cdrom", value=iso_value)
         expect(page.locator("#vm-cdrom")).to_have_value(iso_value)
         page.locator("button[type=submit]").click()
-        page.wait_for_url(f"{BASE}/vms", timeout=60000)
+        page.wait_for_url(re.compile(rf"{re.escape(BASE)}/vms/(?!create$)[^/]+$"), timeout=60000)
         vm = next(v for v in api("GET", "/vms")[1] if v["name"] == VM)
         assert vm["cpus"] == 2 and vm["memory"] == 1536 and vm["disk_size"] == 10, vm
         assert vm["display"]["protocol"] == "vnc" and vm["display"]["sound"] == "intel-hda", vm["display"]
