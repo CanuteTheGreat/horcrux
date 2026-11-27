@@ -12,8 +12,11 @@
 //! * `POST /api/security/hardening/apply|revert`    {rules?, dry_run?}
 //! * `GET  /api/security/host`                      host exposure to Gentoo advisories (GLSA)
 //! * `POST /api/security/host/check`                re-check now
+//! * `GET  /api/security/activity[/events]`         security activity dashboard and event list (see `activity`)
+//! * `GET|POST|DELETE /api/security/blocks`         temporary client blocks
 //!
 //! Reads need Sys.Audit, changes Sys.Modify (privileges.rs area `security`).
+pub mod activity;
 pub mod hardening;
 pub mod host_cve;
 pub mod vmscan;
@@ -57,6 +60,15 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/security/hardening/revert", post(hardening_revert))
         .route("/api/security/host", get(host_get))
         .route("/api/security/host/check", post(host_check))
+        .route("/api/security/activity/events", get(activity::list_events))
+        .route("/api/security/activity", get(activity::dashboard))
+        .route("/api/security/activity/check", post(activity::check_now))
+        .route(
+            "/api/security/blocks",
+            get(activity::blocks)
+                .post(activity::create_block)
+                .delete(activity::delete_block),
+        )
 }
 
 // ------------------------------------------------------------ host exposure
@@ -340,6 +352,35 @@ async fn execute(state: Arc<AppState>, mut rec: ScanResult) {
     release();
     st.prune(vs.keep_scans as usize);
     if rec.summary.status == ScanStatus::Done {
+        let c = &rec.summary.counts;
+        if c.critical + c.high > 0 {
+            activity::journal(
+                &state,
+                activity::ev(
+                    "scan",
+                    "scan_finding",
+                    if c.critical > 0 {
+                        "critical"
+                    } else {
+                        "warning"
+                    },
+                    None,
+                    None,
+                    format!(
+                        "{} {}: {} critical, {} high vulnerabilities",
+                        kind.label(),
+                        rec.summary.target,
+                        c.critical,
+                        c.high
+                    ),
+                    Some(format!(
+                        "Scan {} ({} with a fix)",
+                        rec.summary.id, c.fixable
+                    )),
+                ),
+            )
+            .await;
+        }
         if let Some(min) = vs.notify_threshold() {
             let n = rec.summary.counts.at_least(min);
             if n > 0 {
@@ -423,7 +464,7 @@ async fn run_scanner(
     vulnscan::parse_output(&vs.scanner, &stdout)
 }
 
-fn node_name() -> String {
+pub(crate) fn node_name() -> String {
     hostname::get()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_else(|_| "horcrux".into())
@@ -913,6 +954,30 @@ pub fn spawn_scheduler(state: Arc<AppState>) {
                     .collect();
                 if let Some(prev) = &previous_fail {
                     let new: Vec<&String> = failing.iter().filter(|x| !prev.contains(x)).collect();
+                    if !new.is_empty() {
+                        activity::journal(
+                            &state,
+                            activity::ev(
+                                "hardening",
+                                "hardening_regression",
+                                "warning",
+                                None,
+                                None,
+                                format!(
+                                    "Hardening drift on {}: {} rule(s) now failing",
+                                    r.node,
+                                    new.len()
+                                ),
+                                Some(
+                                    new.iter()
+                                        .map(|s| s.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
+                                ),
+                            ),
+                        )
+                        .await;
+                    }
                     if h.notify_on_regression && !new.is_empty() {
                         notify(
                             &state,

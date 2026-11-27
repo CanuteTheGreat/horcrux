@@ -11,6 +11,9 @@ Security (System menu > Security, or `/security`) has four pages:
 - **Hardening**: the Horcrux baseline, checked live, with a score, per-rule status, what to do
   for each failing rule, **Apply baseline**, per-rule Apply and Revert, and a downloadable report
   (HTML for people, text, JSON for tools).
+- **Events**: one timeline of failed logins and lockouts, denied and failing API calls, permission
+  denials, account and policy changes, brute-force detections, baseline drift and new scan
+  findings, with top failing clients and users, temporary blocks and click-through filters.
 - **Settings**: everything below, also settable as the declarative `security:` section.
 
 Design and the comparison with other platforms: [design/security-suite.md](design/security-suite.md).
@@ -114,6 +117,63 @@ security:
       kernel-aslr: "2"
 ```
 
+## Security activity, alerts and brute-force protection
+
+**Security > Activity** (`/security/activity`) joins five sources into one view for a time range
+(last hour, 24 hours, 7 days, 30 days):
+
+| Source | What it adds |
+|---|---|
+| Audit log | failed logins, lockouts ("too many failures"), permission denials, password / two-factor / role changes, security policy and firewall rule changes |
+| API access log (`/api/access-log`) | denied requests (401, 403), rate-limited (429), unknown paths (404) and server errors (5xx); the login endpoint itself is left to the audit log. Needs the access log on |
+| Detector | brute-force detections, alert-rule firings, blocks and unblocks |
+| Scans | a finished scan with critical or high findings |
+| Hardening | rules that started failing since the last scheduled check (baseline drift) |
+
+Every card, client, user and kind is a link that filters the list (`?kind=login_failed,lockout`,
+`?client=203.0.113.9`, `?user=root`, `?q=text`, `?hours=168`). Unknown-path and server-error
+events are counted for alert rules but hidden from the list unless you filter for them.
+The detector's own events are kept in `<data_dir>/security-activity.jsonl`
+(`detection.journal_max_entries`, default 5000); the audit log and the access log keep their own
+retention.
+
+### Brute-force detection
+
+`detection.brute_force.failures` (N, default 5) failed logins or lockouts from one client within
+`window_minutes` (M, default 10) is a brute-force detection: a critical `security` notification
+(rule name "Brute force login", target = the client address), a timeline event, and, only if
+you turned **block** on, a temporary block of that client. Detection runs every `check_secs`
+(default 30 s); the same client fires once per window. Addresses on `allowlist` (addresses or
+CIDR ranges) are never counted or blocked.
+
+### Temporary blocks
+
+Blocking is **off by default**. When on (or when you press Block on the Events page, or
+`POST /api/security/blocks`), the client address is added to a set in its own nftables table
+(`detection.block_table`, default `horcrux_secblock`, input hook, priority -150) with a timeout of
+`block_minutes` (default 30). Everything from that address to this node is dropped, and the block
+removes itself when the time is up; Unblock removes it early. The table is separate from the
+Horcrux firewall, so rule changes never clear or reorder blocks, and blocks are put back from
+`<data_dir>/security-blocks.json` after a restart. Safety: loopback, this node's own addresses,
+allowlisted addresses and the address you are connected from are refused. Needs `nft`
+(Gentoo: `net-firewall/nftables`); without it the page says so and nothing else changes.
+
+### Alert rules
+
+A rule counts events of chosen kinds in a time window and fires when the count reaches the limit
+(per client, per user, or all together), then stays quiet for its cool-down. The starter rules:
+
+| Id | Fires when |
+|---|---|
+| `access-denied-burst` | one client gets 30 denied API answers in 5 minutes |
+| `path-scan` | one client hits 100 unknown API paths in 5 minutes |
+| `permission-denials` | one user is refused 10 times in 10 minutes |
+
+Rules are edited on Security > Settings (add, change, remove) or in the declarative `security:`
+section. Every alert is a `security` notification, so Monitoring > Notifications > Matchers
+can route it: its **rule** is the rule's name and its **target** the client address or user
+(for example a matcher "event is security AND rule matches Brute force" to the on-call channel).
+
 ## Settings reference
 
 `GET/PUT /api/security/settings`, declarative `security:` (`docs/design/declarative-config.md`).
@@ -152,6 +212,18 @@ security:
 | `host_cve.update_command` | `emerge --update --changed-use --newuse --deep --with-bdeps=y @world` | shown as the way to fix |
 | `host_cve.schedule_hours` | `24` | hours between scheduled checks; 0 = on demand only |
 | `host_cve.notify_on_new` | `true` | notify when a new advisory affects the node |
+| `detection.enabled` | `true` | run the detector and alert rules |
+| `detection.check_secs` | `30` | seconds between detector passes (10-3600) |
+| `detection.journal_max_entries` | `5000` | detector, scan and drift events kept (100-100000) |
+| `detection.block_table` | `horcrux_secblock` | nftables table that holds temporary blocks |
+| `detection.brute_force.enabled` | `true` | detect repeated failed logins |
+| `detection.brute_force.failures` | `5` | N failed logins ... |
+| `detection.brute_force.window_minutes` | `10` | ... within M minutes from one client |
+| `detection.brute_force.notify` | `true` | send a notification |
+| `detection.brute_force.block` | `false` | also block the client in the host firewall |
+| `detection.brute_force.block_minutes` | `30` | how long a block lasts |
+| `detection.brute_force.allowlist` | `[]` | addresses / CIDR ranges never counted or blocked |
+| `detection.rules` | 3 starter rules | list of `{id, name, enabled, kinds, path_group, group_by, threshold, window_minutes, severity, cooldown_minutes}`; kinds: `login_failed`, `lockout`, `access_denied`, `rate_limited`, `not_found`, `server_error`, `permission_denied`, `auth_change`, `policy_change`, `brute_force`, `suspicious`, `rule_fired`, `blocked`, `unblocked` |
 
 ## API
 
@@ -169,6 +241,12 @@ security:
 | `GET /api/security/hardening/report?format=html\|text\|json` | report download | Sys.Audit |
 | `POST /api/security/hardening/apply` `{rules?, dry_run?}` | apply the named (or every failing automatic) rule | Sys.Modify |
 | `POST /api/security/hardening/revert` `{rules?, dry_run?}` | revert the named (or every applied) rule | Sys.Modify |
+| `GET /api/security/activity?hours=` | totals, timeline, top failing clients and users, recent events | Sys.Audit |
+| `GET /api/security/activity/events?since=&until=&source=&kind=&severity=&client=&user=&q=&limit=&offset=` | events, newest first (`kind` may be a comma list) | Sys.Audit |
+| `POST /api/security/activity/check` | run the detector now; returns what fired | Sys.Modify |
+| `GET /api/security/blocks` | clients blocked now | Sys.Audit |
+| `POST /api/security/blocks` `{ip, minutes?, reason?}` | block a client (400 for unsafe addresses, 424 `firewall-missing`) | Sys.Modify |
+| `DELETE /api/security/blocks?ip=` | unblock (404 when not blocked) | Sys.Modify |
 
 ## Not planned: guest introspection
 

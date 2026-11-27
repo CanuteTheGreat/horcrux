@@ -153,7 +153,7 @@ the versions that fix it, the update command and a link to System > Packages.
 | 2 | Host CVE exposure | **shipped**: see "Phase 2: Host CVE exposure" below |
 | 2 | Host IDS / integrity | auditd with a Horcrux rule set (logins, privilege use, /etc changes, horcrux binaries), AIDE database init + scheduled check, findings in Security > Events and as notifications; OpenRC + systemd units |
 | 2 | Pentest VM template library | Kali, Parrot, Pentoo as first-class templates (download + checksum/signature check, cloud-init or answer files where the distro supports it, sensible hardware defaults, isolated network by default) |
-| 3 | Security dashboard + events | one page joining access log (hx-api-access-log), audit log, failed logins, baseline drift and scan results; alerting through hx-notification-matchers |
+| 3 | Security dashboard + events | **shipped**: Security > Activity joins the access log, audit log, failed logins and lockouts, baseline drift and scan results (timeline, top failing clients/users, click-through filters); alert rules and brute-force detection (N failures from one client in M minutes -> `security` notification routable by matchers on `rule`/`target`, optional temporary nftables block, default off). Details: docs/SECURITY-SUITE.md "Security activity" |
 | 3 | Guest provisioning secrets | cloud-init/unattend passwords and keys referenced from an encrypted secrets store, never stored in VM config or exports; rotation |
 | 3 | Microsegmentation templates | per-guest default-deny profiles and "allow only from these groups" templates on the existing firewall objects, with a hit-count view |
 | 3 | Container runtime detection | Falco-class (eBPF, Apache-2.0) rules for containers on the node, optional and resource-capped |

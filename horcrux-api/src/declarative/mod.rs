@@ -775,9 +775,21 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
             let mut d = Vec::new();
             let a = serde_json::to_value(&live.security).unwrap_or_default();
             let b = serde_json::to_value(w).unwrap_or_default();
-            for sec in ["vuln_scan", "hardening"] {
-                if let (Some(x), Some(y)) = (a[sec].as_object(), b[sec].as_object()) {
+            for sec in [
+                "vuln_scan",
+                "hardening",
+                "detection",
+                "detection.brute_force",
+            ] {
+                let at =
+                    |v: &serde_json::Value| sec.split('.').fold(v.clone(), |acc, k| acc[k].clone());
+                let (av_all, bv_all) = (at(&a), at(&b));
+                if let (Some(x), Some(y)) = (av_all.as_object(), bv_all.as_object()) {
                     for (k, bv) in y {
+                        // `detection.brute_force` is listed key by key below.
+                        if sec == "detection" && k == "brute_force" {
+                            continue;
+                        }
                         let av = x.get(k).cloned().unwrap_or_default();
                         if av != *bv {
                             d.push(format!("{sec}.{k}: {av} -> {bv}"));

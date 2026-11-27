@@ -6,13 +6,13 @@ use leptos::*;
 use leptos_router::*;
 use wasm_bindgen::JsCast;
 
-fn ask(msg: &str) -> bool {
+pub(crate) fn ask(msg: &str) -> bool {
     web_sys::window()
         .and_then(|w| w.confirm_with_message(msg).ok())
         .unwrap_or(false)
 }
 
-fn when(ts: Option<i64>) -> String {
+pub(crate) fn when(ts: Option<i64>) -> String {
     match ts {
         None => "never".into(),
         Some(t) => js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(t as f64 * 1000.0))
@@ -50,7 +50,7 @@ fn download(name: &str, mime: &str, text: &str) {
 
 /// In-app link with exact active state (query strings count), no full reload.
 #[component]
-fn NavLink(
+pub(crate) fn NavLink(
     #[prop(into)] href: String,
     #[prop(into)] class: Signal<String>,
     active: Signal<bool>,
@@ -73,7 +73,7 @@ fn NavLink(
 
 /// Severity badge; zero/negligible never red.
 #[component]
-fn SevBadge(sev: Severity) -> impl IntoView {
+pub(crate) fn SevBadge(sev: Severity) -> impl IntoView {
     view! { <span class=format!("sev-badge sev-{}", sev.as_str())>{sev.as_str()}</span> }
 }
 
@@ -95,7 +95,7 @@ fn CountBadges(counts: SeverityCounts) -> impl IntoView {
 }
 
 #[component]
-fn SecurityTabs(active: &'static str) -> impl IntoView {
+pub(crate) fn SecurityTabs(active: &'static str) -> impl IntoView {
     let tab = |href: &'static str, id: &'static str, label: &'static str| {
         let on = id == active;
         let cls = if on { "tab active" } else { "tab" };
@@ -106,6 +106,7 @@ fn SecurityTabs(active: &'static str) -> impl IntoView {
             {tab("/security", "overview", "Overview")}
             {tab("/security/vulnerabilities", "vulns", "Vulnerabilities")}
             {tab("/security/hardening", "hardening", "Hardening")}
+            {tab("/security/activity", "activity", "Activity")}
             {tab("/security/settings", "settings", "Settings")}
         </nav>
     }
@@ -127,6 +128,7 @@ pub fn SecurityOverviewPage() -> impl IntoView {
         }
     });
     load.dispatch(());
+    let events = create_resource(|| (), |_| async move { get_activity_dashboard(24).await });
     view! {
         <div class="security-page">
             <div class="page-header">
@@ -177,6 +179,28 @@ pub fn SecurityOverviewPage() -> impl IntoView {
                             </A>
                         </div>
                         <HostCveCard/>
+                        {move || events.get().and_then(|r| r.ok()).map(|d| {
+                            let t = d.totals;
+                            view! {
+                                <div class="stats-grid">
+                                    <A href="/security/activity?kind=login_failed,lockout" class={if t.failed_logins + t.lockouts > 0 { "stat-card stat-link warning attention" } else { "stat-card stat-link" }}>
+                                        <span class="stat-label">"Failed logins, 24 h"</span>
+                                        <div class="stat-value">{t.failed_logins + t.lockouts}</div>
+                                        <div class="dash-meta">{format!("{} locked out", t.lockouts)}</div>
+                                    </A>
+                                    <A href="/security/activity?kind=access_denied,rate_limited" class={if t.access_denied > 0 { "stat-card stat-link warning attention" } else { "stat-card stat-link" }}>
+                                        <span class="stat-label">"Denied API requests, 24 h"</span>
+                                        <div class="stat-value">{t.access_denied}</div>
+                                        <div class="dash-meta">"401, 403 and 429 answers"</div>
+                                    </A>
+                                    <A href="/security/activity?kind=brute_force,rule_fired" class={if t.brute_force > 0 { "stat-card stat-link critical attention" } else { "stat-card stat-link" }}>
+                                        <span class="stat-label">"Brute-force detections, 24 h"</span>
+                                        <div class="stat-value">{t.brute_force}</div>
+                                        <div class="dash-meta">{format!("{} client(s) blocked now", t.blocks_active)}</div>
+                                    </A>
+                                </div>
+                            }
+                        })}
                         <div class="card">
                             <h2>"Scanner"</h2>
                             <p>{if o.scanner_available { format!("{} {} is installed.", o.scanner, o.scanner_version) } else { format!("{} is not installed.", o.scanner) }}
@@ -887,6 +911,9 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                 let v = cur.vuln_scan.clone();
                 let h = cur.hardening.clone();
                 let hc = cur.host_cve.clone();
+                let ev = cur.detection.clone();
+                let bf = ev.brute_force.clone();
+                let rules = ev.rules.clone();
                 view! {
                     <form class="card settings-form" on:submit=move |e| { e.prevent_default(); if let Some(x) = s.get_untracked() { save.dispatch(x) } }>
                         <h2>"Vulnerability scanning"</h2>
@@ -1044,6 +1071,131 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                             <input id="sec-c-cmd" type="text" prop:value=hc.update_command.clone()
                                 on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.host_cve.update_command = c.clone())) }/>
                             <small class="form-help">"Only displayed; Horcrux never runs it."</small>
+                        </div>
+                        <h2>"Security events and brute-force protection"</h2>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-ev-on"><input id="sec-ev-on" type="checkbox" prop:checked=ev.enabled
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.detection.enabled = c)) }/>" Run the detector and the alert rules"</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-ev-secs">"Check every (seconds)"</label>
+                                <input id="sec-ev-secs" type="number" min="10" max="3600" prop:value=ev.check_secs.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.detection.check_secs = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-ev-journal">"Detector events kept"</label>
+                                <input id="sec-ev-journal" type="number" min="100" prop:value=ev.journal_max_entries.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.detection.journal_max_entries = c)) }/>
+                            </div>
+                        </div>
+                        <h3>"Brute-force detection"</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-bf-on"><input id="sec-bf-on" type="checkbox" prop:checked=bf.enabled
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.detection.brute_force.enabled = c)) }/>" Detect repeated failed logins"</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-bf-n">"Failed logins (N)"</label>
+                                <input id="sec-bf-n" type="number" min="1" prop:value=bf.failures.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.detection.brute_force.failures = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-bf-m">"within (minutes, M)"</label>
+                                <input id="sec-bf-m" type="number" min="1" prop:value=bf.window_minutes.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.detection.brute_force.window_minutes = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-bf-notify"><input id="sec-bf-notify" type="checkbox" prop:checked=bf.notify
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.detection.brute_force.notify = c)) }/>" Send a notification"</label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-bf-block"><input id="sec-bf-block" type="checkbox" prop:checked=bf.block
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.detection.brute_force.block = c)) }/>" Also block the client in this node's firewall"</label>
+                                <small class="form-help">"Off by default. A blocked client cannot reach this node at all (web UI, SSH, everything) until the time is up; you can unblock it on Security > Activity. Needs nftables."</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-bf-mins">"Block for (minutes)"</label>
+                                <input id="sec-bf-mins" type="number" min="1" prop:value=bf.block_minutes.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.detection.brute_force.block_minutes = c)) }/>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-bf-allow">"Never block or count these addresses"</label>
+                            <input id="sec-bf-allow" type="text" placeholder="e.g. 192.0.2.10, 10.0.0.0/8" prop:value=bf.allowlist.join(", ")
+                                on:change=move |e| { let c: Vec<String> = event_target_value(&e).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(); upd(Box::new(move |x| x.detection.brute_force.allowlist = c.clone())) }/>
+                            <small class="form-help">"Put your own management addresses here. Loopback and this node's own addresses are never blocked."</small>
+                        </div>
+                        <h3>"Alert rules"</h3>
+                        <p class="help-text">"A rule fires when it counts at least the limit of matching events inside the time window, once per client or user until its cool-down is over. Each alert is a security notification; Notifications > Matchers can route it by rule name or target. Event kinds, comma separated: "<span class="mono">{EVENT_KINDS.join(", ")}</span>"."</p>
+                        {rules.into_iter().enumerate().map(|(i, r)| {
+                            let title = format!("Rule {}", r.name);
+                            view! {
+                                <fieldset class="event-rule">
+                                    <legend>{title}</legend>
+                                    <div class="form-row">
+                                        <div class="form-group">
+                                            <label for=format!("er-on-{i}")><input id=format!("er-on-{i}") type="checkbox" prop:checked=r.enabled
+                                                on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| if let Some(r) = x.detection.rules.get_mut(i) { r.enabled = c })) }/>" On"</label>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for=format!("er-name-{i}")>"Name"</label>
+                                            <input id=format!("er-name-{i}") type="text" prop:value=r.name.clone()
+                                                on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| if let Some(r) = x.detection.rules.get_mut(i) { r.name = c.clone() })) }/>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for=format!("er-kinds-{i}")>"Event kinds"</label>
+                                            <input id=format!("er-kinds-{i}") type="text" prop:value=r.kinds.join(", ")
+                                                on:change=move |e| { let c: Vec<String> = event_target_value(&e).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(); upd(Box::new(move |x| if let Some(r) = x.detection.rules.get_mut(i) { r.kinds = c.clone() })) }/>
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <div class="form-group">
+                                            <label for=format!("er-grp-{i}")>"Only API area"</label>
+                                            <input id=format!("er-grp-{i}") type="text" placeholder="any" prop:value=r.path_group.clone()
+                                                on:change=move |e| { let c = event_target_value(&e).trim().to_string(); upd(Box::new(move |x| if let Some(r) = x.detection.rules.get_mut(i) { r.path_group = c.clone() })) }/>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for=format!("er-by-{i}")>"Count per"</label>
+                                            <select id=format!("er-by-{i}") on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| if let Some(r) = x.detection.rules.get_mut(i) { r.group_by = c.clone() })) }>
+                                                {[("client", "client"), ("user", "user"), ("none", "everything together")].into_iter().map(|(v, l)| view! { <option value=v selected=r.group_by == v>{l}</option> }).collect_view()}
+                                            </select>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for=format!("er-n-{i}")>"Limit"</label>
+                                            <input id=format!("er-n-{i}") type="number" min="1" prop:value=r.threshold.to_string()
+                                                on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| if let Some(r) = x.detection.rules.get_mut(i) { r.threshold = c })) }/>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for=format!("er-w-{i}")>"Window (minutes)"</label>
+                                            <input id=format!("er-w-{i}") type="number" min="1" prop:value=r.window_minutes.to_string()
+                                                on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| if let Some(r) = x.detection.rules.get_mut(i) { r.window_minutes = c })) }/>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for=format!("er-cd-{i}")>"Cool-down (minutes)"</label>
+                                            <input id=format!("er-cd-{i}") type="number" min="0" prop:value=r.cooldown_minutes.to_string()
+                                                on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| if let Some(r) = x.detection.rules.get_mut(i) { r.cooldown_minutes = c })) }/>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for=format!("er-sev-{i}")>"Severity"</label>
+                                            <select id=format!("er-sev-{i}") on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| if let Some(r) = x.detection.rules.get_mut(i) { r.severity = c.clone() })) }>
+                                                {["info", "warning", "critical"].into_iter().map(|o| view! { <option value=o selected=r.severity == o>{o}</option> }).collect_view()}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <button type="button" class="btn btn-xs btn-danger" aria-label=format!("Remove rule {}", r.name)
+                                        on:click=move |_| upd(Box::new(move |x| { if i < x.detection.rules.len() { x.detection.rules.remove(i); } }))>"Remove rule"</button>
+                                </fieldset>
+                            }
+                        }).collect_view()}
+                        <div class="form-group">
+                            <button type="button" class="btn btn-secondary" on:click=move |_| upd(Box::new(|x| {
+                                let mut n = x.detection.rules.len() + 1;
+                                while x.detection.rules.iter().any(|r| r.id == format!("rule-{n}")) { n += 1; }
+                                x.detection.rules.push(EventRule { id: format!("rule-{n}"), name: format!("New rule {n}"), kinds: vec!["access_denied".into()], ..EventRule::default() });
+                            }))>"Add rule"</button>
                         </div>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary" disabled=move || save.pending().get()>"Save"</button>

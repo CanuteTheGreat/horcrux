@@ -1414,3 +1414,27 @@ td .actions { flex-wrap: nowrap; }
 .host-advisory { padding: .6rem 0; border-top: 1px solid var(--border, rgba(128,128,128,.25)); overflow-wrap: anywhere; }
 .host-advisory:first-child { border-top: 0; }
 .host-advisory-pkgs { margin: .25rem 0; font-family: var(--mono, ui-monospace, monospace); font-size: .85rem; }
+
+/* Security events: timeline chart, top lists, rule editor */
+.events-chart { width: 100%; height: 160px; display: block; }
+.events-chart .tl-login { fill: var(--danger); }
+.events-chart .tl-denied { fill: var(--warning-text); }
+.events-chart .tl-other { fill: var(--secondary); }
+.events-chart .tl-axis { stroke: var(--border); stroke-width: .5; vector-effect: non-scaling-stroke; }
+.events-legend { display: flex; flex-wrap: wrap; gap: 1rem; font-size: .85rem; margin-top: .5rem; }
+.events-legend .tl-key { display: inline-block; width: .8rem; height: .8rem; border-radius: 2px; margin-right: .35rem; vertical-align: middle; }
+.events-legend .tl-login { background: var(--danger); }
+.events-legend .tl-denied { background: var(--warning-text); }
+.events-legend .tl-other { background: var(--secondary); }
+.events-tops { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1rem; margin: 1rem 0; }
+.security-events .card { margin-bottom: 1rem; }
+.security-events .events-filter .form-row { display: flex; flex-wrap: wrap; gap: .75rem; align-items: flex-end; }
+.security-events .events-table td { vertical-align: top; overflow-wrap: anywhere; }
+fieldset.event-rule { border: 1px solid var(--border); border-radius: 6px; margin: .75rem 0; padding: .5rem .75rem; }
+@media (max-width: 640px) { .events-tops { grid-template-columns: 1fr; } .events-chart { height: 120px; } }
+.events-axis { display: flex; justify-content: space-between; gap: .5rem; font-size: .8rem; color: var(--secondary); margin-top: .25rem; flex-wrap: wrap; }
+.security-events .nowrap { white-space: nowrap; }
+.security-events .table-container, .security-events .card { overflow-x: auto; }
+.security-tabs { flex-wrap: wrap; }
+.security-page .help-text a, .security-page p a:not(.btn) { color: var(--primary); }
+a.sev-badge { text-decoration: none; }
