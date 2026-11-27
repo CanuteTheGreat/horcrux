@@ -240,6 +240,22 @@ pub struct ServerConfig {
     /// HTTP-01 challenges (80 for Let's Encrypt). Env: `HORCRUX_HTTP_REDIRECT_PORT`.
     #[serde(default)]
     pub http_redirect_port: Option<u16>,
+    /// API requests per minute per authenticated user (token bucket, so a
+    /// page load may burst up to this many). Env: `RATE_LIMIT_MAX_REQUESTS`.
+    #[serde(default = "default_user_rate_limit")]
+    pub api_rate_limit_per_user: u32,
+    /// API requests per minute per client IP for requests without any
+    /// credential. Env: `RATE_LIMIT_MAX_REQUESTS`.
+    #[serde(default = "default_anonymous_rate_limit")]
+    pub api_rate_limit_anonymous: u32,
+}
+
+fn default_user_rate_limit() -> u32 {
+    1200
+}
+
+fn default_anonymous_rate_limit() -> u32 {
+    100
 }
 
 /// Storage paths configuration
@@ -325,6 +341,8 @@ impl Default for ServerConfig {
             port: 8006,
             tls_enabled: true,
             http_redirect_port: None,
+            api_rate_limit_per_user: default_user_rate_limit(),
+            api_rate_limit_anonymous: default_anonymous_rate_limit(),
         }
     }
 }

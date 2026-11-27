@@ -64,6 +64,72 @@ pub struct StoragePool {
     pub lvm: Option<lvm::LvmPoolOptions>,
 }
 
+/// What a pool's space really comes from, so pools that share it are counted
+/// once in totals: `zfs:<zpool>` for ZFS (datasets of one zpool share its
+/// free space), else `<fstype>:<mount source>` of the filesystem holding the
+/// pool's path (two directory pools on one disk). `None` when unknown
+/// (block pools, a path that is not mounted here).
+pub fn pool_backing(pool: &StoragePool) -> Option<String> {
+    match pool.storage_type {
+        StorageType::Zfs => {
+            let ds = pool.path.trim_start_matches("/dev/zvol/");
+            ds.split('/')
+                .next()
+                .filter(|p| !p.is_empty())
+                .map(|p| format!("zfs:{p}"))
+        }
+        StorageType::Directory
+        | StorageType::Nfs
+        | StorageType::Cifs
+        | StorageType::CephFs
+        | StorageType::GlusterFs
+        | StorageType::BtrFs => {
+            let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+            backing_from_mountinfo(&mountinfo, &pool.path)
+        }
+        _ => None,
+    }
+}
+
+/// [`pool_backing`] for a filesystem path, from `/proc/self/mountinfo` text:
+/// the mount with the longest mount point that contains `path`.
+pub fn backing_from_mountinfo(mountinfo: &str, path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    let path = if path.is_empty() { "/" } else { path };
+    let mut best: Option<(usize, String)> = None;
+    for line in mountinfo.lines() {
+        // id parent maj:min root mount-point opts [optional...] - fstype source superopts
+        let (left, right) = match line.split_once(" - ") {
+            Some(x) => x,
+            None => continue,
+        };
+        let mnt = match left.split(' ').nth(4) {
+            Some(m) => m.replace("\\040", " "),
+            None => continue,
+        };
+        let inside = mnt == "/"
+            || path == mnt
+            || path
+                .strip_prefix(mnt.as_str())
+                .is_some_and(|rest| rest.starts_with('/'));
+        if !inside || best.as_ref().is_some_and(|(l, _)| *l >= mnt.len()) {
+            continue;
+        }
+        let mut r = right.split(' ');
+        let (fstype, source) = match (r.next(), r.next()) {
+            (Some(f), Some(s)) => (f, s),
+            _ => continue,
+        };
+        let key = if fstype == "zfs" {
+            format!("zfs:{}", source.split('/').next().unwrap_or(source))
+        } else {
+            format!("{fstype}:{source}")
+        };
+        best = Some((mnt.len(), key));
+    }
+    best.map(|(_, k)| k)
+}
+
 /// (total, available) GB of the filesystem holding `path`, via statvfs(2).
 pub fn fs_capacity_gb(path: &str) -> Option<(u64, u64)> {
     let st = nix::sys::statvfs::statvfs(path).ok()?;
@@ -1371,6 +1437,30 @@ impl StorageManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pools_sharing_a_filesystem_get_the_same_backing() {
+        let mi = "\
+31 1 0:29 / / rw,relatime - zfs rpool/ROOT/horcrux rw,xattr
+40 31 0:41 / /var/lib/vms rw,relatime - zfs rpool/vms rw,xattr
+41 40 0:42 / /var/lib/vms/big rw,relatime - zfs rpool/vms/big rw,xattr
+50 31 8:17 / /mnt/usb\\040disk rw,relatime - ext4 /dev/sdb1 rw
+";
+        let zfs = Some("zfs:rpool".to_string());
+        assert_eq!(
+            backing_from_mountinfo(mi, "/var/lib/horcrux/storage/local"),
+            zfs
+        );
+        assert_eq!(backing_from_mountinfo(mi, "/var/lib/vms"), zfs);
+        assert_eq!(backing_from_mountinfo(mi, "/var/lib/vms/big/"), zfs);
+        // /var/lib/vmsX is not inside /var/lib/vms
+        assert_eq!(backing_from_mountinfo(mi, "/var/lib/vmsX"), zfs);
+        assert_eq!(
+            backing_from_mountinfo(mi, "/mnt/usb disk/pool"),
+            Some("ext4:/dev/sdb1".to_string())
+        );
+        assert_eq!(backing_from_mountinfo("", "/x"), None);
+    }
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("hx-storage-{name}-{}", std::process::id()));

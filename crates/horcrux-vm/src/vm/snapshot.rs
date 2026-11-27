@@ -498,21 +498,23 @@ impl VmSnapshotManager {
                     .unwrap_or(&disk_snap.snapshot_path);
                 let snapshot_path = format!("{}@{}", dataset, disk_snap.snapshot_name);
 
-                Command::new("zfs")
-                    .arg("destroy")
-                    .arg(&snapshot_path)
-                    .output()
-                    .await?;
+                run_tool(
+                    "zfs",
+                    &["destroy", snapshot_path.as_str()],
+                    "delete ZFS snapshot",
+                )
+                .await?;
             }
             StorageType::Lvm => {
                 let vg_name = disk_snap.snapshot_path.split('/').nth(2).unwrap_or("vg");
                 let snapshot_path = format!("/dev/{}/{}", vg_name, disk_snap.snapshot_name);
 
-                Command::new("lvremove")
-                    .arg("-f")
-                    .arg(&snapshot_path)
-                    .output()
-                    .await?;
+                run_tool(
+                    "lvremove",
+                    &["-f", snapshot_path.as_str()],
+                    "delete LVM snapshot",
+                )
+                .await?;
             }
             StorageType::Qcow2 => {
                 qemu_img_snapshot("-d", &disk_snap.snapshot_name, &disk_snap.snapshot_path).await?;
@@ -522,23 +524,21 @@ impl VmSnapshotManager {
                     "{}.snap_{}",
                     disk_snap.snapshot_path, disk_snap.snapshot_name
                 );
-                Command::new("btrfs")
-                    .arg("subvolume")
-                    .arg("delete")
-                    .arg(&snapshot_path)
-                    .output()
-                    .await?;
+                run_tool(
+                    "btrfs",
+                    &["subvolume", "delete", snapshot_path.as_str()],
+                    "delete Btrfs snapshot",
+                )
+                .await?;
             }
             StorageType::Ceph => {
-                Command::new("rbd")
-                    .arg("snap")
-                    .arg("rm")
-                    .arg(format!(
-                        "{}@{}",
-                        disk_snap.snapshot_path, disk_snap.snapshot_name
-                    ))
-                    .output()
-                    .await?;
+                let spec = format!("{}@{}", disk_snap.snapshot_path, disk_snap.snapshot_name);
+                run_tool(
+                    "rbd",
+                    &["snap", "rm", spec.as_str()],
+                    "delete Ceph snapshot",
+                )
+                .await?;
             }
         }
 
@@ -601,41 +601,39 @@ impl VmSnapshotManager {
                     .unwrap_or(&disk_snap.snapshot_path);
                 let snapshot_path = format!("{}@{}", dataset, disk_snap.snapshot_name);
 
-                Command::new("zfs")
-                    .arg("rollback")
-                    .arg("-r")
-                    .arg(&snapshot_path)
-                    .output()
-                    .await?;
+                run_tool(
+                    "zfs",
+                    &["rollback", "-r", snapshot_path.as_str()],
+                    "roll back ZFS snapshot",
+                )
+                .await?;
             }
             StorageType::Lvm => {
                 // LVM restore requires merge operation
                 let vg_name = disk_snap.snapshot_path.split('/').nth(2).unwrap_or("vg");
                 let snapshot_path = format!("/dev/{}/{}", vg_name, disk_snap.snapshot_name);
 
-                Command::new("lvconvert")
-                    .arg("--merge")
-                    .arg(&snapshot_path)
-                    .output()
-                    .await?;
+                run_tool(
+                    "lvconvert",
+                    &["--merge", snapshot_path.as_str()],
+                    "merge LVM snapshot",
+                )
+                .await?;
             }
             StorageType::Qcow2 => {
                 qemu_img_snapshot("-a", &disk_snap.snapshot_name, &disk_snap.snapshot_path).await?;
             }
             StorageType::Btrfs => {
-                // Btrfs requires deleting current and renaming snapshot
-                tracing::warn!("Btrfs snapshot restoration not fully implemented");
+                restore_btrfs_snapshot(&disk_snap.snapshot_path, &disk_snap.snapshot_name).await?;
             }
             StorageType::Ceph => {
-                Command::new("rbd")
-                    .arg("snap")
-                    .arg("rollback")
-                    .arg(format!(
-                        "{}@{}",
-                        disk_snap.snapshot_path, disk_snap.snapshot_name
-                    ))
-                    .output()
-                    .await?;
+                let spec = format!("{}@{}", disk_snap.snapshot_path, disk_snap.snapshot_name);
+                run_tool(
+                    "rbd",
+                    &["snap", "rollback", spec.as_str()],
+                    "roll back Ceph snapshot",
+                )
+                .await?;
             }
         }
 
@@ -789,6 +787,37 @@ async fn run_tool(prog: &str, args: &[&str], what: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Roll a Btrfs subvolume back to its read-only snapshot
+/// `<subvol>.snap_<name>`: the current subvolume is moved aside, a writable
+/// snapshot of the saved one takes its place, and only then is the old one
+/// deleted. If the new snapshot can't be made, the old subvolume is moved
+/// back, so a failed rollback never leaves the VM without a disk.
+async fn restore_btrfs_snapshot(subvol: &str, name: &str) -> Result<()> {
+    let saved = format!("{subvol}.snap_{name}");
+    let aside = format!("{subvol}.pre-rollback");
+    tokio::fs::rename(subvol, &aside).await.map_err(|e| {
+        horcrux_common::Error::System(format!(
+            "Failed to roll back Btrfs snapshot: move {subvol} aside: {e}"
+        ))
+    })?;
+    if let Err(e) = run_tool(
+        "btrfs",
+        &["subvolume", "snapshot", saved.as_str(), subvol],
+        "roll back Btrfs snapshot",
+    )
+    .await
+    {
+        let _ = tokio::fs::rename(&aside, subvol).await;
+        return Err(e);
+    }
+    run_tool(
+        "btrfs",
+        &["subvolume", "delete", aside.as_str()],
+        "remove the rolled-back Btrfs subvolume",
+    )
+    .await
 }
 
 /// `qemu-img snapshot <op> <name> <image>` (op = -c create, -a apply,

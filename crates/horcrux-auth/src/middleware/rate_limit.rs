@@ -215,6 +215,39 @@ pub async fn rate_limit_middleware(
     }
 }
 
+/// Does the request carry a credential (Bearer token, API key or session
+/// cookie)? Such requests are limited per authenticated user after the auth
+/// middleware has run (see [`rate_limit_middleware`] inside the protected
+/// routes); only anonymous requests share a per-IP budget. Without this split
+/// every request was keyed by IP because the outer layer runs before auth, so
+/// one browser (or everyone behind one NAT/reverse proxy) exhausted a shared
+/// budget while clicking through pages and the UI showed raw HTTP 429 errors.
+pub fn has_credentials(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|s| s.starts_with("Bearer "))
+        || headers.contains_key("x-api-key")
+        || crate::middleware::auth::session_cookie(headers).is_some()
+}
+
+/// Per-IP limit for anonymous requests only; requests with credentials pass
+/// through to the per-user limit applied after authentication. A bogus
+/// credential gains nothing: the auth middleware rejects it before any
+/// handler runs, and credential-submitting endpoints keep their own strict
+/// per-IP limiter.
+pub async fn anonymous_rate_limit_middleware(
+    limiter: Arc<RateLimiter>,
+    conn_info: ConnectInfo<SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Result<Response, RateLimitError> {
+    if has_credentials(request.headers()) {
+        return Ok(next.run(request).await);
+    }
+    rate_limit_middleware(limiter, conn_info, request, next).await
+}
+
 /// Create a rate limiter with default config
 pub fn create_default_limiter() -> Arc<RateLimiter> {
     Arc::new(RateLimiter::new(RateLimitConfig::default()))
@@ -271,6 +304,30 @@ mod tests {
         // 6th request should fail
         let result = limiter.check("test-key").await;
         assert!(!result.allowed);
+    }
+
+    #[test]
+    fn credentials_are_detected_for_each_auth_method() {
+        use axum::http::{HeaderMap, HeaderValue};
+        let mut h = HeaderMap::new();
+        assert!(!has_credentials(&h));
+        h.insert("authorization", HeaderValue::from_static("Bearer abc"));
+        assert!(has_credentials(&h));
+        let mut h = HeaderMap::new();
+        h.insert("authorization", HeaderValue::from_static("Basic abc"));
+        assert!(!has_credentials(&h));
+        let mut h = HeaderMap::new();
+        h.insert("x-api-key", HeaderValue::from_static("k"));
+        assert!(has_credentials(&h));
+        let mut h = HeaderMap::new();
+        h.insert(
+            "cookie",
+            HeaderValue::from_static("theme=dark; session_id=s1"),
+        );
+        assert!(has_credentials(&h));
+        let mut h = HeaderMap::new();
+        h.insert("cookie", HeaderValue::from_static("theme=dark"));
+        assert!(!has_credentials(&h));
     }
 
     #[tokio::test]

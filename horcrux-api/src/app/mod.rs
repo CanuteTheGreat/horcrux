@@ -137,21 +137,32 @@ pub async fn run() -> anyhow::Result<()> {
     // just production limits applied to a test fixture they weren't sized
     // for). CI sets this much higher; production is unaffected since the
     // var is unset there.
-    let rate_limit_max_requests: u32 = std::env::var("RATE_LIMIT_MAX_REQUESTS")
+    // Authenticated callers get a per-user budget (applied after the auth
+    // middleware, inside the protected routes); anonymous requests share a
+    // per-IP one. Both are `[server]` config keys; RATE_LIMIT_MAX_REQUESTS
+    // overrides both (CI's parallel suite shares one admin user).
+    let env_rate_limit: Option<u32> = std::env::var("RATE_LIMIT_MAX_REQUESTS")
         .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(100);
+        .and_then(|v| v.parse().ok());
     let rate_limit_config = middleware::rate_limit::RateLimitConfig {
-        max_requests: rate_limit_max_requests,
+        max_requests: env_rate_limit.unwrap_or(horcrux_config.server.api_rate_limit_per_user),
         window: std::time::Duration::from_secs(60),
         per_user: true,
     };
     let rate_limiter = middleware::rate_limit::create_limiter(rate_limit_config.clone());
     middleware::rate_limit::start_cleanup_task(rate_limiter.clone());
+    let anon_rate_limit_config = middleware::rate_limit::RateLimitConfig {
+        max_requests: env_rate_limit.unwrap_or(horcrux_config.server.api_rate_limit_anonymous),
+        window: std::time::Duration::from_secs(60),
+        per_user: false,
+    };
+    let anon_rate_limiter = middleware::rate_limit::create_limiter(anon_rate_limit_config.clone());
+    middleware::rate_limit::start_cleanup_task(anon_rate_limiter.clone());
     info!(
-        "Rate limiter initialized: {} requests per {} seconds",
+        "Rate limiter initialized: {} requests/{}s per user, {} per anonymous client",
         rate_limit_config.max_requests,
-        rate_limit_config.window.as_secs()
+        rate_limit_config.window.as_secs(),
+        anon_rate_limit_config.max_requests
     );
 
     // Initialize strict rate limiter for auth endpoints
@@ -637,6 +648,19 @@ pub async fn run() -> anyhow::Result<()> {
             state.clone(),
             middleware::rbac::rbac_middleware::<AppState>,
         ))
+        // Per-user rate limit: runs after authentication, so it is keyed by
+        // the caller, not by the client IP.
+        .layer({
+            let rate_limiter = rate_limiter.clone();
+            axum_middleware::from_fn(move |conn_info, req, next| {
+                middleware::rate_limit::rate_limit_middleware(
+                    rate_limiter.clone(),
+                    conn_info,
+                    req,
+                    next,
+                )
+            })
+        })
         // Tell the access log who the authenticated caller is.
         .layer(axum_middleware::from_fn(api::access_log::identify))
         .layer(axum_middleware::from_fn_with_state(
@@ -685,9 +709,11 @@ pub async fn run() -> anyhow::Result<()> {
         .layer(axum_middleware::from_fn(move |req, next| {
             middleware::cors::cors_middleware(cors_config.clone(), req, next)
         }))
+        // Anonymous requests: per-IP limit (credentialed ones are limited
+        // per user inside the protected routes).
         .layer(axum_middleware::from_fn(move |conn_info, req, next| {
-            middleware::rate_limit::rate_limit_middleware(
-                rate_limiter.clone(),
+            middleware::rate_limit::anonymous_rate_limit_middleware(
+                anon_rate_limiter.clone(),
                 conn_info,
                 req,
                 next,
@@ -3439,6 +3465,18 @@ async fn create_template(
     Json(payload): Json<CreateTemplateRequest>,
 ) -> Result<(StatusCode, Json<Template>), ApiError> {
     let vm = state.vm_manager.get_vm(&payload.vm_id).await?;
+    // The template is a copy of the VM's disk: copied while the guest writes
+    // to it, the image is torn (inconsistent filesystem, half-written
+    // blocks). Like Proxmox, only a stopped VM becomes a template.
+    if matches!(
+        vm.status,
+        horcrux_common::VmStatus::Running | horcrux_common::VmStatus::Paused
+    ) {
+        return Err(ApiError::Conflict(format!(
+            "VM {} is {}: shut it down first, a template is made from a stopped VM's disk",
+            vm.name, vm.status
+        )));
+    }
     let vm_disks: Vec<String> = vm.disks.iter().map(|d| d.path.clone()).collect();
     let disk_path = match payload.disk_path {
         Some(p) if vm_disks.contains(&p) => p,
@@ -5360,9 +5398,22 @@ async fn list_vault_secrets(
 
 // Storage handlers
 
-async fn list_storage_pools(State(state): State<Arc<AppState>>) -> Json<Vec<storage::StoragePool>> {
+async fn list_storage_pools(State(state): State<Arc<AppState>>) -> Json<Vec<serde_json::Value>> {
     let pools = state.storage_manager.list_pools().await;
-    Json(pools)
+    // `backing`: what the pool's space comes from, so the Storage page
+    // counts pools that share one filesystem / zpool once in its totals.
+    Json(
+        pools
+            .iter()
+            .map(|p| {
+                let mut v = serde_json::to_value(p).unwrap_or_default();
+                if let (Some(o), Some(b)) = (v.as_object_mut(), storage::pool_backing(p)) {
+                    o.insert("backing".into(), serde_json::Value::String(b));
+                }
+                v
+            })
+            .collect(),
+    )
 }
 
 async fn get_storage_pool(
