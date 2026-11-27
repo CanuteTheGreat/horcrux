@@ -791,6 +791,33 @@ def main():
         d = api_get(f"/api/vms/{vid}", token())["display"]
         assert d["protocol"] == "vnc" and d["sound"] == "ich9-intel-hda", d
 
+        # A stopped VNC guest must never navigate to a console or open a
+        # websocket; the stopped message and display settings stay usable.
+        stopped_console_requests = []
+        stopped_websockets = []
+        def record_stopped_request(request):
+            if f"/api/console/{vid}/" in request.url and any(
+                part in request.url for part in ("/novnc", "/vnc", "/ticket")
+            ):
+                stopped_console_requests.append(request.url)
+        def record_stopped_websocket(ws):
+            stopped_websockets.append(ws.url)
+        page.on("request", record_stopped_request)
+        page.on("websocket", record_stopped_websocket)
+        page.goto(f"{BASE}/vms/{vid}/console")
+        expect(page.locator("#console-stopped")).to_contain_text("start it to get a live console", timeout=30000)
+        expect(page.locator("#console-start")).to_be_visible()
+        expect(page.locator("#disp-protocol")).to_be_visible()
+        expect(page.locator("#console-placeholder")).to_have_count(1)
+        expect(page.locator("iframe.console-iframe")).to_have_count(0)
+        expect(page.locator("#console-status")).to_have_count(0)
+        assert "Connecting..." not in page.locator("body").inner_text()
+        assert '"VALIDATION_ERROR"' not in page.locator("body").inner_text()
+        assert not stopped_console_requests, stopped_console_requests
+        assert not stopped_websockets, stopped_websockets
+        page.remove_listener("request", record_stopped_request)
+        page.remove_listener("websocket", record_stopped_websocket)
+
         # Start from the VM list; noVNC in the console page really connects
         # to QEMU's VNC server (password-protected, through the ticketed
         # WebSocket proxy).
