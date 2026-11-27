@@ -97,7 +97,7 @@ api PUT /san/settings '{"sanlock_watchdog": true, "reconcile_interval_secs": 10}
 echo "== shared LVM on the LUN"
 r=$(api POST /san/lvm "{\"id\":\"sanlvm\",\"vg_name\":\"vg_hxsan\",\"device\":\"$WWID\",\"discard_removed\":true,\"create_vg\":true}")
 echo "$r" | head -c 2500; echo
-check "shared-vg-created" '[ "$(vgs --noheadings -o vg_lock_type vg_hxsan 2>/dev/null | tr -d " ")" = sanlock ]' "$(vgs -o vg_name,vg_lock_type 2>&1)"
+check "shared-vg-created" '[ "$(vgs --noheadings -o vg_lock_type vg_hxsan 2>/dev/null | tr -d " ")" = sanlock ]' "$(vgs -o vg_name,vg_lock_type 2>&1; pvs -o pv_name,vg_name 2>&1; dmsetup ls --tree 2>&1 | head -30; multipath -ll 2>&1 | head -20; lvmconfig --type full devices/multipath_component_detection devices/filter devices/global_filter 2>&1; dpkg -l lvm2 multipath-tools | grep ^ii)"
 check "lvmlocal-owned-with-host-id" 'grep -q "host_id = 1" /etc/lvm/lvmlocal.conf && grep -q "use_lvmlockd = 1" /etc/lvm/lvmlocal.conf'
 check "lvmlockd-sees-lockspace" 'lvmlockctl -i 2>/dev/null | grep -q vg_hxsan' "$(lvmlockctl -i 2>&1 | head)"
 pools=$(api GET /storage/pools)
@@ -161,7 +161,7 @@ check "import-left-no-file-in-dev" '[ -z "$(find /dev/vg_hxsan/ -mindepth 1 ! -n
 r=$(api POST /vms/201/disks "{\"size_gb\":1,\"bus\":\"virtio\",\"storage\":\"$PID\"}")
 check "add-disk-makes-vm-201-disk-1" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 201 ] && [ -b /dev/vg_hxsan/vm-201-disk-1 ] && [ "$(vmj "d[\"body\"][\"disks\"][1][\"path\"]")" = /dev/vg_hxsan/vm-201-disk-1 ]' "$r"
 r=$(api PUT /vms/201/disks/1 '{"size_gb": 2}')
-check "grow-of-a-block-disk-400-not-500" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 400 ]' "$r"
+check "grow-a-block-disk-extends-its-lv" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 200 ] && [ "$(lvs --noheadings --units g --nosuffix -o lv_size vg_hxsan/vm-201-disk-1 | tr -d " ")" = 2.00 ] && [ "$(vmj "d[\"body\"][\"disks\"][1][\"size_gb\"]")" = 2 ]' "$r $(lvs vg_hxsan 2>&1)"
 r=$(api POST /vms/201/start)
 for i in $(seq 1 30); do pgrep -f "[f]ile=/dev/vg_hxsan/vm-201-disk-0,format=raw" >/dev/null && break; sleep 1; done
 check "vm-runs-on-the-lv" 'pgrep -f "[f]ile=/dev/vg_hxsan/vm-201-disk-0,format=raw" >/dev/null && pgrep -f "[f]ile=/dev/vg_hxsan/vm-201-disk-1,format=raw" >/dev/null' "$r $(tail -5 $D/api.log)"

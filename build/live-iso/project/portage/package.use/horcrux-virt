@@ -2,3 +2,6 @@
 app-emulation/qemu spice usbredir virtfs vnc zstd
 # podman -> netavark builds its firewall rules through the nftables json interface; same line horcrux-repo-config ships in horcrux-roles.use
 net-firewall/nftables json
+# SAN storage on every server: iSCSI, dm-multipath, NVMe-oF, lvmlockd + sanlock (horcrux-bin[san]); same lines horcrux-repo-config ships in horcrux-roles.use
+app-emulation/horcrux-bin san
+sys-fs/lvm2 lvm sanlock

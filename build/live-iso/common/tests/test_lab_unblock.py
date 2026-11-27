@@ -181,6 +181,19 @@ class ProductBlockers(unittest.TestCase):
                     t = open(os.path.join(root, fn), errors="replace").read()
                     self.assertNotRegex(t, r"(?m)^[^#\n]*\s-spice\b", os.path.join(root, fn))
 
+    def test_san_host_tools_ship_on_every_image(self):
+        # Storage > SAN needs iscsiadm, multipathd, nvme, lvmlockd + sanlock on the node (Proxmox VE ships them by default):
+        # horcrux-bin[san] pulls them, lvm2 must be built with lvmlockd's sanlock lock manager
+        for path in (("gentoo", "sys-apps", "horcrux-repo-config", "files", "horcrux-roles.use"),
+                     ("build", "live-iso", "project", "portage", "package.use", "horcrux-virt")):
+            t = _rd(*path)
+            self.assertRegex(t, r"(?m)^app-emulation/horcrux-bin .*\bsan\b", path[-1])
+            self.assertRegex(t, r"(?m)^sys-fs/lvm2 .*\bsanlock\b", path[-1])
+        self.assertRegex(_rd("gentoo", "app-emulation", "horcrux-bin", "files", "package.use"), r"(?m)^sys-fs/lvm2 .*\bsanlock\b")
+        eb = _rd("gentoo", "app-emulation", "horcrux-bin", "horcrux-bin-0.1.0.ebuild")
+        for atom in ("sys-block/open-iscsi", "sys-fs/multipath-tools", "sys-cluster/sanlock", "sys-apps/nvme-cli", "sys-fs/lvm2[lvm,sanlock]"):
+            self.assertIn(atom, eb)
+
     def test_live_image_nftables_has_json_for_netavark(self):
         # podman is in the live package list; netavark needs nftables[json] and emerge --noreplace has no autounmask
         use = _rd("build", "live-iso", "project", "portage", "package.use", "horcrux-virt")

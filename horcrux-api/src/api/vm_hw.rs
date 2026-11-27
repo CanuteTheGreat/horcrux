@@ -810,6 +810,35 @@ async fn update_disk(
     Path((id, index)): Path<(String, usize)>,
     Json(upd): Json<crate::vm::hardware::DiskUpdate>,
 ) -> Result<Json<VmConfig>, ApiError> {
+    // A raw volume of a block pool (LVM, SAN LVM) grows through its pool
+    // first (lvextend); the VM then records the size (or QEMU picks it up
+    // with block_resize while it runs).
+    if let (Some(want), Some(d)) = (
+        upd.size_gb,
+        state
+            .vm_manager
+            .get_vm(&id)
+            .await
+            .ok()
+            .and_then(|vm| vm.disks.get(index).cloned()),
+    ) {
+        if want > d.size_gb && d.is_block_volume() && d.format.as_deref() != Some("qcow2") {
+            let name = std::path::Path::new(&d.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            state
+                .storage_manager
+                .resize_volume(d.storage.as_deref().unwrap_or_default(), &name, want)
+                .await
+                .map_err(|e| match e {
+                    horcrux_common::Error::InvalidConfig(m)
+                    | horcrux_common::Error::Validation(m) => ApiError::BadRequest(m),
+                    other => ApiError::from(other),
+                })?;
+        }
+    }
     Ok(Json(state.vm_manager.update_disk(&id, index, upd).await?))
 }
 

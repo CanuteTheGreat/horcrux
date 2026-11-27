@@ -241,6 +241,32 @@ exclusively on the node that works on it. A volume that is a VM's disk is
 refused (409), like delete and resize. This needs no LVM CoW snapshots,
 which shared VGs cannot use across nodes.
 
+### VM disks on LVM and shared LVM
+
+An LVM pool, including a shared VG on a SAN LUN and a volume-chain pool, is
+offered in Create VM and Add disk like a directory pool. A disk placed there
+is a volume of its own, named as on Proxmox VE: `vm-<id>-disk-<n>`
+(`/dev/<vg>/vm-<id>-disk-<n>`). On a plain LVM pool the volume is raw; on a
+volume-chain pool it holds a qcow2 image (the disk's `format` says which,
+set by the server from the pool, never probed from the content). Import disk
+writes the image straight into the volume (`qemu-img convert -n`; the image
+must fit the disk's size). Removing a disk with its data and deleting the VM
+delete its volumes through the pool, so `wipe_removed` / `discard_removed`
+apply; a volume of a VM is refused by the volume routes (409).
+
+Side files of such a VM (QMP/serial/agent sockets, console state, serial
+log, cloud-init seed, EFI variables, TPM state) never go next to the volume
+in `/dev`: they live in `<VM storage dir>/blk/<vg>--<lv>.disk.*` on the node
+(`paths.vm_storage`, default `/var/lib/horcrux/vms`). A VM refuses to start
+with 424 `vm-block-volume-inactive` when a volume is not visible on the node
+(VG missing or its lockspace not started).
+
+Growing a raw disk extends its LV through the pool (`lvextend`; QEMU picks
+the size up with `block_resize` when the VM runs). Not yet: growing a disk of
+a volume-chain pool (400), VM-level snapshots of block-pool disks (take a volume-chain snapshot of the stopped VM's volume through
+the storage routes meanwhile) and clones (a clone of a block-pool VM is
+copied into the node's VM storage directory).
+
 ### Web UI
 
 Storage > SAN (`/storage/san`, `?node=<name>` for another member) shows the

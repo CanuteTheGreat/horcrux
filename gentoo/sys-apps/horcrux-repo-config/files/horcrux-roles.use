@@ -17,3 +17,7 @@ media-video/ffmpeg vpx x264 -drm -soc
 # ffmpeg (Console encoder) pulls media-libs/harfbuzz (drawtext/libass); harfbuzz's default `cairo` USE (hb-view/hb-shape tools only) dragged x11-libs/cairo into a
 # headless server's world update (daily server-systemd red 2026-11-20). Nothing on a Horcrux host needs harfbuzz's cairo tools.
 media-libs/harfbuzz -cairo
+# SAN storage (Storage > SAN, shipped by default like Proxmox VE does): the manager drives the iSCSI initiator, dm-multipath, NVMe over
+# Fabrics and shared LVM (lvmlockd with the sanlock lock manager). horcrux-bin's `san` USE pulls those host tools; lvm2 needs `lvm sanlock`.
+app-emulation/horcrux-bin san
+sys-fs/lvm2 lvm sanlock

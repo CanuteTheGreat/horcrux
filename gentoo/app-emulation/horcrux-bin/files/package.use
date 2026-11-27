@@ -9,3 +9,5 @@ media-video/ffmpeg vpx x264 -drm -soc
 # ffmpeg (Console encoder) pulls media-libs/harfbuzz (drawtext/libass); harfbuzz's default `cairo` USE (hb-view/hb-shape tools only) dragged x11-libs/cairo into a
 # headless server's world update (daily server-systemd red 2026-11-20). Nothing on a Horcrux host needs harfbuzz's cairo tools.
 media-libs/harfbuzz -cairo
+# SAN storage: lvmlockd with the sanlock lock manager (horcrux-bin[san] depends on lvm2[lvm,sanlock])
+sys-fs/lvm2 lvm sanlock

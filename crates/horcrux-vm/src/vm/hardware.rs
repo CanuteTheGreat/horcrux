@@ -475,10 +475,10 @@ impl VmManager {
                 Some(s) if s > 65536 => {
                     return Err(Error::Validation("size must be at most 65536 GB".into()))
                 }
-                Some(s) if s > cur.size_gb && cur.is_block_volume() => {
+                Some(s) if s > cur.size_gb && cur.is_block_volume() && cur.format.as_deref() == Some("qcow2") => {
                     return Err(Error::Validation(format!(
-                        "disk{index} is a volume of storage pool {}: growing block volumes is not \
-                         supported yet (extend the logical volume on the node)",
+                        "disk{index} is a qcow2 volume of the volume-chain pool {}: growing it is not \
+                         supported yet",
                         cur.storage.as_deref().unwrap_or_default()
                     )))
                 }
@@ -489,7 +489,10 @@ impl VmManager {
             qemu::validate_disk_set(&disks).map_err(Error::Validation)?;
             if let Some(s) = grow {
                 if !running {
-                    resize_image(&next.path, s).await?;
+                    // a raw block-pool volume was extended by the API through its pool
+                    if !next.is_block_volume() {
+                        resize_image(&next.path, s).await?;
+                    }
                     disks[index].size_gb = s;
                 }
             }

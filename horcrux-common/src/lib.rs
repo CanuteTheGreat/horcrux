@@ -61,6 +61,7 @@ pub struct VmDisk {
     pub disk_type: String,
     /// Host cache mode: "none", "writethrough", "writeback", "directsync",
     /// "unsafe". Empty = QEMU's default (writeback).
+    #[serde(default)]
     pub cache: String,
     /// Pass guest TRIM/UNMAP through to the image (frees space in qcow2).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
