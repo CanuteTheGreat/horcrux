@@ -222,5 +222,17 @@ class BuildWiring(unittest.TestCase):
                 self.assertIn("SECUREBOOT_SIGNING_KEY: ${{ secrets.SECUREBOOT_SIGNING_KEY }}", s, f)
 
 
+    def test_project_build_passes_the_key_into_the_assembly_container(self):
+        # build.sh (common/'s parent in both repos) runs assemble-iso.sh in a docker container: without -e the key never
+        # reaches secureboot-sign.sh and CI builds an unsigned ISO although the secret is set (Patronus run 29577).
+        b = os.path.join(COMMON, "..", "build.sh")
+        if not os.path.isfile(b):
+            self.skipTest("no project build.sh next to common/")
+        s = open(b).read()
+        run = s[s.index("assemble-iso.sh") - 600:s.index("assemble-iso.sh")]
+        for v in ("-e SECUREBOOT ", "-e SECUREBOOT_SIGNING_KEY", "-e SECUREBOOT_CERT"):
+            self.assertIn(v, run, v)
+        self.assertIn("export SECUREBOOT=", s)
+
 if __name__ == "__main__":
     unittest.main()
