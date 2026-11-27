@@ -526,6 +526,16 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Firewall apply (real nftables)"
           bash horcrux-api/tests/firewall_nft_e2e.sh target/debug/horcrux-api
 
+      - name: Security events (real nftables block of a brute-forcing client)
+        # security_activity_e2e.sh runs the built API as root in a NET_ADMIN
+        # sibling plus a client container on a throwaway network: failed logins
+        # from the client trigger the brute-force detector, the client is
+        # dropped in the kernel's nftables ruleset (and really loses its route
+        # to the API), unblock restores it, and a block survives an API restart.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Security events (real nftables block)"
+          bash horcrux-api/tests/security_activity_e2e.sh target/debug/horcrux-api
+
       - name: Podman e2e (container + stack suites against real Podman, no Docker)
         # Podman is the preferred OCI runtime. The Test job's own container tests use the runner's
         # Docker daemon (kept: Docker is the secondary runtime); this runs the same lifecycle and
