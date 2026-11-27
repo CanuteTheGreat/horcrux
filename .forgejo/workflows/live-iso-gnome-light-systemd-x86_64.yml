@@ -43,11 +43,11 @@ on:
         required: false
         default: 'dry'
 
-# Per variant + event + mode + ref. A burst of main pushes = ONE build: the sweeper (replace: group) keeps started runs and only the NEWEST
-# unstarted one. A started build is never cancelled by a push (builds take 1-3 h; cancelling would starve publishing under constant pushes);
+# Per variant + event + mode + ref. A burst of main pushes = ONE build: the sweeper (latest: group) keeps started runs, the NEWEST
+# unstarted one and, while nothing has started, the OLDEST unstarted one (it holds the queue place: with replace: every push cancelled the queued run and sent its replacement to the back of a saturated kvm queue, so no daily ever started). A started build is never cancelled by a push (builds take 1-3 h; cancelling would starve publishing under constant pushes);
 # the next queued build then starts at once with the newest main. A newer dispatch of the same variant still cancels the older dispatch.
 concurrency:
-  group: "replace:live-iso-gnome-light-systemd-x86_64-${{ github.event_name }}-${{ github.event.inputs.mode }}-${{ github.ref }}"
+  group: "latest:live-iso-gnome-light-systemd-x86_64-${{ github.event_name }}-${{ github.event.inputs.mode }}-${{ github.ref }}"
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
