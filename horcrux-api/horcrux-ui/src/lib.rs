@@ -59,7 +59,7 @@ fn SessionGate(children: ChildrenFn) -> impl IntoView {
         spawn_local(async move {
             match api::get_me().await {
                 Ok(_) => set_server_session.set(true),
-                Err(_) => navigate("/login", Default::default()),
+                Err(_) => navigate(&crate::pages::login::login_href(), Default::default()),
             }
         });
     });

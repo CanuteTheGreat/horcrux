@@ -30,7 +30,7 @@ pub fn UserMenu() -> impl IntoView {
                 }
                 Err(_) => {
                     set_me.set(None);
-                    navigate("/login", Default::default());
+                    navigate(&crate::pages::login::login_href(), Default::default());
                 }
             }
         });

@@ -5,6 +5,41 @@ use leptos_router::*;
 
 /// Parse `#key=value&...` (the OpenID Connect callback hands the token over
 /// in the URL fragment so it never reaches a server log).
+/// A same-site page to return to after signing in, or `None` (absolute or
+/// protocol-relative URLs and the login page itself are never followed).
+pub fn safe_redirect(r: &str) -> Option<String> {
+    let ok = r.starts_with('/')
+        && !r.starts_with("//")
+        && !r.contains('\\')
+        && !r.starts_with("/login")
+        && r != "/";
+    ok.then(|| r.to_string())
+}
+
+/// Where a browser without a valid session is sent: the login page, remembering
+/// the page it was on (Proxmox shows its login over the current view the same way).
+pub fn login_href_for(current: &str) -> String {
+    match safe_redirect(current) {
+        Some(r) => format!("/login?redirect={}", urlencoding::encode(&r)),
+        None => "/login".to_string(),
+    }
+}
+
+/// `login_href_for` the page this window shows now (path and query).
+pub fn login_href() -> String {
+    let here = web_sys::window()
+        .map(|w| {
+            let l = w.location();
+            format!(
+                "{}{}",
+                l.pathname().unwrap_or_default(),
+                l.search().unwrap_or_default()
+            )
+        })
+        .unwrap_or_default();
+    login_href_for(&here)
+}
+
 fn fragment_params() -> Vec<(String, String)> {
     let hash = web_sys::window()
         .and_then(|w| w.location().hash().ok())
@@ -44,6 +79,12 @@ pub fn Login() -> impl IntoView {
     let (use_recovery, set_use_recovery) = create_signal(false);
 
     let navigate = use_navigate();
+    // ?redirect=<page>: go back there after signing in.
+    let back_to = use_query_map()
+        .get_untracked()
+        .get("redirect")
+        .and_then(|r| safe_redirect(r))
+        .unwrap_or_else(|| "/".to_string());
 
     // Logged in: full session, or straight to second-factor enrollment.
     let finish = {
@@ -53,7 +94,7 @@ pub fn Login() -> impl IntoView {
                 if r.tfa_setup_required {
                     navigate("/auth/mfa?setup=required", Default::default());
                 } else {
-                    navigate("/", Default::default());
+                    navigate(&back_to, Default::default());
                 }
             }
             LoginOutcome::SecondFactor(ch) => {
@@ -310,5 +351,34 @@ pub fn Login() -> impl IntoView {
                 <p class="version">"Version " {env!("CARGO_PKG_VERSION")}</p>
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sign_in_returns_to_the_page_only_on_this_site() {
+        assert_eq!(
+            login_href_for("/vms/kali/console"),
+            "/login?redirect=%2Fvms%2Fkali%2Fconsole"
+        );
+        assert_eq!(
+            login_href_for("/vms?state=running"),
+            "/login?redirect=%2Fvms%3Fstate%3Drunning"
+        );
+        assert_eq!(login_href_for("/"), "/login");
+        assert_eq!(login_href_for("/login?redirect=%2Fx"), "/login");
+        for bad in [
+            "https://evil.example/",
+            "//evil.example/x",
+            "/\\evil.example",
+            "javascript:alert(1)",
+            "",
+        ] {
+            assert_eq!(safe_redirect(bad), None, "{bad}");
+        }
+        assert_eq!(safe_redirect("/storage").as_deref(), Some("/storage"));
     }
 }

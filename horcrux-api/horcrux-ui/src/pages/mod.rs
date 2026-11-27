@@ -23,7 +23,7 @@ pub mod ha;
 mod host_bridges;
 mod iso_library;
 pub mod kubernetes;
-mod login;
+pub mod login;
 pub mod lxc;
 mod monitoring;
 pub mod nas;
