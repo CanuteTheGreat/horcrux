@@ -33,9 +33,10 @@ concurrency:
 
 jobs:
   deploy-site:
-    # arm64 lane (2026-11-26): this job builds a COPY-only image for ollivanders (arm64) and needs no x86. On
-    # linux-cross-x86_64 it queued for hours behind ~150 netlab/test jobs, so merged site changes stayed unpublished.
-    runs-on: arm64
+    # arm64-light lane: this job builds a COPY-only image for ollivanders (arm64) and needs no x86. On
+    # linux-cross-x86_64 it queued for hours behind ~150 netlab/test jobs, and on the bulk arm64 label it waited
+    # hours behind embedded/image builds. arm64-light is the short-job slot that bulk jobs cannot occupy.
+    runs-on: arm64-light
     timeout-minutes: 25
     steps:
       - name: Ubuntu mirror failover (build-cache hub)
