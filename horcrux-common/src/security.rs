@@ -470,12 +470,14 @@ impl HardeningSettings {
 pub struct SecuritySettings {
     pub vuln_scan: VulnScanSettings,
     pub hardening: HardeningSettings,
+    pub pentest: crate::pentest::PentestSettings,
 }
 
 impl SecuritySettings {
     pub fn validate(&self) -> Result<(), String> {
         self.vuln_scan.validate()?;
-        self.hardening.validate()
+        self.hardening.validate()?;
+        self.pentest.validate()
     }
 }
 

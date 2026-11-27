@@ -100,6 +100,66 @@ security:
       kernel-aslr: "2"
 ```
 
+## Pentest VM templates
+
+Security > Pentest templates (also linked from Create Virtual Machine) offers Kali Linux, Parrot Security and Pentoo as ready-made VM templates. Use them only on systems you are authorised to test.
+
+How it works:
+
+1. **Download an image once.** The image goes into the image store (`<data dir>/pentest-images`; an ISO goes into the ISO library). The check has three layers: the SHA-256 pinned in the catalogue (the catalogue itself is signed, see below); the vendor's own published checksum, which must agree with the pin; and, where the vendor signs its checksums (Kali, Parrot), the OpenPGP signature, which must verify against the vendor key fingerprint pinned in the catalogue. Pentoo publishes a checksum but no signature; the page says so. A mismatch removes the file and shows the reason. Progress, Cancel and Delete image are on the page.
+2. **Create a VM** from the template: name, network, CPUs, memory and disk (defaults come from the template, then from `pentest.cpus/memory_mb/disk_gb`). The disk image is copied (and grown, never shrunk) into the new VM's own disk.
+3. **Network.** The default is an isolated lab: an SDN `simple` zone (`hxlab`) with a VNet (`hxlab0`) that has no subnet, no host address and no uplink, so lab VMs reach each other and nothing else. Horcrux runs no DHCP there: give lab guests static addresses in one subnet. The toggle `LAN` attaches the VM to the host's default-route interface instead (a bridge, or macvtap on a wired port; Wi-Fi is refused with the reason). Set `pentest.network` for the node default and `pentest.lan_interface` to pick the interface.
+4. **Unattended install where the distro supports it.** Kali and Parrot are prebuilt images: installed, they boot to the desktop. Pentoo ships as a live ISO: the VM boots it and carries a second disc labelled `HXANSWERS` with `install.sh`, which runs Pentoo's own headless installer and adds the guest agents; run it in the live session and the VM then boots from its disk.
+
+Declarative `vms:` can name a template:
+
+```yaml
+security:
+  pentest:
+    prefetch: [kali]        # images download in the background after apply
+vms:
+  - name: kali-lab
+    template: kali
+    network: isolated        # or lan; absent = security.pentest.network
+    # memory/cpus absent = the template's
+    power: running
+```
+
+`apply` creates the VM once the image is ready and says "still downloading" otherwise; running it again converges.
+
+### Catalogue updates without a release
+
+The catalogue (URLs, versions, pinned checksums, vendor key fingerprints, hardware defaults) is built into each version and is itself a signed index: `horcrux-common/data/pentest-v1.json` with a detached ed25519 signature (`.sig`, over the exact bytes). Nodes fetch `pentest.catalogue_url` (default: this repository's raw file) every `pentest.refresh_hours`, accept it only if the signature matches a trusted key (`pentest.catalogue_keys`, plus the key compiled in unless `trust_builtin_key` is off), the schema validates and its `serial` is not lower than the one in use (rollback protection). A failed refresh keeps the previous catalogue and shows the error. Point `catalogue_url` at your own mirror and add your own key to publish a private catalogue. Maintainers: `ci/pentest-catalogue.py build|sign|check`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `pentest.catalogue_url` | project raw index | signed index URL; empty = built-in only |
+| `pentest.catalogue_sig_url` | empty | signature URL; empty = `<catalogue_url>.sig` |
+| `pentest.catalogue_keys` | `[]` | extra trusted ed25519 keys (base64, 32 bytes) |
+| `pentest.trust_builtin_key` | `true` | trust the key compiled into this version |
+| `pentest.refresh_hours` | `24` | hours between refreshes; 0 = on demand |
+| `pentest.vendor_signature` | `require` | `require`, `if-available` (skip when gpg is missing) or `off` |
+| `pentest.network` | `isolated` | network of new VMs: `isolated` or `lan` |
+| `pentest.lab_zone` / `pentest.lab_vnet` | `hxlab` / `hxlab0` | SDN zone and VNet (bridge) of the isolated lab |
+| `pentest.lan_interface` | empty | LAN mode interface; empty = the default route's |
+| `pentest.store_dir` | empty | image store; empty = `<data dir>/pentest-images` |
+| `pentest.keep_images` | `true` | keep the downloaded image after VMs exist |
+| `pentest.min_free_gb` | `10` | free space that must remain after a download |
+| `pentest.cpus` / `memory_mb` / `disk_gb` | `0` | override the template hardware (0 = the template's) |
+| `pentest.prefetch` | `[]` | template ids downloaded in the background |
+
+Needs on the node: `qemu-img`; `xz` (Parrot), a 7-Zip (`app-arch/7zip` or `p7zip`, Kali); `gpg` (`app-crypt/gnupg`) for the vendor signature check; `xorriso`, `genisoimage` or `mkisofs` for Pentoo's answers disc. The page reports what is missing.
+
+| Method and path | Purpose | Privilege |
+|---|---|---|
+| `GET /api/security/pentest/templates` | catalogue with each image's state and download progress | Sys.Audit |
+| `POST /api/security/pentest/templates/:id/download` | fetch + verify the image (202) | Sys.Modify |
+| `POST /api/security/pentest/templates/:id/cancel` | stop a running download | Sys.Modify |
+| `DELETE /api/security/pentest/templates/:id/image` | remove the stored image | Sys.Modify |
+| `POST /api/security/pentest/templates/:id/create` | `{name, network?, cpus?, memory_mb?, disk_gb?, storage?, start?}` creates the VM (201) | Sys.Modify |
+| `GET /api/security/pentest/catalogue`, `POST .../catalogue/refresh` | where the catalogue came from; fetch the signed index now | Sys.Audit / Sys.Modify |
+| `GET /api/security/pentest/lab` | isolated lab and LAN interface status | Sys.Audit |
+
 ## Settings reference
 
 `GET/PUT /api/security/settings`, declarative `security:` (`docs/design/declarative-config.md`).

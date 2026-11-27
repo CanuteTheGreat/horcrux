@@ -34,6 +34,7 @@ mod resource_pools;
 mod resources;
 pub mod sdn_zones;
 pub mod security;
+pub mod security_templates;
 mod snapshot_list;
 pub mod storage;
 mod storage_content;

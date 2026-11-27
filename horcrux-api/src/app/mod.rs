@@ -470,6 +470,7 @@ pub async fn run() -> anyhow::Result<()> {
     api::idle_power::spawn(state.clone());
     // Scheduled vulnerability scans and hardening baseline checks.
     api::security::spawn_scheduler(state.clone());
+    api::security::pentest::spawn_background(state.clone());
 
     // Save/resume of guests across host shutdown: token, boot pass, running snapshot.
     api::guest_state::engine::spawn(state.clone());

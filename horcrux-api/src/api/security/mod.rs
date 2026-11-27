@@ -10,9 +10,11 @@
 //! * `GET  /api/security/hardening`                 evaluate the baseline now
 //! * `GET  /api/security/hardening/report?format=text|html|json` download
 //! * `POST /api/security/hardening/apply|revert`    {rules?, dry_run?}
+//! * `/api/security/pentest/...`                    pentest VM templates (see pentest.rs)
 //!
 //! Reads need Sys.Audit, changes Sys.Modify (privileges.rs area `security`).
 pub mod hardening;
+pub mod pentest;
 pub mod vmscan;
 pub mod vulnscan;
 
@@ -52,6 +54,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/security/hardening/report", get(hardening_report))
         .route("/api/security/hardening/apply", post(hardening_apply))
         .route("/api/security/hardening/revert", post(hardening_revert))
+        .merge(pentest::routes())
 }
 
 // ------------------------------------------------------------ settings
@@ -88,6 +91,8 @@ pub async fn set_settings(state: &AppState, s: SecuritySettings) -> Result<(), S
     if let Ok(mut c) = cell().lock() {
         *c = Some(s);
     }
+    // Template images named in `pentest.prefetch` start downloading within
+    // a minute (pentest::spawn_background).
     Ok(())
 }
 

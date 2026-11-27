@@ -635,6 +635,15 @@ async fn get_zone(State(state): State<Arc<AppState>>, Path(id): Path<String>) ->
         .ok_or_else(|| ApiError::NotFound(format!("zone {id} not found")))
 }
 
+/// Whether a zone / VNet with this id exists (pentest lab setup).
+pub(crate) async fn exists_zone(state: &Arc<AppState>, id: &str) -> bool {
+    Cfg::new(state).zones().await.iter().any(|z| z.id == id)
+}
+
+pub(crate) async fn exists_vnet(state: &Arc<AppState>, id: &str) -> bool {
+    Cfg::new(state).vnets().await.iter().any(|v| v.id == id)
+}
+
 pub(crate) async fn create_zone(
     State(state): State<Arc<AppState>>,
     Json(z): Json<Zone>,

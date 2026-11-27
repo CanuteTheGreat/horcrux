@@ -192,6 +192,11 @@ pub fn VmCreate() -> impl IntoView {
     view! {
         <div class="vm-create">
             <h1>"Create Virtual Machine"</h1>
+            <p class="help-text" id="vm-create-pentest-hint">
+                "Need Kali, Parrot Security or Pentoo? "
+                <a href="/security/templates">"Create it from a pentest template"</a>
+                " (verified image, isolated lab network)."
+            </p>
 
             <form on:submit=submit>
                 <div class="form-group">

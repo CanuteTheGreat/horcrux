@@ -6,6 +6,15 @@ use leptos::*;
 use leptos_router::*;
 use wasm_bindgen::JsCast;
 
+pub(super) fn confirm(msg: &str) -> bool {
+    ask(msg)
+}
+
+/// The Security tab bar for the sibling pages of this section.
+pub(super) fn security_tabs(active: &'static str) -> impl IntoView {
+    view! { <SecurityTabs active=active/> }
+}
+
 fn ask(msg: &str) -> bool {
     web_sys::window()
         .and_then(|w| w.confirm_with_message(msg).ok())
@@ -106,6 +115,7 @@ fn SecurityTabs(active: &'static str) -> impl IntoView {
             {tab("/security", "overview", "Overview")}
             {tab("/security/vulnerabilities", "vulns", "Vulnerabilities")}
             {tab("/security/hardening", "hardening", "Hardening")}
+            {tab("/security/templates", "templates", "Pentest templates")}
             {tab("/security/settings", "settings", "Settings")}
         </nav>
     }
@@ -787,6 +797,7 @@ pub fn SecuritySettingsPage() -> impl IntoView {
             {move || s.get().map(|cur| {
                 let v = cur.vuln_scan.clone();
                 let h = cur.hardening.clone();
+                let p = cur.pentest.clone();
                 view! {
                     <form class="card settings-form" on:submit=move |e| { e.prevent_default(); if let Some(x) = s.get_untracked() { save.dispatch(x) } }>
                         <h2>"Vulnerability scanning"</h2>
@@ -899,6 +910,77 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                             <input id="sec-h-file" type="text" prop:value=h.sysctl_file.clone()
                                 on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.hardening.sysctl_file = c.clone())) }/>
                             <small class="form-help">"Read at boot by OpenRC's sysctl service and systemd-sysctl."</small>
+                        </div>
+                        <h2>"Pentest VM templates"</h2>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-p-url">"Catalogue index URL"</label>
+                                <input id="sec-p-url" type="text" placeholder="built-in catalogue only" prop:value=p.catalogue_url.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.pentest.catalogue_url = c.clone())) }/>
+                                <small class="form-help">"A signed index adds or updates templates without a Horcrux release. Its signature must match a trusted key; empty = the catalogue built into this version."</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-p-refresh">"Refresh every (hours)"</label>
+                                <input id="sec-p-refresh" type="number" min="0" prop:value=p.refresh_hours.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.pentest.refresh_hours = c)) }/>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-p-net">"New VMs go on"</label>
+                                <select id="sec-p-net" on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.pentest.network = c.clone())) }>
+                                    <option value="isolated" selected=p.network == "isolated">"the isolated lab (no uplink)"</option>
+                                    <option value="lan" selected=p.network == "lan">"the LAN"</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-p-sig">"Vendor signature check"</label>
+                                <select id="sec-p-sig" on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.pentest.vendor_signature = c.clone())) }>
+                                    {["require", "if-available", "off"].into_iter().map(|o| view! {
+                                        <option value=o selected=p.vendor_signature == o>{o}</option>
+                                    }).collect_view()}
+                                </select>
+                                <small class="form-help">"On top of the catalogue's pinned checksum. 'require' fails when gpg is missing."</small>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-p-lan">"LAN interface"</label>
+                                <input id="sec-p-lan" type="text" placeholder="the default route's interface" prop:value=p.lan_interface.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.pentest.lan_interface = c.clone())) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-p-store">"Image store"</label>
+                                <input id="sec-p-store" type="text" placeholder="<data dir>/pentest-images" prop:value=p.store_dir.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.pentest.store_dir = c.clone())) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-p-keep"><input id="sec-p-keep" type="checkbox" prop:checked=p.keep_images
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.pentest.keep_images = c)) }/>" Keep downloaded images"</label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-p-cpus">"vCPUs (0 = template)"</label>
+                                <input id="sec-p-cpus" type="number" min="0" prop:value=p.cpus.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.pentest.cpus = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-p-mem">"Memory MB (0 = template)"</label>
+                                <input id="sec-p-mem" type="number" min="0" prop:value=p.memory_mb.to_string()
+                                    on:change=move |e| { let c = event_target_value(&e).trim().parse::<u64>().unwrap_or(0); upd(Box::new(move |x| x.pentest.memory_mb = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-p-disk">"Disk GB (0 = template)"</label>
+                                <input id="sec-p-disk" type="number" min="0" prop:value=p.disk_gb.to_string()
+                                    on:change=move |e| { let c = event_target_value(&e).trim().parse::<u64>().unwrap_or(0); upd(Box::new(move |x| x.pentest.disk_gb = c)) }/>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-p-prefetch">"Download these templates ahead"</label>
+                            <input id="sec-p-prefetch" type="text" placeholder="kali, parrot, pentoo" prop:value=p.prefetch.join(", ")
+                                on:change=move |e| { let c: Vec<String> = event_target_value(&e).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(); upd(Box::new(move |x| x.pentest.prefetch = c.clone())) }/>
+                            <small class="form-help">"Their images download in the background after saving, so declarative VMs that name a template can be created."</small>
                         </div>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary" disabled=move || save.pending().get()>"Save"</button>

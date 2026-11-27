@@ -139,9 +139,11 @@ pub struct VmSpec {
     pub id: Option<String>,
     #[serde(default = "default_hv")]
     pub hypervisor: VmHypervisor,
-    /// MB
+    /// MB; 0/absent with `template` = the template's.
+    #[serde(default)]
     pub memory: u64,
-    #[serde(default = "default_cpus")]
+    /// Absent = 1 (or the template's with `template`).
+    #[serde(default)]
     pub cpus: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub architecture: Option<VmArchitecture>,
@@ -154,6 +156,15 @@ pub struct VmSpec {
     /// LXD/Incus VMs: the instance image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    /// Create the VM from a pentest template of the library (`kali`,
+    /// `parrot`, `pentoo`, ...): memory/cpus default to the template's (0 or
+    /// absent), the disk is the template's image. The image must be
+    /// downloaded (`security.pentest.prefetch`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+    /// With `template`: `isolated` (lab bridge, the default) or `lan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
     /// Desired power state; absent = leave it alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub power: Option<Power>,
@@ -186,6 +197,27 @@ fn normalize(spec: &mut Spec) -> Result<(), String> {
             let (net, p) = parse_cidr(&s.cidr).map_err(|e| format!("subnet {}: {e}", s.cidr))?;
             s.id = subnet_id(&s.vnet, net, p);
             s.gateway = s.gateway.take().filter(|g| !g.is_empty());
+        }
+    }
+    // A VM from a pentest template takes the template's size unless the
+    // spec says otherwise.
+    for v in spec.vms.iter_mut().flatten() {
+        if let Some(t) = v.template.as_deref() {
+            let e = crate::api::security::pentest::find_template(t)
+                .ok_or_else(|| format!("vm {}: unknown pentest template {t:?}", v.name))?;
+            if v.memory == 0 {
+                v.memory = e.hardware.memory_mb;
+            }
+            if v.cpus == 0 {
+                v.cpus = e.hardware.cpus;
+            }
+        } else {
+            if v.network.is_some() {
+                return Err(format!("vm {}: network is only used with template", v.name));
+            }
+            if v.cpus == 0 {
+                v.cpus = default_cpus();
+            }
         }
     }
     Ok(())
@@ -991,6 +1023,8 @@ pub fn export(live: &Live) -> Spec {
             display: (v.display != VmDisplay::default()).then_some(v.display),
             hardware: (v.hardware != VmHardware::default()).then(|| v.hardware.clone()),
             image: None,
+            template: None,
+            network: None,
             power: match v.status {
                 VmStatus::Running => Some(Power::Running),
                 VmStatus::Stopped => Some(Power::Stopped),

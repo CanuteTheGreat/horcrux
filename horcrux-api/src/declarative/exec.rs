@@ -333,6 +333,9 @@ async fn create_vm(state: &Arc<AppState>, spec: &Spec, name: &str) -> Result<Str
         .flatten()
         .find(|v| v.name == name)
         .ok_or("not in spec")?;
+    if let Some(t) = w.template.as_deref() {
+        return create_from_template(state, w, t).await;
+    }
     let pools = state.storage_manager.list_pools().await;
     let mut disks = Vec::new();
     for d in &w.disks {
@@ -374,6 +377,40 @@ async fn create_vm(state: &Arc<AppState>, spec: &Spec, name: &str) -> Result<Str
         .await
         .map_err(|e| format!("{e:?}"))?;
     Ok(format!("id {}", vm.id))
+}
+
+/// A VM named by a pentest template: the library creates it (the image must
+/// be downloaded already; `security.pentest.prefetch` does that).
+async fn create_from_template(
+    state: &Arc<AppState>,
+    w: &super::VmSpec,
+    template: &str,
+) -> Result<String, String> {
+    use crate::api::security::pentest;
+    pentest::image_state(state, template).await?;
+    let pools = state.storage_manager.list_pools().await;
+    let storage = match w.disks.first().and_then(|d| d.storage.as_deref()) {
+        None => String::new(),
+        Some(n) => pools
+            .iter()
+            .find(|p| p.name == n)
+            .map(|p| p.id.clone())
+            .ok_or_else(|| format!("storage pool {n} does not exist"))?,
+    };
+    let o = horcrux_common::pentest::CreateOptions {
+        name: w.name.clone(),
+        id: w.vm_id(),
+        network: w.network.clone().unwrap_or_default(),
+        cpus: w.cpus,
+        memory_mb: w.memory,
+        disk_gb: w.disks.first().map(|d| d.size_gb).unwrap_or(0),
+        storage,
+        start: false,
+    };
+    let r = pentest::create_from_template(state, template, o)
+        .await
+        .map_err(api_msg)?;
+    Ok(format!("id {} from template {template}", r.vm.id))
 }
 
 /// The message inside an `ApiError`.

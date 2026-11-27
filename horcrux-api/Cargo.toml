@@ -94,6 +94,7 @@ subtle = { workspace = true }
 # Encryption
 aes-gcm = { workspace = true }
 hex = { workspace = true }
+ring = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
 pwhash = { workspace = true }

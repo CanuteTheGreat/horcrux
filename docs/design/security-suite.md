@@ -22,7 +22,7 @@ works the same on OpenRC and systemd, and degrades to a clear "not installed, he
 | Host CVE exposure | none (apt is the tool) | Lifecycle Manager patch baselines | LCM | Windows Update / Azure Update Manager | phase 2: Gentoo GLSA + ctg-vulnwatch-style feed matching for the host |
 | Host IDS / integrity | none | none built in | none built in | Defender for Endpoint (paid) | phase 2: auditd rules + AIDE, phase 3: Falco-class container runtime detection |
 | Guest secrets for provisioning | cloud-init passwords stored in the config | guest customization specs | cloud-init | unattend files | phase 3: secrets store references in cloud-init/unattend, never in the VM config |
-| Pentest VM templates | none | none | none | none | phase 2: Kali, Parrot, Pentoo as first-class templates |
+| Pentest VM templates | none | none | none | none | **phase 2 (shipped)**: Kali, Parrot, Pentoo as first-class templates: verified download, isolated lab network, declarative `vms:` |
 | Guest introspection | none | NSX Guest Introspection (deprecated) | none | none | phase 4 research (optional, off by default) |
 
 Sources: Proxmox VE admin guide (pve-docs, chapters Firewall, User Management, Two-factor
@@ -120,6 +120,14 @@ caps. VM rows appear in Security > Vulnerabilities; the VM detail page shows a
 Security tab/badge. The guest SBOM format is verified against real Grype
 (reports real deb CVEs with fix versions from a hand-built CycloneDX SBOM).
 
+## Phase 2: pentest VM templates (shipped)
+
+- Catalogue: `horcrux-common/src/pentest.rs` (pure: entries, validation, vendor-sums parsing, VM building) + the signed index `data/pentest-v1.json` (ed25519, key compiled in; `ci/pentest-catalogue.py`). API/jobs: `horcrux-api/src/api/security/pentest.rs`; UI: `pages/security_templates.rs` (`/security/templates`) and a link on the VM create page; declarative: `vms[].template` / `network`, `security.pentest.prefetch`.
+- Integrity chain: pinned SHA-256 (signed index) = vendor's published checksum = downloaded bytes, plus the vendor's OpenPGP signature when the vendor signs (key fingerprint pinned; `gpg` in a throwaway home). Pentoo has no vendor signature: stated in the UI.
+- Images: Kali prebuilt qemu image (7z), Parrot prebuilt qcow2 (xz), Pentoo live ISO (unattended install through an `HXANSWERS` disc). All three were created by hand on a host earlier; the template reproduces those settings (q35, virtio disk/NIC, guest agent, Kali VNC+virtio-gpu, Parrot/Pentoo SPICE+qxl+HDA).
+- Isolated lab: SDN simple zone + VNet with no subnet, no host address, no uplink; LAN is a toggle (default-route bridge, or macvtap on a wired port).
+- Not done on purpose: no GPU passthrough, no auto-start, no default credentials changed by us (the guest's own are shown after create).
+
 ## Later phases (one job each)
 
 | Phase | Item | Notes |
@@ -128,7 +136,7 @@ Security tab/badge. The guest SBOM format is verified against real Grype
 | 2 | VM guest scanning | **shipped**: see "Phase 2: VM guest scanning" below |
 | 2 | Host CVE exposure | Gentoo GLSA (`glsa-check`) + package versions matched against the feed ctg-vulnwatch uses; shown on the Security overview, notification on new affecting advisories, ties into Packages > updates |
 | 2 | Host IDS / integrity | auditd with a Horcrux rule set (logins, privilege use, /etc changes, horcrux binaries), AIDE database init + scheduled check, findings in Security > Events and as notifications; OpenRC + systemd units |
-| 2 | Pentest VM template library | Kali, Parrot, Pentoo as first-class templates (download + checksum/signature check, cloud-init or answer files where the distro supports it, sensible hardware defaults, isolated network by default) |
+| 2 | Pentest VM template library | **shipped**: see "Phase 2: pentest VM templates" below |
 | 3 | Security dashboard + events | one page joining access log (hx-api-access-log), audit log, failed logins, baseline drift and scan results; alerting through hx-notification-matchers |
 | 3 | Guest provisioning secrets | cloud-init/unattend passwords and keys referenced from an encrypted secrets store, never stored in VM config or exports; rotation |
 | 3 | Microsegmentation templates | per-guest default-deny profiles and "allow only from these groups" templates on the existing firewall objects, with a hit-count view |

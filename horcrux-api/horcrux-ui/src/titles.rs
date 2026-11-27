@@ -82,6 +82,7 @@ fn exact(path: &str) -> Option<&'static str> {
         "/security" => "Security",
         "/security/vulnerabilities" => "Vulnerabilities",
         "/security/hardening" => "Hardening",
+        "/security/templates" => "Pentest templates",
         "/security/settings" => "Security Settings",
         "/tasks" => "Tasks",
         "/gpu" => "GPU / PCI Passthrough",
