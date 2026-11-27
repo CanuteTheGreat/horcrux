@@ -97,6 +97,12 @@ fn opt(v: &Value, k: &str) -> Option<String> {
     (!t.is_empty()).then_some(t)
 }
 
+/// Single-file bind mounts a container runtime adds (resolv.conf, hostname,
+/// hosts); lsblk shows the backing host partition with these mount points.
+fn is_container_file_bind(mp: &str) -> bool {
+    matches!(mp, "/etc/resolv.conf" | "/etc/hostname" | "/etc/hosts")
+}
+
 /// Disks (and their partitions) from `lsblk -J -b` output. Loop, ram, rom
 /// and device-mapper devices, and empty (0-byte) devices such as unattached
 /// `nbd*`, are not physical disks and are left out.
@@ -135,6 +141,11 @@ pub fn parse_lsblk(json: &str) -> Result<Vec<DiskInfo>, String> {
             .unwrap_or_default()
         {
             if s(&p, "type") != "part" {
+                continue;
+            }
+            // Inside a container the runtime bind-mounts single files from
+            // the host disk; those are not partitions the user can manage.
+            if is_container_file_bind(&s(&p, "mountpoint")) {
                 continue;
             }
             let pused = num(&p, "fsused");
@@ -641,6 +652,17 @@ mod tests {
         assert_eq!(d[0].partitions[1].mount_point.as_deref(), Some("/"));
         assert_eq!(d[0].used_bytes, 501_048_576);
         assert_eq!(d[1].disk_type, "nvme");
+    }
+
+    #[test]
+    fn container_file_binds_are_not_partitions() {
+        let j = r#"{"blockdevices":[{"name":"sda","path":"/dev/sda","size":1000,"type":"disk","rota":false,
+          "children":[{"name":"sda1","type":"part","size":1000,"mountpoint":"/etc/resolv.conf"},
+                      {"name":"sda2","type":"part","size":1000,"mountpoint":"/etc/hosts"},
+                      {"name":"sda3","type":"part","size":1000,"mountpoint":"/data"}]}]}"#;
+        let d = parse_lsblk(j).unwrap();
+        assert_eq!(d[0].partitions.len(), 1);
+        assert_eq!(d[0].partitions[0].id, "sda3");
     }
 
     #[test]
