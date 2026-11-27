@@ -1,0 +1,43 @@
+/* ui-kit/map v0.1 (docs/design/infra-map.md). Scoped to .ui-map; uses ui-kit tokens with fallbacks so it
+   also works on pages that have not adopted the kit yet. */
+.ui-map { --m-ink: var(--c-ink, #1f2933); --m-muted: var(--c-muted, #5c6b7a); --m-line: var(--c-border, #d5dbe1);
+  --m-surface: var(--c-surface, #fff); --m-sunken: var(--c-sunken, #f3f5f7); --m-accent: var(--c-accent, #2563eb);
+  display: block; color: var(--m-ink); font-size: 14px; }
+@media (prefers-color-scheme: dark) { .ui-map { --m-ink: var(--c-ink, #e4e9ee); --m-muted: var(--c-muted, #9aa8b6);
+  --m-line: var(--c-border, #334150); --m-surface: var(--c-surface, #1a2129); --m-sunken: var(--c-sunken, #12171d); } }
+.ui-map-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 10px; }
+.ui-map-filter { flex: 1 1 220px; min-width: 0; }
+.ui-map-summary { color: var(--m-muted); font-size: 0.9em; }
+.ui-map-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; position: relative; }
+.ui-map .ui-input { padding: 5px 8px; border: 1px solid var(--m-line); border-radius: 6px; background: var(--m-surface); color: var(--m-ink); font: inherit; }
+.ui-map .ui-btn { padding: 4px 10px; border: 1px solid var(--m-line); border-radius: 6px; background: var(--m-surface); color: var(--m-ink); font: inherit; font-size: 0.9em; cursor: pointer; text-decoration: none; display: inline-block; }
+.ui-map .ui-btn:focus-visible, .ui-map-stage:focus-visible, .ui-map-node:focus-visible { outline: 2px solid var(--c-focus, var(--m-accent)); outline-offset: 2px; }
+.ui-map-export { position: relative; }
+.ui-map-export > summary { list-style: none; }
+.ui-map-export > summary::-webkit-details-marker { display: none; }
+.ui-map-export .ui-menu-items { position: absolute; right: 0; z-index: 5; display: flex; flex-direction: column; min-width: 120px;
+  background: var(--m-surface); border: 1px solid var(--m-line); border-radius: 6px; padding: 4px; margin-top: 4px; }
+.ui-map-export .ui-menu-items button { text-align: left; background: none; border: 0; padding: 6px 8px; color: var(--m-ink); font: inherit; cursor: pointer; }
+.ui-map-export .ui-menu-items button:hover { background: var(--m-sunken); }
+.ui-map-findings .ui-banner { display: block; padding: 10px 12px; border-radius: 6px; margin: 0 0 8px; border: 1px solid var(--c-warn, #b45309);
+  background: var(--c-warn-bg, #fef3c7); color: var(--c-ink, #3b2a06); }
+.ui-map-findings .ui-banner.crit { border-color: var(--c-crit, #b91c1c); background: var(--c-crit-bg, #fee2e2); }
+.ui-map-findings .ui-banner.info { border-color: var(--c-info, #1d4ed8); background: var(--c-info-bg, #dbeafe); }
+.ui-map-findings .ui-banner .ui-btn { margin-left: 8px; }
+.ui-map-stage { overflow: auto; max-width: 100%; border: 1px solid var(--m-line); border-radius: 8px; background: var(--m-sunken); -webkit-overflow-scrolling: touch; }
+.ui-map-stage svg { display: block; margin: 0 auto; }
+.ui-map-node { cursor: pointer; }
+.ui-map-panel { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--m-line); border-radius: 8px; background: var(--m-surface); }
+.ui-map-panel-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+.ui-map-panel .ui-kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0 0 8px; }
+.ui-map-panel .ui-kv dt { color: var(--m-muted); }
+.ui-map-panel .ui-kv dd { margin: 0; overflow-wrap: anywhere; }
+.ui-map .ui-grid-wrap { overflow-x: auto; }
+.ui-map .ui-grid { width: 100%; border-collapse: collapse; background: var(--m-surface); }
+.ui-map .ui-grid th, .ui-map .ui-grid td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--m-line); white-space: nowrap; }
+.ui-map .ui-empty, .ui-map .ui-grid-state { padding: 24px; text-align: center; color: var(--m-muted); }
+.ui-map .ui-empty strong { display: block; color: var(--m-ink); margin-bottom: 4px; }
+.ui-map .ui-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; background: var(--c-neutral-solid, #64748b); }
+.ui-map .ui-dot.ok { background: var(--c-ok-solid, #15803d); }
+.ui-map .ui-dot.crit { background: var(--c-crit-solid, #b91c1c); }
+.ui-map .ui-dot.warn { background: var(--c-warn-solid, #b45309); }

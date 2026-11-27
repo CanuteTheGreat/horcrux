@@ -14,7 +14,8 @@
   "ZFS boot environments: a snapshot before every update and a menu entry per environment; a QEMU test upgrades a package on an encrypted ZFS install, rolls it back with horcrux-be rollback and checks that VM and user files are untouched.",
   "Nightly tests on real QEMU/KVM guests: snapshots, backup and restore, API restarts and crashes, live migration, HA failover on 3 nodes, save state on host shutdown. A weekly test installs Windows 11 unattended through the gaming-VM wizard.",
   "Integration tests against real services, not mocks: LDAP, OIDC, PAM, nftables firewall and SDN, CNI, Docker, Incus and LXC, k3s with Helm, and a single-node Ceph cluster.",
-  "Portable binaries: built for x86-64-v2 and generic arm64 and booted on a conservative CPU model in every test."
+  "Portable binaries: built for x86-64-v2 and generic arm64 and booted on a conservative CPU model in every test.",
+  "Infrastructure map: a node's VMs, containers, storage and networks with live state, with a Patronus router's network merged in (each VM NIC linked to the device the router sees) and a read-only Proxmox import. Export as PNG, SVG or Mermaid, read-only share links and a dashboard stats feed; tested against a live server and in Firefox."
  ],
  "gaps": [
   "No stable release yet, so there is no release-to-release upgrade test either.",

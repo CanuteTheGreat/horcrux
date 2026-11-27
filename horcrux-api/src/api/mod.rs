@@ -32,6 +32,7 @@ pub mod hx_console;
 #[cfg(feature = "cluster")]
 pub mod idle_power;
 pub mod import_cleanup;
+pub mod infra_map;
 pub mod inventory;
 #[cfg(feature = "kubernetes")]
 pub mod k8s_config;

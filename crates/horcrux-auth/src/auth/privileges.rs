@@ -115,6 +115,7 @@ pub const KNOWN_AREAS: &[&str] = &[
     "tags",
     "search",
     "tree",
+    "infra-map",
     "declarative",
     "gpu",
     "tls",
@@ -377,6 +378,13 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         "san" => read_write(m, P::DatastoreAudit, P::DatastoreAllocate, "/storage"),
         // Inventory views: the handlers show only what the caller may see.
         "tags" | "search" | "tree" => Requirement::Authenticated,
+        // Infrastructure map: the graph shows only what the caller may see (like the tree); sources
+        // and share keys are node administration. The live view and stats check a share key.
+        "infra-map" => match arg(1) {
+            "shared" | "stats" => Requirement::Public,
+            "sources" | "keys" => read_write(m, P::SysAudit, P::SysModify, "/"),
+            _ => Requirement::Authenticated,
+        },
         // Resource pools: seeing a pool takes Pool.Audit on it (or anywhere
         // below /pool); creating one Pool.Allocate on /pool; changing one
         // Pool.Allocate on that pool.
@@ -898,6 +906,9 @@ mod tests {
     /// added routes: add the area to `KNOWN_AREAS` and give it a rule in
     /// `requirement()` (which privilege on which ACL path), instead of letting
     /// it fall through to the administrators-only default.
+    /// Routes outside /api that the router serves without a session (docs/design/infra-map.md).
+    const NON_API_PUBLIC: &[&str] = &["/map/live", "/ui-map/map.js", "/ui-map/map.css"];
+
     #[test]
     fn every_registered_route_is_mapped() {
         // The router and handlers live in horcrux-api: src/app/ (formerly
@@ -927,6 +938,12 @@ mod tests {
                 count += 1;
                 let path = &cap[1];
                 if path == "/metrics" {
+                    continue;
+                }
+                // non-API pages served by the router itself (the read-only map live view and the
+                // shared map component): public by design, the handlers check a share key
+                if NON_API_PUBLIC.contains(&path) {
+                    assert_eq!(requirement("GET", path), Requirement::Public, "{path}");
                     continue;
                 }
                 let area = path

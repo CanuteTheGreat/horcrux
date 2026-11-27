@@ -27,6 +27,11 @@ structured 424 with a reason instead of a 500.
 
 Gaps: 7 (3 missing, 4 partial; row 4 done).
 
+Beyond 9.3 (Proxmox has no map at all): the infrastructure map (`/map`, docs/design/infra-map.md) draws
+this node's VMs, containers, storage and bridges with live state, merges a Patronus router's network map
+(VM NICs linked to the devices the router sees) and a read-only Proxmox import, exports PNG/SVG/Mermaid,
+and has read-only share keys for a live view and a Homepage-style stats widget.
+
 ## Plan
 
 Order of work, highest value first: 2, 4, 6, 5, 1, 3, 7, 8. Each item is its

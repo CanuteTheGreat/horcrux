@@ -54,6 +54,7 @@ fn exact(path: &str) -> Option<&'static str> {
         "/vms/import-libvirt" => "Import from libvirt",
         "/vms/import-esxi" => "Import from ESXi",
         "/resources" => "Resources",
+        "/map" => "Infrastructure map",
         "/storage" => "Storage",
         "/storage/isos" => "ISO Library",
         "/storage/content" => "Storage Content",

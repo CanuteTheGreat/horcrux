@@ -156,7 +156,10 @@ fn status_of<T: Serialize>(s: &T) -> String {
 }
 
 /// Every resource the caller may see.
-async fn inventory(state: &AppState, principal: &Option<Extension<Principal>>) -> Vec<Resource> {
+pub(crate) async fn inventory(
+    state: &AppState,
+    principal: &Option<Extension<Principal>>,
+) -> Vec<Resource> {
     let can = |p: Privilege, path: String| match principal {
         Some(Extension(pr)) => pr.has(p, &path),
         None => true,

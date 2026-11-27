@@ -581,6 +581,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::storage_content::routes())
         .merge(api::resource_pools::routes())
         .merge(api::inventory::routes())
+        .merge(api::infra_map::routes())
         .merge(api::protection::routes())
         .merge(api::declarative::routes())
         .merge(api::firewall_objects::routes())
@@ -673,6 +674,8 @@ pub async fn run() -> anyhow::Result<()> {
         .with_state(state.clone())
         // Compiled-in features (USE flags), read by the UI to hide the rest
         .merge(features::routes())
+        // Read-only infrastructure map for share-key holders (live view, stats widget, map component)
+        .merge(api::infra_map::public_routes().with_state(state.clone()))
         // Host shutdown/boot hook: token-authenticated, loopback tooling.
         .merge(api::guest_state::agent::routes().with_state(state.clone()))
         // Merge OpenAPI / Swagger UI routes (public, for documentation)

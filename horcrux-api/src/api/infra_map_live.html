@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>Infrastructure map (live, read-only) - Horcrux</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/ui-map/map.css">
+<style>
+    body { margin: 0; padding: 16px; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #f6f8fa; color: #1f2933; }
+    @media (prefers-color-scheme: dark) { body { background: #0f1419; color: #e4e9ee; } }
+    header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+    header img { height: 28px; }
+    h1 { font-size: 1.2em; margin: 0; }
+    .ro { font-size: 0.85em; opacity: 0.75; }
+    form { display: flex; gap: 8px; flex-wrap: wrap; margin: 24px 0; }
+    form input { flex: 1 1 260px; padding: 8px; font: inherit; }
+</style>
+</head>
+<body>
+<header><h1>Horcrux infrastructure map</h1><span class="ro">live, read-only</span></header>
+<main id="live"></main>
+<script src="/ui-map/map.js"></script>
+<script>
+    // The key travels in the URL fragment (#k=...), which browsers never send to the server or to proxy logs;
+    // it is passed to the API as the X-Map-Key header.
+    (function () {
+        const m = /(?:^#|&)k=([A-Za-z0-9_]+)/.exec(location.hash || '');
+        const box = document.getElementById('live');
+        if (!m) {
+            box.innerHTML = '<p>This page shows a Horcrux node\'s infrastructure map to anyone holding a share key. Ask its administrator for a link, or paste the key:</p>'
+                + '<form id="k"><input name="k" aria-label="Share key" placeholder="hmk_..." required><button type="submit">Open</button></form>';
+            document.getElementById('k').onsubmit = function (ev) { ev.preventDefault(); location.hash = 'k=' + ev.target.k.value.trim(); location.reload(); };
+            return;
+        }
+        UiMap.mount(box, { src: '/api/infra-map/shared/graph', headers: { 'X-Map-Key': m[1] }, readonly: true,
+            onLoad: function (g) { document.title = 'Infrastructure map: ' + ((g.source && g.source.name) || '') + ' (live)'; } });
+    })();
+</script>
+</body>
+</html>

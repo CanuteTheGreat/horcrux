@@ -126,6 +126,7 @@ pub fn App() -> impl IntoView {
                     <div class="navbar-dropdown">
                         <span class="navbar-item dropdown-trigger">"Infrastructure ▾"</span>
                         <div class="dropdown-content">
+                            <A href="/map" class="dropdown-item">"Infrastructure map"</A>
                             <A href="/resources" class="dropdown-item">"Resources (search, tags, tree)"</A>
                             <A href="/storage" class="dropdown-item">"Storage"</A>
                             <A href="/storage/disks" class="dropdown-item">"Disks"</A>
@@ -236,6 +237,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/vms/import-esxi" view=VmImportEsxiPage/>
                     <Route path="/vms/:id" view=crate::pages::VmDetailPage/>
                     <Route path="/resources" view=crate::pages::ResourcesPage/>
+                    <Route path="/map" view=crate::pages::InfraMapPage/>
                     <Route path="/vms/:id/console" view=VmConsole/>
                     <Route path="/vms/:id/hardware" view=crate::pages::VmHardwarePage/>
                     <Route path="/vms/:id/remote-play" view=crate::pages::VmRemotePlayPage/>
