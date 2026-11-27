@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn common_wrong_addresses_point_somewhere_useful() {
         assert_eq!(suggestion("/cluster").unwrap().0, "/ha/cluster");
-        assert_eq!(suggestion("/nodes/hogsmeade").unwrap().0, "/ha/cluster");
+        assert_eq!(suggestion("/nodes/node-01").unwrap().0, "/ha/cluster");
         assert_eq!(suggestion("/Users").unwrap().0, "/auth/users");
         assert_eq!(suggestion("/tasks/xyz").unwrap().0, "/tasks");
         assert_eq!(suggestion("/qwerty"), None);

@@ -631,6 +631,9 @@ pub async fn run() -> anyhow::Result<()> {
         // WebSocket endpoint for real-time updates
         .route("/api/ws", get(websocket::ws_handler::<AppState>))
         .with_state(state.clone())
+        // Guest operations (start, shutdown, clone, backup, ...) go to the
+        // task log; innermost, so only authorized calls are recorded.
+        .layer(axum_middleware::from_fn(api::tasks::record_guest_actions))
         // Every protected route: permission check (inner) after
         // authentication (outer layer, runs first).
         .layer(axum_middleware::from_fn_with_state(
