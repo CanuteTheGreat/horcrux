@@ -664,7 +664,7 @@ impl SecuritySettings {
     pub fn validate(&self) -> Result<(), String> {
         self.vuln_scan.validate()?;
         self.hardening.validate()?;
-        self.host_cve.validate()
+        self.host_cve.validate()?;
         self.runtime.validate()
     }
 }

@@ -106,6 +106,7 @@ fn SecurityTabs(active: &'static str) -> impl IntoView {
             {tab("/security", "overview", "Overview")}
             {tab("/security/vulnerabilities", "vulns", "Vulnerabilities")}
             {tab("/security/hardening", "hardening", "Hardening")}
+            {tab("/security/runtime", "runtime", "Runtime")}
             {tab("/security/settings", "settings", "Settings")}
         </nav>
     }
@@ -846,6 +847,165 @@ pub fn SecurityHardeningPage() -> impl IntoView {
 }
 
 // ------------------------------------------------------------ settings
+
+#[component]
+pub fn SecurityRuntimePage() -> impl IntoView {
+    let query = use_query_map();
+    let prio = move || query.with(|q| q.get("priority").cloned().unwrap_or_default());
+    let rule_f = move || query.with(|q| q.get("rule").cloned().unwrap_or_default());
+    let cont_f = move || query.with(|q| q.get("container").cloned().unwrap_or_default());
+    let (st, set_st) = create_signal(None::<RuntimeStatus>);
+    let (events, set_events) = create_signal(None::<Vec<RuntimeEvent>>);
+    let (err, set_err) = create_signal(None::<String>);
+    let (settings, set_settings) = create_signal(None::<SecuritySettings>);
+    let (ver, bump) = create_signal(0u32);
+    let load = create_action(move |_: &()| async move {
+        match get_runtime_status().await {
+            Ok(s) => {
+                set_err.set(None);
+                set_st.set(Some(s))
+            }
+            Err(e) => set_err.set(Some(format!("Could not load the detector status: {e}"))),
+        }
+        match list_runtime_events(&prio(), &rule_f(), &cont_f()).await {
+            Ok(l) => set_events.set(Some(l)),
+            Err(e) => set_err.set(Some(format!("Could not load detections: {e}"))),
+        }
+        if let Ok(s) = get_security_settings().await {
+            set_settings.set(Some(s));
+        }
+    });
+    load.dispatch(());
+    create_effect(move |_| {
+        let _ = (ver.get(), prio(), rule_f(), cont_f());
+        load.dispatch(());
+    });
+    let toggle = create_action(move |on: &bool| {
+        let on = *on;
+        async move {
+            if let Some(mut s) = settings.get_untracked() {
+                s.runtime.enabled = on;
+                match put_security_settings(&s).await {
+                    Ok(v) => set_settings.set(Some(v)),
+                    Err(e) => set_err.set(Some(format!("Not saved: {e}"))),
+                }
+            }
+            bump.update(|v| *v += 1);
+        }
+    });
+    let clear = create_action(move |_: &()| async move {
+        if let Err(e) = clear_runtime_events().await {
+            set_err.set(Some(format!("Could not clear detections: {e}")));
+        }
+        bump.update(|v| *v += 1);
+    });
+    let filter_link = move |val: &'static str, label: &'static str| {
+        let href = if val.is_empty() {
+            "/security/runtime".to_string()
+        } else {
+            format!("/security/runtime?priority={val}")
+        };
+        let on = Signal::derive(move || prio() == val);
+        view! { <NavLink href=href class=Signal::derive(move || if on.get() { "filter-link active".to_string() } else { "filter-link".to_string() }) active=on>{label}</NavLink> }
+    };
+    view! {
+        <div class="security-page">
+            <div class="page-header">
+                <h1>"Runtime detection"</h1>
+                <div class="header-actions">
+                    <button class="btn btn-secondary" on:click=move |_| bump.update(|v| *v += 1)>"Refresh"</button>
+                </div>
+            </div>
+            <SecurityTabs active="runtime"/>
+            <p class="help-text">
+                "Watches the containers on this node for suspicious behaviour with Falco (Apache-2.0, eBPF, no kernel module): an interactive shell in a container, writes below /etc, "
+                "a privileged container starting, crypto-miner patterns. Off by default; it runs resource-limited and keeps its detections here and in Notifications."
+            </p>
+            {move || err.get().map(|m| view! { <div class="alert alert-error">{m}</div> })}
+            {move || st.get().map(|s| {
+                let on = s.enabled;
+                view! {
+                    {(!s.available).then(|| view! {
+                        <div class="alert alert-warning">
+                            "Falco is not installed on this node. Install it with the " <span class="mono">"runtime-detection"</span> " USE flag of Horcrux (app-containers/falco-bin), or set its path in "
+                            <A href="/security/settings">"Security settings"</A> "."
+                        </div>
+                    })}
+                    {s.last_error.clone().filter(|_| s.available).map(|m| view! { <div class="alert alert-warning">{m}</div> })}
+                    <div class="stats-grid">
+                        <A href="/security/settings" class={if s.running { "stat-card stat-link healthy" } else { "stat-card stat-link" }}>
+                            <span class="stat-label">"Detector"</span>
+                            <div class="stat-value">{if s.running { "running" } else if on { "stopped" } else { "off" }}</div>
+                            <div class="dash-meta">{if s.version.is_empty() { String::new() } else { format!("Falco {}", s.version) }} {s.since.map(|t| format!(" since {}", when(Some(t))))}</div>
+                        </A>
+                        <A href="/security/settings" class="stat-card stat-link">
+                            <span class="stat-label">"Detector CPU"</span>
+                            <div class="stat-value">{format!("{:.0}%", s.cpu_percent)}</div>
+                            <div class="dash-meta">{format!("{:.0} MB resident, {}", s.memory_mb, if s.limits_applied { "limits applied" } else { "no cgroup limits" })}</div>
+                        </A>
+                        <A href="/security/runtime" class="stat-card stat-link">
+                            <span class="stat-label">"Kernel events"</span>
+                            <div class="stat-value">{format!("{:.0}/s", s.events_per_sec)}</div>
+                            <div class={if s.kernel_drops > 0 { "dash-meta critical" } else { "dash-meta" }}>{format!("{} dropped", s.kernel_drops)}</div>
+                        </A>
+                        <A href="/security/runtime?priority=warning" class="stat-card stat-link">
+                            <span class="stat-label">"Detections kept"</span>
+                            <div class="stat-value">{s.events_kept}</div>
+                            <div class="dash-meta">{format!("{} since the log began", s.events_total)}</div>
+                        </A>
+                    </div>
+                    <div class="card">
+                        <label for="rt-enabled"><input id="rt-enabled" type="checkbox" prop:checked=on disabled=move || toggle.pending().get()
+                            on:change=move |e| toggle.dispatch(event_target_checked(&e))/>" Detect threats in containers on this node"</label>
+                        <div class="dash-meta">{format!("Rules: {}", s.rules.join(", "))}</div>
+                    </div>
+                }
+            })}
+            <h2>"Detections"</h2>
+            <div class="filter-links">
+                {filter_link("", "All")}
+                {filter_link("warning", "Warning or worse")}
+                {filter_link("error", "Error or worse")}
+                {filter_link("critical", "Critical")}
+                {move || (!rule_f().is_empty() || !cont_f().is_empty()).then(|| view! { <A href="/security/runtime" class="filter-link">"Clear rule/container filter"</A> })}
+                <button class="btn btn-secondary btn-sm" on:click=move |_| { if ask("Delete all kept detections on this node?") { clear.dispatch(()) } }>"Clear all"</button>
+            </div>
+            {move || match events.get() {
+                None => view! { <div class="loading">"Loading..."</div> }.into_view(),
+                Some(list) if list.is_empty() => view! {
+                    <div class="empty-state">
+                        <h3>"No detections"</h3>
+                        <p>{if st.get().map(|s| s.running).unwrap_or(false) { "The detector is running and has seen nothing suspicious." } else { "Turn the detector on above to start watching containers." }}</p>
+                    </div>
+                }.into_view(),
+                Some(list) => view! {
+                    <div class="table-container">
+                    <table class="data-table">
+                        <thead><tr><th>"Time"</th><th>"Priority"</th><th>"Rule"</th><th>"Container"</th><th>"Detail"</th></tr></thead>
+                        <tbody>
+                        {list.into_iter().map(|e| {
+                            let cls = match e.priority.as_str() { "critical" => "sev-badge sev-critical", "error" => "sev-badge sev-high", "warning" => "sev-badge sev-medium", _ => "sev-badge sev-low" };
+                            let rule_href = format!("/security/runtime?rule={}", js_sys::encode_uri_component(&e.rule));
+                            let cont_href = format!("/security/runtime?container={}", js_sys::encode_uri_component(&e.container));
+                            view! {
+                                <tr>
+                                    <td>{when(Some(e.time))}</td>
+                                    <td><span class=cls>{e.priority.clone()}</span></td>
+                                    <td><A href=rule_href>{e.rule.clone()}</A></td>
+                                    <td>{if e.container.is_empty() || e.container == "host" { view! { <span class="dash-meta">"host"</span> }.into_view() } else { view! { <A href=cont_href>{e.container.clone()}</A> }.into_view() }}
+                                        <div class="dash-meta">{e.image.clone()}</div></td>
+                                    <td><span class="mono">{e.cmdline.clone()}</span><div class="dash-meta">{e.message.clone()}</div></td>
+                                </tr>
+                            }
+                        }).collect_view()}
+                        </tbody>
+                    </table>
+                    </div>
+                }.into_view(),
+            }}
+        </div>
+    }
+}
 
 #[component]
 pub fn SecuritySettingsPage() -> impl IntoView {
