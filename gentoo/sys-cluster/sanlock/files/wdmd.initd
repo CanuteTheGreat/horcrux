@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+# Copyright 1999-2026 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
+# wdmd keeps its pid file in /run/wdmd (WDMD_RUN_DIR), not /var/run.
+pidfile="/run/wdmd/wdmd.pid"
+command="/usr/sbin/wdmd"
+command_args="${WDMDOPTS:-"-G sanlock"}"
+
+depend() {
+	need localmount
+}
+
+start_pre() {
+	$command -p || exit 1
+}

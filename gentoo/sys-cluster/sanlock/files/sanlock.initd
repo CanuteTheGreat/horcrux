@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+# Copyright 1999-2026 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
+# sanlock writes its lock/pid file to its run dir (/run/sanlock, or
+# $SANLOCK_RUN_DIR): with pidfile=/var/run/sanlock.pid OpenRC never finds
+# the daemon and reports it crashed while it runs.
+pidfile="${SANLOCK_RUN_DIR:-/run/sanlock}/sanlock.pid"
+command="/usr/sbin/sanlock"
+command_args="daemon ${SANLOCKOPTS:-"-U sanlock -G sanlock"}"
+
+depend() {
+	need localmount
+	use wdmd
+	before lvmlockd
+}

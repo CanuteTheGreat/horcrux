@@ -151,18 +151,26 @@ pub async fn create_shared_vg(vg: &str, dev: &str, t: Duration) -> Result<(), St
     // exists once the first shared VG does (lvmlockd(8), "Initial set up");
     // vgcreate initializes the device itself.
     //
-    // vgcreate activates the internal `lvmlock` LV on the map at once. While
-    // multipathd is still reloading the map (a path that just joined it, the
-    // reconcile right before) or udev still probes it, that table load gets
-    // EBUSY ("reload ioctl ... Device or resource busy") and vgcreate leaves
-    // an orphan PV behind (seen in the KVM e2e on Debian 13, 2 of 3 runs).
-    // So wait for udev to settle first, and on EBUSY settle and try again; the
-    // orphan PV is taken over by the next vgcreate.
+    // Two transient failures were seen on installed nodes in the SAN
+    // vmtest, both leaving a half-made VG behind (its `lvmlock` LV created
+    // but no sanlock lock args, so `vg_lock_type` is empty):
+    //  * EBUSY ("reload ioctl ... Device or resource busy") when the map
+    //    is still being reloaded/probed (Debian 13 e2e);
+    //  * "Failed to initialize lock args for lock type sanlock" when sanlock
+    //    is not ready for the global-lock bootstrap yet (Gentoo systemd).
+    // So wait for udev to settle, delete any half-made VG first, create,
+    // and verify the lock type really came out `sanlock`; retry otherwise.
     let mut last = String::new();
     for attempt in 0..BUSY_RETRIES {
         let _ = run("udevadm", &["settle", "--timeout=30"], t).await;
         if attempt > 0 {
             tokio::time::sleep(BUSY_BACKOFF * attempt).await;
+            // a previous attempt may have left the VG without lock args
+            if matches!(vg_lock_type(vg, t).await, Ok(Some(lt)) if lt.is_empty())
+                || matches!(vg_lock_type(vg, t).await, Ok(None))
+            {
+                force_remove_vg(vg, dev, t).await;
+            }
         }
         let r = run(
             "vgcreate",
@@ -171,23 +179,55 @@ pub async fn create_shared_vg(vg: &str, dev: &str, t: Duration) -> Result<(), St
         )
         .await?;
         if r.ok {
-            return Ok(());
+            match vg_lock_type(vg, t).await {
+                Ok(Some(lt)) if lt == "sanlock" => return Ok(()),
+                _ => {
+                    last =
+                        format!("vgcreate --shared created {vg} but its lock type is not sanlock");
+                    force_remove_vg(vg, dev, t).await;
+                    continue;
+                }
+            }
         }
         last = fail("vgcreate --shared", &r);
-        if !is_busy(&r.stderr) {
+        if !is_retriable(&r.stderr) {
             break;
         }
+        force_remove_vg(vg, dev, t).await;
     }
     Err(last)
 }
 
-/// vgcreate retries on a busy map (see `create_shared_vg`).
-const BUSY_RETRIES: u32 = 4;
-const BUSY_BACKOFF: Duration = Duration::from_secs(2);
+/// vgcreate retries on a transient failure (see `create_shared_vg`).
+const BUSY_RETRIES: u32 = 5;
+const BUSY_BACKOFF: Duration = Duration::from_secs(3);
 
-/// Does LVM's error say a device-mapper table load hit EBUSY?
-pub fn is_busy(stderr: &str) -> bool {
+/// Does LVM's error say the shared-VG create can be retried (a busy
+/// device-mapper reload, or sanlock not ready for the global-lock
+/// bootstrap)?
+pub fn is_retriable(stderr: &str) -> bool {
     stderr.contains("Device or resource busy")
+        || stderr.contains("lock args for lock type sanlock")
+        || stderr.contains("sanlock lv")
+        || stderr.contains("global lock")
+}
+
+/// Remove a half-made shared VG and wipe the PV, so the next vgcreate
+/// starts clean. Best effort: the VG has no working lock, so this bypasses
+/// lvmlockd.
+async fn force_remove_vg(vg: &str, dev: &str, t: Duration) {
+    let _ = run(
+        "vgremove",
+        &["-f", "-y", "--config", "global/use_lvmlockd=0", vg],
+        t,
+    )
+    .await;
+    let _ = run(
+        "pvremove",
+        &["-ff", "-y", "--config", "global/use_lvmlockd=0", dev],
+        t,
+    )
+    .await;
 }
 
 /// Join this node to the VG's lockspace (idempotent).
@@ -267,8 +307,11 @@ mod tests {
         assert!(c.starts_with(HEADER));
         assert!(c.contains("global {\n\tuse_lvmlockd = 1\n}\n"));
         assert!(c.ends_with("local {\n\thost_id = 7\n}\n"));
-        assert!(is_busy("  device-mapper: reload ioctl on  (253:1) failed: Device or resource busy\n  Failed to activate new LV vg/lvmlock."));
-        assert!(!is_busy("  Physical volume /dev/x not found"));
+        assert!(is_retriable("  device-mapper: reload ioctl on  (253:1) failed: Device or resource busy\n  Failed to activate new LV vg/lvmlock."));
+        assert!(is_retriable(
+            "  Failed to initialize lock args for lock type sanlock"
+        ));
+        assert!(!is_retriable("  Physical volume /dev/x not found"));
         assert_eq!(render_sanlock_conf(true), None);
         assert!(render_sanlock_conf(false)
             .unwrap()

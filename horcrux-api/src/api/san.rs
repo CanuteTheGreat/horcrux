@@ -459,6 +459,12 @@ async fn ensure_service(name: &str, rep: &mut ApplyReport) {
         Ok(crate::init::ServiceState::Active) => {}
         // a daemon that died (OpenRC "crashed", systemd "failed") is
         // restarted: OpenRC refuses `start` on a crashed service
+        // a daemon that runs although its init status says otherwise (an
+        // init script with a wrong pidfile) is left alone: restarting it
+        // would drop its lockspaces/sessions
+        Ok(crate::init::ServiceState::Failed) if daemon_runs(name) => rep
+            .actions
+            .push(format!("{name} runs (its init system reports it failed)")),
         Ok(crate::init::ServiceState::Failed) => match b.restart(name).await {
             Ok(()) => rep.actions.push(format!("restarted {name} (it had died)")),
             Err(e) => rep.errors.push(format!("restart {name}: {e}")),
@@ -468,6 +474,39 @@ async fn ensure_service(name: &str, rep: &mut ApplyReport) {
             Err(e) => rep.errors.push(format!("start {name}: {e}")),
         },
     }
+}
+
+/// A process named `name` (the SAN daemons' service and program names are
+/// the same: iscsid, multipathd, sanlock, wdmd, lvmlockd) is alive.
+fn daemon_runs(name: &str) -> bool {
+    daemon_runs_in(std::path::Path::new("/proc"), name)
+}
+
+fn daemon_runs_in(proc_dir: &std::path::Path, name: &str) -> bool {
+    let Ok(rd) = std::fs::read_dir(proc_dir) else {
+        return false;
+    };
+    rd.flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|c| c.is_ascii_digit())
+        })
+        .any(|e| {
+            std::fs::read_to_string(e.path().join("comm"))
+                .map(|c| c.trim() == name)
+                .unwrap_or(false)
+                && !std::fs::read_to_string(e.path().join("stat"))
+                    .map(|s| {
+                        s.rsplit(')')
+                            .next()
+                            .unwrap_or("")
+                            .trim_start()
+                            .starts_with('Z')
+                    })
+                    .unwrap_or(true)
+        })
 }
 
 async fn restart_service(name: &str, rep: &mut ApplyReport) {
@@ -1372,7 +1411,9 @@ async fn create_lvm(
     let mut rep = reconcile(&state).await;
     if req.create_vg {
         match lvm_shared::vg_lock_type(&l.vg_name, TOOL_TIMEOUT).await {
-            Ok(Some(_)) => rep.errors.push(format!(
+            // a real shared VG already there: leave it. An empty lock type is
+            // a half-made VG from a failed attempt; create_shared_vg clears it.
+            Ok(Some(lt)) if !lt.is_empty() => rep.errors.push(format!(
                 "volume group {} exists already; not created",
                 l.vg_name
             )),
@@ -1921,6 +1962,27 @@ pub async fn declarative_apply(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_running_daemon_is_found_by_its_comm_and_a_zombie_is_not() {
+        let d = tempfile::tempdir().unwrap();
+        for (pid, comm, state) in [
+            ("10", "sanlock", "S"),
+            ("11", "wdmd", "Z"),
+            ("self", "x", "R"),
+        ] {
+            std::fs::create_dir_all(d.path().join(pid)).unwrap();
+            std::fs::write(d.path().join(pid).join("comm"), format!("{comm}\n")).unwrap();
+            std::fs::write(
+                d.path().join(pid).join("stat"),
+                format!("{pid} ({comm}) {state} 1 1"),
+            )
+            .unwrap();
+        }
+        assert!(daemon_runs_in(d.path(), "sanlock"));
+        assert!(!daemon_runs_in(d.path(), "wdmd"), "zombie");
+        assert!(!daemon_runs_in(d.path(), "multipathd"));
+    }
+
     use super::*;
 
     #[test]
