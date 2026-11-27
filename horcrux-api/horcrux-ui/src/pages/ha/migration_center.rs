@@ -9,6 +9,17 @@ pub fn MigrationCenterPage() -> impl IntoView {
     let (vms, set_vms) = create_signal(Vec::<VirtualMachine>::new());
     let (containers, set_containers) = create_signal(Vec::<Container>::new());
     let (cluster_nodes, set_cluster_nodes) = create_signal(Vec::<ClusterNode>::new());
+    // Last manual container move per container (the API keeps them).
+    let (ct_moves, set_ct_moves) = create_signal(Vec::<MoveOutcome>::new());
+    // Online nodes other than this one: the only possible targets.
+    let peers = move || {
+        cluster_nodes
+            .get()
+            .into_iter()
+            .filter(|n| n.status == "online" && !n.is_local)
+            .collect::<Vec<_>>()
+    };
+    let has_peers = move || !peers().is_empty();
     // Live-migration verdicts (CPU vendor/level) for the selected guest's source node.
     let (targets, set_targets) = create_signal(Vec::<MigrationTarget>::new());
     let (show_migration_modal, set_show_migration_modal) = create_signal(false);
@@ -63,17 +74,34 @@ pub fn MigrationCenterPage() -> impl IntoView {
                 }
             }
 
-            if let Ok(vm_list) = get_virtual_machines().await {
-                set_vms.set(vm_list)
-            }
-
-            if let Ok(container_list) = get_containers().await {
-                set_containers.set(container_list)
-            }
-
             if let Ok(nodes) = get_cluster_nodes().await {
                 set_cluster_nodes.set(nodes)
             }
+            let local = local_node_name(&cluster_nodes.get_untracked());
+
+            if let Ok(mut vm_list) = get_virtual_machines().await {
+                for v in vm_list.iter_mut() {
+                    if v.node.is_empty() || v.node == "local" {
+                        v.node = local.clone();
+                    }
+                }
+                set_vms.set(vm_list)
+            }
+
+            if let Ok(mut container_list) = get_containers().await {
+                for c in container_list.iter_mut() {
+                    normalize_container(c, &local);
+                }
+                set_containers.set(container_list)
+            }
+            // A container move runs in the background: show the last one.
+            let mut moves = Vec::new();
+            for c in containers.get_untracked() {
+                if let Ok(Some(m)) = container_migration(&c.id).await {
+                    moves.push(m);
+                }
+            }
+            set_ct_moves.set(moves);
 
             if show_loading {
                 set_loading.set(false);
@@ -86,6 +114,21 @@ pub fn MigrationCenterPage() -> impl IntoView {
         if let Some((resource_type, resource_id)) = selected_resource.get() {
             set_loading.set(true);
             set_error_message.set(None);
+            if resource_type == "container" {
+                match migrate_container(&resource_id, &target_node.get()).await {
+                    Ok(_) => {
+                        set_show_migration_modal.set(false);
+                        set_selected_resource.set(None);
+                        set_target_node.set(String::new());
+                        load_data.dispatch(true);
+                    }
+                    Err(e) => {
+                        set_error_message.set(Some(format!("Could not move the container: {}", e)))
+                    }
+                }
+                set_loading.set(false);
+                return;
+            }
 
             let migration_job = MigrationJob {
                 job_id: format!("migration-{}", chrono::Utc::now().timestamp()),
@@ -279,6 +322,50 @@ pub fn MigrationCenterPage() -> impl IntoView {
         load_data.dispatch(true);
     });
 
+    // `/ha/migration?guest=<id>&type=vm|container` (the Migrate buttons on
+    // the VM page and the container list): open the dialog for that guest
+    // once the lists are in and a target exists.
+    let query = leptos_router::use_query_map();
+    let (preselected, set_preselected) = create_signal(false);
+    create_effect(move |_| {
+        if preselected.get_untracked() {
+            return;
+        }
+        let q = query.get();
+        let Some(id) = q.get("guest").cloned().filter(|g| !g.is_empty()) else {
+            return;
+        };
+        let kind = q.get("type").cloned().unwrap_or_else(|| "vm".into());
+        if cluster_nodes.get().is_empty() {
+            return;
+        }
+        let source = if kind == "container" {
+            containers
+                .get()
+                .into_iter()
+                .find(|c| c.vmid == id)
+                .map(|c| (c.node, false))
+        } else {
+            vms.get()
+                .into_iter()
+                .find(|v| v.vmid == id)
+                .map(|v| (v.node, v.status == "running"))
+        };
+        let Some((node, running)) = source else {
+            return;
+        };
+        set_preselected.set(true);
+        if !has_peers() {
+            return;
+        }
+        set_selected_resource.set(Some((kind.clone(), id)));
+        set_target_node.set(get_optimal_target_node(&node));
+        if kind == "vm" {
+            set_migration_type.set(if running { "online" } else { "offline" }.to_string());
+        }
+        set_show_migration_modal.set(true);
+    });
+
     view! {
         <div class="migration-center-page">
             <div class="page-header">
@@ -303,6 +390,21 @@ pub fn MigrationCenterPage() -> impl IntoView {
 
             {move || error_message.get().map(|msg| view! {
                 <div class="alert alert-error">{msg}</div>
+            })}
+            {move || (!cluster_nodes.get().is_empty() && !has_peers()).then(|| view! {
+                <div class="alert alert-info" id="migration-no-peers">
+                    "Migration moves a VM or container to another node of the cluster. "
+                    {move || {
+                        let n = local_node_name(&cluster_nodes.get());
+                        let others = cluster_nodes.get().iter().filter(|x| !x.is_local).count();
+                        if others == 0 {
+                            format!("{n} is not part of a cluster yet, so there is no node to move guests to. ")
+                        } else {
+                            "No other node of this cluster is online right now. ".to_string()
+                        }
+                    }}
+                    <a href="/ha/cluster">"Add or join a node"</a>
+                </div>
             })}
 
             <div class="migration-dashboard">
@@ -459,7 +561,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                     // Running VMs migrate live/online, stopped ones
                                     // offline; not while a job for it is active.
                                     let is_running = vm.status == "running";
-                                    let can_migrate = !migration_jobs.get()
+                                    let can_migrate = has_peers() && !migration_jobs.get()
                                         .iter().any(|job| job.resource_id == vmid_str &&
                                                   (job.status == "running" || job.status == "pending"));
 
@@ -527,9 +629,6 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                     }
                                 }).collect_view()}
                             </div>
-                            {move || vms.get().is_empty().then(|| view! {
-                                <p class="empty-state">"No virtual machines on this cluster yet. " <a href="/vms">"Create or view VMs"</a></p>
-                            })}
 
                             <h3>"Containers"</h3>
                             {move || containers.get().is_empty().then(|| view! { <p class="empty-state" id="migration-co-empty">"No containers to migrate. "<a href="/containers">"Go to the container list"</a></p> })}
@@ -543,17 +642,24 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                     let status = container.status.clone();
                                     let status_lower = container.status.to_lowercase();
                                     let node = container.node.clone();
-                                    let cpus = container.cpus;
-                                    let memory_gb = format!("{:.1} GB", container.maxmem as f64 / 1024.0 / 1024.0 / 1024.0);
-                                    // Live/offline migration is implemented for VMs only
-                                    // (the API answers 400 for containers), so don't offer it.
-                                    let can_migrate = false;
+                                    let cpus = if container.cpus == 0 { "no limit".to_string() } else { format!("{} cores", container.cpus) };
+                                    let memory_gb = if container.maxmem == 0 {
+                                        "no limit".to_string()
+                                    } else {
+                                        format!("{:.1} GB", container.maxmem as f64 / 1024.0 / 1024.0 / 1024.0)
+                                    };
+                                    let runtime = container.runtime.clone();
+                                    let last_move = ct_moves.get().into_iter().find(|m| m.guest_id == container.id);
+                                    let moving = last_move.as_ref().is_some_and(|m| m.status == "running");
+                                    // Containers move with the drain/rebalance engine
+                                    // (POST /api/containers/:id/migrate).
+                                    let can_migrate = has_peers() && !moving;
 
                                     view! {
                                         <div class="resource-card">
                                             <div class="resource-header">
                                                 <h4>{hostname}</h4>
-                                                <span class="resource-id">"CT " {vmid}</span>
+                                                <span class="resource-id">{runtime}" container"</span>
                                             </div>
                                             <div class="resource-info">
                                                 <div class="info-row">
@@ -568,13 +674,22 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                 </div>
                                                 <div class="info-row">
                                                     <span class="label">"CPU:"</span>
-                                                    <span class="value">{cpus}" cores"</span>
+                                                    <span class="value">{cpus}</span>
                                                 </div>
                                                 <div class="info-row">
                                                     <span class="label">"Memory:"</span>
                                                     <span class="value">{memory_gb}</span>
                                                 </div>
                                             </div>
+                                            {last_move.map(|m| {
+                                                let text = match m.status.as_str() {
+                                                    "running" => format!("Moving to {}...", m.to),
+                                                    "done" => format!("Moved to {}", m.to),
+                                                    _ => format!("Move to {} failed: {}", m.to, m.error.unwrap_or_default()),
+                                                };
+                                                let cls = if m.status == "failed" { "ct-move-status alert alert-error" } else { "ct-move-status form-help" };
+                                                view! { <p class=cls>{text}</p> }
+                                            })}
                                             <div class="resource-actions">
                                                 <button
                                                     class="btn btn-sm btn-primary"
@@ -585,7 +700,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                                         set_show_migration_modal.set(true);
                                                     }
                                                 >
-                                                    {if can_migrate { "Migrate" } else { "VMs only" }}
+                                                    {if moving { "Moving..." } else { "Migrate" }}
                                                 </button>
                                                 <button
                                                     class="btn btn-sm btn-secondary"
@@ -613,9 +728,6 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                 }).collect_view()}
                             </div>
                         </div>
-                            {move || containers.get().is_empty().then(|| view! {
-                                <p class="empty-state">"No containers on this cluster yet. " <a href="/containers">"Create or view containers"</a></p>
-                            })}
                     </div>
                 </div>
             </div>
@@ -657,7 +769,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                         on:change=move |ev| set_target_node.set(event_target_value(&ev))
                                     >
                                         <option value="">"Select target node"</option>
-                                        {cluster_nodes.get().into_iter().filter(|n| n.status == "online").map(|node| {
+                                        {peers().into_iter().map(|node| {
                                             let node_name = node.name.clone();
                                             let node_name_val = node.name.clone();
                                             let usage = node.usage_label();
@@ -790,7 +902,7 @@ pub fn MigrationCenterPage() -> impl IntoView {
                                         on:change=move |ev| set_bulk_target_node.set(event_target_value(&ev))
                                     >
                                         <option value="">"Select target node"</option>
-                                        {cluster_nodes.get().into_iter().filter(|n| n.status == "online").map(|node| {
+                                        {peers().into_iter().map(|node| {
                                             let node_name = node.name.clone();
                                             let node_name_val = node.name.clone();
                                             let usage = node.usage_label();
@@ -852,5 +964,46 @@ pub fn MigrationCenterPage() -> impl IntoView {
                 view! {}.into_view()
             }}
         </div>
+    }
+}
+
+/// This node's name in the cluster list ("" before the list loaded).
+fn local_node_name(nodes: &[ClusterNode]) -> String {
+    nodes
+        .iter()
+        .find(|n| n.is_local)
+        .map(|n| n.name.clone())
+        .unwrap_or_default()
+}
+
+/// The container list answers `id`/`name` only: fill what the cards and
+/// the migration dialog key on.
+fn normalize_container(c: &mut Container, local: &str) {
+    if c.vmid.is_empty() {
+        c.vmid = c.id.clone();
+    }
+    if c.hostname.is_empty() {
+        c.hostname = c.name.clone();
+    }
+    if c.node.is_empty() || c.node == "local" {
+        c.node = local.to_string();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn container_rows_get_id_name_and_node() {
+        let mut c: Container = serde_json::from_str(
+            r#"{"id":"web1","name":"web1","runtime":"docker","rootfs":"nginx","status":"running","created_at":null}"#,
+        )
+        .unwrap();
+        normalize_container(&mut c, "node-a");
+        assert_eq!(
+            (c.vmid.as_str(), c.hostname.as_str(), c.node.as_str()),
+            ("web1", "web1", "node-a")
+        );
     }
 }

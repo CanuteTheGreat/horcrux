@@ -66,6 +66,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/vms/:id/placement",
             get(get_placement).put(put_placement),
         )
+        .route(
+            "/api/containers/:id/migrate",
+            get(ct_migrate_status).post(ct_migrate),
+        )
         .route("/api/ha/peer/placement", post(peer_placement))
         .route("/api/ha/peer/maintenance", post(peer_maintenance))
         .route("/api/ha/peer/move", post(peer_move))
@@ -1265,6 +1269,101 @@ async fn peer_move(
     Ok(Json(move_here(&state, &m, req.timeout_secs).await))
 }
 
+// ------------------------------------------------- manual container migrate
+
+/// Body of `POST /api/containers/:id/migrate`.
+#[derive(Debug, Deserialize)]
+pub struct CtMigrateReq {
+    pub target_node: String,
+}
+
+/// The current or last manual move of each container (by id), for the
+/// Migration Center's progress line. Finished moves are also in the move
+/// history (`GET /api/cluster/moves?guest=<id>`).
+fn ct_moves() -> &'static Mutex<HashMap<String, MoveResult>> {
+    static CELL: OnceLock<Mutex<HashMap<String, MoveResult>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Why `target` can't receive a container from `local`, if it can't.
+pub fn ct_target_problem(nodes: &[Node], local: &str, target: &str) -> Option<String> {
+    let target = target.trim();
+    if !is_clustered(nodes) {
+        return Some(
+            "This node is not part of a cluster, so there is no other node to move the \
+             container to. Join or create a cluster first (High Availability > Manage Cluster)."
+                .into(),
+        );
+    }
+    if target.is_empty() {
+        return Some("Choose the node to move the container to.".into());
+    }
+    if target == local {
+        return Some(format!("The container already runs on {local}."));
+    }
+    match nodes.iter().find(|n| n.name == target) {
+        None => Some(format!("{target} is not a node of this cluster.")),
+        Some(n) if n.status != NodeStatus::Online => Some(format!(
+            "{target} is not online, so it cannot take the container now."
+        )),
+        Some(_) => None,
+    }
+}
+
+/// Move one container to another node (the same engine drain and rebalance
+/// use: live with CRIU on both nodes, otherwise stop -> copy -> start). The
+/// move runs in the background; poll `GET` on the same path.
+async fn ct_migrate(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<CtMigrateReq>,
+) -> Result<(axum::http::StatusCode, Json<MoveResult>), ApiError> {
+    let ct = state.container_manager.get_container(&id).await?;
+    let local = state.cluster_manager.get_local_node_name().await?;
+    let nodes = state.cluster_manager.list_nodes().await;
+    if let Some(p) = ct_target_problem(&nodes, &local, &req.target_node) {
+        return Err(ApiError::Conflict(p));
+    }
+    let r = MoveResult {
+        guest_id: id.clone(),
+        name: ct.name.clone(),
+        from: local.clone(),
+        to: req.target_node.trim().to_string(),
+        reason: "manual".into(),
+        status: "running".into(),
+        ..Default::default()
+    };
+    {
+        let mut moves = ct_moves().lock().unwrap();
+        if moves.get(&id).is_some_and(|m| m.status == "running") {
+            return Err(ApiError::Conflict(format!(
+                "{} is already being moved",
+                ct.name
+            )));
+        }
+        moves.insert(id.clone(), r.clone());
+    }
+    let m = Move {
+        guest_id: id.clone(),
+        name: ct.name,
+        from: local,
+        to: r.to.clone(),
+        reason: "manual".into(),
+    };
+    let st = state.clone();
+    tokio::spawn(async move {
+        let out = move_here(&st, &m, 900).await;
+        ct_moves().lock().unwrap().insert(m.guest_id.clone(), out);
+    });
+    Ok((axum::http::StatusCode::ACCEPTED, Json(r)))
+}
+
+/// The current or last manual move of a container (`null` if none since
+/// the API started).
+async fn ct_migrate_status(Path(id): Path<String>) -> Json<Option<MoveResult>> {
+    Json(ct_moves().lock().unwrap().get(&id).cloned())
+}
+
 async fn peer_settings(
     State(state): State<Arc<AppState>>,
     user: Option<Extension<AuthUser>>,
@@ -1335,5 +1434,46 @@ pub async fn leave_boot_maintenance(state: &Arc<AppState>) {
             tokio::time::sleep(Duration::from_secs(10)).await;
             rebalance_run(&s2, &st, false, None, "on-return").await;
         });
+    }
+}
+
+#[cfg(test)]
+mod ct_migrate_tests {
+    use super::*;
+
+    fn n(name: &str, local: bool, online: bool) -> Node {
+        let mut x = Node::new(0, name.into(), "10.0.0.1".into());
+        x.is_local = local;
+        x.status = if online {
+            NodeStatus::Online
+        } else {
+            NodeStatus::Offline
+        };
+        x
+    }
+
+    #[test]
+    fn container_migrate_targets_are_checked() {
+        // a single node: say so instead of failing somewhere in the move
+        let solo = vec![n("a", true, true)];
+        assert!(ct_target_problem(&solo, "a", "b")
+            .unwrap()
+            .contains("not part of a cluster"));
+        let three = vec![
+            n("a", true, true),
+            n("b", false, true),
+            n("c", false, false),
+        ];
+        assert!(ct_target_problem(&three, "a", "").is_some());
+        assert!(ct_target_problem(&three, "a", "a")
+            .unwrap()
+            .contains("already runs on a"));
+        assert!(ct_target_problem(&three, "a", "zz")
+            .unwrap()
+            .contains("not a node"));
+        assert!(ct_target_problem(&three, "a", "c")
+            .unwrap()
+            .contains("not online"));
+        assert_eq!(ct_target_problem(&three, "a", " b "), None);
     }
 }

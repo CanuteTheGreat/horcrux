@@ -158,6 +158,7 @@ pub fn App() -> impl IntoView {
                             <IfFeature feature="cluster">
                                 <A href="/ha" class="dropdown-item">"High Availability"</A>
                                 <A href="/ha/maintenance" class="dropdown-item">"Maintenance & Rebalance"</A>
+                                <A href="/ha/migration" class="dropdown-item">"Migration Center"</A>
                             </IfFeature>
                         </div>
                     </div>

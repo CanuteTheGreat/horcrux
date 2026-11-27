@@ -7784,6 +7784,21 @@ pub struct MoveOutcome {
     pub error: Option<String>,
 }
 
+/// POST /api/containers/:id/migrate: move a container to another node
+/// (runs in the background; the answer is the started move).
+pub async fn migrate_container(id: &str, target_node: &str) -> Result<MoveOutcome, ApiError> {
+    post_json(
+        &format!("/containers/{}/migrate", urlencoding::encode(id)),
+        &serde_json::json!({ "target_node": target_node }),
+    )
+    .await
+}
+
+/// GET /api/containers/:id/migrate: the current or last manual move.
+pub async fn container_migration(id: &str) -> Result<Option<MoveOutcome>, ApiError> {
+    fetch_json(&format!("/containers/{}/migrate", urlencoding::encode(id))).await
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct MoveRun {
     pub kind: String,

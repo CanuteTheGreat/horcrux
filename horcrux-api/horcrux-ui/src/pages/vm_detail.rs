@@ -124,7 +124,14 @@ pub fn VmDetailPage() -> impl IntoView {
 
     view! {
         <div class="vm-detail">
-            <div class="page-header"><h1>{move || vm.get().map(|v| format!("{} ({})", v.name, v.id)).unwrap_or_else(id)}</h1></div>
+            <div class="page-header"><h1>{move || vm.get().map(|v| format!("{} ({})", v.name, v.id)).unwrap_or_else(id)}</h1>
+                <div class="header-actions">
+                    <crate::features::IfFeature feature="cluster">
+                        <a class="btn btn-secondary" id="vmd-migrate" title="Move this VM to another node of the cluster"
+                            href=move || format!("/ha/migration?guest={}&type=vm", urlencoding::encode(&id()))>"Migrate"</a>
+                    </crate::features::IfFeature>
+                </div>
+            </div>
             <nav class="tabs" id="vm-tabs">
                 <A href=move || format!("/vms/{}", id()) class="tab tab-active">"Summary"</A>
                 <A href=move || format!("/vms/{}/hardware", id()) class="tab">"Hardware"</A>

@@ -227,6 +227,7 @@ pub fn ContainerList() -> impl IntoView {
                                         let container_id_stop = container.id.clone();
                                         let container_id_delete = container.id.clone();
                                         let cid_save = container.id.clone();
+                                        let mig_href = format!("/ha/migration?guest={}&type=container", urlencoding::encode(&container.id));
                                         let cid_resume = container.id.clone();
                                         let cid_discard = container.id.clone();
                                         let saved_state = saved.get().get(&container.id).cloned();
@@ -290,6 +291,10 @@ pub fn ContainerList() -> impl IntoView {
                                                     } else {
                                                         view! { <button class="btn btn-sm ct-terminal" disabled=true title="Start the container to open a terminal in it">"Terminal"</button> }.into_view()
                                                     }}
+                                                    <IfFeature feature="cluster">
+                                                        <a class="btn btn-sm ct-migrate" title="Move this container to another node of the cluster"
+                                                            href=mig_href.clone()>"Migrate"</a>
+                                                    </IfFeature>
                                                     <a class="btn btn-sm container-firewall" href=format!("/containers/{}/firewall", container.id)>"Firewall"</a>
                                                     {matches!(container.runtime.as_str(), "lxc" | "lxd" | "incus").then(|| view! {
                                                         <a class="btn btn-sm container-console" href=format!("/containers/{}/console?runtime={}", container.id, container.runtime)>"Console"</a>
