@@ -133,4 +133,35 @@ Security tab/badge. The guest SBOM format is verified against real Grype
 | 3 | Guest provisioning secrets | cloud-init/unattend passwords and keys referenced from an encrypted secrets store, never stored in VM config or exports; rotation |
 | 3 | Microsegmentation templates | per-guest default-deny profiles and "allow only from these groups" templates on the existing firewall objects, with a hit-count view |
 | 3 | Container runtime detection | Falco-class (eBPF, Apache-2.0) rules for containers on the node, optional and resource-capped |
-| 4 | Guest introspection (research) | VMI-based (LibVMI) read-only checks, off by default; go/no-go spike with measured overhead |
+| 4 | Guest introspection (research) | spike done 2026-11: NO-GO for now (see "Phase 4 spike"); revisit when KVMI or a maintained per-kernel profile source exists |
+
+## Phase 4 spike: guest introspection (VMI), result 2026-11
+
+Question: can Horcrux offer optional, read-only, agentless checks of a running Linux guest (hidden processes, rootkit hooks in the kernel syscall table) by reading guest memory from the host? Prototype and raw outputs: docs/design/hx-vmi-spike/.
+
+Setup: Debian 13 cloud guest, kernel 6.12.118, 2 vCPU, 2 GiB, KVM, QEMU 10.0 (Debian), on a shared AWS build host (load about 20 on 8 cores, so benchmark noise is large). Guest RAM is a `memory-backend-file,share=on`; the prototype maps that file read-only, walks the 4-level guest page tables from CR3, takes the KASLR slide from the #PF gate of the IDT (both from QMP `info registers`), then reads the task list and the syscall table.
+
+Measured:
+
+| Check | Result |
+|---|---|
+| Hidden process: `sleep` bind-mounted over with an empty dir in /proc (invisible to `ps`: 0 hits) | found by walking init_task->tasks (pid and comm both correct); cross-view diff against the guest's /proc is the detection |
+| Syscall table, 460 entries, clean guest | 0 entries outside kernel text |
+| Positive control: entry 39 overwritten (through the shared file) with a module address | reported at once, then restored |
+| Full scan (page-table walk, 100 tasks, 460 entries), Python | 0.24 s to 0.41 s wall, no guest pause (live read) |
+| Pause alternative: QMP stop+cont round trip | 33 ms mean, 46 ms max |
+| Pause alternative: consistent full snapshot (`dump-guest-memory`, 2 GiB, paused) | 3.8 s guest paused |
+| Guest CPU (sysbench cpu, 2 threads), median of runs | anon RAM 5914 ev/s, file-backed RAM 5693, file-backed + scan every second 5738 |
+| Guest memory bandwidth (sysbench), median | 29182, 30282 and 29050 MiB/s |
+
+The overhead is inside the noise of the shared host (run to run spread 3500 to 6300 ev/s); nothing here shows a cost above a few percent, and nothing proves it is below that either. A live read can see torn data (a task list changing during the walk): the checker must re-read and confirm a finding twice, or take the 33 ms pause for the pointer walk only.
+
+Findings that decide the go/no-go:
+
+1. LibVMI itself (current master builds fine with its file driver and the KVM driver enabled; library LGPL-3.0, tools and examples GPL-3.0, so linking from our Rust API is allowed, shipping GPL tools needs care). But its live KVM mode needs KVMI, which is not in any mainline, Debian or Gentoo kernel and needs a patched QEMU too. Without it LibVMI only works on a memory file or dump, i.e. the shared-file approach above, which is what we measured.
+2. The kernel profile is the hard part. A scan needs exact struct offsets and symbol addresses for the guest's kernel build (a debug-symbol profile from the distro's dbgsym package or a BTF-derived profile). Debian's `/boot/System.map` is a one-line stub and the prototype had to take symbol offsets from the guest's own `/proc/kallsyms`, which a compromised guest could forge. A product needs a host-side profile store per distro kernel (hundreds of MB to GB), updated for every guest kernel update, and an UNKNOWN verdict when no profile matches. Task_struct field offsets were found by heuristics in the prototype; a product must not do that.
+3. Introspection widens the host attack surface: a file-backed guest RAM is writable by anything that opens the file (the spike overwrote a syscall table entry that way), `info registers` over QMP gives register access to whoever holds the socket, and a parser walking attacker-controlled memory (page tables, linked lists) is a classic target. A product would run the reader unprivileged in its own sandbox with a read-only mapping, a bounded walk (step caps, no recursion) and no write path.
+4. Constraints: breaks live migration expectations of shared-file RAM unless the node uses memfd/hugetlbfs with `share=on` consistently (already implied by vhost-user and ivshmem), is incompatible with the confidential-computing guests, gives no result for Windows (different structures, PatchGuard) or encrypted-RAM guests, and a rootkit that edits the task list or the page tables can fool a pure walker (it needs the cross-view and the hook checks above).
+5. Quality of the signal: the two checks cover a narrow class (kernel rootkits that hide tasks or hook the syscall table). Modern rootkits use eBPF or ftrace and do not touch the table. The same value per effort is available from the guest agent plus host IDS (phase 2) with no profile problem.
+
+Decision: NO-GO as a product feature in this release cycle. Revisit only if (a) KVMI or an equivalent lands in a mainline kernel, or (b) a maintained, signed per-kernel profile source exists for Debian, Ubuntu and Gentoo kernels. If revisited, ship it as an off-by-default, read-only node setting `security.guest_introspection` (`enabled: false`, `interval_secs`, `profile_dir`, `max_guests`) with an UNKNOWN verdict for any guest whose kernel has no profile, per-VM opt-in, and findings routed into Security > Events. The phase 4 row stays in the table as "researched, deferred".
