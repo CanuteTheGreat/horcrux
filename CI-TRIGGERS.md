@@ -4,7 +4,7 @@ CI work runs **when its inputs change**, not on a clock (owner principle 2026-11
 
 - Heavy workflows (nightly-*, live-iso-*, mutation, test-depth, ...) trigger on a push to `main` with `paths:` filters naming what they build or test.
   Docs/README/site-only pushes start none of them.
-- Bursts coalesce: they use a `replace:` concurrency group, so the ci-supersede-sweeper keeps every started run and only the NEWEST unstarted one.
+- Bursts coalesce: they use a `latest:` concurrency group, so the ci-supersede-sweeper keeps every started run, the NEWEST unstarted one and (while nothing has started) the OLDEST, which holds its queue place. (`replace:` starved them: each push cancelled the queued run and sent its replacement to the back of the queue.)
   A started run is never cancelled by a push.
 - A cron stays only where the thing it checks has no change signal (upstream package trees/base images, external services, elapsed time).
   Each such cron has a comment in its workflow saying why. Priority (not the clock) handles contention: heavy workflows are matched by file name
