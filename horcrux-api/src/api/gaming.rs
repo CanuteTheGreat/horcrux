@@ -125,8 +125,32 @@ struct Created {
 
 async fn create(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<GamingVmRequest>,
+    user: Option<axum::Extension<crate::middleware::auth::AuthUser>>,
+    Json(mut req): Json<GamingVmRequest>,
 ) -> Result<(StatusCode, Json<Created>), ApiError> {
+    // `password: "secret:<name>"` takes the account password from the
+    // guest secrets store; it is read only now (a dry run just checks that
+    // the secret exists) and ends up only on the answer disc, which goes
+    // once Windows is installed.
+    if let Some(name) = req.password.strip_prefix("secret:").map(str::to_string) {
+        horcrux_common::guest_secrets::valid_name(&name).map_err(ApiError::BadRequest)?;
+        let vault = crate::api::security::guest_secrets::Vault::open(&state).await?;
+        if req.dry_run {
+            vault.meta(&name).await?;
+            req.password = "placeholder-not-used".into();
+        } else {
+            let who = user
+                .map(|axum::Extension(u)| u.username)
+                .unwrap_or_else(|| "system".into());
+            req.password = vault
+                .reveal(
+                    &who,
+                    &name,
+                    &format!("Windows answer file of VM {}", req.name),
+                )
+                .await?;
+        }
+    }
     let settings = load_settings(&state).await;
     let (report, compat) = tokio::task::spawn_blocking(|| {
         let quirks = crate::vm::handoff::load_quirks(&crate::vm::tuning::config().quirks_files);
@@ -181,6 +205,11 @@ async fn create(
         // no half-made gaming VM
         let _ = state.vm_manager.delete_vm(&vm.id).await;
         return Err(e.into());
+    }
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // the answer disc holds the account password until the install is done
+        let _ = std::fs::set_permissions(&iso, std::fs::Permissions::from_mode(0o600));
     }
     tracing::info!("gaming VM {} created ({})", vm.id, vm.name);
     if vm.hardware.adv.remote_play.is_some() {

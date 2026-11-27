@@ -1,7 +1,9 @@
 //! Common types and utilities shared between horcrux-api and horcrux-ui
 
 pub mod auth;
+pub mod cloudinit;
 pub mod console;
+pub mod guest_secrets;
 pub mod lxc;
 pub mod remote_play;
 pub mod security;

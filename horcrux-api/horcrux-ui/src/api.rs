@@ -8026,6 +8026,41 @@ pub use horcrux_common::security::{
     SecuritySettings, Severity, SeverityCounts,
 };
 
+pub use horcrux_common::guest_secrets::{
+    GuestSecretAudit, GuestSecretMeta, GuestSecretPut, GuestSecretsSettings, SecretKind,
+};
+
+/// Secret metadata (a value is never returned).
+pub async fn list_guest_secrets() -> Result<Vec<GuestSecretMeta>, ApiError> {
+    fetch_json("/security/guest-secrets").await
+}
+
+/// Create (`exists` false) or rotate/edit a secret; the value is write-only.
+pub async fn save_guest_secret(
+    exists: bool,
+    req: &GuestSecretPut,
+) -> Result<GuestSecretMeta, ApiError> {
+    let name = req.name.clone().unwrap_or_default();
+    if exists {
+        put_json(&format!("/security/guest-secrets/{name}"), req).await
+    } else {
+        post_json("/security/guest-secrets", req).await
+    }
+}
+
+pub async fn delete_guest_secret(name: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/security/guest-secrets/{name}")).await
+}
+
+pub async fn list_guest_secret_audit(
+    name: Option<&str>,
+) -> Result<Vec<GuestSecretAudit>, ApiError> {
+    match name {
+        Some(n) => fetch_json(&format!("/security/guest-secrets-audit?limit=200&name={n}")).await,
+        None => fetch_json("/security/guest-secrets-audit?limit=200").await,
+    }
+}
+
 pub async fn get_security_overview() -> Result<SecurityOverview, ApiError> {
     fetch_json("/security/overview").await
 }

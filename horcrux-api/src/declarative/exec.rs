@@ -23,9 +23,37 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         console: crate::console::hxc_settings::get(),
         remote_play: crate::api::remote_play::load_settings(state).await,
         security: crate::api::security::load_settings(state).await,
+        guest_secrets: guest_secret_meta(state).await,
+        provisioning: provisioning_by_name(state).await,
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
     }
+}
+
+async fn guest_secret_meta(
+    state: &Arc<AppState>,
+) -> Vec<horcrux_common::guest_secrets::GuestSecretMeta> {
+    match crate::api::security::guest_secrets::Vault::open(state).await {
+        Ok(v) => v.list().await.unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Stored provisioning (references only) by VM name.
+async fn provisioning_by_name(
+    state: &Arc<AppState>,
+) -> std::collections::BTreeMap<String, horcrux_common::guest_secrets::GuestProvisioning> {
+    let mut out = std::collections::BTreeMap::new();
+    let Ok(v) = crate::api::security::guest_secrets::Vault::open(state).await else {
+        return out;
+    };
+    let vms = state.vm_manager.list_vms().await;
+    for (id, p) in v.all_provisioning().await.unwrap_or_default() {
+        if let Some(vm) = vms.iter().find(|x| x.id == id) {
+            out.insert(vm.name.clone(), p);
+        }
+    }
+    out
 }
 
 /// Per-VM power overrides by VM name.
@@ -283,6 +311,49 @@ async fn run_change(
             }
             Ok(None)
         }
+        ("guest_secret", Action::Update) => {
+            let d = spec
+                .guest_secrets
+                .as_ref()
+                .and_then(|g| g.secrets.as_ref())
+                .and_then(|l| l.iter().find(|x| x.name == c.name))
+                .ok_or("not in spec")?;
+            let v = crate::api::security::guest_secrets::Vault::open(state)
+                .await
+                .map_err(|x| e(&x))?;
+            v.update(
+                "declarative",
+                &c.name,
+                &horcrux_common::guest_secrets::GuestSecretPut {
+                    kind: Some(d.kind),
+                    description: Some(d.description.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|x| e(&x))?;
+            Ok(None)
+        }
+
+        ("vm_provisioning", Action::Update | Action::Delete) => {
+            let id = vm_id(state, spec, &c.name).await?;
+            let v = crate::api::security::guest_secrets::Vault::open(state)
+                .await
+                .map_err(|x| e(&x))?;
+            if c.action == Action::Delete {
+                v.clear_provisioning(&id).await.map_err(|x| e(&x))?;
+            } else {
+                let w = spec
+                    .guest_secrets
+                    .as_ref()
+                    .and_then(|g| g.provisioning.as_ref())
+                    .and_then(|m| m.get(&c.name))
+                    .ok_or("not in spec")?;
+                v.set_provisioning(&id, w).await.map_err(|x| e(&x))?;
+            }
+            Ok(None)
+        }
+
         ("guest_power", Action::Update | Action::Delete) => {
             use crate::api::guest_state::{engine::GuestKind, policy};
             let gp = spec.guest_power.as_ref().ok_or("not in spec")?;

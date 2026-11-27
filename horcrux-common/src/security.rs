@@ -470,12 +470,15 @@ impl HardeningSettings {
 pub struct SecuritySettings {
     pub vuln_scan: VulnScanSettings,
     pub hardening: HardeningSettings,
+    /// Guest provisioning secrets (encrypted store, seed disc handling).
+    pub guest_secrets: crate::guest_secrets::GuestSecretsSettings,
 }
 
 impl SecuritySettings {
     pub fn validate(&self) -> Result<(), String> {
         self.vuln_scan.validate()?;
-        self.hardening.validate()
+        self.hardening.validate()?;
+        self.guest_secrets.validate()
     }
 }
 
