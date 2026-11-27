@@ -47,7 +47,7 @@ if [ "${APT_DROP_PPAS:-1}" = 1 ]; then
     case $f in *.sources) rm -f "$f" ;; *) sed -i -E '/ppa\.launchpad(content)?\.net/d' "$f" ;; esac
   done
 fi
-host_deps() { apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools gdisk dosfstools mtools binutils >/dev/null; }
+host_deps() { apt-get update -qq && apt-get install -y -qq --no-install-recommends $QEMU_PKGS swtpm qemu-utils python3 curl ca-certificates openssh-client sshpass e2fsprogs openssl gnupg gpgv xorriso squashfs-tools gdisk dosfstools mtools binutils rsync >/dev/null; }
 host_deps || { echo "host deps failed, retrying in 20 s" >&2; sleep 20; host_deps; } || fail deps "apt install failed"
 echo "::endgroup::"
 
