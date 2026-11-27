@@ -43,6 +43,8 @@ src_install() {
 	# /usr/bin/horcrux-be belongs to sys-apps/horcrux-be (a package an installed machine can update; this one is a tarball of the image build). The installer's
 	# own copy of the program stays in usr/lib/live-installer/liveinst/be.py.
 	rm -f "${ED}"/usr/bin/horcrux-be || die
+	# same for the boot-copy sync (sys-apps/horcrux-be -r3 ships it so the space fix reaches installed machines)
+	rm -f "${ED}"/usr/bin/horcrux-boot-sync || die
 	exeinto /usr/libexec
 	doexe usr/libexec/*
 	insinto /usr/lib

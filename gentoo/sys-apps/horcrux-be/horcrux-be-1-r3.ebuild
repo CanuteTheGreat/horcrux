@@ -27,6 +27,7 @@ REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 # /etc/horcrux/be.conf (KERNELS_KEEP, KERNEL_TRIAL, GOOD_DELAY). OpenRC script and systemd unit both ship; the program never reboots.
 RDEPEND="
 	${PYTHON_DEPS}
+	net-misc/rsync
 	sys-boot/grub
 	sys-fs/zfs
 "
@@ -35,6 +36,10 @@ src_install() {
 	python_moduleinto /usr/lib/horcrux-be
 	python_domodule "${FILESDIR}"/be.py
 	python_doscript "${FILESDIR}"/horcrux-be
+	# -r3: the mirror copy of /boot to the extra drives (kernel postinst hook 95-horcrux-boot-sync). It was only in the image-time horcrux-tools
+	# tarball, so a fix never reached an installed machine; files/horcrux-boot-sync is byte-identical to
+	# build/live-iso/common/overlay/usr/bin/horcrux-boot-sync (tests/test_boot_sync_space.py).
+	dobin "${FILESDIR}"/horcrux-boot-sync
 	if use systemd; then
 		systemd_dounit "${FILESDIR}"/horcrux-be-good.service
 	else
@@ -45,11 +50,14 @@ src_install() {
 pkg_setup() {
 	python-single-r1_pkg_setup
 	# upgrade from the horcrux-tools-owned wrapper (see above); only on the live system, only when that package owns it
-	if [[ -z ${ROOT} && -e /usr/bin/horcrux-be ]] && command -v qfile >/dev/null 2>&1; then
-		if [[ $(qfile -qC /usr/bin/horcrux-be 2>/dev/null) == sys-apps/horcrux-tools ]]; then
-			rm -f /usr/bin/horcrux-be && einfo "removed the horcrux-tools copy of /usr/bin/horcrux-be (this package owns it now)"
+	local f
+	for f in horcrux-be horcrux-boot-sync; do
+		if [[ -z ${ROOT} && -e /usr/bin/${f} ]] && command -v qfile >/dev/null 2>&1; then
+			if [[ $(qfile -qC /usr/bin/${f} 2>/dev/null) == sys-apps/horcrux-tools ]]; then
+				rm -f /usr/bin/${f} && einfo "removed the horcrux-tools copy of /usr/bin/${f} (this package owns it now)"
+			fi
 		fi
-	fi
+	done
 }
 
 pkg_postinst() {
