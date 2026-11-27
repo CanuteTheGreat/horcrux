@@ -354,10 +354,19 @@ pub fn ContainerCreate() -> impl IntoView {
             lxc_loaded.set(true);
             spawn_local(async move {
                 if let Ok(h) = api::get_lxc_host().await {
-                    if let Some(b) = h.bridges.first() {
+                    // Same default network as a new VM (the node's default
+                    // network, else the hypervisor default), else the first.
+                    let preferred = api::get_vm_host_options().await.ok().and_then(|o| {
+                        let dn = o.default_networks;
+                        dn.override_network.or(dn.qemu)
+                    });
+                    let pick = preferred
+                        .filter(|p| h.bridges.iter().any(|b| &b.name == p))
+                        .or_else(|| h.bridges.first().map(|b| b.name.clone()));
+                    if let Some(b) = pick {
                         lxc_form.update(|f| {
                             if f.bridge.is_empty() {
-                                f.bridge = b.name.clone();
+                                f.bridge = b;
                             }
                         });
                     }

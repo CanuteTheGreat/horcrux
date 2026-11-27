@@ -302,6 +302,11 @@ pub fn default_qemu_bridge(bridges: &[HostBridge], route_dev: Option<&str>) -> O
             }
         }
     }
+    // libvirt's default network (NAT + DHCP) works out of the box; a lab or
+    // host-only bridge that sorts before it alphabetically usually doesn't.
+    if let Some(b) = bridges.iter().find(|b| b.name == "virbr0") {
+        return Some(b.name.clone());
+    }
     let runtime = |n: &str| {
         crate::container::probe::is_container_runtime_bridge(n)
             || ["incusbr", "lxdbr", "lxcbr"]
@@ -1590,6 +1595,11 @@ mod tests {
         assert_eq!(
             default_qemu_bridge(&[b("br0"), b("virbr0")], Some("br0")).as_deref(),
             Some("br0")
+        );
+        // the NAT+DHCP default network beats a bridge that merely sorts first
+        assert_eq!(
+            default_qemu_bridge(&[b("artexbr0"), b("docker0"), b("virbr0")], None).as_deref(),
+            Some("virbr0")
         );
         assert_eq!(default_qemu_bridge(&[b("docker0")], None), None);
         assert_eq!(default_qemu_bridge(&[], None), None);
