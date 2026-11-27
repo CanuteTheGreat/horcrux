@@ -519,6 +519,11 @@ pub async fn audit_facts() -> (bool, bool, u32) {
 
 pub async fn ids_status(state: &AppState) -> IdsStatus {
     let s = super::load_settings(state).await;
+    // Read "running" BEFORE the state file: a run that ends while this
+    // status is being built (the subprocess probes below take a while) must
+    // not be reported as idle together with its pre-run numbers. When it is
+    // idle here, the state read after it is final.
+    let integrity_running = running().lock().ok().and_then(|g| g.clone());
     let st = ids::load_state(&dd());
     let (installed, running_d, loaded) = audit_facts().await;
     let bin = aide_bin(&s.integrity);
@@ -540,7 +545,7 @@ pub async fn ids_status(state: &AppState) -> IdsStatus {
         aide_version: version,
         integrity_initialized: db_path(&s.integrity).is_file(),
         integrity_initialized_at: st.integrity_initialized_at,
-        integrity_running: running().lock().ok().and_then(|g| g.clone()),
+        integrity_running,
         integrity_last_check: st.integrity_last_check,
         integrity_last_differences: st.integrity_last_differences,
         integrity_error: st.integrity_error,
