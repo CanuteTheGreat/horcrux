@@ -1407,6 +1407,15 @@ def vm_power_checks(page, vid):
     body = page.locator("body").inner_text()
     assert "HTTP 404" not in body and '{"' not in body, body[:400]
 
+    # the Hardware page has the same power controls and tabs, and a missing VM is explained there too
+    page.goto(f"{BASE}/vms/{vid}/hardware")
+    expect(page.locator("#vm-power-bar")).to_be_visible(timeout=30000)
+    expect(page.locator("#vm-power-start")).to_be_enabled()
+    expect(page.locator("#vm-tabs a", has_text="Summary")).to_have_attribute("href", f"/vms/{vid}")
+    page.goto(f"{BASE}/vms/no-such-vm-e2e/hardware")
+    expect(page.locator("#vm-hw-missing")).to_contain_text("no-such-vm-e2e", timeout=30000)
+    expect(page.locator("#vm-hw-loading")).not_to_contain_text("Loading")
+
     page.goto(f"{BASE}/no/such/page")
     expect(page.locator("#page-not-found")).to_contain_text("/no/such/page", timeout=30000)
     expect(page.locator("#page-not-found a[href='/']")).to_be_visible()

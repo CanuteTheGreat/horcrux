@@ -729,6 +729,8 @@ pub fn VmHardwarePage() -> impl IntoView {
     let (notice, set_notice) = create_signal(None::<String>);
     let (error, set_error) = create_signal(None::<String>);
     let (busy, set_busy) = create_signal(false);
+    // No such VM (deleted, mistyped link): say so instead of empty device panels.
+    let (missing, set_missing) = create_signal(false);
     let name = create_rw_signal(String::new());
     let cpus = create_rw_signal(1u32);
     let memory = create_rw_signal(512u64);
@@ -744,6 +746,10 @@ pub fn VmHardwarePage() -> impl IntoView {
                     memory.set(v.memory);
                     hardware.set(v.hardware.clone());
                     set_vm.set(Some(v));
+                }
+                Err(e) if api::status_of(&e.message) == Some(404) => {
+                    set_missing.set(true);
+                    return;
                 }
                 Err(e) => set_error.set(Some(e.message)),
             }
@@ -765,7 +771,7 @@ pub fn VmHardwarePage() -> impl IntoView {
     let is_qemu = move || {
         vm.get()
             .map(|v| v.hypervisor == VmHypervisor::Qemu)
-            .unwrap_or(true)
+            .unwrap_or(!missing.get())
     };
 
     let save = move |ev: ev::SubmitEvent| {
@@ -804,59 +810,38 @@ pub fn VmHardwarePage() -> impl IntoView {
         });
     };
 
-    let power = move |action: &'static str| {
-        let id = vm_id();
-        set_busy.set(true);
-        set_error.set(None);
-        set_notice.set(Some(format!("{action}...")));
-        spawn_local(async move {
-            let r = match action {
-                "Shutdown" => api::shutdown_vm(&id, 60, false).await,
-                "Shutdown (force after 60 s)" => api::shutdown_vm(&id, 60, true).await,
-                "Reboot" => api::reboot_vm(&id).await,
-                _ => api::reset_vm(&id).await,
-            };
-            match r {
-                Ok(v) => {
-                    set_notice.set(Some(format!("{action}: VM is {}", v.status)));
-                    set_vm.set(Some(v));
-                }
-                Err(e) => {
-                    set_notice.set(None);
-                    set_error.set(Some(e.message));
-                }
-            }
-            set_busy.set(false);
-        });
-    };
-
     view! {
         <div class="vm-hardware-page">
             <div class="page-header">
                 <h1>"VM " {move || vm.get().map(|v| format!("{} ({})", v.name, v.id)).unwrap_or_else(vm_id)}</h1>
                 <A href="/vms" class="btn btn-secondary">"Back to VMs"</A>
             </div>
-            {move || vm.get().map(|v| view! {
-                <p>"Status: " <span id="vm-hw-status" class=format!("status-{}", v.status)>{v.status.to_string()}</span></p>
-            })}
+            <crate::components::vm_tabs::VmTabs vm_id=Signal::derive(vm_id) active="Hardware"/>
+            <Show when=move || missing.get() fallback=|| ()>
+                <div class="empty-state" id="vm-hw-missing">
+                    <p>{move || format!("There is no VM with the ID {} on this node. It may have been deleted or moved to another node.", vm_id())}</p>
+                    <A href="/vms" class="btn btn-primary">"Back to the VM list"</A>
+                </div>
+            </Show>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="vm-hw-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="vm-hw-error">{e}</div> })}
 
-            <div class="form-actions" id="vm-power">
-                <button class="btn btn-warning" id="vm-shutdown" disabled={move || busy.get() || !running.get()}
-                    on:click=move |_| power("Shutdown")>"Shutdown"</button>
-                <button class="btn btn-warning" id="vm-shutdown-force" disabled={move || busy.get() || !running.get()}
-                    on:click=move |_| power("Shutdown (force after 60 s)")>"Shutdown, then stop"</button>
-                <button class="btn btn-secondary" id="vm-reboot" disabled={move || busy.get() || !running.get()}
-                    on:click=move |_| power("Reboot")>"Reboot"</button>
-                <button class="btn btn-danger" id="vm-reset" disabled={move || busy.get() || !running.get()}
-                    on:click=move |_| power("Reset")>"Reset"</button>
-            </div>
+            // Start/Shutdown/Stop/... for the VM's current state (a stopped VM
+            // used to get only disabled Shutdown/Reboot/Reset here, and no Start).
+            <crate::components::vm_power::VmPowerBar vm=Signal::derive(move || vm.get()) on_changed=Callback::new(move |_| {
+                // refresh the state only: the form keeps what the user is editing
+                let id = vm_id();
+                spawn_local(async move {
+                    if let Ok(v) = api::get_vm(&id).await {
+                        set_vm.set(Some(v));
+                    }
+                });
+            })/>
 
             // The form appears once the VM is loaded: rendered earlier, the
             // load would overwrite whatever the user had already changed.
             <Show when=move || vm.get().is_some() fallback=move || view! {
-                <p class="form-help" id="vm-hw-loading">{move || if error.get().is_some() { "" } else { "Loading the VM..." }}</p>
+                <p class="form-help" id="vm-hw-loading">{move || if error.get().is_some() || missing.get() { "" } else { "Loading the VM..." }}</p>
             }>
             <form id="vm-hardware-form" on:submit=save>
                 <div class="form-group">

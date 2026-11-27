@@ -6852,6 +6852,24 @@ pub async fn remove_vm_disk(vm_id: &str, index: usize, delete_file: bool) -> Res
     .await
 }
 
+/// Pause a running VM (its CPUs stop; memory stays). `POST /api/vms/:id/pause`.
+pub async fn pause_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/pause", urlencoding::encode(vm_id)),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+/// Resume a paused VM. `POST /api/vms/:id/resume`.
+pub async fn resume_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/resume", urlencoding::encode(vm_id)),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
 pub async fn reset_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
     post_json(
         &format!("/vms/{}/reset", urlencoding::encode(vm_id)),

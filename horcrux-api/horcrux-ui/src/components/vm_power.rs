@@ -14,6 +14,9 @@ pub enum PowerAction {
     Shutdown,
     Reboot,
     Stop,
+    Pause,
+    Resume,
+    Reset,
 }
 
 impl PowerAction {
@@ -23,14 +26,20 @@ impl PowerAction {
             Self::Shutdown => "Shutdown",
             Self::Reboot => "Reboot",
             Self::Stop => "Stop",
+            Self::Pause => "Pause",
+            Self::Resume => "Resume",
+            Self::Reset => "Reset",
         }
     }
 
     /// Whether the action makes sense in `status` (the button is disabled otherwise).
     pub fn allowed(self, status: &VmStatus) -> bool {
         match self {
-            Self::Start => !matches!(status, VmStatus::Running),
-            Self::Shutdown | Self::Reboot => matches!(status, VmStatus::Running),
+            Self::Start => matches!(status, VmStatus::Stopped | VmStatus::Unknown),
+            Self::Shutdown | Self::Reboot | Self::Pause | Self::Reset => {
+                matches!(status, VmStatus::Running)
+            }
+            Self::Resume => matches!(status, VmStatus::Paused),
             Self::Stop => matches!(status, VmStatus::Running | VmStatus::Paused),
         }
     }
@@ -42,6 +51,9 @@ impl PowerAction {
             Self::Shutdown => format!("Shutting down {name} (asking the guest OS)..."),
             Self::Reboot => format!("Rebooting {name}..."),
             Self::Stop => format!("Stopping {name}..."),
+            Self::Pause => format!("Pausing {name}..."),
+            Self::Resume => format!("Resuming {name}..."),
+            Self::Reset => format!("Resetting {name}..."),
         }
     }
 
@@ -52,15 +64,19 @@ impl PowerAction {
             Self::Shutdown => format!("{name} has shut down"),
             Self::Reboot => format!("{name} rebooted"),
             Self::Stop => format!("{name} is stopped"),
+            Self::Pause => format!("{name} is paused"),
+            Self::Resume => format!("{name} is running"),
+            Self::Reset => format!("{name} was reset"),
         }
     }
 
     /// The state the VM ends up in, if the action changes it.
     pub fn target(self) -> Option<VmStatus> {
         match self {
-            Self::Start => Some(VmStatus::Running),
+            Self::Start | Self::Resume => Some(VmStatus::Running),
             Self::Shutdown | Self::Stop => Some(VmStatus::Stopped),
-            Self::Reboot => None,
+            Self::Pause => Some(VmStatus::Paused),
+            Self::Reboot | Self::Reset => None,
         }
     }
 }
@@ -69,7 +85,10 @@ impl PowerAction {
 /// Says what happens to the guest in plain words, like Proxmox's dialogs.
 pub fn confirm_text(action: PowerAction, name: &str) -> Option<String> {
     match action {
-        PowerAction::Start => None,
+        PowerAction::Start | PowerAction::Pause | PowerAction::Resume => None,
+        PowerAction::Reset => Some(format!(
+            "Reset VM {name}?\n\nLike pressing the reset button: the guest restarts at once without shutting down, and unsaved data in it is lost."
+        )),
         PowerAction::Shutdown => Some(format!(
             "Shut down VM {name}?\n\nThe guest operating system is asked to shut down cleanly (like pressing the power button)."
         )),
@@ -126,6 +145,15 @@ pub async fn run_power_action(id: &str, action: PowerAction) -> Result<bool, api
             api::reboot_vm(id).await?;
         }
         PowerAction::Stop => api::stop_vm(id).await?,
+        PowerAction::Pause => {
+            api::pause_vm(id).await?;
+        }
+        PowerAction::Resume => {
+            api::resume_vm(id).await?;
+        }
+        PowerAction::Reset => {
+            api::reset_vm(id).await?;
+        }
     }
     let Some(target) = action.target() else {
         return Ok(true);
@@ -240,6 +268,16 @@ pub fn VmPowerBar(
             {button(PowerAction::Shutdown, "btn btn-warning", "Ask the guest OS to shut down cleanly")}
             {button(PowerAction::Reboot, "btn btn-secondary", "Ask the guest OS to restart")}
             {button(PowerAction::Stop, "btn btn-danger", "Stop immediately (like pulling the power)")}
+            // only where they apply (a paused VM shows Resume, a running one Pause and Reset)
+            {move || {
+                let st = vm.get().map(|v| v.status);
+                let shown = move |a: PowerAction| st.as_ref().map(|s| a.allowed(s)).unwrap_or(false);
+                view! {
+                    {shown(PowerAction::Resume).then(|| button(PowerAction::Resume, "btn btn-success", "Let the paused guest run again"))}
+                    {shown(PowerAction::Pause).then(|| button(PowerAction::Pause, "btn btn-secondary", "Freeze the guest's CPUs (memory stays)"))}
+                    {shown(PowerAction::Reset).then(|| button(PowerAction::Reset, "btn btn-secondary", "Hard restart (like the reset button)"))}
+                }
+            }}
             {console_link.then(|| view! {
                 <a class="btn btn-primary" id="vm-power-console"
                     href=move || vm.get().map(|v| format!("/vms/{}/console", v.id)).unwrap_or_default()>"Console"</a>
@@ -260,7 +298,10 @@ mod tests {
         let running = VmStatus::Running;
         let stopped = VmStatus::Stopped;
         let paused = VmStatus::Paused;
-        assert!(Start.allowed(&stopped) && !Start.allowed(&running) && Start.allowed(&paused));
+        assert!(Start.allowed(&stopped) && !Start.allowed(&running) && !Start.allowed(&paused));
+        assert!(Resume.allowed(&paused) && !Resume.allowed(&running) && !Resume.allowed(&stopped));
+        assert!(Pause.allowed(&running) && !Pause.allowed(&paused) && !Pause.allowed(&stopped));
+        assert!(Reset.allowed(&running) && !Reset.allowed(&stopped));
         assert!(Shutdown.allowed(&running) && !Shutdown.allowed(&stopped));
         assert!(Reboot.allowed(&running) && !Reboot.allowed(&stopped));
         assert!(Stop.allowed(&running) && Stop.allowed(&paused) && !Stop.allowed(&stopped));
@@ -280,6 +321,10 @@ mod tests {
     #[test]
     fn destructive_actions_ask_first_start_does_not() {
         assert!(confirm_text(PowerAction::Start, "kali").is_none());
+        assert!(confirm_text(PowerAction::Resume, "kali").is_none());
+        assert!(confirm_text(PowerAction::Reset, "kali")
+            .unwrap()
+            .contains("reset button"));
         let stop = confirm_text(PowerAction::Stop, "kali").unwrap();
         assert!(
             stop.contains("kali") && stop.contains("pulling the power plug"),

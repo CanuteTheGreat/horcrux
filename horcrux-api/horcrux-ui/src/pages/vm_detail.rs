@@ -144,15 +144,7 @@ pub fn VmDetailPage() -> impl IntoView {
         <div class="vm-detail">
             <div class="page-header"><h1>{move || vm.get().map(|v| format!("{} ({})", v.name, v.id)).unwrap_or_else(id)}</h1></div>
             <crate::components::vm_power::VmPowerBar vm=Signal::derive(move || vm.get()) on_changed=Callback::new(move |_| load())/>
-            <nav class="tabs" id="vm-tabs">
-                <A href=move || format!("/vms/{}", id()) class="tab tab-active">"Summary"</A>
-                <A href=move || format!("/vms/{}/hardware", id()) class="tab">"Hardware"</A>
-                <A href=move || format!("/vms/{}/console", id()) class="tab">"Console"</A>
-                <A href=move || format!("/vms/{}/remote-play", id()) class="tab">"Remote Play"</A>
-                <A href=move || format!("/snapshots?vm={}", id()) class="tab">"Snapshots"</A>
-                <A href="/network/firewall-objects" class="tab">"Firewall"</A>
-                <A href="/security/vulnerabilities" class="tab">"Security"</A>
-            </nav>
+            <crate::components::vm_tabs::VmTabs vm_id=Signal::derive(id) active="Summary"/>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="vmd-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="vmd-error">{e}</div> })}
             {move || vm.get().map(|v| view! {

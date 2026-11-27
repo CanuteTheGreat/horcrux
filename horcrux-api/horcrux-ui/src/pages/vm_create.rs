@@ -149,6 +149,9 @@ pub fn VmCreate() -> impl IntoView {
     load_options(true);
     let (creating, set_creating) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
+    // A VM that was created but whose next step (disk import, start) failed: Create
+    // again only retries that step instead of making a second VM.
+    let (created_id, set_created_id) = create_signal(None::<String>);
 
     // GB free where disk0 goes: the chosen pool, else the VM storage dir.
     let disk_free = move || {
@@ -227,12 +230,18 @@ pub fn VmCreate() -> impl IntoView {
         // LXD/Incus VMs are created from an instance image; QEMU VMs get a
         // disk image imported after creation.
         let instance = matches!(config.hypervisor, VmHypervisor::Lxd | VmHypervisor::Incus);
+        let already = created_id.get_untracked();
         spawn_local(async move {
-            let result = if instance && !image.is_empty() {
-                api::create_vm_from_image(config, &image).await
-            } else {
-                api::create_vm(config).await
+            let result = match &already {
+                Some(id) => api::get_vm(id).await,
+                None if instance && !image.is_empty() => {
+                    api::create_vm_from_image(config, &image).await
+                }
+                None => api::create_vm(config).await,
             };
+            if let Ok(vm) = &result {
+                set_created_id.set(Some(vm.id.clone()));
+            }
             let created = match result {
                 Ok(vm) if !image.is_empty() && !instance => api::import_vm_disk(&vm.id, &image)
                     .await
@@ -445,6 +454,12 @@ pub fn VmCreate() -> impl IntoView {
 
                 {move || error.get().map(|err| view! {
                     <p class="error" role="alert">{err}</p>
+                })}
+                {move || created_id.get().map(|id| view! {
+                    <p class="form-help" id="vm-create-created">
+                        {format!("VM {id} exists; Create retries only the step that failed. ")}
+                        <A href=format!("/vms/{id}")>"Open the VM"</A>
+                    </p>
                 })}
 
                 <div class="form-actions">
