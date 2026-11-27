@@ -11,3 +11,5 @@ net-misc/bridge-utils
 sys-apps/dbus
 net-dns/dnsmasq
 app-misc/jq
+# Security > Vulnerabilities scanner (horcrux overlay, upstream Grype release binary; also pulled by horcrux-bin[security])
+app-containers/grype-bin

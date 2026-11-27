@@ -33,8 +33,10 @@ listed under `host_cve.ignore`. A node without Portage shows that on the card in
 
 Horcrux runs a free scanner as a separate program:
 
-- **Grype** (Anchore, Apache-2.0), the default. Gentoo: `emerge app-containers/grype`, or build
-  Horcrux with `USE=security`, which pulls it in.
+- **Grype** (Anchore, Apache-2.0), the default. Gentoo: `emerge app-containers/grype-bin` (the
+  current upstream release for amd64 and arm64, from the Horcrux overlay; ::gentoo's own
+  `app-containers/grype` is too old for the current database). `horcrux-bin` and `horcrux` with
+  `USE=security` (default on in the images) pull it in.
 - **Trivy** (Aqua Security, Apache-2.0), the alternative: pick it in Settings.
 
 Without the scanner the Vulnerabilities page says so and links here; nothing else is affected.
@@ -71,6 +73,25 @@ For an air-gapped node, copy the database in and turn **Update the database befo
 off, or point **Database mirror** at your own copy (Grype: the URL of a `listing.json` /
 `latest.json`; Trivy: an OCI repository such as `registry.example/trivy-db`). The database lives
 in `<data_dir>/security/scanner-db` unless **db_dir** says otherwise.
+
+Offline recipe for Grype (tested by `gentoo/ci/grype-bin-check.sh`):
+
+1. On a machine with internet, read `https://grype.anchore.io/databases/v6/latest.json`: its `path`
+   names the archive (`https://grype.anchore.io/databases/v6/<path>`) and `checksum` its sha256.
+   Download the archive and compare the checksum.
+2. Copy it to the node and import it as the user that runs `horcrux-api`, into the database
+   directory Horcrux uses:
+   `GRYPE_DB_CACHE_DIR=/var/lib/horcrux/security/scanner-db grype db import vulnerability-db_v6.*.tar.zst`
+   (`grype db status` with the same variable shows the build date).
+3. In Settings (or `security: vuln_scan:` in the declarative config) set **Update the database
+   before scanning** off (`update_db: false`). Horcrux then runs Grype with automatic updates and the
+   database age check disabled, so the imported copy is used as is.
+4. Scanning registry-less: images must already be on the node (Podman/Docker local images and
+   container file systems are scanned from local storage).
+5. Repeat 1-2 whenever you want fresher data; the database is rebuilt daily upstream.
+
+A mirror instead of a file copy: host the same `latest.json` and archives on your own web server and
+set **Database mirror** (`db_url`) to the URL of that `latest.json`.
 
 ## Hardening baseline
 

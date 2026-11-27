@@ -117,9 +117,4 @@ app-emulation/horcrux ~amd64 ~arm64 ~riscv
 # to make sure *this* line is what makes that resolve.
 =app-emulation/horcrux-9999 **
 
-# =============================================================================
-# SECURITY TOOLING (USE=security: Security > Vulnerabilities)
-# =============================================================================
-app-containers/grype ~amd64
-app-containers/syft ~amd64
-app-containers/falco-bin ~amd64 ~arm64
+# ======================================================================

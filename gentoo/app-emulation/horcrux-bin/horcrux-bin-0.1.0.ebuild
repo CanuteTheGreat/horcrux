@@ -38,6 +38,10 @@ KEYWORDS="amd64 arm64 riscv"
 # (iSCSI initiator, dm-multipath, lvmlockd + sanlock for shared VGs, blkdiscard). Without them the API answers 424.
 IUSE="san"
 
+# security: the vulnerability scanner (Grype) behind Security > Vulnerabilities, on by default so every edition can scan images, containers and VMs.
+# The scanning code is always in the manager; without the scanner the page says so. Offline databases: docs/SECURITY-SUITE.md.
+IUSE="+security"
+
 # ffmpeg[vpx,x264]: the Horcrux Console encodes guest screens with an ffmpeg child process (H.264, VP8 fallback);
 # QEMU's D-Bus display (gio + gdbus-codegen, always on in the Gentoo ebuild) is its frame source.
 # qemu[zstd]: qcow2 images with zstd compression (libvirt / virt-manager default on some distros) are imported with qemu-img; without
@@ -56,6 +60,7 @@ RDEPEND="
 	sys-auth/pambase
 	sys-libs/pam
 	virtual/libudev
+	security? ( app-containers/grype-bin )
 !app-emulation/horcrux
 	san? (
 		sys-apps/nvme-cli

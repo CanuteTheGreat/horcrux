@@ -39,3 +39,5 @@ sys-firmware/sof-firmware
 sys-firmware/intel-microcode
 # the os-release is rebuilt for this edition (the core layer built the Server one)
 sys-apps/horcrux-release
+# --- Security > Vulnerabilities scanner (horcrux overlay; same atom as the server list, explicit so the desktop edition never loses it)
+app-containers/grype-bin

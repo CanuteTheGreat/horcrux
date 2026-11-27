@@ -61,3 +61,9 @@ prefix = "v"
 source = "github"
 github = "falcosecurity/falco"
 use_latest_release = true
+
+["app-containers/grype-bin"]
+source = "github"
+github = "anchore/grype"
+use_latest_release = true
+prefix = "v"

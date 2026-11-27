@@ -144,7 +144,7 @@ RDEPEND="
 
 	nas? ( sys-apps/acl )
 
-	security? ( app-containers/grype )
+	security? ( app-containers/grype-bin )
 	runtime-detection? ( app-containers/falco-bin )
 "
 

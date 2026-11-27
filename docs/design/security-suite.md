@@ -91,7 +91,7 @@ self-hosted platforms scan their own workloads.
   store, every baseline rule class on a fake root, apply/revert round trip, exclusions and
   overrides, report rendering, settings validation, declarative plan/export; end-to-end
   `tests/it/security_tests.rs` (real binary, stand-in scanner, fake host root).
-- Packaging: the `security` USE flag on app-emulation/horcrux pulls `app-containers/grype`.
+- Packaging: the `security` USE flag on app-emulation/horcrux and app-emulation/horcrux-bin (default on) pulls `app-containers/grype-bin` (see "Scanner packaging" below).
 
 ## Phase 2: VM guest scanning (shipped)
 
@@ -187,11 +187,25 @@ connection to a mining-pool port. Each fired in the spike run on real containers
 **Not in this phase**: Kubernetes audit, the full default Falco rule set (extra files can be
 added), response actions (killing containers), host (non-container) detection, VM guests.
 
+## Scanner packaging (shipped)
+
+- `app-containers/grype-bin` in the Horcrux overlay (`gentoo/app-containers/grype-bin`): the upstream
+  Grype release binary (Apache-2.0), amd64 + arm64, thin Manifest with the release digests (compared
+  with the upstream `checksums.txt` when a version is cut), nvchecker entry for bumps. It exists
+  because ::gentoo only has `app-containers/grype-0.86.1` (~amd64, no arm64, a database schema the
+  current Grype database no longer serves). The two packages block each other (both own `/usr/bin/grype`).
+- `app-emulation/horcrux[security]` and `app-emulation/horcrux-bin[+security]` depend on it; the server
+  image list (`build/live-iso/project/packages.txt`) and the GNOME edition list name it explicitly.
+  The binhost builds it from the overlay (gentoo-binhost `config/horcrux-overlay-packages.txt`).
+- Check: `gentoo/ci/grype-bin-check.sh` (stage3 container): emerge from the overlay, `grype version`,
+  the offline database recipe and a scan of `alpine:3.10` with the imported database only.
+- Offline database: see docs/SECURITY-SUITE.md, "Nodes without internet".
+
 ## Later phases (one job each)
 
 | Phase | Item | Notes |
 |---|---|---|
-| 2 | Scanner packaging in images | current Grype as `app-containers/grype-bin` in the Horcrux overlay (::gentoo has an old ~amd64 0.86), binhost tier, server + GNOME images, `horcrux-bin` optional dependency, DB mirror docs for air-gapped nodes |
+| 2 | Scanner packaging in images | **shipped**: see "Scanner packaging" below |
 | 2 | VM guest scanning | **shipped**: see "Phase 2: VM guest scanning" below |
 | 2 | Host CVE exposure | **shipped**: see "Phase 2: Host CVE exposure" below |
 | 2 | Host IDS / integrity | auditd with a Horcrux rule set (logins, privilege use, /etc changes, horcrux binaries), AIDE database init + scheduled check, findings in Security > Events and as notifications; OpenRC + systemd units |

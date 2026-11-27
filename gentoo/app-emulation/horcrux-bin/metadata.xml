@@ -8,6 +8,7 @@
 	<longdescription lang="en">Prebuilt Horcrux manager (API server, web UI, CLI) installed from the image-built tarball; see the ebuild header.</longdescription>
 	<use>
 		<flag name="san">Pull the host tools the SAN storage API drives: open-iscsi, nvme-cli, multipath-tools, lvm2 with lvmlockd/sanlock, sanlock</flag>
+		<flag name="security">Install the vulnerability scanner (<pkg>app-containers/grype-bin</pkg>) used by Security &gt; Vulnerabilities</flag>
 	</use>
 	<upstream>
 		<bugs-to>https://github.com/CanuteTheGreat/horcrux/issues</bugs-to>
