@@ -15,6 +15,8 @@ expects), this walks the product like a new user and asserts what a person would
   J6 storage / networks     pools, bridges, DHCP pages: content, and a way to add one
   J7 backups / snapshots    the VM can be snapshotted from the UI; backup pages explain themselves
   J8 settings / updates     users, certificates, configuration, package updates are reachable and not empty
+  J9 object states          per-object pages for a stopped VM and for missing VMs/containers: the control the text
+                            asks for is there (Start), no spinner is left, no raw API error, a way back
 
 Every step takes a screenshot (--shots DIR/NN-name.png), records JS console errors (any = failure) and asserts the
 OUTCOME, not the click. Findings are ids `journey:<step>:<check>`; known/tracked ones live in
@@ -589,6 +591,63 @@ def main():
                 j.go("/snapshots", settle=2.5)
                 expect("j7-backup-snapshots", "snapshots-default-all-vms", page.locator("tr[data-snapshot-name='journey-snap']").count() > 0,
                        "opening /snapshots shows no snapshot until a VM is picked")
+
+        # ------------------------------------------------------------------ J9 objects in every state
+        # Owner finding 36: a stopped VM's console said "start it first" with no Start, spun "Connecting..." forever
+        # and printed the raw 422 JSON. Page-level crawls never saw it: the page only breaks for an object in a given
+        # state. Here each per-object page is opened for a STOPPED VM and for objects that do NOT exist, and must
+        # offer the control its own text asks for, settle (no spinner left), and never show raw API errors.
+        with step(j, "j9-object-states", "per-object pages for stopped and missing VMs/containers") as _:
+            # check ids built below (listed so docs/qa/owner-findings.md can name them):
+            # "stopped-vm-summary-has-start" "stopped-vm-hardware-has-start" "stopped-vm-summary-no-impossible-actions"
+            # "stopped-vm-hardware-no-impossible-actions" "stopped-vm-console-has-start" "missing-vm-summary-explained"
+            # "missing-vm-hardware-explained" "missing-ct-console-explained"
+            raw_err = re.compile(r'\bHTTP\s?[45]\d\d\b|\{\s*"(status|error|message)"\s*:|\b(VALIDATION_ERROR|INTERNAL_ERROR|NOT_AVAILABLE|BAD_REQUEST)\b')
+            spinner = re.compile(r"\b(Connecting|Loading)(\.\.\.|\u2026)")
+
+            def settled(check_id, path):
+                page.wait_for_timeout(6000)
+                t = j.text()
+                m = raw_err.search(t)
+                expect("j9-object-states", f"{check_id}-no-raw-error", not m, f"{path} shows a raw API error: {t[max(0, m.start() - 40):m.end() + 80] if m else ''}")
+                s = spinner.search(t)
+                expect("j9-object-states", f"{check_id}-settles", not s, f"{path} still shows '{s.group(0) if s else ''}' after 6 s")
+                return t
+
+            stopped_vm = next((v for v in (api("GET", "/api/vms")[1] or []) if str(v.get("status", "")).lower() == "stopped"), None)
+            if not stopped_vm:
+                code, stopped_vm = api("POST", "/api/vms", {"id": "journey-stopped", "name": "journey-stopped", "hypervisor": "qemu",
+                                                            "architecture": "x86_64", "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped"})
+                stopped_vm = stopped_vm if code in (200, 201) else None
+            if expect("j9-object-states", "have-stopped-vm", stopped_vm, "no stopped VM to test with"):
+                vid = stopped_vm["id"]
+                for sub, name in (("", "summary"), ("/hardware", "hardware")):
+                    j.go(f"/vms/{vid}{sub}", settle=2)
+                    settled(f"stopped-vm-{name}", f"/vms/{vid}{sub}")
+                    j.shot(f"stopped-vm-{name}")
+                    start = page.locator("#vm-start")
+                    expect("j9-object-states", f"stopped-vm-{name}-has-start", start.count() and start.first.is_enabled(),
+                           f"/vms/{vid}{sub}: a stopped VM's page has no enabled Start button")
+                    live = [b for b in ("#vm-shutdown", "#vm-reboot", "#vm-reset", "#vm-pause") if page.locator(b).count() and page.locator(b).first.is_enabled()]
+                    expect("j9-object-states", f"stopped-vm-{name}-no-impossible-actions", not live, f"/vms/{vid}{sub} offers {live} for a stopped VM")
+                    tabs = page.locator("#vm-tabs a")
+                    expect("j9-object-states", f"stopped-vm-{name}-has-tabs", tabs.count() >= 3, f"/vms/{vid}{sub} has no VM tab bar (only a way back to the list)")
+                j.go(f"/vms/{vid}/console", settle=2)
+                t = settled("stopped-vm-console", f"/vms/{vid}/console")
+                j.shot("stopped-vm-console")
+                start = page.locator("#console-start")
+                expect("j9-object-states", "stopped-vm-console-has-start", start.count() and start.first.is_enabled(),
+                       "the console of a stopped VM tells the user to start it but has no Start button")
+            for path, sel, name in (("/vms/journey-no-such-vm", "#vmd-missing", "missing-vm-summary"),
+                                    ("/vms/journey-no-such-vm/hardware", "#vm-hw-missing", "missing-vm-hardware"),
+                                    ("/containers/journey-no-such-ct/console", "#console-missing", "missing-ct-console")):
+                j.go(path, settle=2)
+                settled(name, path)
+                j.shot(name)
+                expect("j9-object-states", f"{name}-explained", page.locator(sel).count() > 0,
+                       f"{path}: an object that does not exist gets no 'not found' explanation with a way back")
+            # the 404s for the made-up objects are the point of the test, not page errors
+            _console[:] = [c for c in _console if "no-such" not in c]
 
         # ------------------------------------------------------------------ J8 settings / updates
         with step(j, "j8-settings", "settings, users, updates") as _:

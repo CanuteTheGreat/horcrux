@@ -7,6 +7,7 @@ One deterministic, no-LLM check for the classes of defect the owner kept finding
   blank             page body empty after load
   http-5xx          an API request answered 5xx while the page loaded
   not-found         the page itself says 404 / not found
+  raw-error         a raw API error shown to the user: 'HTTP 4xx/5xx', a JSON error object, an error-code constant
   bad-text          'undefined', 'NaN', '[object Object]', 'missing field', 'panicked' printed to the user (also raw Rust such as `.get() ||` leaked by a `>` inside an unbraced view! attribute)
   private-text      a private URL / private host / owner machine name visible in the UI
   internal-name     build-internal vocabulary shown to users (see forbidden_names in the config)
@@ -312,6 +313,8 @@ def main():
     forbidden = [re.compile(p, re.I) for p in cfg["forbidden_names"]]
     pfail = [re.compile(p, re.I) for p in cfg["private_fail"]]
     pwarn = [re.compile(p, re.I) for p in cfg["private_warn"]]
+    # owner finding 37: errors must read as sentences, never as the API's wire format
+    raw_error = re.compile(r'\bHTTP\s?(4(0[0-35-9]|[1-9]\d)|5\d\d)\b|\{\s*"(status|error|message)"\s*:|\b(VALIDATION_ERROR|INTERNAL_ERROR|NOT_AVAILABLE|BAD_REQUEST)\b')
     bad_text = re.compile(r"\bundefined\b|\bNaN\b|\[object Object\]|missing field|panicked at|Traceback \(most|RUST_BACKTRACE|\{\{|\}\}|\{\w+(\.\w+)+\([^)]*\)\}|\.(clone|len|to_string|to_uppercase)\(\)|\.get\(\)\s*(\|\||&&|[<>!=]=)", re.I)
     # A bare "404" is a number too (a 404 GB disk, 404 MiB free on the runner), so only the
     # error-shaped forms count: "HTTP 404", "404 Not Found", "Error 404", a lone "404" line.
@@ -382,6 +385,9 @@ def main():
                     m = bad_text.search(f["ownText"])
                     if m:
                         add("bad-text", "fail", route, vp, scheme, f"'{m.group(0)}' shown to the user")
+                    m = raw_error.search(f["ownText"])
+                    if m:
+                        add("raw-error", "fail", route, vp, scheme, f"raw API error '{m.group(0)}' shown to the user")
                     for rx in pfail:
                         m = rx.search(f["text"])
                         if m:
