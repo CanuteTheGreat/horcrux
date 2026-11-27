@@ -8101,3 +8101,42 @@ pub async fn hardening_revert(
 pub async fn hardening_report_text(format: &str) -> Result<String, ApiError> {
     fetch_text(&format!("/security/hardening/report?format={format}")).await
 }
+
+// Security events: dashboard, event list, temporary blocks
+pub use horcrux_common::security_activity::{
+    ActivityDashboard, BlockRequest, BlockedClient, BruteForceSettings, DetectionSettings,
+    EventBucket, EventRule, TimelineEvent, TimelinePage, TopFailing, EVENT_KINDS,
+};
+
+pub async fn get_activity_dashboard(hours: u32) -> Result<ActivityDashboard, ApiError> {
+    fetch_json(&format!("/security/activity?hours={hours}")).await
+}
+
+/// `query` is the already encoded query string (without `?`).
+pub async fn list_activity_events(query: &str) -> Result<TimelinePage, ApiError> {
+    fetch_json(&format!("/security/activity/events?{query}")).await
+}
+
+pub async fn list_blocked_clients() -> Result<Vec<BlockedClient>, ApiError> {
+    fetch_json("/security/blocks").await
+}
+
+pub async fn block_client(ip: &str, minutes: u32, reason: &str) -> Result<BlockedClient, ApiError> {
+    post_json(
+        "/security/blocks",
+        &BlockRequest {
+            ip: ip.to_string(),
+            minutes,
+            reason: reason.to_string(),
+        },
+    )
+    .await
+}
+
+pub async fn unblock_client(ip: &str) -> Result<(), ApiError> {
+    delete_json(&format!(
+        "/security/blocks?ip={}",
+        js_sys::encode_uri_component(ip)
+    ))
+    .await
+}

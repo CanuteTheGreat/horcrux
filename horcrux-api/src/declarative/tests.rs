@@ -415,6 +415,22 @@ fn security_settings_are_planned_validated_and_exported() {
         "{d}"
     );
     assert!(d.contains("hardening.exclude"), "{d}");
+    let mut ev = SecuritySettings::default();
+    ev.detection.brute_force.block = true;
+    ev.detection.brute_force.failures = 3;
+    ev.detection.rules[0].threshold = 7;
+    s.security = Some(ev);
+    let d = plan(&s, &live, false).changes[0].details.join("\n");
+    assert!(
+        d.contains("detection.brute_force.block: false -> true"),
+        "{d}"
+    );
+    assert!(d.contains("detection.brute_force.failures: 5 -> 3"), "{d}");
+    assert!(d.contains("detection.rules"), "{d}");
+    let mut bad_ev = SecuritySettings::default();
+    bad_ev.detection.brute_force.allowlist = vec!["nope".into()];
+    s.security = Some(bad_ev);
+    assert_eq!(plan(&s, &live, false).errors.len(), 1);
     let mut bad = SecuritySettings::default();
     bad.vuln_scan.max_concurrent = 0;
     s.security = Some(bad);

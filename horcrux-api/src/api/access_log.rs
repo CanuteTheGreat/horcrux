@@ -195,6 +195,10 @@ impl AccessLog {
         }
     }
 
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
     pub fn all(&self) -> Vec<AccessEntry> {
         self.inner.lock().unwrap().entries.iter().cloned().collect()
     }
@@ -423,6 +427,11 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/access-log", get(list))
         .route("/api/access-log/stats", get(stats))
+}
+
+/// The process-wide log once `init` has run.
+pub fn global() -> Option<&'static Arc<AccessLog>> {
+    LOG.get()
 }
 
 fn current() -> Result<&'static Arc<AccessLog>, ApiError> {
