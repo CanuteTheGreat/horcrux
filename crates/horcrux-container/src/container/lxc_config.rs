@@ -36,6 +36,12 @@ pub struct HostEnv {
     pub lxc_share_config: PathBuf,
     /// AppArmor is enabled and LXC can generate profiles.
     pub apparmor: bool,
+    /// The kernel has AppArmor enabled (even if LXC can't generate
+    /// profiles). Without it no `lxc.apparmor.*` key is written at all: an
+    /// LXC built without AppArmor (Gentoo's default, USE=-apparmor) refuses
+    /// to parse a config carrying one ("Built without AppArmor support"),
+    /// so the container vanished from `lxc-ls` and could not be started.
+    pub apparmor_kernel: bool,
 }
 
 /// Everything needed to render one container's config.
@@ -177,7 +183,7 @@ pub fn render_config(i: &ConfigInput) -> String {
         if o.features.nesting {
             let _ = writeln!(c, "lxc.apparmor.allow_nesting = 1");
         }
-    } else {
+    } else if i.host.apparmor_kernel {
         let _ = writeln!(c, "lxc.apparmor.profile = unconfined");
     }
     let _ = writeln!(c, "lxc.seccomp.profile = {dir}/seccomp.conf");
@@ -596,6 +602,7 @@ mod tests {
         HostEnv {
             lxc_share_config: PathBuf::from("/nonexistent/lxc/config"),
             apparmor: false,
+            apparmor_kernel: true,
         }
     }
 
@@ -758,6 +765,25 @@ mod tests {
         assert!(
             managed.contains("lxc.apparmor.profile = generated\nlxc.apparmor.allow_nesting = 1\n")
         );
+        // No AppArmor in the kernel: no apparmor key at all (an LXC built
+        // without AppArmor refuses the whole config otherwise).
+        let plain = render_config(&ConfigInput {
+            id: "ct-test",
+            name: "ct1",
+            dir: Path::new("/var/lib/lxc/ct1"),
+            distro: "alpine",
+            arch: "amd64",
+            memory_mb: 256,
+            cpus: 2,
+            rootfs: RootfsKind::Dir,
+            opts: &opts,
+            guest_net_managed: true,
+            host: &HostEnv {
+                apparmor_kernel: false,
+                ..host()
+            },
+        });
+        assert!(!plain.contains("lxc.apparmor"), "{plain}");
     }
 
     #[test]
@@ -927,5 +953,40 @@ mod tests {
             assert_eq!(m.len(), 17);
         }
         assert_ne!(random_mac(), random_mac());
+    }
+}
+
+/// Drop `lxc.apparmor.*` lines from a container config (`text`) written
+/// before [`HostEnv::apparmor_kernel`] existed, on a host whose kernel has
+/// no AppArmor. `None` when nothing needs to change.
+pub fn strip_apparmor_keys(text: &str) -> Option<String> {
+    if !text
+        .lines()
+        .any(|l| l.trim_start().starts_with("lxc.apparmor."))
+    {
+        return None;
+    }
+    let mut out: String = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("lxc.apparmor."))
+        .collect::<Vec<_>>()
+        .join("\n");
+    out.push('\n');
+    Some(out)
+}
+
+#[cfg(test)]
+mod apparmor_tests {
+    use super::*;
+
+    #[test]
+    fn no_apparmor_keys_without_kernel_apparmor() {
+        let cfg =
+            "lxc.arch = x86_64\nlxc.apparmor.profile = unconfined\nlxc.seccomp.profile = /x\n";
+        assert_eq!(
+            strip_apparmor_keys(cfg).as_deref(),
+            Some("lxc.arch = x86_64\nlxc.seccomp.profile = /x\n")
+        );
+        assert_eq!(strip_apparmor_keys("lxc.arch = x86_64\n"), None);
     }
 }

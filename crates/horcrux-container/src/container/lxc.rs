@@ -376,6 +376,16 @@ pub fn ensure_subid_range(file: &Path, base: u32, size: u32) -> std::io::Result<
     Ok(true)
 }
 
+/// The kernel has AppArmor enabled.
+fn apparmor_kernel() -> bool {
+    if let Ok(v) = std::env::var("HORCRUX_LXC_APPARMOR") {
+        return v == "1";
+    }
+    std::fs::read_to_string("/sys/module/apparmor/parameters/enabled")
+        .map(|s| s.trim() == "Y")
+        .unwrap_or(false)
+}
+
 fn apparmor_usable() -> bool {
     if let Ok(v) = std::env::var("HORCRUX_LXC_APPARMOR") {
         return v == "1";
@@ -458,6 +468,39 @@ impl LxcManager {
         HostEnv {
             lxc_share_config: self.share_config.clone(),
             apparmor: apparmor_usable(),
+            apparmor_kernel: apparmor_kernel(),
+        }
+    }
+
+    /// Containers Horcrux created before the AppArmor fix carry
+    /// `lxc.apparmor.profile = unconfined`, which an LXC built without
+    /// AppArmor cannot parse: `lxc-ls` skipped them and Start answered 404.
+    /// Drop the key from Horcrux-created configs on hosts without AppArmor.
+    fn repair_apparmor_configs(&self) {
+        if apparmor_kernel() {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(&self.lxc_path) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let dir = e.path();
+            if !dir.join(META).is_file() {
+                continue;
+            }
+            let cfg = dir.join("config");
+            let Ok(text) = std::fs::read_to_string(&cfg) else {
+                continue;
+            };
+            if let Some(fixed) = lxc_config::strip_apparmor_keys(&text) {
+                match std::fs::write(&cfg, fixed) {
+                    Ok(()) => tracing::info!(
+                        "LXC {}: removed lxc.apparmor keys (no AppArmor on this host)",
+                        dir.display()
+                    ),
+                    Err(e) => tracing::warn!("LXC {}: {e}", cfg.display()),
+                }
+            }
         }
     }
 
@@ -1269,6 +1312,7 @@ impl LxcManager {
         if !self.lxc_path.is_dir() || !Self::check_lxc_available() {
             return Ok(Vec::new());
         }
+        self.repair_apparmor_configs();
         let out = run(
             Command::new("lxc-ls")
                 .arg("-P")
