@@ -28,7 +28,6 @@ livecd/packages:
     app-misc/screen
     app-misc/tmux
     app-editors/vim
-    app-editors/nano
 
     # Networking
     net-misc/curl

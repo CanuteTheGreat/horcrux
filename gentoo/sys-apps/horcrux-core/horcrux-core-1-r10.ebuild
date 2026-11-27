@@ -64,8 +64,14 @@ KEYWORDS="amd64 arm64"
 #   the installer writes it, and pkg_postinst adds it to /etc/default/grub when that file does not set it either way (an explicit choice is kept),
 #   then refreshes /boot/grub/grub.cfg through 91-horcrux-boot-entry (never a reboot). Settings: /etc/conf.d/horcrux-boot-entry. QEMU gate:
 #   build/live-iso/common/grub-autoboot-test.py --mode mkconfig (the image's own grub-mkconfig + scripts, booted with no key pressed).
+# app-editors/vim + /usr/sbin/default-editor + /etc/default-editor.conf (-r10, owner 2026-11-27: "I hate nano as the default editor" and "vim or neovim should
+#   always be installed"): vim is a hard dependency of core (so it is in the dependency closure of @world and depclean can never drop it) and EDITOR/VISUAL
+#   default to it system-wide. The setting is EDITOR_CHOICE in /etc/default-editor.conf (vim|neovim|nano|vi|/path; declarative key system.editor);
+#   `default-editor apply` writes /etc/env.d/99editor in exactly the text `eselect editor set` writes. pkg_postinst applies it only when no editor is set
+#   yet, so a deliberate `eselect editor set ...` survives updates. Mirrored byte-identical from build/live-iso/common/overlay (unit test).
 RDEPEND="
 	acct-group/portage
+	app-editors/vim
 	app-portage/eix
 	app-portage/gentoolkit
 	sys-apps/shadow
@@ -105,6 +111,9 @@ src_install() {
 	doins "${FILESDIR}"/80-horcrux-udisks-hide.rules
 	dosbin "${FILESDIR}"/horcrux-admin-groups
 	dosbin "${FILESDIR}"/horcrux-doctor
+	dosbin "${FILESDIR}"/default-editor
+	insinto /etc
+	doins "${FILESDIR}"/default-editor.conf
 	exeinto /etc/portage/postsync.d
 	newexe "${FILESDIR}"/postsync-admin-groups 60-horcrux-admin-groups
 	newexe "${FILESDIR}"/postsync-doctor 60-horcrux-doctor
@@ -137,6 +146,10 @@ pkg_postinst() {
 	# re-evaluate the already-present disks now (no reboot, no session restart) so udisks drops the system storage at once
 	if [[ -z ${ROOT} ]] && command -v udevadm >/dev/null 2>&1; then
 		udevadm trigger --subsystem-match=block --action=change || true
+	fi
+	# default editor: vim unless the owner already chose one (never nano by default)
+	if [[ -z ${ROOT} ]]; then
+		"${EROOT%/}"/usr/sbin/default-editor apply --if-unset || ewarn "default-editor apply failed: run it once by hand"
 	fi
 	# administrators into the portage group (idempotent; also run after every tree sync)
 	local line

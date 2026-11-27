@@ -128,7 +128,6 @@ install_packages() {
         app-misc/screen
         app-misc/tmux
         app-editors/vim
-        app-editors/nano
         dev-vcs/git
         net-misc/curl
         net-misc/wget

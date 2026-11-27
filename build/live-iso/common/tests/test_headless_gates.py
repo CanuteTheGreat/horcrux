@@ -189,5 +189,30 @@ class DockerForwardGate(unittest.TestCase):
         self.assertIn("HG.docker_forward_gate(", open(os.path.join(ROOT, "qemu-test.py")).read())
 
 
+class EditorGate(unittest.TestCase):
+    """default editor is vim (owner 2026-11-27)"""
+    GOOD = ("EDITOR-LOGIN root EDITOR=/usr/bin/vim VISUAL=/usr/bin/vim\nEDITOR-LOGIN adm EDITOR=/usr/bin/vim VISUAL=/usr/bin/vim\n"
+            + "".join(f"EDITOR-PROBE {l} -> vim\n" for l in ("crontab-e", "git-commit", "visudo", "sudoedit")) + "EDITOR-DONE\n")
+
+    def test_good(self):
+        self.assertTrue(HG.editor_verdict(self.GOOD)[0])
+
+    def test_neovim_is_accepted(self):
+        self.assertTrue(HG.editor_verdict(self.GOOD.replace("/usr/bin/vim", "/usr/bin/nvim").replace("-> vim", "-> nvim"))[0])
+
+    def test_nano_anywhere_fails(self):
+        self.assertFalse(HG.editor_verdict(self.GOOD.replace("EDITOR=/usr/bin/vim", "EDITOR=/bin/nano", 1))[0])
+        self.assertFalse(HG.editor_verdict(self.GOOD.replace("sudoedit -> vim", "sudoedit -> nano"))[0])
+
+    def test_unset_editor_or_missing_probe_fails(self):
+        self.assertFalse(HG.editor_verdict(self.GOOD.replace("EDITOR=/usr/bin/vim", "EDITOR=", 1))[0])
+        self.assertFalse(HG.editor_verdict(self.GOOD.replace("EDITOR-PROBE visudo -> vim\n", ""))[0])
+        self.assertFalse(HG.editor_verdict(self.GOOD.replace("EDITOR-DONE\n", ""))[0])
+        self.assertFalse(HG.editor_verdict("")[0])
+
+    def test_guest_script_compiles(self):
+        compile(HG.EDITOR_PROBE.replace("@USER@", "x"), "probe", "exec")
+
+
 if __name__ == "__main__":
     unittest.main()

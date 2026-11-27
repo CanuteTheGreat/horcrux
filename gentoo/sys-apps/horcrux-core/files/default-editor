@@ -1,0 +1,85 @@
+#!/bin/sh
+# default-editor [show|apply [--if-unset]|set CHOICE]: the system-wide default text editor (EDITOR / VISUAL).
+#
+# Owner rule 2026-11-27: the default editor is vim on every tier; neovim is a one-setting alternative; nano is never the default.
+# The setting is /etc/default-editor.conf (EDITOR_CHOICE=vim|neovim|nano|vi|/absolute/path; the declarative key system.editor).
+# `apply` writes /etc/env.d/99editor (the file `eselect editor`/`eselect visual` manage, same format) and runs env-update, so every
+# login shell, `git commit`, `crontab -e`, `sudoedit`, `visudo` and `systemctl edit` open that editor. Init-neutral (OpenRC and systemd).
+# A choice whose binary is not installed falls back (vim -> neovim -> vi) with a warning, so an image never ends up with an EDITOR that does not exist.
+# DEFAULT_EDITOR_ROOT=<dir> redirects every path (tests, image builds).
+set -eu
+R=${DEFAULT_EDITOR_ROOT:-}
+CONF=$R/etc/default-editor.conf
+ENVD=$R/etc/env.d/99editor
+DEFAULT=vim
+
+choice() {
+	c=$DEFAULT
+	if [ -r "$CONF" ]; then
+		v=$(sed -n 's/^[[:space:]]*EDITOR_CHOICE=[[:space:]]*"\{0,1\}\([^"#[:space:]]*\)"\{0,1\}.*/\1/p' "$CONF" | tail -n 1)
+		[ -z "$v" ] || c=$v
+	fi
+	printf '%s\n' "$c"
+}
+
+path_of() { # CHOICE -> candidate absolute paths, in order
+	case $1 in
+	vim) echo "/usr/bin/vim /bin/vim /usr/sbin/vim";;
+	neovim|nvim) echo "/usr/bin/nvim";;
+	nano) echo "/bin/nano /usr/bin/nano";;
+	vi) echo "/usr/bin/vi /bin/vi";;
+	/*) echo "$1";;
+	*) echo "/usr/bin/$1";;
+	esac
+}
+
+resolve() { # CHOICE -> first existing executable path (empty when none)
+	for p in $(path_of "$1"); do
+		if [ -x "$R$p" ]; then echo "$p"; return 0; fi
+	done
+	return 0
+}
+
+pick() { # prints "<path> <warning-or-empty>"
+	want=$(choice)
+	p=$(resolve "$want")
+	[ -z "$p" ] || { echo "$p"; return; }
+	for fb in vim neovim vi; do
+		[ "$fb" = "$want" ] && continue
+		p=$(resolve "$fb")
+		[ -z "$p" ] || { echo "default-editor: $want is not installed, using $p" >&2; echo "$p"; return; }
+	done
+	echo "default-editor: no editor found (wanted $want)" >&2
+	return 1
+}
+
+cmd=${1:-show}
+case $cmd in
+show)
+	printf 'choice=%s editor=%s\n' "$(choice)" "$(pick 2>/dev/null || echo none)"
+	;;
+apply)
+	if [ "${2:-}" = "--if-unset" ] && [ -s "$ENVD" ] && grep -q '^EDITOR=' "$ENVD"; then
+		exit 0
+	fi
+	p=$(pick)
+	mkdir -p "$R/etc/env.d"
+	t=$(mktemp "$R/etc/env.d/.99editor.XXXXXX")
+	# the exact text `eselect editor set` writes, so a later eselect (or this tool) never makes a ._cfg conflict
+	printf '# Configuration file for eselect\n# This file has been automatically generated.\nEDITOR="%s"\nVISUAL="%s"\n' "$p" "$p" > "$t"
+	chmod 644 "$t"
+	mv -f "$t" "$ENVD"
+	if [ -z "$R" ] && command -v env-update >/dev/null 2>&1; then env-update >/dev/null 2>&1 || true; fi
+	echo "default-editor: EDITOR=VISUAL=$p"
+	;;
+set)
+	[ -n "${2:-}" ] || { echo "usage: default-editor set vim|neovim|nano|vi|/path" >&2; exit 2; }
+	mkdir -p "$R/etc"
+	printf '# System default text editor (default-editor(8)); the declarative key system.editor.\n# vim | neovim | nano | vi | /absolute/path\nEDITOR_CHOICE=%s\n' "$2" > "$CONF"
+	exec "$0" apply
+	;;
+*)
+	echo "usage: default-editor [show|apply [--if-unset]|set CHOICE]" >&2
+	exit 2
+	;;
+esac

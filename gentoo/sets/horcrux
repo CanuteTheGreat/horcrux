@@ -180,7 +180,7 @@ app-arch/zstd
 
 # Editors
 app-editors/vim
-# app-editors/nano
+# nano is never the default editor (owner 2026-11-27); installable, not in the base set
 
 # =============================================================================
 # OPTIONAL: KUBERNETES

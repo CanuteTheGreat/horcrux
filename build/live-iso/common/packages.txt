@@ -29,7 +29,8 @@ app-admin/sudo
 openrc? app-admin/sysklogd
 net-firewall/nftables
 sys-apps/iproute2
-app-editors/nano
+# default editor is vim on every tier (owner 2026-11-27); always in @world via the --noreplace base emerge; nano is never the default
+app-editors/vim
 app-misc/tmux
 sys-process/htop
 sys-process/cronie

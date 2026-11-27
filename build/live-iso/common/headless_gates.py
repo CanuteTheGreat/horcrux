@@ -15,6 +15,7 @@ Pure functions: `sh(cmd) -> (rc, out)` and `step(name, ok, info)` are passed in,
 import base64
 import datetime
 import hashlib
+import os
 import re
 import subprocess
 import time
@@ -128,6 +129,97 @@ def admin_tools_gate(sh, step):
     okn = len(re.findall(r"(?m)^TOOL-OK \S+", o))
     ok = "ADMIN-DONE" in o and not missing and okn == len(ADMIN_TOOLS) and "app-portage/gentoolkit-" in o
     step("gentoolkit-installed-equery-eclean-revdep-rebuild-euse", ok, re.sub(r"\s+", " ", f"missing {missing}; {o.strip()[-160:]}")[:300])
+    return ok
+
+
+# Default editor (owner 2026-11-27: "I hate nano as the default editor. it should be vim or neovim"): in a LOGIN shell EDITOR and VISUAL are vim (or
+# neovim when the owner chose it), and the tools that open an editor really start it: crontab -e and `git commit` as the administrator, visudo and
+# sudoedit as root. Each probe runs under a pty (an editor needs a terminal), looks for the editor process, then kills the whole group.
+EDITOR_PROBE = r'''
+import glob, os, pty, pwd, signal, subprocess, sys, time
+USER = "@USER@"
+EDITORS = {"vim", "vi", "nvim", "nano", "emacs", "ed", "pico", "joe", "mcedit", "micro", "view"}
+def comms():
+    r = {}
+    for d in glob.glob("/proc/[0-9]*"):
+        try:
+            r[int(d[6:])] = open(d + "/comm").read().strip()
+        except OSError:
+            pass
+    return r
+def login(user, what):
+    cmd = "echo $" + what
+    if user == "root":
+        argv = ["env", "-i", "HOME=/root", "TERM=xterm", "sh", "-lc", cmd]
+    else:
+        pw = pwd.getpwnam(user)
+        argv = ["setpriv", "--reuid=%d" % pw.pw_uid, "--regid=%d" % pw.pw_gid, "--init-groups", "env", "-i", "HOME=" + pw.pw_dir, "TERM=xterm", "sh", "-lc", cmd]
+    return subprocess.run(argv, capture_output=True, text=True, timeout=30).stdout.strip()
+for u in ("root", USER):
+    print("EDITOR-LOGIN", u, "EDITOR=" + login(u, "EDITOR"), "VISUAL=" + login(u, "VISUAL"))
+def probe(label, user, shcmd):
+    before = set(comms())
+    pid, fd = pty.fork()
+    if pid == 0:
+        if user == "root":
+            argv = ["env", "-i", "HOME=/root", "TERM=xterm", "SHELL=/bin/sh", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "sh", "-lc", shcmd]
+        else:
+            pw = pwd.getpwnam(user)
+            argv = ["setpriv", "--reuid=%d" % pw.pw_uid, "--regid=%d" % pw.pw_gid, "--init-groups", "env", "-i", "HOME=" + pw.pw_dir, "TERM=xterm", "SHELL=/bin/sh", "PATH=/usr/local/bin:/usr/bin:/bin", "sh", "-lc", shcmd]
+        os.execvp(argv[0], argv)
+    found = ""
+    end = time.time() + 12
+    while time.time() < end and not found:
+        try:
+            os.set_blocking(fd, False)
+            os.read(fd, 65536)      # keep the pty drained so the editor never blocks on a full buffer
+        except OSError:
+            pass
+        now = comms()
+        for p, c in now.items():
+            if p not in before and c in EDITORS:
+                found = c
+        time.sleep(0.2)
+    for p in [p for p in comms() if p not in before]:
+        try:
+            os.kill(p, signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0)
+    except OSError:
+        pass
+    print("EDITOR-PROBE", label, "->", found or "none")
+os.makedirs("/tmp/hx-editor-probe", exist_ok=True)
+os.system("rm -rf /tmp/hx-editor-probe/git /tmp/hx-editor-probe/f; mkdir -p /tmp/hx-editor-probe/git; chown -R %s /tmp/hx-editor-probe; chmod 777 /tmp/hx-editor-probe; touch /tmp/hx-editor-probe/f" % USER)
+os.system("cd /tmp/hx-editor-probe/git && setpriv --reuid=$(id -u %s) --regid=$(id -g %s) --init-groups git init -q . 2>/dev/null" % (USER, USER))
+probe("crontab-e", USER, "crontab -e")
+probe("git-commit", USER, "cd /tmp/hx-editor-probe/git && git -c user.name=x -c user.email=x@example.invalid commit -q --allow-empty")
+probe("visudo", "root", "visudo -f /tmp/hx-editor-probe/sudoers")
+probe("sudoedit", "root", "sudoedit /tmp/hx-editor-probe/f")
+os.system("rm -rf /tmp/hx-editor-probe")
+print("EDITOR-DONE")
+'''
+
+
+def editor_verdict(o, want=("vim", "nvim")):
+    """(ok, info): login-shell EDITOR/VISUAL name the wanted editor (never nano) and every probed tool started it"""
+    o = (o or "").replace("\r", "")
+    logins = re.findall(r"(?m)^EDITOR-LOGIN (\S+) EDITOR=(\S*) VISUAL=(\S*)$", o)
+    probes = re.findall(r"(?m)^EDITOR-PROBE (\S+) -> (\S+)$", o)
+    names = {os.path.basename(x) for _, e, v in logins for x in (e, v)}
+    login_ok = len(logins) >= 2 and all(os.path.basename(e) in want and os.path.basename(v) in want for _, e, v in logins)
+    probe_ok = len(probes) >= 4 and all(c in want for _, c in probes)
+    ok = "EDITOR-DONE" in o and login_ok and probe_ok and "nano" not in names
+    info = "logins " + " ".join(f"{u}:{e}/{v}" for u, e, v in logins) + " | probes " + " ".join(f"{l}={c}" for l, c in probes)
+    return ok, info[:400]
+
+
+def editor_gate(sh, step, user, want=("vim", "nvim")):
+    """EDITOR/VISUAL are vim in a login shell and crontab -e, git commit, visudo and sudoedit open it (every project, every variant)"""
+    rc, o = sh(b64("python3", EDITOR_PROBE.replace("@USER@", user)))
+    ok, info = editor_verdict(o, want)
+    step("default-editor-is-vim-login-shell-crontab-git-visudo-sudoedit", ok, info)
     return ok
 
 

@@ -24,7 +24,6 @@ net-wireless/*
 app-admin/sudo
 app-admin/sysklogd
 app-crypt/argon2
-app-editors/nano
 app-editors/vim
 app-cdr/cdrtools
 dev-db/sqlite

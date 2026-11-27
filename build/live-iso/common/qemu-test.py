@@ -2571,6 +2571,8 @@ class Runner:
         flat = out.strip().replace("\n", " | ")[:220]
         self.step("ssh-key-login-accepted", rc == 0 and "KEYLOGIN-OK" in out, flat)
         HG.admin_tools_gate(lambda cmd, timeout=60: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step)
+        # default editor is vim, never nano (owner 2026-11-27): login-shell EDITOR/VISUAL + crontab -e / git commit / visudo / sudoedit start it
+        HG.editor_gate(lambda cmd, timeout=90: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step, (getattr(self, "P", {}) or {}).get("web_user") or "root")
         if getattr(self, "P", {}).get("web_user"):
             # the installer-created administrator: in the portage group, runs equery + eix itself (owner 2026-11-17)
             HG.portage_group_gate(lambda cmd, timeout=90: ssh(FWD_SSH, self.key, cmd, timeout=int(T(timeout))), self.step, self.P["web_user"], wait=int(T(300)))

@@ -29,7 +29,7 @@ Production three-node cluster configuration with:
 # Copy to each node and customize
 sudo cp cluster/three-node-cluster.toml /etc/horcrux/config.toml
 # Edit node-specific settings (node_id, bind_address)
-sudo vi /etc/horcrux/config.toml
+sudo vim /etc/horcrux/config.toml
 sudo systemctl restart horcrux
 ```
 
@@ -88,7 +88,7 @@ Script to configure automated backup schedules:
 **Usage:**
 ```bash
 # Review and customize the script
-vi backup/automated-backup.sh
+vim backup/automated-backup.sh
 
 # Run to create backup schedules
 ./backup/automated-backup.sh
@@ -114,7 +114,7 @@ Script to configure high availability:
 horcrux-cli cluster status
 
 # Review and customize VM names
-vi ha/high-availability-setup.sh
+vim ha/high-availability-setup.sh
 
 # Run HA setup
 ./ha/high-availability-setup.sh

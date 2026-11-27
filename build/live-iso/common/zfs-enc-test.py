@@ -686,6 +686,7 @@ class ZRun(qt.Runner):
         a = self.z
         self.headless_checks()
         qt.HG.portage_group_gate(self.sh, self.step, "hxadmin", wait=int(qt.T(300)))     # the installer's administrator: portage group, equery + eix (owner 2026-11-17)
+        qt.HG.editor_gate(self.sh, self.step, "hxadmin")      # default editor is vim, never nano (owner 2026-11-27)
         if getattr(a, "public", False):
             self.public_image_checks()
         self.core_checks()
@@ -1154,6 +1155,7 @@ class ZRun(qt.Runner):
         qt.greeter_no_session_gate(self.sh, self.step, "owner", "gdm", wait=60)         # OWNER RULE: after the disk unlock the greeter shows, no user session exists before a greeter login
         self.desktop_exec_check()
         qt.HG.portage_group_gate(self.sh, self.step, "owner", wait=int(qt.T(300)))       # the desktop user is an administrator: portage group, equery + eix (owner 2026-11-17)
+        qt.HG.editor_gate(self.sh, self.step, "owner")        # default editor is vim, never nano (owner 2026-11-27)
         if getattr(self.z, "public", False):
             self.public_image_checks()
         self.keyring_pam_checks()
