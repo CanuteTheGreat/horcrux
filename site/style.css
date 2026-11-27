@@ -72,18 +72,6 @@ footer p{margin:.3em 0}
  .dl tr{padding:.7em 0;border-bottom:1px solid #222}
  .dl td{border:0;padding:.2em .4em}
 }
-/* donations: highlighted nav item, strip under the hero, one card per way to give */
-nav a.nav-donate{color:var(--accent-fg);background:var(--accent);padding:4px 12px;border-radius:999px;font-weight:600}
-nav a.nav-donate:hover,nav a.nav-donate[aria-current]{color:var(--accent-fg);filter:brightness(1.1)}
-.givebar .box{border:1px solid var(--accent);border-radius:12px;padding:16px 20px;display:flex;gap:12px 24px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--panel)}
-.givebar .box p{margin:0;max-width:40em}
-.cta.tight{margin-top:0}
-.give{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin:16px 0}
-.give .card{border:1px solid var(--line);border-radius:10px;padding:16px;background:var(--panel);display:flex;flex-direction:column;gap:10px}
-.give .card h3{margin:0}
-.give .card p{margin:0;color:var(--muted);flex:1}
-.give .card .btn{align-self:flex-start}
-.give-foot{color:var(--text)}
 /* light palette: follows the device setting (logos keep their dark tile) */
 @media (prefers-color-scheme: light){
  :root{--bg:#fff;--panel:#f4f5f7;--line:#d6dae1;--text:#15171c;--muted:#565d69;--accent:#86600c;--accent-fg:#fff}

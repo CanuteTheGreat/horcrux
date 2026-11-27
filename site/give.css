@@ -1,0 +1,24 @@
+/* Shared donation component v1 (site/give.py). Byte-identical in the Horcrux and Patronus repos; appended to
+   assets/style.css by build.py. Only --accent / --accent-fg (brand colour, set in style.css) differ per product.
+   Layout is set by fixed breakpoints, never by how long the text is, so both products always look the same. */
+nav a.nav-donate{color:var(--accent-fg);background:var(--accent);padding:4px 12px;border-radius:999px;font-weight:600}
+nav a.nav-donate:hover,nav a.nav-donate[aria-current]{color:var(--accent-fg);filter:brightness(1.1)}
+.givebar .box{border:1px solid var(--accent);border-radius:12px;padding:16px 20px;background:var(--panel);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px 24px;align-items:center}
+.givebar .give-text{margin:0}
+.givebar .give-btns{margin:0;display:grid;grid-template-columns:repeat(3,auto);gap:10px}
+.givebar .give-btns .btn{text-align:center;white-space:nowrap}
+.give{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:16px 0}
+.give .card{border:1px solid var(--line);border-top:3px solid var(--accent);border-radius:10px;padding:16px;background:var(--panel);display:flex;flex-direction:column;gap:10px}
+.give .card h3{margin:0}
+.give .card p{margin:0;color:var(--muted);flex:1}
+.give .card .btn{align-self:stretch;text-align:center}
+.give-foot{color:var(--text)}
+@media (max-width:999px){
+ .givebar .box{grid-template-columns:1fr}
+ .givebar .give-btns{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .give{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:559px){
+ .givebar .give-btns{grid-template-columns:1fr}
+ .give{grid-template-columns:1fr}
+}
