@@ -243,7 +243,11 @@ pub fn ContainerList() -> impl IntoView {
                                         view! {
                                             <tr data-container-id=container.id.clone()>
                                                 <td>{&container.id}</td>
-                                                <td><strong>{&container.name}</strong></td>
+                                                <td>{if container.runtime == "lxc" {
+                                                    view! { <a class="ct-name-link" href=format!("/containers/{}/lxc", container.id)><strong>{container.name.clone()}</strong></a> }.into_view()
+                                                } else {
+                                                    view! { <strong>{container.name.clone()}</strong> }.into_view()
+                                                }}</td>
                                                 <td>
                                                     <span class="runtime-badge">{&container.runtime}</span>
                                                 </td>

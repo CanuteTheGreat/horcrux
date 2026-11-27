@@ -130,7 +130,11 @@ def run_ct(page):
     page.wait_for_url(f"{BASE}/containers", timeout=600000)
     row = page.locator(f"tr[data-container-id='{CT}']")
     expect(row).to_contain_text("incus", timeout=30000)
-    row.get_by_role("button", name="Start").click()
+    # Start is only enabled while the container is stopped ("Start after
+    # creating" may already have started it).
+    start = row.get_by_role("button", name="Start")
+    if start.is_enabled():
+        start.click()
     wait_for(lambda: sibling(f"incus exec {CT} -- cat /etc/alpine-release")[0] == 0, "container running")
     rc, out = sibling(f"incus exec {CT} -- passwd -d root")
     assert rc == 0, out

@@ -374,13 +374,20 @@ pub fn LxcContainerPage() -> impl IntoView {
                 <h1>"LXC container " {id}</h1>
                 <div class="header-actions">
                     <span id="lxc-status" class=move || format!("status-{}", status.get())>{move || status.get()}</span>
-                    <button id="lxc-start" class="btn btn-sm btn-success" disabled=working on:click=move |_| lifecycle("start")>"Start"</button>
-                    <button id="lxc-shutdown" class="btn btn-sm btn-warning" disabled=working on:click=move |_| lifecycle("shutdown")>"Shutdown"</button>
-                    <button id="lxc-stop" class="btn btn-sm btn-danger" disabled=working on:click=move |_| lifecycle("stop")>"Stop"</button>
-                    <button id="lxc-reboot" class="btn btn-sm" disabled=working on:click=move |_| lifecycle("reboot")>"Reboot"</button>
-                    <button id="lxc-pause" class="btn btn-sm" disabled=working on:click=move |_| lifecycle("pause")>"Freeze"</button>
-                    <button id="lxc-resume" class="btn btn-sm" disabled=working on:click=move |_| lifecycle("resume")>"Thaw"</button>
-                    <a class="btn btn-sm" href=move || format!("/containers/{}/exec?runtime=lxc", id())>"Console"</a>
+                    // Power buttons follow the state, like the VM list: only what
+                    // applies now is clickable.
+                    <button id="lxc-start" class="btn btn-sm btn-success" disabled=move || working.get() || status.get() != "stopped" on:click=move |_| lifecycle("start")>"Start"</button>
+                    <button id="lxc-shutdown" class="btn btn-sm btn-warning" disabled=move || working.get() || status.get() != "running" on:click=move |_| lifecycle("shutdown")>"Shutdown"</button>
+                    <button id="lxc-stop" class="btn btn-sm btn-danger" disabled=move || working.get() || !matches!(status.get().as_str(), "running" | "paused") on:click=move |_| lifecycle("stop")>"Stop"</button>
+                    <button id="lxc-reboot" class="btn btn-sm" disabled=move || working.get() || status.get() != "running" on:click=move |_| lifecycle("reboot")>"Reboot"</button>
+                    <button id="lxc-pause" class="btn btn-sm" disabled=move || working.get() || status.get() != "running" on:click=move |_| lifecycle("pause")>"Freeze"</button>
+                    <button id="lxc-resume" class="btn btn-sm" disabled=move || working.get() || status.get() != "paused" on:click=move |_| lifecycle("resume")>"Thaw"</button>
+                    <a class="btn btn-sm" id="lxc-sysconsole" href=move || format!("/containers/{}/console?runtime=lxc", id())>"Console"</a>
+                    <a class="btn btn-sm" href=move || format!("/containers/{}/exec?runtime=lxc", id())>"Shell"</a>
+                    <a class="btn btn-sm" href=move || format!("/containers/{}/firewall", id())>"Firewall"</a>
+                    <crate::features::IfFeature feature="cluster">
+                        <a class="btn btn-sm" id="lxc-migrate" href=move || format!("/ha/migration?guest={}&type=container", urlencoding::encode(&id()))>"Migrate"</a>
+                    </crate::features::IfFeature>
                     <a class="btn btn-sm" href=move || format!("/containers/{}/logs?runtime=lxc", id())>"Boot log"</a>
                     <a class="btn btn-sm" href="/containers">"Back"</a>
                 </div>
