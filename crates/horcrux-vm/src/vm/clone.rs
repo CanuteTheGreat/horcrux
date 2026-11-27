@@ -135,6 +135,105 @@ impl VmCloneManager {
         Ok(cloned_vm)
     }
 
+    /// Full clone of a VM as it was at a snapshot (Proxmox Clone > Snapshot).
+    /// `snap_vm` is the configuration saved with the snapshot and
+    /// `disk_snapshots` maps each of its disk paths to the qcow2 internal
+    /// snapshot holding that disk's state. Each disk is read out of its
+    /// snapshot with `qemu-img convert -l snapshot.name=...`, so the source
+    /// VM's current disks are never touched and it may keep running (an
+    /// internal snapshot's clusters are immutable while it exists; `-U`
+    /// reads past QEMU's lock). Only qcow2 disks can be cloned this way.
+    pub async fn clone_vm_from_snapshot(
+        &self,
+        snap_vm: &VmConfig,
+        disk_snapshots: &std::collections::HashMap<String, String>,
+        options: CloneOptions,
+    ) -> Result<VmConfig> {
+        if matches!(options.mode, CloneMode::Linked) {
+            return Err(horcrux_common::Error::Validation(
+                "A clone from a snapshot is always a full clone".into(),
+            ));
+        }
+        let new_vm_id = options.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        crate::validation::validate_vm_id(&new_vm_id)?;
+        // Check every disk first: nothing is written unless all can be done.
+        let mut plan = Vec::new();
+        for (idx, disk) in snap_vm.disks.iter().enumerate() {
+            let Some(snap) = disk_snapshots.get(&disk.path) else {
+                return Err(horcrux_common::Error::Validation(format!(
+                    "The snapshot has no saved state for disk {}",
+                    disk.path
+                )));
+            };
+            if !matches!(self.detect_storage_type(&disk.path)?, StorageType::Qcow2) {
+                return Err(horcrux_common::Error::Validation(format!(
+                    "Disk {} is not a qcow2 image: cloning from a snapshot needs qcow2 disks \
+                     (roll back or clone the current state instead)",
+                    disk.path
+                )));
+            }
+            let dest = self.disk_dest(disk, &new_vm_id, idx);
+            if dest.exists() {
+                return Err(horcrux_common::Error::Conflict(format!(
+                    "A disk image already exists at {}",
+                    dest.display()
+                )));
+            }
+            plan.push((disk, snap.clone(), dest));
+        }
+        tokio::fs::create_dir_all(&self.storage_path)
+            .await
+            .map_err(|e| {
+                horcrux_common::Error::System(format!("Failed to create storage directory: {}", e))
+            })?;
+        let mut written: Vec<PathBuf> = Vec::new();
+        let mut cloned_disks = Vec::new();
+        for (disk, snap, dest) in plan {
+            let args = snapshot_convert_args(&disk.path, &snap, &dest);
+            let out = Command::new("qemu-img").args(&args).output().await;
+            let ok = matches!(&out, Ok(o) if o.status.success());
+            if !ok {
+                let why = match out {
+                    Ok(o) => String::from_utf8_lossy(&o.stderr).trim().to_string(),
+                    Err(e) => format!("Failed to run qemu-img: {e}"),
+                };
+                let _ = fs::remove_file(&dest).await;
+                for w in &written {
+                    let _ = fs::remove_file(w).await;
+                }
+                return Err(horcrux_common::Error::System(format!(
+                    "Copying disk {} from snapshot {snap} failed: {why}",
+                    disk.path
+                )));
+            }
+            written.push(dest.clone());
+            cloned_disks.push(VmDisk {
+                path: dest.to_string_lossy().to_string(),
+                storage: None,
+                ..disk.clone()
+            });
+        }
+        info!(
+            "VM {} cloned from a snapshot to {} ({} disk(s))",
+            snap_vm.id,
+            new_vm_id,
+            cloned_disks.len()
+        );
+        Ok(VmConfig {
+            id: new_vm_id,
+            name: options.name,
+            hypervisor: snap_vm.hypervisor.clone(),
+            memory: snap_vm.memory,
+            cpus: snap_vm.cpus,
+            disk_size: snap_vm.disk_size,
+            status: VmStatus::Stopped,
+            architecture: snap_vm.architecture.clone(),
+            disks: cloned_disks,
+            display: snap_vm.display,
+            hardware: snap_vm.hardware.for_clone(),
+        })
+    }
+
     /// Where the clone's copy of disk `disk_index` goes.
     fn disk_dest(&self, source_disk: &VmDisk, new_vm_id: &str, disk_index: usize) -> PathBuf {
         let extension = Path::new(&source_disk.path)
@@ -1194,6 +1293,23 @@ enum StorageType {
     Ceph,
 }
 
+/// `qemu-img convert` arguments that copy the state of qcow2 internal
+/// snapshot `snap` of `src` into a new qcow2 image `dest`.
+fn snapshot_convert_args(src: &str, snap: &str, dest: &Path) -> Vec<String> {
+    vec![
+        "convert".into(),
+        "-U".into(),
+        "-f".into(),
+        "qcow2".into(),
+        "-l".into(),
+        format!("snapshot.name={snap}"),
+        "-O".into(),
+        "qcow2".into(),
+        src.into(),
+        dest.to_string_lossy().into_owned(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::CloneMode;
@@ -1224,6 +1340,144 @@ mod tests {
             cache: "none".to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn snapshot_clone_reads_the_named_internal_snapshot() {
+        let a = snapshot_convert_args("/v/a.qcow2", "snap-1", Path::new("/v/b.qcow2"));
+        assert_eq!(
+            a.join(" "),
+            "convert -U -f qcow2 -l snapshot.name=snap-1 -O qcow2 /v/a.qcow2 /v/b.qcow2"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_clone_refuses_linked_missing_and_non_qcow2_disks() {
+        let dir = std::env::temp_dir().join(format!("hx-snapclone-ref-{}", std::process::id()));
+        let m = VmCloneManager::new(dir.to_string_lossy().into_owned());
+        let mut vm = create_test_vm_config();
+        vm.disks = vec![create_test_disk("/v/a.qcow2")];
+        let mut snaps = std::collections::HashMap::new();
+        let opts = |mode| CloneOptions {
+            name: "c".into(),
+            id: Some("c1".into()),
+            mode,
+            start: false,
+            mac_addresses: None,
+            description: None,
+            network_config: None,
+        };
+        assert!(m
+            .clone_vm_from_snapshot(&vm, &snaps, opts(CloneMode::Linked))
+            .await
+            .is_err());
+        // No saved state for the disk.
+        assert!(m
+            .clone_vm_from_snapshot(&vm, &snaps, opts(CloneMode::Full))
+            .await
+            .is_err());
+        // A raw disk.
+        vm.disks = vec![create_test_disk("/v/a.raw")];
+        snaps.insert("/v/a.raw".to_string(), "s".to_string());
+        assert!(m
+            .clone_vm_from_snapshot(&vm, &snaps, opts(CloneMode::Full))
+            .await
+            .is_err());
+        assert!(!dir.exists(), "nothing written when refused");
+    }
+
+    /// Real qemu-img: the clone holds the data at snapshot time, not the
+    /// source's current data. Skipped where qemu-img/qemu-io are missing.
+    #[tokio::test]
+    async fn snapshot_clone_copies_the_snapshot_state_with_qemu_img() {
+        let have = |b: &str| {
+            std::process::Command::new(b)
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+        if !have("qemu-img") || !have("qemu-io") {
+            eprintln!("skipped: qemu-img/qemu-io not installed");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("hx-snapclone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.qcow2");
+        let src_s = src.to_string_lossy().to_string();
+        let run = |args: &[&str], bin: &str| {
+            let o = std::process::Command::new(bin).args(args).output().unwrap();
+            assert!(
+                o.status.success(),
+                "{bin} {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            String::from_utf8_lossy(&o.stdout).to_string()
+        };
+        run(&["create", "-q", "-f", "qcow2", &src_s, "1M"], "qemu-img");
+        run(
+            &["-f", "qcow2", "-c", "write -P 0x11 0 64k", &src_s],
+            "qemu-io",
+        );
+        run(&["snapshot", "-c", "before", &src_s], "qemu-img");
+        run(
+            &["-f", "qcow2", "-c", "write -P 0x22 0 64k", &src_s],
+            "qemu-io",
+        );
+        let mut vm = create_test_vm_config();
+        vm.disks = vec![create_test_disk(&src_s)];
+        let snaps = std::collections::HashMap::from([(src_s.clone(), "before".to_string())]);
+        let out = dir.join("out");
+        let m = VmCloneManager::new(out.to_string_lossy().into_owned());
+        let c = m
+            .clone_vm_from_snapshot(
+                &vm,
+                &snaps,
+                CloneOptions {
+                    name: "from-snap".into(),
+                    id: Some("vm-snapclone".into()),
+                    mode: CloneMode::Full,
+                    start: false,
+                    mac_addresses: None,
+                    description: None,
+                    network_config: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(c.status, VmStatus::Stopped);
+        let dst = c.disks[0].path.clone();
+        assert_eq!(dst, out.join("vm-snapclone.qcow2").to_string_lossy());
+        // Snapshot-time data in the clone; the source keeps its current data.
+        let r = run(
+            &["-f", "qcow2", "-c", "read -P 0x11 0 64k", &dst],
+            "qemu-io",
+        );
+        assert!(!r.contains("verification failed"), "{r}");
+        let r = run(
+            &["-f", "qcow2", "-c", "read -P 0x22 0 64k", &src_s],
+            "qemu-io",
+        );
+        assert!(!r.contains("verification failed"), "{r}");
+        // A second clone with the same id is refused (no overwrite).
+        assert!(m
+            .clone_vm_from_snapshot(
+                &vm,
+                &snaps,
+                CloneOptions {
+                    name: "again".into(),
+                    id: Some("vm-snapclone".into()),
+                    mode: CloneMode::Full,
+                    start: false,
+                    mac_addresses: None,
+                    description: None,
+                    network_config: None,
+                },
+            )
+            .await
+            .is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

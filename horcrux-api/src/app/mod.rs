@@ -1086,6 +1086,7 @@ fn storage_routes() -> Router<Arc<AppState>> {
         .route("/api/storage/pools/:id", get(get_storage_pool))
         .route("/api/storage/pools", post(add_storage_pool))
         .route("/api/storage/pools/:id", delete(remove_storage_pool))
+        .route("/api/storage/pools/:id", put(update_storage_pool))
         // GPU passthrough endpoints
         .route("/api/gpu/devices", get(list_gpu_devices))
         .route("/api/gpu/devices/scan", post(scan_gpu_devices))
@@ -2407,6 +2408,11 @@ struct CloneVmRequest {
     /// pools only.
     #[serde(default)]
     storage: Option<String>,
+    /// Snapshot (id or name) to clone from instead of the current state
+    /// (Proxmox Clone > Snapshot): a full clone of the disks and hardware
+    /// as they were at that snapshot. qcow2 disks only.
+    #[serde(default)]
+    snapshot: Option<String>,
 }
 
 /// The directory of a pool a clone's / restore's qcow2 disks can go to.
@@ -2487,6 +2493,37 @@ async fn clone_vm(
         None => next_vm_id(&state).await,
     };
 
+    // Clone > Snapshot: the configuration and per-disk qcow2 snapshot names
+    // saved with that snapshot (looked up by id, then by name).
+    let from_snapshot = match req.snapshot.as_deref().map(str::trim) {
+        Some(sid) if !sid.is_empty() => {
+            if matches!(clone_mode, vm::clone::CloneMode::Linked) {
+                return Err(ApiError::BadRequest(
+                    "A clone from a snapshot is always a full clone".to_string(),
+                ));
+            }
+            let mgr = state.snapshot_manager.read().await;
+            let snap = mgr
+                .get_snapshot(sid)
+                .filter(|s| s.vm_id == vm_id)
+                .cloned()
+                .or_else(|| {
+                    mgr.list_snapshots(&vm_id)
+                        .into_iter()
+                        .find(|s| s.name == sid)
+                })
+                .ok_or_else(|| ApiError::NotFound(format!("VM {vm_id} has no snapshot {sid}")))?;
+            let disks: std::collections::HashMap<String, String> = snap
+                .disk_snapshots
+                .iter()
+                .filter(|d| d.storage_type == vm::snapshot::StorageType::Qcow2)
+                .map(|d| (d.snapshot_path.clone(), d.snapshot_name.clone()))
+                .collect();
+            Some((snap.config_backup.clone(), disks))
+        }
+        _ => None,
+    };
+
     // Recorded as a clone job, so it shows on the Clones page and in
     // `horcrux clone list/status`.
     let target_pool = match req.storage.as_deref().map(str::trim) {
@@ -2516,17 +2553,21 @@ async fn clone_vm(
         let pool_cloner = target_pool
             .as_ref()
             .map(|(_, dir)| vm::clone::VmCloneManager::new(dir.clone()));
-        let cloned_vm = pool_cloner
-            .as_ref()
-            .unwrap_or(state.clone_manager.as_ref())
-            .clone_vm(&source_vm, clone_options)
-            .await
-            .map_err(|e| match e {
-                horcrux_common::Error::Conflict(_) | horcrux_common::Error::Validation(_) => {
-                    ApiError::from(e)
-                }
-                e => ApiError::Internal(format!("Failed to clone VM: {}", e)),
-            })?;
+        let cloner = pool_cloner.as_ref().unwrap_or(state.clone_manager.as_ref());
+        let cloned = match &from_snapshot {
+            Some((snap_vm, disks)) => {
+                cloner
+                    .clone_vm_from_snapshot(snap_vm, disks, clone_options)
+                    .await
+            }
+            None => cloner.clone_vm(&source_vm, clone_options).await,
+        };
+        let cloned_vm = cloned.map_err(|e| match e {
+            horcrux_common::Error::Conflict(_) | horcrux_common::Error::Validation(_) => {
+                ApiError::from(e)
+            }
+            e => ApiError::Internal(format!("Failed to clone VM: {}", e)),
+        })?;
         let _ = jobs
             .update_progress(&job_id, vm::clone_progress::CloneStage::Finalizing, 90)
             .await;
@@ -5558,6 +5599,21 @@ async fn add_storage_pool(
             }),
         )
         .await;
+    Ok(Json(pool))
+}
+
+/// `PUT /api/storage/pools/:id` `{name?, enabled?}`: rename or
+/// enable/disable a pool (its location is fixed; re-add to move it).
+async fn update_storage_pool(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<storage::PoolUpdate>,
+) -> Result<Json<storage::StoragePool>, ApiError> {
+    let pool = state
+        .storage_manager
+        .update_pool(&id, req)
+        .await
+        .map_err(ApiError::from)?;
     Ok(Json(pool))
 }
 

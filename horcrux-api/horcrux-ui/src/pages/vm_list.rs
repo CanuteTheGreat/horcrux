@@ -138,6 +138,9 @@ pub fn VmList() -> impl IntoView {
     let (cloning, set_cloning) = create_signal(false);
     let (clone_storage, set_clone_storage) = create_signal(String::new());
     let (file_pools, set_file_pools) = create_signal(Vec::<api::StoragePoolInfo>::new());
+    // Clone > Snapshot (Proxmox): "" = the current state.
+    let (clone_from, set_clone_from) = create_signal(String::new());
+    let (clone_snaps, set_clone_snaps) = create_signal(Vec::<api::VmSnapshot>::new());
 
     let open_clone = move |vm: VmConfig| {
         set_clone_name.set(format!("{}-clone", vm.name));
@@ -145,6 +148,14 @@ pub fn VmList() -> impl IntoView {
         set_clone_start.set(false);
         set_clone_error.set(None);
         set_clone_storage.set(String::new());
+        set_clone_from.set(String::new());
+        set_clone_snaps.set(Vec::new());
+        let snap_vm = vm.id.clone();
+        spawn_local(async move {
+            if let Ok(s) = api::get_vm_snapshots(&snap_vm).await {
+                set_clone_snaps.set(s);
+            }
+        });
         spawn_local(async move {
             if let Ok(p) = api::get_storage_pools().await {
                 set_file_pools.set(
@@ -167,15 +178,36 @@ pub fn VmList() -> impl IntoView {
         }
         let (mode, start) = (clone_mode.get(), clone_start.get());
         let storage = clone_storage.get();
+        let from = clone_from.get();
+        let from_name = clone_snaps
+            .get()
+            .into_iter()
+            .find(|s| s.id == from)
+            .map(|s| s.name);
+        let mode = if from.is_empty() {
+            mode
+        } else {
+            "full".to_string()
+        };
         set_cloning.set(true);
         spawn_local(async move {
-            let r = api::clone_vm_to(&src.id, &name, &mode, start, Some(&storage)).await;
+            let r =
+                api::clone_vm_to(&src.id, &name, &mode, start, Some(&storage), Some(&from)).await;
             set_cloning.set(false);
             match r {
                 Ok(vm) => {
                     set_clone_src.set(None);
                     report(
-                        format!("VM {} cloned ({}) as {} ({})", src.id, mode, vm.name, vm.id),
+                        match &from_name {
+                            Some(sn) => format!(
+                                "VM {} cloned from snapshot {} as {} ({})",
+                                src.id, sn, vm.name, vm.id
+                            ),
+                            None => format!(
+                                "VM {} cloned ({}) as {} ({})",
+                                src.id, mode, vm.name, vm.id
+                            ),
+                        },
                         Ok(()),
                     );
                 }
@@ -363,11 +395,36 @@ pub fn VmList() -> impl IntoView {
                                     on:input=move |ev| set_clone_name.set(event_target_value(&ev))/>
                             </div>
                             <div class="form-group">
+                                <label for="clone-from">"Clone from"</label>
+                                <select id="clone-from" on:change=move |ev| {
+                                    let v = event_target_value(&ev);
+                                    if !v.is_empty() {
+                                        set_clone_mode.set("full".to_string());
+                                    }
+                                    set_clone_from.set(v);
+                                }>
+                                    <option value="" selected=move || clone_from.get().is_empty()>"Current state"</option>
+                                    {move || clone_snaps.get().into_iter().map(|s| {
+                                        let id = s.id.clone();
+                                        view! {
+                                            <option value=s.id.clone() selected=move || clone_from.get() == id>
+                                                {format!("Snapshot {} ({})", s.name, s.created_at)}
+                                            </option>
+                                        }
+                                    }).collect_view()}
+                                </select>
+                                {move || (!clone_from.get().is_empty()).then(|| view! {
+                                    <small class="form-help" id="clone-from-help">
+                                        "The clone gets the disks and hardware as they were at this snapshot (a full copy; this VM is not changed and may keep running)."
+                                    </small>
+                                })}
+                            </div>
+                            <div class="form-group">
                                 <label for="clone-mode">"Mode"</label>
                                 <select id="clone-mode" prop:value=clone_mode
                                     on:change=move |ev| set_clone_mode.set(event_target_value(&ev))>
                                     <option value="full">"Full clone (independent copy of the disk)"</option>
-                                    <option value="linked">"Linked clone (qcow2 overlay on this VM's disk)"</option>
+                                    <option value="linked" disabled=move || !clone_from.get().is_empty()>"Linked clone (qcow2 overlay on this VM's disk)"</option>
                                 </select>
                                 {move || (clone_mode.get() == "linked").then(|| view! {
                                     <small class="form-help" id="clone-linked-help">

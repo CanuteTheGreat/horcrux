@@ -70,6 +70,8 @@ pub fn build_job(
 
 #[component]
 pub fn BackupJobsPage() -> impl IntoView {
+    let query = leptos_router::use_query_map();
+    let status_filter = move || query.with(|q| q.get("status").cloned());
     let (jobs, set_jobs) = create_signal(Vec::<bk::BackupJob>::new());
     let (guests, set_guests) = create_signal(Vec::<Guest>::new());
     let (storages, set_storages) = create_signal(Vec::<bk::BackupStorage>::new());
@@ -401,11 +403,30 @@ pub fn BackupJobsPage() -> impl IntoView {
                 if loading.get() {
                     return view! { <p class="loading">"Loading jobs..."</p> }.into_view();
                 }
-                let list = jobs.get();
-                if list.is_empty() {
+                let all = jobs.get();
+                if all.is_empty() {
                     return view! { <p class="no-data">"No backup jobs. Create one to back guests up on a schedule."</p> }.into_view();
                 }
+                // `?status=failed` (the Backups page's "Failed jobs" card):
+                // only jobs whose last run failed.
+                let only_failed = status_filter().as_deref() == Some("failed");
+                let list: Vec<_> = all
+                    .into_iter()
+                    .filter(|j| !only_failed || j.last_status.as_deref() == Some("failed"))
+                    .collect();
+                if list.is_empty() {
+                    return view! {
+                        <p class="no-data" id="job-filter-empty">
+                            "No job's last run failed. " <a href="/backup/jobs">"Show all jobs"</a>
+                        </p>
+                    }.into_view();
+                }
                 view! {
+                    {only_failed.then(|| view! {
+                        <p class="form-help" id="job-filter-note">
+                            "Showing jobs whose last run failed. " <a href="/backup/jobs">"Show all jobs"</a>
+                        </p>
+                    })}
                     <table class="vm-table" id="job-table">
                         <thead>
                             <tr>

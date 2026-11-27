@@ -64,6 +64,16 @@ pub struct StoragePool {
     pub lvm: Option<lvm::LvmPoolOptions>,
 }
 
+/// Editable fields of a pool (`PUT /api/storage/pools/:id`); absent = keep.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PoolUpdate {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
 /// What a pool's space really comes from, so pools that share it are counted
 /// once in totals: `zfs:<zpool>` for ZFS (datasets of one zpool share its
 /// free space), else `<fstype>:<mount source>` of the filesystem holding the
@@ -746,6 +756,37 @@ impl StorageManager {
         let pool_clone = pool.clone();
         pools.insert(pool.id.clone(), pool);
         Ok(pool_clone)
+    }
+
+    /// Edit a pool's display name and enabled flag (Proxmox Storage > Edit).
+    /// The location (path, export, target) is what the pool IS, so it is not
+    /// editable: remove and re-add the pool to point it somewhere else.
+    pub async fn update_pool(&self, id: &str, update: PoolUpdate) -> Result<StoragePool> {
+        let mut pools = self.pools.write().await;
+        let current = pools.get(id).cloned().ok_or_else(|| {
+            horcrux_common::Error::NotFound(format!("Storage pool {} not found", id))
+        })?;
+        let mut pool = current;
+        if let Some(name) = update.name {
+            let name = name.trim().to_string();
+            if name.is_empty() || name.len() > 64 {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "pool name must be 1-64 characters".into(),
+                ));
+            }
+            if pools.values().any(|p| p.id != id && p.name == name) {
+                return Err(horcrux_common::Error::InvalidConfig(format!(
+                    "a storage pool named {name} already exists"
+                )));
+            }
+            pool.name = name;
+        }
+        if let Some(enabled) = update.enabled {
+            pool.enabled = enabled;
+        }
+        config_store::put_opt(&self.store, kinds::STORAGE_POOL, &pool.id, &pool).await?;
+        pools.insert(pool.id.clone(), pool.clone());
+        Ok(pool)
     }
 
     /// Remove a storage pool
@@ -1748,6 +1789,58 @@ mod tests {
         assert!(m.list_pools().await.is_empty());
         assert!(m.get_pool("dirpool").await.is_err());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn update_pool_edits_name_and_enabled_only() {
+        let m = pinned();
+        m.pools
+            .write()
+            .await
+            .insert("a".into(), pool("a", StorageType::Directory, "/tmp/a"));
+        m.pools
+            .write()
+            .await
+            .insert("b".into(), pool("b", StorageType::Directory, "/tmp/b"));
+        let p = m
+            .update_pool(
+                "a",
+                PoolUpdate {
+                    name: Some(" fast ".into()),
+                    enabled: Some(false),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(p.name, "fast");
+        assert!(!p.enabled);
+        assert_eq!(p.path, "/tmp/a");
+        assert!(!m.get_pool("a").await.unwrap().enabled);
+        // Name clash with another pool, empty name, unknown pool.
+        let b_name = m.get_pool("b").await.unwrap().name;
+        assert!(m
+            .update_pool(
+                "a",
+                PoolUpdate {
+                    name: Some(b_name),
+                    enabled: None
+                }
+            )
+            .await
+            .is_err());
+        assert!(m
+            .update_pool(
+                "a",
+                PoolUpdate {
+                    name: Some("  ".into()),
+                    enabled: None
+                }
+            )
+            .await
+            .is_err());
+        assert!(m.update_pool("zz", PoolUpdate::default()).await.is_err());
+        // Unknown fields (e.g. path) are refused, not silently ignored.
+        assert!(serde_json::from_str::<PoolUpdate>(r#"{"path":"/x"}"#).is_err());
     }
 
     #[tokio::test]

@@ -412,6 +412,23 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
 .ct-runtime-hint { color: var(--secondary); }
 .search-select select { margin-top: .4rem; }
 
+/* A checkbox/radio inside a form group sits next to its label text: the
+   rule above made it 100% wide, so the box floated away from its words. */
+.form-group input[type="checkbox"],
+.form-group input[type="radio"] {
+    width: auto;
+    padding: 0;
+    margin: 0 0.5rem 0 0;
+    vertical-align: middle;
+}
+.form-group label:has(> input[type="checkbox"]),
+.form-group label:has(> input[type="radio"]) {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    font-weight: 500;
+}
+
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus {
@@ -719,6 +736,10 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
 .alert-success { background: var(--ok-bg); border: 1px solid var(--success); padding: 0.75rem; border-radius: 4px; margin: 0.75rem 0; }
 .alert-warning { background: var(--warn-bg); border: 1px solid var(--warning); padding: 0.75rem; border-radius: 4px; margin: 0.75rem 0; }
 .alert-error { background: var(--bad-bg); border: 1px solid var(--danger); padding: 0.75rem; border-radius: 4px; margin: 0.75rem 0; }
+/* .alert-info was used on ~30 pages with no rule, so notices rendered as bare text. */
+.alert-info { background: var(--note-bg); border: 1px solid var(--primary); padding: 0.75rem; border-radius: 4px; margin: 0.75rem 0; }
+.alert:has(> .btn-close) { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.alert > .btn-close { background: none; border: 0; color: inherit; cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0.25rem 0.5rem; }
 .hint { color: var(--secondary); font-size: 0.85rem; }
 @media (max-width: 800px) {
     .trend-grid,
@@ -1096,6 +1117,14 @@ a.stat-card.healthy .stat-value { color: var(--success); }
 .storage-details .label { color: var(--secondary); }
 .storage-details code { overflow-wrap: anywhere; }
 .storage-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.storage-card.status-disabled { opacity: 0.8; border-style: dashed; }
+.pool-edit-form { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+.pool-edit-form .form-group { margin-bottom: 0.75rem; }
+.pool-edit-form .form-hint { color: var(--secondary); font-size: 0.85rem; margin: 0 0 0.75rem; }
+.pool-edit-check { display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 0.5rem; font-size: 0.9rem; cursor: pointer; }
+.pool-edit-check input { width: auto; flex: 0 0 auto; margin: 0.2rem 0 0; }
+.pool-edit-check span { flex: 1 1 auto; min-width: 0; }
+.pool-edit-form .form-actions { margin-top: 0.75rem; justify-content: flex-end; }
 /* An open volumes panel needs the whole row: its table (name, format, sizes, path, grow/delete) is wider than a
    grid cell and used to spill over the next pool's card, which then took the clicks meant for its buttons. */
 .storage-grid .storage-card:has(.pool-volumes) { grid-column: 1 / -1; }
@@ -1414,3 +1443,19 @@ td .actions { flex-wrap: nowrap; }
 .host-advisory { padding: .6rem 0; border-top: 1px solid var(--border, rgba(128,128,128,.25)); overflow-wrap: anywhere; }
 .host-advisory:first-child { border-top: 0; }
 .host-advisory-pkgs { margin: .25rem 0; font-family: var(--mono, ui-monospace, monospace); font-size: .85rem; }
+
+/* Backups / Templates pages: links use the theme accent (they showed the
+   browser's default blue), the archive table keeps short values and its
+   action buttons on one line and scrolls sideways instead of wrapping. */
+.backup-dashboard a:not(.btn):not(.stat-card), .template-manager a:not(.btn) { color: var(--primary); }
+.backup-dashboard a:not(.btn):not(.stat-card):hover, .template-manager a:not(.btn):hover { text-decoration: underline; }
+.backup-dashboard .stat-link .stat-value { color: var(--primary); }
+.backup-dashboard .stat-link.critical.attention .stat-value { color: var(--danger); }
+.backup-dashboard .backup-table-wrap { overflow-x: auto; max-width: 100%; }
+#backup-table { border-collapse: collapse; }
+#backup-table td, #backup-table th { white-space: nowrap; padding: 0.6rem 0.75rem; }
+#backup-table td.backup-notes { white-space: normal; min-width: 8rem; width: 100%; }
+#backup-table td.actions { display: table-cell; }
+#backup-table td.actions .btn { margin-right: 0.35rem; }
+.backup-filter-row { display: flex; align-items: center; gap: 0.5rem; max-width: 28rem; }
+.backup-filter-row label { margin: 0; white-space: nowrap; }

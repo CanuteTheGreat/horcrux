@@ -3738,17 +3738,24 @@ pub fn clone_vm_body(name: &str, mode: &str, start: bool) -> serde_json::Value {
 }
 
 /// Clone a VM with its file disks placed in storage pool `storage`
-/// (`None` = the node's VM storage directory).
+/// (`None` = the node's VM storage directory), from its current state or
+/// from snapshot `snapshot` (id).
 pub async fn clone_vm_to(
     vm_id: &str,
     name: &str,
     mode: &str,
     start: bool,
     storage: Option<&str>,
+    snapshot: Option<&str>,
 ) -> Result<horcrux_common::VmConfig, ApiError> {
     let mut body = clone_vm_body(name, mode, start);
     if let Some(s) = storage.filter(|s| !s.is_empty()) {
         body["storage"] = serde_json::Value::String(s.to_string());
+    }
+    // Clone > Snapshot: the VM as it was at that snapshot (always full).
+    if let Some(s) = snapshot.filter(|s| !s.is_empty()) {
+        body["snapshot"] = serde_json::Value::String(s.to_string());
+        body["mode"] = serde_json::Value::String("full".to_string());
     }
     post_json(&format!("/vms/{}/clone", vm_id), &body).await
 }
@@ -5539,6 +5546,19 @@ pub async fn create_storage_pool(
     request: CreateStoragePoolRequest,
 ) -> Result<StoragePoolInfo, ApiError> {
     post_json("/storage/pools", &request).await
+}
+
+/// `PUT /api/storage/pools/:id`: rename / enable / disable a pool.
+pub async fn update_storage_pool(
+    pool_id: &str,
+    name: &str,
+    enabled: bool,
+) -> Result<StoragePoolInfo, ApiError> {
+    put_json(
+        &format!("/storage/pools/{}", urlencoding::encode(pool_id)),
+        &serde_json::json!({"name": name, "enabled": enabled}),
+    )
+    .await
 }
 
 pub async fn delete_storage_pool(pool_id: &str) -> Result<(), ApiError> {

@@ -104,6 +104,7 @@ pub fn StorageManagement() -> impl IntoView {
     let (pools, set_pools) = create_signal(Vec::<StoragePool>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
+    let (pool_notice, set_notice) = create_signal(None::<String>);
     let (show_create_modal, set_show_create_modal) = create_signal(false);
 
     let name_ref: NodeRef<html::Input> = create_node_ref();
@@ -257,6 +258,13 @@ pub fn StorageManagement() -> impl IntoView {
                 </div>
             })}
 
+            {move || pool_notice.get().map(|n| view! {
+                <div class="alert alert-info" id="pool-notice">
+                    <span>{n}</span>
+                    <button class="btn-close" aria-label="Dismiss" on:click=move |_| set_notice.set(None)>"x"</button>
+                </div>
+            })}
+
             // Loading state
             {move || loading.get().then(|| view! {
                 <div class="loading">
@@ -307,6 +315,11 @@ pub fn StorageManagement() -> impl IntoView {
                             let pool_id = pool.id.clone();
                             let volumes_pool_id = pool.id.clone();
                             let show_volumes = create_rw_signal(false);
+                            let show_edit = create_rw_signal(false);
+                            let edit_pool_id = pool.id.clone();
+                            let edit_name = create_rw_signal(pool.name.clone());
+                            let edit_enabled = create_rw_signal(pool.status != "disabled");
+                            let edit_error = create_rw_signal(None::<String>);
                             let usage_percent = if pool.total_bytes > 0 {
                                 (pool.used_bytes as f64 / pool.total_bytes as f64) * 100.0
                             } else {
@@ -359,15 +372,69 @@ pub fn StorageManagement() -> impl IntoView {
                                     </div>
 
                                     <div class="storage-actions">
-                                        <button class="btn btn-secondary pool-volumes-toggle"
+                                        <button class="btn btn-sm btn-secondary pool-volumes-toggle"
                                                 on:click=move |_| show_volumes.update(|v| *v = !*v)>
                                             {move || if show_volumes.get() { "Hide volumes" } else { "Volumes" }}
                                         </button>
-                                        <button class="btn btn-danger"
+                                        <button class="btn btn-sm btn-secondary pool-edit-toggle"
+                                                on:click=move |_| show_edit.update(|v| *v = !*v)>
+                                            "Edit"
+                                        </button>
+                                        <button class="btn btn-sm btn-danger"
                                                 on:click=move |_| delete_pool(pool_id.clone())>
                                             "Delete"
                                         </button>
                                     </div>
+                                    // Storage > Edit (Proxmox): name and enabled; the location
+                                    // is what the pool is, so moving it = remove + add.
+                                    {move || show_edit.get().then(|| {
+                                        let id = edit_pool_id.clone();
+                                        let save = move |_| {
+                                            let id = id.clone();
+                                            let n = edit_name.get_untracked();
+                                            let en = edit_enabled.get_untracked();
+                                            edit_error.set(None);
+                                            spawn_local(async move {
+                                                match api::update_storage_pool(&id, n.trim(), en).await {
+                                                    Ok(p) => {
+                                                        set_error.set(None);
+                                                        set_notice.set(Some(format!(
+                                                            "Storage pool {} saved ({}).",
+                                                            p.name,
+                                                            if en { "enabled" } else { "disabled: no new disks, ISOs or backups go to it" }
+                                                        )));
+                                                        if let Ok(data) = fetch_json::<Vec<StoragePool>>("/api/storage/pools").await {
+                                                            set_pools.set(data);
+                                                        }
+                                                    }
+                                                    Err(e) => edit_error.set(Some(e.message)),
+                                                }
+                                            });
+                                        };
+                                        view! {
+                                            <div class="pool-edit-form">
+                                                <p class="form-hint">"Name and state can be changed here. The location is fixed: remove the pool and add it again to move it."</p>
+                                                <div class="form-group">
+                                                    <label for=format!("pool-edit-name-{}", edit_pool_id)>"Name"</label>
+                                                    <input type="text" class="form-control pool-edit-name"
+                                                        id=format!("pool-edit-name-{}", edit_pool_id)
+                                                        prop:value=move || edit_name.get()
+                                                        on:input=move |ev| edit_name.set(event_target_value(&ev))/>
+                                                </div>
+                                                <label class="pool-edit-check">
+                                                    <input type="checkbox" class="pool-edit-enabled"
+                                                        prop:checked=move || edit_enabled.get()
+                                                        on:change=move |ev| edit_enabled.set(event_target_checked(&ev))/>
+                                                    <span>"Enabled: new VM disks, ISOs and backups may use this pool"</span>
+                                                </label>
+                                                {move || edit_error.get().map(|e| view! { <div class="alert alert-error pool-edit-error">{e}</div> })}
+                                                <div class="form-actions">
+                                                    <button type="button" class="btn btn-sm btn-secondary" on:click=move |_| show_edit.set(false)>"Cancel"</button>
+                                                    <button type="button" class="btn btn-sm btn-primary pool-edit-save" on:click=save>"Save"</button>
+                                                </div>
+                                            </div>
+                                        }
+                                    })}
                                     {move || show_volumes.get().then(|| view! {
                                         <PoolVolumes pool_id=volumes_pool_id.clone()/>
                                     })}
@@ -399,10 +466,12 @@ pub fn StorageManagement() -> impl IntoView {
             // Create Pool Modal
             {move || show_create_modal.get().then(|| view! {
                 <div class="modal-overlay" on:click=move |_| set_show_create_modal.set(false)>
-                    <div class="modal" on:click=|e| e.stop_propagation()>
+                    // .modal-content is the panel (.modal is itself a full-screen overlay:
+                    // nested in .modal-overlay it laid header, form and buttons out side by side).
+                    <div class="modal-content" id="pool-create-dialog" on:click=|e| e.stop_propagation()>
                         <div class="modal-header">
                             <h3>"Create Storage Pool"</h3>
-                            <button class="btn-close" on:click=move |_| set_show_create_modal.set(false)>
+                            <button class="modal-close" aria-label="Close" on:click=move |_| set_show_create_modal.set(false)>
                                 "x"
                             </button>
                         </div>

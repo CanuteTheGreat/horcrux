@@ -496,3 +496,86 @@ async fn clone_into_a_chosen_storage_pool() {
     let _ = a.delete(&format!("/vms/{id}")).await;
     let _ = a.delete(&format!("/vms/{src}")).await;
 }
+
+/// Clone > Snapshot: the clone holds the disk as it was at the snapshot,
+/// the source keeps its current data, a linked clone from a snapshot and an
+/// unknown snapshot are refused, and the snapshot can be named by name.
+#[tokio::test]
+async fn clone_from_a_snapshot_gets_the_snapshot_state() {
+    let dir = scratch("vm-clone-snap");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let a = srv.api().await;
+    let src = format!("clsnap{}", std::process::id());
+    let (s, b) = a
+        .post(
+            "/vms",
+            json!({"id": src, "name": "snap source", "hypervisor": "qemu",
+                   "architecture": "x86_64", "cpus": 1, "memory": 128, "disk_size": 1,
+                   "status": "stopped", "display": {"protocol": "none"}}),
+        )
+        .await;
+    assert!((200..300).contains(&s), "create: {s} {b}");
+    let disk = disk_of(&a, &src).await;
+    let io = |cmd: &str, img: &Path| {
+        let o = Command::new("qemu-io")
+            .args(["-f", "qcow2", "-c", cmd])
+            .arg(img)
+            .output()
+            .expect("qemu-io");
+        let out = String::from_utf8_lossy(&o.stdout).to_string();
+        assert!(
+            o.status.success() && !out.contains("verification failed"),
+            "qemu-io {cmd} {}: {out}",
+            img.display()
+        );
+    };
+    io("write -P 0x11 0 64k", &disk);
+    let (s, snap) = a
+        .post(
+            &format!("/vms/{src}/snapshots"),
+            json!({"name": "before", "include_memory": false}),
+        )
+        .await;
+    assert_eq!(s, 200, "snapshot: {snap}");
+    let snap_id = snap["id"].as_str().unwrap().to_string();
+    io("write -P 0x22 0 64k", &disk);
+
+    let (s, e) = clone(
+        &a,
+        &src,
+        json!({"name": "linked from snap", "mode": "linked", "snapshot": snap_id}),
+    )
+    .await;
+    assert_eq!(s, 400, "linked clone from a snapshot: {e}");
+    let (s, e) = clone(
+        &a,
+        &src,
+        json!({"name": "no snap", "mode": "full", "snapshot": "no-such-snapshot"}),
+    )
+    .await;
+    assert_eq!(s, 404, "unknown snapshot: {e}");
+
+    for (name, which) in [("by id", snap_id.as_str()), ("by name", "before")] {
+        let (s, c) = clone(
+            &a,
+            &src,
+            json!({"name": format!("from snap {name}"), "mode": "full", "snapshot": which}),
+        )
+        .await;
+        assert!(
+            (200..300).contains(&s),
+            "clone from snapshot {name}: {s} {c}"
+        );
+        let cdisk = PathBuf::from(c["disks"][0]["path"].as_str().unwrap());
+        assert_ne!(cdisk, disk);
+        assert_eq!(backing_of(&cdisk), None, "a full copy, no backing file");
+        io("read -P 0x11 0 64k", &cdisk);
+        let id = c["id"].as_str().unwrap().to_string();
+        let _ = a.delete(&format!("/vms/{id}")).await;
+    }
+    io("read -P 0x22 0 64k", &disk);
+    let _ = a.delete(&format!("/vms/{src}/snapshots/{snap_id}")).await;
+    let _ = a.delete(&format!("/vms/{src}")).await;
+}

@@ -268,20 +268,16 @@ pub fn BackupDashboard() -> impl IntoView {
                         {move || bk::format_bytes(backups.get().iter().map(|b| b.size).sum())}
                     </div>
                 </a>
-                <div class="stat-card">
+                <a class="stat-card stat-link" href="/backup/jobs">
                     <h3>"Jobs"</h3>
-                    <div class="stat-value">
-                        <a href="/backup/jobs">{move || jobs.get().len()}</a>
-                    </div>
-                </div>
-                <div class="stat-card">
+                    <div class="stat-value" id="backup-job-count">{move || jobs.get().len()}</div>
+                </a>
+                // Red only when something failed (a zero count is never red).
+                <a class="stat-card stat-link critical" class:attention=has_failed
+                    href="/backup/jobs?status=failed">
                     <h3>"Failed jobs"</h3>
-                    <div class="stat-value">
-                        <a href="/backup/jobs" class:error=has_failed>
-                            {failed_jobs}
-                        </a>
-                    </div>
-                </div>
+                    <div class="stat-value" id="backup-failed-count">{failed_jobs}</div>
+                </a>
             </div>
 
             {move || notice.get().map(|n| view! { <div class="alert alert-success" id="backup-notice">{n}</div> })}
@@ -403,8 +399,9 @@ pub fn BackupDashboard() -> impl IntoView {
 
             <div class="dashboard-section">
                 <h2 id="backup-archives">"Backup archives"</h2>
-                <div class="form-group">
-                    <input id="backup-filter" type="text" aria-label="Filter by guest id or name" placeholder="Guest id or name"
+                <div class="form-group backup-filter-row">
+                    <label for="backup-filter">"Filter"</label>
+                    <input id="backup-filter" type="search" placeholder="Guest id or name"
                         prop:value=move || filter.get() on:input=move |ev| set_filter.set(event_target_value(&ev))/>
                 </div>
                 {move || {
@@ -419,6 +416,7 @@ pub fn BackupDashboard() -> impl IntoView {
                         return view! { <p class="no-data">"No backups yet. Use \"Back up now\" or create a backup job."</p> }.into_view();
                     }
                     view! {
+                        <div class="backup-table-wrap">
                         <table class="vm-table" id="backup-table">
                             <thead>
                                 <tr>
@@ -450,7 +448,7 @@ pub fn BackupDashboard() -> impl IntoView {
                                             <td>{format!("{} / {}", b.mode, b.compression)}</td>
                                             <td title=b.storage.clone()>{bk::storage_label(&b.storage, &storages.get())}</td>
                                             <td class="verify-state">{verify_cell}</td>
-                                            <td>
+                                            <td class="backup-notes">
                                                 {if protected { "[protected] " } else { "" }}
                                                 {b.job_id.clone().map(|j| format!("[job {j}] ")).unwrap_or_default()}
                                                 {b.notes.clone().unwrap_or_default()}
@@ -468,6 +466,7 @@ pub fn BackupDashboard() -> impl IntoView {
                                 }).collect_view()}
                             </tbody>
                         </table>
+                        </div>
                     }.into_view()
                 }}
             </div>

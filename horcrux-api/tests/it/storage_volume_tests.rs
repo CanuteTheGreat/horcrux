@@ -456,3 +456,58 @@ async fn cephfs_pool_needs_a_cephfs_mount() {
         "refused pool was stored: {pools}"
     );
 }
+
+/// Storage > Edit: a pool can be renamed and disabled/enabled over HTTP,
+/// the change survives a re-read, a disabled pool refuses new volumes, and
+/// the location is not editable (unknown fields are a 4xx, not ignored).
+#[tokio::test]
+async fn storage_pools_can_be_renamed_and_disabled_over_http() {
+    let dir = scratch("storage-edit");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let pool_dir = dir.join("editpool");
+    std::fs::create_dir_all(&pool_dir).unwrap();
+    let pool = api
+        .ok(
+            reqwest::Method::POST,
+            "/storage/pools",
+            Some(json!({"name": "edit-a", "storage_type": "directory",
+                        "path": pool_dir.to_string_lossy()})),
+        )
+        .await;
+    let pid = pool["id"].as_str().unwrap().to_string();
+    let (s, v) = api
+        .put(
+            &format!("/storage/pools/{pid}"),
+            json!({"name": "edit-b", "enabled": false}),
+        )
+        .await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["name"], "edit-b");
+    assert_eq!(v["enabled"], false);
+    let (_, got) = api.get(&format!("/storage/pools/{pid}")).await;
+    assert_eq!(got["name"], "edit-b");
+    assert_eq!(got["enabled"], false);
+    let (s, _) = api
+        .post(
+            &format!("/storage/pools/{pid}/volumes"),
+            json!({"name": "d0", "size": 1}),
+        )
+        .await;
+    assert!(s >= 400, "disabled pool accepted a volume: {s}");
+    let (s, _) = api
+        .put(&format!("/storage/pools/{pid}"), json!({"path": "/etc"}))
+        .await;
+    assert!((400..500).contains(&s), "path edit not refused: {s}");
+    let (s, _) = api
+        .put("/storage/pools/no-such-pool", json!({"enabled": true}))
+        .await;
+    assert_eq!(s, 404);
+    let (s, v) = api
+        .put(&format!("/storage/pools/{pid}"), json!({"enabled": true}))
+        .await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(api.delete(&format!("/storage/pools/{pid}")).await, 200);
+}
