@@ -430,17 +430,16 @@ fn node_name() -> String {
 }
 
 /// Send a `security` event through the notification channels.
-async fn notify(state: &AppState, severity: &str, title: String, body: String) {
-    let msg = crate::notification_channels::Message {
-        title,
-        body,
-        severity: severity.into(),
-        event: "security".into(),
-        alert: None,
+async fn notify(_state: &AppState, severity: &str, title: String, body: String) {
+    use horcrux_common::notify::{emit, Event, EventKind, Severity};
+    let sev = match severity {
+        "critical" => Severity::Critical,
+        "error" => Severity::Error,
+        "warning" => Severity::Warning,
+        "notice" => Severity::Notice,
+        _ => Severity::Info,
     };
-    if let Some(store) = state.alert_manager.channel_store() {
-        store.dispatch(&msg).await;
-    }
+    emit(Event::new(EventKind::Security, sev, title).body(body));
 }
 
 /// Queue a scan; returns its record (status queued).
