@@ -23,6 +23,8 @@ IUSE="systemd"
 # packages (old kernels) no longer block the whole depclean, and the repo.postsync.d md5-cache hook.
 # -r5: after an update (and hourly in between), a Horcrux service whose program was replaced (horcrux-api) is restarted so the installed
 # code runs; guests keep running, the restart waits while a web UI/API/console client is connected (`restart-services`, RESTART_* keys).
+# -r6: maintenance hold (/run/horcrux-autoupdate.hold, /etc/horcrux/autoupdate.hold): the scheduled run waits while it exists, so test labs can keep
+# an update from starting under a running test.
 RDEPEND="
 	dev-lang/python
 	sys-apps/portage

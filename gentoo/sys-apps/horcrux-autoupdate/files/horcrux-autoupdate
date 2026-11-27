@@ -36,6 +36,10 @@ EMERGE_LOG = os.environ.get("HX_AU_EMERGE_LOG", "/var/log/emerge.log")
 PRESERVED = os.environ.get("HX_AU_PRESERVED", "/var/lib/portage/preserved_libs_registry")
 RUN_REBOOT_FLAG = os.environ.get("HX_AU_RUN_FLAG", "/run/reboot-required")
 GENTOO_REPO = os.environ.get("HX_AU_GENTOO_REPO", "")  # empty: ask portageq, else /var/db/repos/gentoo
+# A maintenance hold: while one of these files exists, the scheduled run waits (retries hourly, the interval is not reset). A file that holds
+# an epoch number is a hold until then (a lab lease that was never released expires on its own); an empty file or any other text holds
+# until it is removed. /run goes away at reboot; /etc/horcrux/autoupdate.hold is the persistent one. `run` by hand ignores the hold.
+HOLD_FILES = os.environ.get("HX_AU_HOLD", "/run/horcrux-autoupdate.hold:/etc/horcrux/autoupdate.hold").split(":")
 SLEEP = time.sleep
 
 # Binary-package managers: Portage matches a binary package by version, and these ebuilds install a tarball fetched at unpack time, so a
@@ -873,6 +877,24 @@ def count_config_updates():
     return n
 
 
+def hold_reason(files=None, at=None):
+    """why a scheduled run must wait (a hold file), else None"""
+    t = now() if at is None else at
+    for path in (HOLD_FILES if files is None else files):
+        try:
+            txt = open(path).read().strip()
+        except OSError:
+            continue
+        try:
+            until = float(txt.split()[0]) if txt else None
+        except ValueError:
+            until = None
+        if until is not None and until < t:
+            continue
+        return f"maintenance hold {path}" + (f" until {iso(until)}" if until else "")
+    return None
+
+
 def due(conf, st):
     last = st.get("started") or 0
     return now() - last >= float(conf["INTERVAL_HOURS"]) * 3600
@@ -919,6 +941,10 @@ def cmd_run(a, only_if_due):
     st0 = read_status()
     if only_if_due and not due(conf, st0):
         return restart_only(conf)
+    why = hold_reason() if only_if_due else None
+    if why:
+        print(why + "; trying again later", file=sys.stderr)
+        return restart_only(conf)  # not a failure, and it does not reset the interval
     try:
         fd = take_lock()
     except Locked:
