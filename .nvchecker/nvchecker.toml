@@ -56,3 +56,8 @@ github = "qemu/qemu"
 use_max_tag = true
 include_regex = '^v\d+\.\d+\.\d+$'
 prefix = "v"
+
+["app-containers/falco-bin"]
+source = "github"
+github = "falcosecurity/falco"
+use_latest_release = true

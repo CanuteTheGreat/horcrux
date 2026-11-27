@@ -144,6 +144,49 @@ the versions that fix it, the update command and a link to System > Packages.
   (`emerge --update --changed-use --newuse --deep --with-bdeps=y @world`), never run.
 - API `GET /api/security/host`, `POST /api/security/host/check`.
 
+## Phase 3: container runtime detection (spike: GO, shipped)
+
+Falco-class detection for containers on the node, optional (`security.runtime.enabled`,
+default off) and resource-capped. User guide: docs/SECURITY-SUITE.md "Runtime detection".
+
+**Choice.** Falco 0.45.2 (Apache-2.0) with the modern eBPF probe (built into the binary, no
+kernel module, needs kernel 5.8+ and BTF) and the container plugin for container names and
+images. Not in ::gentoo, so `app-containers/falco-bin` in the Horcrux overlay (binary tarball
+from download.falco.org, checksummed; only the binary, the plugin and /etc/falco are installed,
+falcoctl and the driver sources are not), pulled by the `runtime-detection` USE flag of
+`app-emulation/horcrux`. Horcrux runs it as a child process with a generated `falco.yaml` and
+its own curated rule file; nothing is linked into Horcrux and the node's /etc/falco is not read.
+
+**Spike (2026-11-27, rw-man-06: 8 vCPU AWS, kernel 7.0.0-1018-aws, Docker 29, shared with CI).**
+Workload: 4 workers in a container running `true`, `echo > file`, `cat`, `rm` in a loop (a
+fork/exec/open-heavy worst case, 25k-175k kernel events/s; a normal node is a few hundred).
+Falco in a container with `--privileged --cpus=1 --memory=1g`.
+
+| Measure | Result |
+|---|---|
+| Falco CPU (default rule set, 175k events/s) | 26 % of one core; 12-30 % with the curated set |
+| Falco memory | 133-137 MB resident, ~70 MiB cgroup after warm-up; **512 MiB cap was OOM-killed at start**, 1 GiB fine |
+| Kernel event drops | 0 (`scap.n_drops`), output queue drops 0 |
+| Fixed work (4 x 3000 loops), quiet host, 5 interleaved pairs | 4.97 / 4.99 / 4.94 / 5.00 / 4.94 s without vs 4.98 / 5.18 / 5.00 / 4.92 / 4.98 s with: +0 to +4 % |
+| Same, host busy with CI (load 4-8) | 7.1 / 7.0 / 7.0 / 8.2 / 9.3 s without vs 8.0 / 8.0 / 9.4 / 12.9 / 10.9 s with: +14 to +34 % (noisy: other jobs share the host) |
+
+The numbers are for a deliberately hostile loop; idle container hosts see well under 1 % CPU.
+
+**Decision: GO**, as an optional feature, with these guard rails: off by default; a cgroup v2
+group with `cpu.max` (default 100 % of a core) and `memory.max` (default 1 GiB, minimum 768
+MiB); nice 10; events below `min_priority` dropped; per rule+container notification dedupe;
+drops are visible (`kernel_drops` in the status and UI) so an overloaded node is reported, not
+silently blind. Falco's default rules were judged on the same run: they caught
+"Drop and execute new binary in container" and "Read sensitive file untrusted" but not a write
+below /etc by a plain process, a privileged container start or a miner by name, and they flag
+every CI container's `ssh`/`apt` as critical. Horcrux therefore ships its own small rule set
+(prefix `HX`): interactive shell in a container, write below /etc in a container (package
+managers excluded), privileged container init, miner process or command line, outbound
+connection to a mining-pool port. Each fired in the spike run on real containers.
+
+**Not in this phase**: Kubernetes audit, the full default Falco rule set (extra files can be
+added), response actions (killing containers), host (non-container) detection, VM guests.
+
 ## Later phases (one job each)
 
 | Phase | Item | Notes |
@@ -156,7 +199,7 @@ the versions that fix it, the update command and a link to System > Packages.
 | 3 | Security dashboard + events | one page joining access log (hx-api-access-log), audit log, failed logins, baseline drift and scan results; alerting through hx-notification-matchers |
 | 3 | Guest provisioning secrets | cloud-init/unattend passwords and keys referenced from an encrypted secrets store, never stored in VM config or exports; rotation |
 | 3 | Microsegmentation templates | per-guest default-deny profiles and "allow only from these groups" templates on the existing firewall objects, with a hit-count view |
-| 3 | Container runtime detection | Falco-class (eBPF, Apache-2.0) rules for containers on the node, optional and resource-capped |
+| 3 | Container runtime detection | **shipped**: see "Phase 3: container runtime detection" above |
 | 4 | Guest introspection (research) | spike done 2026-11: NO-GO for now (see "Phase 4 spike"); revisit when KVMI or a maintained per-kernel profile source exists |
 
 ## Phase 4 spike: guest introspection (VMI), result 2026-11

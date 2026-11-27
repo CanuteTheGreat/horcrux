@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>hermes@errant.solutions</email>
+		<name>Horcrux overlay</name>
+	</maintainer>
+	<longdescription>Falco runtime threat detection from upstream's prebuilt binary tarball. Used by app-emulation/horcrux[runtime-detection]; installs only falco, the container plugin and the default config (no falcoctl, no kernel driver sources).</longdescription>
+	<upstream>
+		<remote-id type="github">falcosecurity/falco</remote-id>
+	</upstream>
+</pkgmetadata>

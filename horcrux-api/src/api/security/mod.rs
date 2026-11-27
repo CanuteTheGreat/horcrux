@@ -13,9 +13,14 @@
 //! * `GET  /api/security/host`                      host exposure to Gentoo advisories (GLSA)
 //! * `POST /api/security/host/check`                re-check now
 //!
+//! * `GET  /api/security/runtime`                    runtime detection status
+//! * `GET|DELETE /api/security/runtime/events`      kept detections (`?limit&min_priority&rule&container`)
+//! * `GET  /api/security/runtime/rules`             the curated rule file
+//!
 //! Reads need Sys.Audit, changes Sys.Modify (privileges.rs area `security`).
 pub mod hardening;
 pub mod host_cve;
+pub mod runtime;
 pub mod vmscan;
 pub mod vulnscan;
 
@@ -57,6 +62,63 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/security/hardening/revert", post(hardening_revert))
         .route("/api/security/host", get(host_get))
         .route("/api/security/host/check", post(host_check))
+        .route("/api/security/runtime", get(runtime_status))
+        .route(
+            "/api/security/runtime/events",
+            get(runtime_events).delete(runtime_clear),
+        )
+        .route("/api/security/runtime/rules", get(runtime_rules))
+}
+
+// ------------------------------------------------------------ runtime detection
+
+async fn runtime_status(
+    State(state): State<Arc<AppState>>,
+) -> Json<horcrux_common::security::RuntimeStatus> {
+    Json(runtime::status(&state).await)
+}
+
+#[derive(Deserialize, Default)]
+struct RuntimeEventsQuery {
+    limit: Option<usize>,
+    min_priority: Option<String>,
+    rule: Option<String>,
+    container: Option<String>,
+}
+
+async fn runtime_events(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<RuntimeEventsQuery>,
+) -> Json<Vec<horcrux_common::security::RuntimeEvent>> {
+    let s = load_settings(&state).await.runtime;
+    let min = q
+        .min_priority
+        .as_deref()
+        .map(horcrux_common::security::runtime_priority_rank)
+        .unwrap_or(0);
+    let limit = q.limit.unwrap_or(500).clamp(1, 100_000);
+    Json(
+        runtime::events(s.keep_events as usize)
+            .into_iter()
+            .filter(|e| horcrux_common::security::runtime_priority_rank(&e.priority) >= min)
+            .filter(|e| q.rule.as_deref().is_none_or(|r| e.rule == r))
+            .filter(|e| q.container.as_deref().is_none_or(|c| e.container == c))
+            .take(limit)
+            .collect(),
+    )
+}
+
+async fn runtime_clear(State(state): State<Arc<AppState>>) -> StatusCode {
+    let s = load_settings(&state).await.runtime;
+    runtime::clear_events(s.keep_events as usize);
+    StatusCode::NO_CONTENT
+}
+
+async fn runtime_rules() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/yaml; charset=utf-8")],
+        runtime::CURATED_RULES,
+    )
 }
 
 // ------------------------------------------------------------ host exposure
@@ -807,6 +869,12 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<SecurityOverview> 
         hardening_failed: rep.failed,
         hardening_manual: rep.manual,
         hardening_checked_at: Some(rep.checked_at),
+        runtime_enabled: s.runtime.enabled,
+        runtime_running: runtime::is_running(),
+        runtime_events_24h: runtime::events_since(
+            s.runtime.keep_events as usize,
+            chrono::Utc::now().timestamp() - 86400,
+        ),
     })
 }
 
@@ -815,6 +883,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<SecurityOverview> 
 /// Periodic scans and baseline checks. Due times follow the newest scan /
 /// check on record, so a restart does not rescan everything at once.
 pub fn spawn_scheduler(state: Arc<AppState>) {
+    runtime::spawn_supervisor(state.clone());
     tokio::spawn(async move {
         // Let the node finish starting before the first look.
         tokio::time::sleep(Duration::from_secs(120)).await;

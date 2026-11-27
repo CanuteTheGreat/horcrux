@@ -177,6 +177,11 @@ pub fn SecurityOverviewPage() -> impl IntoView {
                             </A>
                         </div>
                         <HostCveCard/>
+                        <A href="/security/runtime" class={if o.runtime_events_24h > 0 { "stat-card stat-link warning attention" } else { "stat-card stat-link" }}>
+                            <span class="stat-label">"Runtime detections (24 h)"</span>
+                            <div class="stat-value">{o.runtime_events_24h}</div>
+                            <div class="dash-meta">{if o.runtime_running { "container runtime detection is running" } else if o.runtime_enabled { "enabled but not running" } else { "runtime detection is off" }}</div>
+                        </A>
                         <div class="card">
                             <h2>"Scanner"</h2>
                             <p>{if o.scanner_available { format!("{} {} is installed.", o.scanner, o.scanner_version) } else { format!("{} is not installed.", o.scanner) }}
@@ -887,6 +892,7 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                 let v = cur.vuln_scan.clone();
                 let h = cur.hardening.clone();
                 let hc = cur.host_cve.clone();
+                let r = cur.runtime.clone();
                 view! {
                     <form class="card settings-form" on:submit=move |e| { e.prevent_default(); if let Some(x) = s.get_untracked() { save.dispatch(x) } }>
                         <h2>"Vulnerability scanning"</h2>
@@ -1044,6 +1050,83 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                             <input id="sec-c-cmd" type="text" prop:value=hc.update_command.clone()
                                 on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.host_cve.update_command = c.clone())) }/>
                             <small class="form-help">"Only displayed; Horcrux never runs it."</small>
+                        </div>
+                        <h2>"Runtime detection"</h2>
+                        <p class="help-text">"Falco watches containers for suspicious behaviour. Off by default; turn it on here or on the Runtime tab."</p>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-r-enabled"><input id="sec-r-enabled" type="checkbox" prop:checked=r.enabled
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.runtime.enabled = c)) }/>" Detect threats in containers"</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-r-path">"Falco program"</label>
+                                <input id="sec-r-path" type="text" prop:value=r.falco_path.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.runtime.falco_path = c.clone())) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-r-plugins">"Falco plugin directory"</label>
+                                <input id="sec-r-plugins" type="text" prop:value=r.plugin_dir.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.runtime.plugin_dir = c.clone())) }/>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-r-cpu">"CPU limit (% of one core)"</label>
+                                <input id="sec-r-cpu" type="number" min="5" max="800" prop:value=r.cpu_limit_percent.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.runtime.cpu_limit_percent = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-r-mem">"Memory limit (MiB)"</label>
+                                <input id="sec-r-mem" type="number" min="768" prop:value=r.memory_limit_mb.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.runtime.memory_limit_mb = c)) }/>
+                                <small class="form-help">"The eBPF buffers need headroom: 512 MiB was killed at start in testing."</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-r-nice">"CPU niceness (0-19)"</label>
+                                <input id="sec-r-nice" type="number" min="0" max="19" prop:value=r.nice.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)).min(255) as u8; upd(Box::new(move |x| x.runtime.nice = c)) }/>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-r-min">"Keep detections at or above"</label>
+                                <select id="sec-r-min" on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.runtime.min_priority = c.clone())) }>
+                                    {["notice", "warning", "error", "critical"].into_iter().map(|o| view! { <option value=o selected=r.min_priority == o>{o}</option> }).collect_view()}
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-r-notify">"Notify at or above"</label>
+                                <select id="sec-r-notify" on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.runtime.notify_min_priority = c.clone())) }>
+                                    {["notice", "warning", "error", "critical"].into_iter().map(|o| view! { <option value=o selected=r.notify_min_priority == o>{o}</option> }).collect_view()}
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-r-dedupe">"Same rule and container notifies every (s)"</label>
+                                <input id="sec-r-dedupe" type="number" min="0" prop:value=r.notify_dedupe_secs.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.runtime.notify_dedupe_secs = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-r-keep">"Detections kept"</label>
+                                <input id="sec-r-keep" type="number" min="100" prop:value=r.keep_events.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.runtime.keep_events = c)) }/>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-r-ignore">"Ignored containers"</label>
+                            <input id="sec-r-ignore" type="text" placeholder="comma separated" prop:value=r.ignore_containers.join(", ")
+                                on:change=move |e| { let c: Vec<String> = event_target_value(&e).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(); upd(Box::new(move |x| x.runtime.ignore_containers = c.clone())) }/>
+                            <small class="form-help">"Detections from these containers are dropped (for example build containers that write below /etc by design)."</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-r-off">"Disabled rules"</label>
+                            <input id="sec-r-off" type="text" placeholder="comma separated" prop:value=r.disabled_rules.join(", ")
+                                on:change=move |e| { let c: Vec<String> = event_target_value(&e).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(); upd(Box::new(move |x| x.runtime.disabled_rules = c.clone())) }/>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-r-extra">"Extra rule files"</label>
+                            <input id="sec-r-extra" type="text" placeholder="comma separated" prop:value=r.extra_rules_files.join(", ")
+                                on:change=move |e| { let c: Vec<String> = event_target_value(&e).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(); upd(Box::new(move |x| x.runtime.extra_rules_files = c.clone())) }/>
+                            <small class="form-help">"Your own Falco rule files, read after the curated rules."</small>
                         </div>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary" disabled=move || save.pending().get()>"Save"</button>

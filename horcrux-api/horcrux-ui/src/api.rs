@@ -8023,8 +8023,8 @@ pub async fn delete_boot_environment(path: &str) -> Result<(), ApiError> {
 
 pub use horcrux_common::security::{
     HardeningApplyRequest, HardeningApplyResult, HardeningReport, HardeningRuleResult, RuleStatus,
-    ScanRequest, ScanResult, ScanStatus, ScanSummary, ScanTarget, ScanTargetKind, SecurityOverview,
-    SecuritySettings, Severity, SeverityCounts,
+    RuntimeEvent, RuntimeSettings, RuntimeStatus, ScanRequest, ScanResult, ScanStatus, ScanSummary,
+    ScanTarget, ScanTargetKind, SecurityOverview, SecuritySettings, Severity, SeverityCounts,
 };
 pub use horcrux_common::security::{HostAdvisory, HostAffectedPackage, HostCveReport};
 
@@ -8034,6 +8034,32 @@ pub async fn get_host_cve() -> Result<HostCveReport, ApiError> {
 
 pub async fn check_host_cve() -> Result<HostCveReport, ApiError> {
     post_json("/security/host/check", &serde_json::json!({})).await
+}
+
+pub async fn get_runtime_status() -> Result<RuntimeStatus, ApiError> {
+    fetch_json("/security/runtime").await
+}
+
+pub async fn list_runtime_events(
+    min_priority: &str,
+    rule: &str,
+    container: &str,
+) -> Result<Vec<RuntimeEvent>, ApiError> {
+    let mut q = vec!["limit=500".to_string()];
+    for (k, v) in [
+        ("min_priority", min_priority),
+        ("rule", rule),
+        ("container", container),
+    ] {
+        if !v.is_empty() {
+            q.push(format!("{k}={}", js_sys::encode_uri_component(v)));
+        }
+    }
+    fetch_json(&format!("/security/runtime/events?{}", q.join("&"))).await
+}
+
+pub async fn clear_runtime_events() -> Result<(), ApiError> {
+    delete_json("/security/runtime/events").await
 }
 
 pub async fn get_security_overview() -> Result<SecurityOverview, ApiError> {

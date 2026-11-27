@@ -1,0 +1,56 @@
+# Horcrux curated container runtime rules (Falco rule syntax, Apache-2.0 engine).
+- macro: hx_container
+  condition: (container.id != host and container.id != "")
+- macro: hx_spawned
+  condition: (evt.type in (execve, execveat))
+- macro: hx_shell_names
+  condition: (proc.name in (sh, bash, dash, zsh, ash, ksh, fish, busybox))
+- macro: hx_open_write
+  condition: (evt.type in (open, openat, openat2) and evt.is_open_write=true and fd.typechar='f' and fd.num>=0)
+- list: hx_pkg_writers
+  items: [ldconfig, apt, apt-get, dpkg, apk, rpm, dnf, yum, update-ca-certificates, useradd, groupadd, usermod, adduser, systemd-tmpfiles, update-alternatives]
+- list: hx_miner_names
+  items: [xmrig, xmr-stak, minerd, cpuminer, cpuminer-multi, ethminer, nbminer, t-rex, lolMiner, cgminer, bfgminer, ccminer, kdevtmpfsi, kinsing]
+- list: hx_pool_ports
+  items: [3333, 4444, 5555, 7777, 9999, 14444, 45560]
+
+- rule: HX shell in container
+  desc: An interactive shell (tty attached) started inside a container
+  condition: hx_spawned and hx_container and hx_shell_names and proc.tty != 0
+  output: "Interactive shell in container (proc=%proc.name user=%user.name container=%container.name image=%container.image.repository:%container.image.tag cmd=%proc.cmdline parent=%proc.pname)"
+  priority: WARNING
+  tags: [horcrux, container, shell]
+
+- rule: HX write below /etc in container
+  desc: A process in a container opened a file below /etc for writing
+  condition: hx_open_write and hx_container and fd.name startswith /etc/ and not proc.name in (hx_pkg_writers) and not proc.pname in (hx_pkg_writers)
+  output: "File below /etc opened for writing in container (file=%fd.name proc=%proc.name cmd=%proc.cmdline user=%user.name container=%container.name image=%container.image.repository)"
+  priority: ERROR
+  tags: [horcrux, container, filesystem]
+
+- rule: HX privileged container started
+  desc: The init process of a privileged container started
+  condition: hx_spawned and hx_container and proc.vpid = 1 and container.privileged = true
+  output: "Privileged container started (proc=%proc.name container=%container.name image=%container.image.repository:%container.image.tag cmd=%proc.cmdline)"
+  priority: WARNING
+  tags: [horcrux, container, privilege]
+
+- rule: HX crypto miner process in container
+  desc: A known miner binary or a stratum command line in a container
+  condition: >
+    hx_spawned and hx_container and
+    (proc.name in (hx_miner_names) or proc.exe in (hx_miner_names) or
+     proc.cmdline contains "stratum+tcp://" or proc.cmdline contains "stratum+ssl://" or
+     proc.cmdline contains "--donate-level" or proc.cmdline contains "cryptonight")
+  output: "Crypto miner pattern in container (proc=%proc.name cmd=%proc.cmdline container=%container.name image=%container.image.repository)"
+  priority: CRITICAL
+  tags: [horcrux, container, cryptominer]
+
+- rule: HX outbound connection to mining pool port from container
+  desc: A container connects out to a typical mining pool port
+  condition: >
+    evt.type = connect and hx_container and fd.typechar = 4 and
+    fd.sport in (hx_pool_ports) and not fd.snet in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8")
+  output: "Container connects to a typical mining pool port (dest=%fd.sip:%fd.sport proc=%proc.name container=%container.name image=%container.image.repository)"
+  priority: NOTICE
+  tags: [horcrux, container, cryptominer, network]

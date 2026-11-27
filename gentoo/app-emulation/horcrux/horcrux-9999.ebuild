@@ -31,7 +31,8 @@ SLOT="0"
 # Platform features: backup (default), cluster (+HA), kubernetes, nas
 # Build options: cli, monitoring, systemd, webui (default)
 # Runtime tooling: security (installs the vulnerability scanner Security >
-#   Vulnerabilities uses; the scanning code itself is always built)
+#   Vulnerabilities uses; the scanning code itself is always built),
+#   runtime-detection (installs Falco, which Horcrux supervises itself)
 # NAS protocols: smb, nfs-server, afp, webdav, ftp
 # NAS auth: ldap (client), ldap-server, kerberos, ad (Active Directory)
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
@@ -42,7 +43,7 @@ IUSE="
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
 	nas-zfs nas-btrfs nas-mdraid nas-lvm
-	security
+	security runtime-detection
 "
 
 # At least one virtualization backend or container runtime must be enabled
@@ -144,6 +145,7 @@ RDEPEND="
 	nas? ( sys-apps/acl )
 
 	security? ( app-containers/grype )
+	runtime-detection? ( app-containers/falco-bin )
 "
 
 # Build dependencies

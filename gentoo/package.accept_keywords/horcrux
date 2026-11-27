@@ -122,3 +122,4 @@ app-emulation/horcrux ~amd64 ~arm64 ~riscv
 # =============================================================================
 app-containers/grype ~amd64
 app-containers/syft ~amd64
+app-containers/falco-bin ~amd64 ~arm64

@@ -114,6 +114,53 @@ security:
       kernel-aslr: "2"
 ```
 
+## Runtime detection (containers)
+
+Optional and **off by default**. When on, Horcrux supervises one
+[Falco](https://falco.org) process (Apache-2.0, modern eBPF probe, no kernel
+module, kernel 5.8+ with BTF) with a curated rule set, keeps what it detects
+under Security > Runtime and sends it through Notifications as source
+`security`.
+
+- Install Falco with the `runtime-detection` USE flag of Horcrux
+  (`app-containers/falco-bin`), or point `runtime.falco_path` at your own.
+- Curated rules (`GET /api/security/runtime/rules`): interactive shell in a
+  container, a file below `/etc` opened for writing in a container (package
+  managers are excluded), a privileged container's init starting, crypto-miner
+  names and command lines, and outbound connections to typical mining-pool
+  ports. Add your own rule files with `runtime.extra_rules_files`; turn a
+  curated rule off with `runtime.disabled_rules`; ignore a noisy container
+  (for example a build container) with `runtime.ignore_containers`.
+- The process runs at `runtime.nice` inside a cgroup v2 group
+  (`horcrux-runtime-detection`) limited to `runtime.cpu_limit_percent` and
+  `runtime.memory_limit_mb`. Without cgroup v2 or root it still runs and the
+  status says "no cgroup limits".
+- Measured cost (spike on an 8-core AWS node, kernel 7.0, Falco 0.45.2, a
+  worst-case fork/exec/file loop in a container, 25k-175k kernel events per
+  second): 12-30 % of one core, about 135 MB resident, no kernel drops; the
+  workload slowed by 0-4 % on a quiet host and 14-34 % while the host was also
+  busy with CI. A normal node produces a few hundred events per second.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `runtime.enabled` | `false` | run the detector |
+| `runtime.falco_path` | `falco` | program (name in PATH or absolute path) |
+| `runtime.plugin_dir` | `/usr/share/falco/plugins` | where `libcontainer.so` lives |
+| `runtime.extra_rules_files` | `[]` | your own rule files (absolute paths, max 16) |
+| `runtime.disabled_rules` | `[]` | curated rule names that are switched off |
+| `runtime.ignore_containers` | `[]` | container names whose detections are dropped |
+| `runtime.cpu_limit_percent` | `100` | cgroup CPU limit, % of one core (5-800) |
+| `runtime.memory_limit_mb` | `1024` | cgroup memory limit (768-65536; 512 was killed at start) |
+| `runtime.nice` | `10` | CPU niceness (0-19) |
+| `runtime.min_priority` | `warning` | lowest priority kept (`notice`, `warning`, `error`, `critical`) |
+| `runtime.notify_min_priority` | `error` | lowest priority that notifies |
+| `runtime.notify_dedupe_secs` | `300` | the same rule in the same container notifies at most this often |
+| `runtime.keep_events` | `5000` | detections kept (100-100000) |
+| `runtime.restart_delay_secs` | `30` | wait before restarting an exited detector |
+
+Changing the program, plugin directory, rule files, disabled rules or limits
+restarts the detector; every other setting applies at once.
+
 ## Settings reference
 
 `GET/PUT /api/security/settings`, declarative `security:` (`docs/design/declarative-config.md`).
@@ -169,6 +216,10 @@ security:
 | `GET /api/security/hardening/report?format=html\|text\|json` | report download | Sys.Audit |
 | `POST /api/security/hardening/apply` `{rules?, dry_run?}` | apply the named (or every failing automatic) rule | Sys.Modify |
 | `POST /api/security/hardening/revert` `{rules?, dry_run?}` | revert the named (or every applied) rule | Sys.Modify |
+| `GET /api/security/runtime` | detector status (running, version, CPU, memory, drops, limits) | Sys.Audit |
+| `GET /api/security/runtime/events?limit=&min_priority=&rule=&container=` | kept detections, newest first | Sys.Audit |
+| `DELETE /api/security/runtime/events` | clear the kept detections | Sys.Modify |
+| `GET /api/security/runtime/rules` | the curated rule file | Sys.Audit |
 
 ## Not planned: guest introspection
 

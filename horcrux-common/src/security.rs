@@ -463,6 +463,192 @@ impl HardeningSettings {
     }
 }
 
+/// Container runtime threat detection (Falco-class, optional, off by default).
+/// Horcrux supervises one `falco` process (modern eBPF probe) with a curated
+/// rule set and keeps its events; see docs/design/security-suite.md.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RuntimeSettings {
+    /// Run the detector. Off by default: it costs CPU on a busy node.
+    pub enabled: bool,
+    /// `falco` program (a name found in PATH or an absolute path).
+    pub falco_path: String,
+    /// Directory with Falco's container plugin (`libcontainer.so`).
+    pub plugin_dir: String,
+    /// Extra rule files read after the curated Horcrux rules (absolute paths).
+    pub extra_rules_files: Vec<String>,
+    /// Curated rules that are switched off (e.g. `HX write below /etc in container`).
+    pub disabled_rules: Vec<String>,
+    /// Containers (by name) whose events are dropped, e.g. build containers.
+    pub ignore_containers: Vec<String>,
+    /// CPU limit for the detector in percent of one core (cgroup v2 `cpu.max`).
+    pub cpu_limit_percent: u32,
+    /// Memory limit in MiB (cgroup v2 `memory.max`). Falco's eBPF buffers need
+    /// about 130 MiB resident; the cgroup also counts kernel memory, so keep
+    /// well above that (measured: 512 MiB was killed at start).
+    pub memory_limit_mb: u32,
+    /// CPU niceness of the detector.
+    pub nice: u8,
+    /// Lowest priority that is kept as an event (`notice`, `warning`, `error`, `critical`).
+    pub min_priority: String,
+    /// Lowest priority that sends a `security` notification.
+    pub notify_min_priority: String,
+    /// The same rule in the same container notifies at most once per this many seconds.
+    pub notify_dedupe_secs: u32,
+    /// Events kept on this node (newest).
+    pub keep_events: u32,
+    /// Seconds between restarts after the detector exits.
+    pub restart_delay_secs: u32,
+}
+
+impl Default for RuntimeSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            falco_path: "falco".into(),
+            plugin_dir: "/usr/share/falco/plugins".into(),
+            extra_rules_files: Vec::new(),
+            disabled_rules: Vec::new(),
+            ignore_containers: Vec::new(),
+            cpu_limit_percent: 100,
+            memory_limit_mb: 1024,
+            nice: 10,
+            min_priority: "warning".into(),
+            notify_min_priority: "error".into(),
+            notify_dedupe_secs: 300,
+            keep_events: 5000,
+            restart_delay_secs: 30,
+        }
+    }
+}
+
+/// Event priorities, lowest first.
+pub const RUNTIME_PRIORITIES: [&str; 4] = ["notice", "warning", "error", "critical"];
+
+/// Rank of a Falco priority name (`Emergency`..`Debug` collapse onto our four).
+pub fn runtime_priority_rank(p: &str) -> usize {
+    match p.to_ascii_lowercase().as_str() {
+        "emergency" | "alert" | "critical" => 3,
+        "error" => 2,
+        "warning" => 1,
+        _ => 0,
+    }
+}
+
+impl RuntimeSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        for (k, v) in [
+            ("falco_path", &self.falco_path),
+            ("plugin_dir", &self.plugin_dir),
+        ] {
+            if v.is_empty() || v.contains(char::is_whitespace) || v.contains('\0') {
+                return Err(format!("runtime.{k}: one path, no spaces"));
+            }
+        }
+        if !self.plugin_dir.starts_with('/') || self.plugin_dir.contains("..") {
+            return Err("runtime.plugin_dir: an absolute path without '..'".into());
+        }
+        if self.extra_rules_files.len() > 16 {
+            return Err("runtime.extra_rules_files: at most 16 files".into());
+        }
+        for f in &self.extra_rules_files {
+            if !f.starts_with('/') || f.contains("..") || f.contains(char::is_whitespace) {
+                return Err(format!(
+                    "runtime.extra_rules_files: '{f}' is not an absolute path"
+                ));
+            }
+        }
+        for (k, list) in [
+            ("disabled_rules", &self.disabled_rules),
+            ("ignore_containers", &self.ignore_containers),
+        ] {
+            if list.len() > 256
+                || list
+                    .iter()
+                    .any(|x| x.is_empty() || x.len() > 200 || x.contains(['\n', '\r', '"']))
+            {
+                return Err(format!("runtime.{k}: up to 256 short single-line names"));
+            }
+        }
+        if !(5..=800).contains(&self.cpu_limit_percent) {
+            return Err("runtime.cpu_limit_percent: 5 to 800".into());
+        }
+        if !(768..=65536).contains(&self.memory_limit_mb) {
+            return Err(
+                "runtime.memory_limit_mb: 768 to 65536 (the eBPF buffers need headroom)".into(),
+            );
+        }
+        if self.nice > 19 {
+            return Err("runtime.nice: 0 to 19".into());
+        }
+        for (k, v) in [
+            ("min_priority", &self.min_priority),
+            ("notify_min_priority", &self.notify_min_priority),
+        ] {
+            if !RUNTIME_PRIORITIES.contains(&v.as_str()) {
+                return Err(format!(
+                    "runtime.{k}: one of notice, warning, error, critical"
+                ));
+            }
+        }
+        if self.notify_dedupe_secs > 86400 {
+            return Err("runtime.notify_dedupe_secs: 0 to 86400".into());
+        }
+        if !(100..=100_000).contains(&self.keep_events) {
+            return Err("runtime.keep_events: 100 to 100000".into());
+        }
+        if !(5..=3600).contains(&self.restart_delay_secs) {
+            return Err("runtime.restart_delay_secs: 5 to 3600".into());
+        }
+        Ok(())
+    }
+}
+
+/// One detection kept by the node.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RuntimeEvent {
+    pub id: u64,
+    /// Unix seconds.
+    pub time: i64,
+    pub rule: String,
+    /// `notice`, `warning`, `error` or `critical`.
+    pub priority: String,
+    pub container: String,
+    pub image: String,
+    pub process: String,
+    pub cmdline: String,
+    pub user: String,
+    /// Falco's output text.
+    pub message: String,
+}
+
+/// `GET /api/security/runtime`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RuntimeStatus {
+    pub enabled: bool,
+    /// The `falco` program was found.
+    pub available: bool,
+    pub version: String,
+    pub running: bool,
+    #[serde(default)]
+    pub pid: Option<u32>,
+    #[serde(default)]
+    pub since: Option<i64>,
+    pub restarts: u32,
+    /// Kernel events seen per second (Falco's own metrics) and dropped share.
+    pub events_per_sec: f64,
+    pub kernel_drops: u64,
+    pub cpu_percent: f64,
+    pub memory_mb: f64,
+    /// The cgroup limits were applied (needs root and cgroup v2).
+    pub limits_applied: bool,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    pub events_total: u64,
+    pub events_kept: u32,
+    pub rules: Vec<String>,
+}
+
 /// Node security settings (`GET/PUT /api/security/settings`, declarative
 /// `security:`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -471,6 +657,7 @@ pub struct SecuritySettings {
     pub vuln_scan: VulnScanSettings,
     pub hardening: HardeningSettings,
     pub host_cve: HostCveSettings,
+    pub runtime: RuntimeSettings,
 }
 
 impl SecuritySettings {
@@ -478,6 +665,7 @@ impl SecuritySettings {
         self.vuln_scan.validate()?;
         self.hardening.validate()?;
         self.host_cve.validate()
+        self.runtime.validate()
     }
 }
 
@@ -717,6 +905,13 @@ pub struct SecurityOverview {
     pub hardening_manual: u32,
     #[serde(default)]
     pub hardening_checked_at: Option<i64>,
+    #[serde(default)]
+    pub runtime_enabled: bool,
+    #[serde(default)]
+    pub runtime_running: bool,
+    /// Events at or above the keep level in the last 24 hours.
+    #[serde(default)]
+    pub runtime_events_24h: u32,
 }
 
 // --------------------------------------------------- VM guest inventory
