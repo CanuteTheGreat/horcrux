@@ -20,10 +20,12 @@ Horcrux uses structured logging with `tracing` for comprehensive observability. 
 
 ```bash
 # Set log level (default: info)
+export HORCRUX_LOG_LEVEL=debug
+# or, for per-module filters, RUST_LOG:
 export RUST_LOG=debug
 
-# Set log file path (default: /var/log/horcrux)
-export HORCRUX_LOG_PATH=/var/log/horcrux
+# Set the log directory (default: /var/log/horcrux)
+export HORCRUX_LOG_DIR=/var/log/horcrux
 
 # Enable specific modules
 export RUST_LOG=horcrux_api=debug,sqlx=warn
@@ -67,7 +69,7 @@ config.init()?;
 ### File Output (JSON)
 
 - **Format**: Structured JSON (one log per line)
-- **Location**: `/var/log/horcrux/horcrux.log`
+- **Location**: `/var/log/horcrux/horcrux.log.<date>` (a new file per day; the `horcrux.log` paths in the commands below mean the current day file)
 - **Rotation**: Daily by default
 - **Thread IDs**: Included
 
@@ -527,7 +529,3 @@ df -h /var/log
 2025-10-09T10:31:15.256Z ERROR horcrux_api::vm: Failed to start VM vm_id="vm-100" error="QEMU start failed"
 2025-10-09T10:31:15.278Z WARN horcrux_api::main: API request failed method="POST" path="/api/vms/100/start" status=500 error="Failed to start VM"
 ```
-
----
-
-**Version**: 1.0

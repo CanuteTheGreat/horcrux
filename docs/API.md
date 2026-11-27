@@ -4,9 +4,7 @@
 
 The Horcrux API provides comprehensive virtualization management capabilities including VM lifecycle, storage, networking, monitoring, security, and clustering. All endpoints (except `/api/health` and authentication endpoints) require authentication via JWT token or API key.
 
-**Base URL**: `http://localhost:8006`
-
-**API Version**: 1.0
+**Base URL**: `https://<node>/` (HTTPS with the node's own certificate; new installs listen on 443, nodes upgraded from older releases keep 8006 and also answer on 443). Use `curl -k` or the node CA from `/api/tls/ca.pem` for the self-issued certificate.
 
 **Content-Type**: `application/json`
 
@@ -3167,22 +3165,11 @@ Response includes pagination metadata:
 
 ---
 
-## Versioning
-
-The API version is included in all responses via the `X-API-Version` header:
-```
-X-API-Version: 1.0
-```
-
----
-
 ## SDKs and Examples
 
 For code examples in different languages, see:
 - [Python Examples](./examples/python/)
-- [Go Examples](./examples/go/)
-- [TypeScript Examples](./examples/typescript/)
-- [Rust Examples](./examples/rust/)
+- [Shell Examples](./examples/shell/)
 
 ---
 
