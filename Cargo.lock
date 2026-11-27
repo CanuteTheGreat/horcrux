@@ -3313,6 +3313,7 @@ dependencies = [
  "libc",
  "opus",
  "opusic-sys",
+ "serde",
  "serde_json",
  "windows",
 ]

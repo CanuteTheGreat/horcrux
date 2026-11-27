@@ -79,7 +79,15 @@ class Swtpm:
     def stop(self):
         sh(f"swtpm_ioctl --tcp 127.0.0.1:{self.port + 1} -s", check_rc=False)
         for _ in range(30):
-            if not os.path.exists(f"/proc/{open(self.pid).read().strip()}") if os.path.exists(self.pid) else True:
+            # swtpm removes its own pidfile as it exits, so reading it races the
+            # shutdown above: a plain os.path.exists()+open() is a TOCTOU that
+            # throws FileNotFoundError once in a while. Treat a missing or empty
+            # pidfile as "already stopped".
+            try:
+                pid = open(self.pid).read().strip()
+            except FileNotFoundError:
+                break
+            if not pid or not os.path.exists(f"/proc/{pid}"):
                 break
             time.sleep(0.2)
         time.sleep(0.3)

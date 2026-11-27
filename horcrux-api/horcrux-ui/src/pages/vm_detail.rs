@@ -132,6 +132,7 @@ pub fn VmDetailPage() -> impl IntoView {
                 <A href=move || format!("/vms/{}/remote-play", id()) class="tab">"Remote Play"</A>
                 <A href=move || format!("/snapshots?vm={}", id()) class="tab">"Snapshots"</A>
                 <A href="/network/firewall-objects" class="tab">"Firewall"</A>
+                <A href="/security/vulnerabilities" class="tab">"Security"</A>
             </nav>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="vmd-notice">{n}</div> })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="vmd-error">{e}</div> })}

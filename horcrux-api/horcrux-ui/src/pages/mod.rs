@@ -33,6 +33,7 @@ mod replication_list;
 mod resource_pools;
 mod resources;
 pub mod sdn_zones;
+pub mod security;
 mod snapshot_list;
 pub mod storage;
 mod storage_content;

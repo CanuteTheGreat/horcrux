@@ -58,6 +58,7 @@ pub mod s3_gateway;
 pub mod sdn_cni;
 pub mod sdn_ovs;
 pub mod sdn_zones;
+pub mod security;
 pub mod storage_content;
 pub mod storage_volumes;
 pub mod system_admin;

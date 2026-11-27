@@ -145,6 +145,7 @@ pub fn App() -> impl IntoView {
                             <A href="/system/console" class="dropdown-item">"Horcrux Console"</A>
                             <A href="/system/services" class="dropdown-item">"Node Services"</A>
                             <A href="/system/shell" class="dropdown-item">"Node Shell"</A>
+                            <A href="/security" class="dropdown-item">"Security"</A>
                             <A href="/audit" class="dropdown-item">"Audit Log"</A>
                             <A href="/system/logs" class="dropdown-item">"System Log"</A>
                             <A href="/system/packages" class="dropdown-item">"Packages"</A>
@@ -250,6 +251,11 @@ pub fn App() -> impl IntoView {
                     <Route path="/system/console" view=crate::pages::system::console_settings::ConsoleSettingsPage/>
                     <Route path="/system/services" view=crate::pages::system::services::ServicesPage/>
                     <Route path="/system/shell" view=crate::pages::system::shell::NodeShellPage/>
+                    <Route path="/security" view=crate::pages::security::SecurityOverviewPage/>
+                    <Route path="/security/vulnerabilities" view=crate::pages::security::SecurityVulnsPage/>
+                    <Route path="/security/vulnerabilities/:id" view=crate::pages::security::SecurityScanPage/>
+                    <Route path="/security/hardening" view=crate::pages::security::SecurityHardeningPage/>
+                    <Route path="/security/settings" view=crate::pages::security::SecuritySettingsPage/>
                     <Route path="/audit" view=crate::pages::AuditLogPage/>
                     <Route path="/system/logs" view=crate::pages::system::logs::SystemLogsPage/>
                     <Route path="/system/packages" view=crate::pages::system::package_manager::PackageManagerPage/>

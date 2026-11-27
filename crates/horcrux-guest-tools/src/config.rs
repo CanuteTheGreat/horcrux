@@ -71,6 +71,9 @@ pub struct Config {
     pub once: bool,
     /// Print the capability report and exit.
     pub print_caps: bool,
+    /// List installed guest packages as JSON and exit (for VM vulnerability
+    /// scanning of a running guest).
+    pub inventory: bool,
     /// Name given to the virtual input devices.
     pub input_device_name: String,
     /// Offer the node keyboard, buttons and absolute pointer through the
@@ -183,6 +186,7 @@ impl Default for Config {
             port_write_timeout_ms: 2000,
             once: false,
             print_caps: false,
+            inventory: false,
             input_device_name: "Horcrux virtual input".into(),
             offer_input: true,
             service: false,
@@ -252,6 +256,7 @@ impl Config {
                     k,
                     "once"
                         | "print-caps"
+                        | "inventory"
                         | "help"
                         | "service"
                         | "hibernate"
@@ -328,6 +333,7 @@ impl Config {
             "port_write_timeout_ms" => self.port_write_timeout_ms = num(v)?.max(10),
             "once" => self.once = b(v),
             "print_caps" => self.print_caps = b(v),
+            "inventory" => self.inventory = b(v),
             "input_device_name" => self.input_device_name = v.into(),
             "offer_input" => self.offer_input = b(v),
             "service" => self.service = b(v),
@@ -384,7 +390,7 @@ fn parse_file(text: &str) -> Vec<(String, String)> {
 
 const HELP: &str = "usage: horcrux-guest-agent [--config FILE] [--port PATH | --connect HOST:PORT] \
 [--capture auto|kmsgrab|x11grab|dxgi|idd] [--encoder auto|software|vaapi|nvenc|qsv|amf|mediafoundation] \
-[--ffmpeg PATH] [--once] [--print-caps] \
+[--ffmpeg PATH] [--once] [--print-caps] [--inventory] \
 [--hibernate-status | --hibernate-setup | --hibernate-enable | --hibernate]";
 
 #[cfg(test)]
