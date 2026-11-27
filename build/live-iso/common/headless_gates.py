@@ -215,11 +215,26 @@ def editor_verdict(o, want=("vim", "nvim")):
     return ok, info[:400]
 
 
-def editor_gate(sh, step, user, want=("vim", "nvim")):
-    """EDITOR/VISUAL are vim in a login shell and crontab -e, git commit, visudo and sudoedit open it (every project, every variant)"""
-    rc, o = sh(b64("python3", EDITOR_PROBE.replace("@USER@", user)))
-    ok, info = editor_verdict(o, want)
-    step("default-editor-is-vim-login-shell-crontab-git-visudo-sudoedit", ok, info)
+def editor_gate(sh, step, user, want=("vim", "nvim"), choice=None):
+    """EDITOR/VISUAL are vim in a login shell and crontab -e, git commit, visudo and sudoedit open it (every project, every variant).
+    `choice` (e.g. "neovim", with want=("nvim",)): first `default-editor set <choice>`, require every probe to start `want`, then put
+    vim back (the default) so later gates see the stock image. Default call is unchanged."""
+    name = "default-editor-is-vim-login-shell-crontab-git-visudo-sudoedit"
+    if choice:
+        if not re.fullmatch(r"[a-z]+|/[A-Za-z0-9._/+-]+", choice):
+            raise ValueError("bad editor choice %r" % choice)
+        rc, o = sh("default-editor set %s 2>&1; echo SET-RC=$?" % choice)
+        if "SET-RC=0" not in (o or ""):
+            step("default-editor-set-%s-login-shell-crontab-git-visudo-sudoedit" % choice, False, ("default-editor set failed: " + (o or ""))[:300])
+            return False
+        name = "default-editor-set-%s-login-shell-crontab-git-visudo-sudoedit" % choice
+    try:
+        rc, o = sh(b64("python3", EDITOR_PROBE.replace("@USER@", user)))
+        ok, info = editor_verdict(o, want)
+    finally:
+        if choice and choice != "vim":
+            sh("default-editor set vim 2>&1; echo RESTORE-RC=$?")
+    step(name, ok, info)
     return ok
 
 

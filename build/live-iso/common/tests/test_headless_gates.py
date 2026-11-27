@@ -210,6 +210,23 @@ class EditorGate(unittest.TestCase):
         self.assertFalse(HG.editor_verdict(self.GOOD.replace("EDITOR-DONE\n", ""))[0])
         self.assertFalse(HG.editor_verdict("")[0])
 
+    def test_editor_gate_choice_sets_probes_and_restores(self):
+        calls, steps = [], []
+        good = self.GOOD.replace("/usr/bin/vim", "/usr/bin/nvim").replace("-> vim", "-> nvim")
+        def sh(cmd, timeout=90):
+            calls.append(cmd)
+            return (0, "SET-RC=0\n") if cmd.startswith("default-editor set") else (0, good)
+        ok = HG.editor_gate(sh, lambda n, o, i="": steps.append((n, o)), "root", want=("nvim",), choice="neovim")
+        self.assertTrue(ok)
+        self.assertTrue(calls[0].startswith("default-editor set neovim"))
+        self.assertTrue(calls[-1].startswith("default-editor set vim"))
+        self.assertEqual(steps, [("default-editor-set-neovim-login-shell-crontab-git-visudo-sudoedit", True)])
+        steps.clear()      # vim output fails the neovim gate
+        self.assertFalse(HG.editor_gate(lambda c, timeout=90: (0, "SET-RC=0\n" if c.startswith("default-editor") else self.GOOD),
+                                        lambda n, o, i="": steps.append((n, o)), "root", want=("nvim",), choice="neovim"))
+        with self.assertRaises(ValueError):
+            HG.editor_gate(sh, lambda *a: None, "root", choice="x; id")
+
     def test_guest_script_compiles(self):
         compile(HG.EDITOR_PROBE.replace("@USER@", "x"), "probe", "exec")
 

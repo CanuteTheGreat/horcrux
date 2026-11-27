@@ -73,9 +73,23 @@ pub struct Spec {
     /// shared VGs; docs/SAN.md). Needs USE=san. Absent = unmanaged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub san: Option<horcrux_storage::san::SanSpec>,
+    /// Node-wide system settings. `system.editor` is the default text editor
+    /// (vim|neovim|nano|vi|/absolute/path; `default-editor set`). Absent =
+    /// unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<SystemSpec>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+/// The `system:` section.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SystemSpec {
+    /// Default text editor: vim | neovim | nano | vi | an absolute path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<String>,
 }
 
 /// Host shutdown / boot behaviour of guests (see docs/SAVE_STATE.md). Every
@@ -215,7 +229,7 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
     }
     if let Some(k) = spec.extra.keys().next() {
         return Err(format!(
-            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms, guest_power, console, remote_play and security)"
+            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms, guest_power, console, remote_play, security and system)"
         ));
     }
     if let Some(gp) = &spec.guest_power {
@@ -345,6 +359,9 @@ pub struct Live {
     pub console: horcrux_common::console::ConsoleSettings,
     pub remote_play: horcrux_common::remote_play::RemotePlaySettings,
     pub security: horcrux_common::security::SecuritySettings,
+    /// The configured default editor; `None` on a node without the
+    /// `default-editor` tool.
+    pub editor: Option<String>,
     pub power_node: crate::api::guest_state::NodePolicy,
     /// Per-VM power overrides by VM name (only VMs that have one).
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
@@ -789,6 +806,29 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // Default editor (`system.editor`).
+    if let Some(w) = spec.system.as_ref().and_then(|s| s.editor.as_ref()) {
+        if let Err(e) = crate::api::system_admin::editor::validate_choice(w) {
+            p.errors.push(format!("system.editor: {e}"));
+        } else {
+            match &live.editor {
+                None => creates.push(ch(
+                    "system_editor",
+                    "editor",
+                    Action::Blocked,
+                    vec!["this node has no default-editor tool (install horcrux-core)".to_string()],
+                )),
+                Some(l) if l != w => creates.push(ch(
+                    "system_editor",
+                    "editor",
+                    Action::Update,
+                    vec![format!("editor: {l} -> {w}")],
+                )),
+                Some(_) => {}
+            }
+        }
+    }
+
     // Remote Play node settings: one node-wide object.
     if let Some(w) = &spec.remote_play {
         if let Err(e) = w.validate() {
@@ -857,6 +897,7 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
             "console",
             "remote_play",
             "security",
+            "system_editor",
             "san_settings",
             "san_target",
             "san_lvm",
@@ -1134,6 +1175,9 @@ pub fn export(live: &Live) -> Spec {
         console: Some(live.console.clone()),
         remote_play: Some(live.remote_play.clone()),
         security: Some(live.security.clone()),
+        system: live.editor.as_ref().map(|e| SystemSpec {
+            editor: Some(e.clone()),
+        }),
         guest_power: Some(GuestPowerSpec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),

@@ -228,3 +228,166 @@ async fn needs_a_login() {
         .unwrap();
     assert_eq!(r.status().as_u16(), 401);
 }
+
+fn tool_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../build/live-iso/common/overlay/usr/sbin/default-editor")
+}
+
+/// A scratch system root with the real `default-editor` tool and some editor
+/// binaries (stand-in executables) under it.
+fn editor_root(dir: &std::path::Path, tool: bool, bins: &[&str]) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let root = dir.join("sysroot");
+    std::fs::create_dir_all(root.join("usr/sbin")).unwrap();
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+    if tool {
+        let t = root.join("usr/sbin/default-editor");
+        std::fs::copy(tool_path(), &t).unwrap();
+        std::fs::set_permissions(&t, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    for b in bins {
+        let p = root.join("usr/bin").join(b);
+        std::fs::write(&p, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    root
+}
+
+#[tokio::test]
+async fn system_editor_export_plan_apply_and_rollback() {
+    let dir = scratch("declarative-editor");
+    let root = editor_root(&dir, true, &["vim", "nvim"]);
+    let mut srv = Server::new(&dir).env("HORCRUX_SYSROOT", root.to_str().unwrap());
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let envd = root.join("etc/env.d/99editor");
+
+    // export: nothing configured = the default (vim), and it is a fixed point
+    let (s, ex) = api.get("/declarative/export").await;
+    assert_eq!(s, 200, "{ex}");
+    let before = ex["spec"].as_str().unwrap().to_string();
+    assert!(before.contains("system:\n  editor: vim"), "{before}");
+    let (_, v) = api.post("/declarative/plan", json!({"spec": before})).await;
+    assert_eq!(v["in_sync"], true, "{v}");
+
+    // plan changes nothing; invalid values are 422 / plan errors
+    let want = "system:\n  editor: neovim\n";
+    let (s, v) = api.post("/declarative/plan", json!({"spec": want})).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(kinds(&v["plan"]), ["update system_editor editor"]);
+    assert!(!envd.exists());
+    let (s, v) = api
+        .post(
+            "/declarative/apply",
+            json!({"spec": "system: {editor: emacs}"}),
+        )
+        .await;
+    assert!(s == 422 || v["ok"] == false, "{s} {v}");
+    assert!(
+        v.to_string().contains("system.editor"),
+        "clear error expected: {v}"
+    );
+    assert!(!root.join("etc/default-editor.conf").exists());
+
+    // apply: the conf and EDITOR/VISUAL point at nvim
+    let (s, v) = api.post("/declarative/apply", json!({"spec": want})).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["results"][0]["status"], "applied", "{v}");
+    let conf = std::fs::read_to_string(root.join("etc/default-editor.conf")).unwrap();
+    assert!(conf.contains("EDITOR_CHOICE=neovim"), "{conf}");
+    let e = std::fs::read_to_string(&envd).unwrap();
+    assert!(e.contains("EDITOR=\"/usr/bin/nvim\""), "{e}");
+    let (_, v) = api.post("/declarative/plan", json!({"spec": want})).await;
+    assert_eq!(v["in_sync"], true, "{v}");
+
+    // rollback: apply the earlier export again
+    let (_, v) = api
+        .post("/declarative/apply", json!({"spec": before}))
+        .await;
+    assert_eq!(v["ok"], true, "{v}");
+    let e = std::fs::read_to_string(&envd).unwrap();
+    assert!(e.contains("EDITOR=\"/usr/bin/vim\""), "{e}");
+    let (_, ex) = api.get("/declarative/export").await;
+    assert!(ex["spec"].as_str().unwrap().contains("editor: vim"));
+}
+
+#[tokio::test]
+async fn system_editor_endpoint_get_put_audit_and_424() {
+    let dir = scratch("system-editor-api");
+    let root = editor_root(&dir, true, &["vim", "nvim"]);
+    let mut srv = Server::new(&dir).env("HORCRUX_SYSROOT", root.to_str().unwrap());
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+
+    let (s, v) = api.get("/system/editor").await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["choice"], "vim");
+    assert_eq!(v["effective"], "/usr/bin/vim");
+    let inst = |c: &str| {
+        v["installed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["choice"] == c)
+            .unwrap()["installed"]
+            .clone()
+    };
+    assert_eq!(inst("neovim"), true);
+    assert_eq!(inst("nano"), false);
+
+    let (s, v) = api.put("/system/editor", json!({"choice": "neovim"})).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["choice"], "neovim");
+    assert_eq!(v["effective"], "/usr/bin/nvim");
+    // a choice that is not installed falls back, and says so
+    let (s, v) = api.put("/system/editor", json!({"choice": "nano"})).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["choice"], "nano");
+    assert_eq!(v["effective"], "/usr/bin/vim");
+
+    for bad in ["emacs", "", "/a b", "vim; id"] {
+        let (s, v) = api.put("/system/editor", json!({"choice": bad})).await;
+        assert!(s == 400 || s == 422, "{bad}: {s} {v}");
+    }
+    let conf = std::fs::read_to_string(root.join("etc/default-editor.conf")).unwrap();
+    assert!(conf.contains("EDITOR_CHOICE=nano"), "{conf}");
+
+    // audit logged
+    let (s, a) = api.get("/audit/search?search=default%20editor").await;
+    assert_eq!(s, 200, "{a}");
+    assert!(
+        a.to_string().contains("default editor set to neovim"),
+        "{a}"
+    );
+}
+
+#[tokio::test]
+async fn system_editor_without_the_tool_is_a_424() {
+    let dir = scratch("system-editor-424");
+    let root = editor_root(&dir, false, &["vim"]);
+    let mut srv = Server::new(&dir).env("HORCRUX_SYSROOT", root.to_str().unwrap());
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let (s, v) = api.get("/system/editor").await;
+    assert_eq!(s, 424, "{v}");
+    assert!(v.to_string().contains("default-editor-missing"), "{v}");
+    let (s, v) = api.put("/system/editor", json!({"choice": "vim"})).await;
+    assert_eq!(s, 424, "{v}");
+    // declarative: the section is blocked, and export omits it
+    let (_, ex) = api.get("/declarative/export").await;
+    assert!(!ex["spec"].as_str().unwrap().contains("system:"), "{ex}");
+    let (_, v) = api
+        .post(
+            "/declarative/apply",
+            json!({"spec": "system: {editor: vim}"}),
+        )
+        .await;
+    assert_eq!(v["ok"], false, "{v}");
+    assert_eq!(v["results"][0]["status"], "skipped", "{v}");
+}

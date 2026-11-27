@@ -4,6 +4,7 @@
 //! or reads the real host; nothing is held in memory only.
 //!
 //! * `GET|POST /api/system/config`            hostname, domain, time zone, locale
+//! * `GET|PUT /api/system/editor`             default text editor (vim|neovim|nano|vi|/path)
 //! * `GET /api/system/network/interfaces`, `POST .../interfaces/:name`
 //! * `GET|POST /api/system/network/dns`       `/etc/resolv.conf`
 //! * `GET|POST /api/system/time/ntp`          chrony / systemd-timesyncd / ntpd
@@ -26,6 +27,7 @@ use std::sync::Arc;
 
 pub mod boot_environments;
 pub mod diagnostics;
+pub mod editor;
 pub mod host;
 pub mod logs;
 pub mod packages;
@@ -34,6 +36,7 @@ pub mod services;
 pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .merge(host::routes(state))
+        .merge(editor::routes())
         .merge(services::routes())
         .merge(logs::routes())
         .merge(packages::routes())
@@ -80,9 +83,32 @@ pub(crate) async fn run(program: &str, args: &[&str]) -> Result<String, String> 
 }
 
 pub(crate) async fn run_secs(program: &str, args: &[&str], secs: u64) -> Result<String, String> {
-    let bin = which(program).ok_or_else(|| format!("{program} is not installed"))?;
+    run_cmd(program, args, &[], secs).await
+}
+
+/// Like [`run`] with extra environment variables (`program` may be a path).
+pub(crate) async fn run_env(
+    program: &str,
+    args: &[&str],
+    env: &[(&str, String)],
+) -> Result<String, String> {
+    run_cmd(program, args, env, 60).await
+}
+
+async fn run_cmd(
+    program: &str,
+    args: &[&str],
+    env: &[(&str, String)],
+    secs: u64,
+) -> Result<String, String> {
+    let bin = if program.starts_with('/') {
+        PathBuf::from(program)
+    } else {
+        which(program).ok_or_else(|| format!("{program} is not installed"))?
+    };
     let child = tokio::process::Command::new(&bin)
         .args(args)
+        .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();

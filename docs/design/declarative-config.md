@@ -64,6 +64,9 @@ guest_power:          # what guests do when the HOST shuts down / restarts
     save_dir: null                 # default: <data dir>/saved-state/data
   vms:                # per-VM overrides by VM name (same keys as the power policy API)
     app1: {host_shutdown_action: shutdown, start_order: 10}
+
+system:
+  editor: vim         # default text editor: vim (default) | neovim | nano | vi | /absolute/path
 ```
 
 Notes:
@@ -75,6 +78,11 @@ Notes:
   subnets by derived id.
 - `guest_power` is planned as kind `guest_power` (`(node defaults)` and one entry
   per VM override); with `prune`, overrides the spec does not list are removed.
+- `system.editor` is the system default editor (`EDITOR`/`VISUAL`; `default-editor set`,
+  docs/DEFAULT-EDITOR.md). Planned as kind `system_editor`; a value other than
+  vim|neovim|nano|vi|absolute path is a plan error; a node without the
+  `default-editor` tool plans it `blocked` and exports no `system:` section.
+  Rolling back = applying the earlier export again.
 - Keys for later phases (`containers`, `users`, `acl`, `firewall`,
   `backup_jobs`, `ha_groups`, `nodes`) are *rejected* with "not supported
   yet" rather than ignored, so a spec never half-applies without saying so.

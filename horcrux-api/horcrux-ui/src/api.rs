@@ -4585,6 +4585,30 @@ pub async fn get_system_config_options() -> Result<SystemConfigOptions, ApiError
     fetch_json("/system/config/options").await
 }
 
+/// The system default text editor (`/api/system/editor`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct EditorState {
+    pub choice: String,
+    pub effective: Option<String>,
+    pub installed: Vec<EditorInstalled>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct EditorInstalled {
+    pub choice: String,
+    pub installed: bool,
+}
+
+/// Read the default editor (424 `default-editor-missing` without the tool).
+pub async fn get_editor() -> Result<EditorState, ApiError> {
+    fetch_json("/system/editor").await
+}
+
+/// Set the default editor: vim | neovim | nano | vi | an absolute path.
+pub async fn put_editor(choice: &str) -> Result<EditorState, ApiError> {
+    put_json("/system/editor", &serde_json::json!({ "choice": choice })).await
+}
+
 /// Update system configuration
 pub async fn update_system_configuration(config: SystemConfiguration) -> Result<(), ApiError> {
     post_json("/system/config", &config).await

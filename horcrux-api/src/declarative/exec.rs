@@ -23,6 +23,9 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         console: crate::console::hxc_settings::get(),
         remote_play: crate::api::remote_play::load_settings(state).await,
         security: crate::api::security::load_settings(state).await,
+        editor: crate::api::system_admin::editor::current()
+            .await
+            .map(|e| e.choice),
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
         #[cfg(feature = "san")]
@@ -153,6 +156,21 @@ async fn run_change(
             crate::api::remote_play::set_settings(state, w).await?;
             Ok(Some(
                 "applied at once (listeners, relay and port forwards)".into(),
+            ))
+        }
+
+        ("system_editor", Action::Update) => {
+            let w = spec
+                .system
+                .as_ref()
+                .and_then(|s| s.editor.clone())
+                .ok_or("not in spec")?;
+            crate::api::system_admin::editor::set(&w)
+                .await
+                .map_err(api)?;
+            Ok(Some(
+                "applied at once (/etc/default-editor.conf and /etc/env.d/99editor); new login shells use it"
+                    .into(),
             ))
         }
 

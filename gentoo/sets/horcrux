@@ -180,6 +180,8 @@ app-arch/zstd
 
 # Editors
 app-editors/vim
+# neovim: the one-setting alternative default editor (default-editor set neovim); prebuilt by the binhost so the choice has a binary
+app-editors/neovim
 # nano is never the default editor (owner 2026-11-27); installable, not in the base set
 
 # =============================================================================

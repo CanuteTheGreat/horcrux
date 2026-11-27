@@ -484,3 +484,64 @@ fn san_section_plans_creates_updates_and_prunes() {
     );
     assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
 }
+
+#[test]
+fn system_editor_is_planned_validated_exported_and_rolled_back() {
+    let live = Live {
+        editor: Some("vim".into()),
+        ..Default::default()
+    };
+    // export carries it and is a fixed point (also through YAML)
+    let e = export(&live);
+    assert_eq!(e.system.as_ref().unwrap().editor.as_deref(), Some("vim"));
+    let y = serde_yaml::to_string(&e).unwrap();
+    assert!(y.contains("system:") && y.contains("editor: vim"), "{y}");
+    let back: Spec = parse(&y).unwrap();
+    assert!(plan(&back, &live, true).in_sync());
+
+    // a different choice is one update, run through `system_editor`
+    let s = parse("system: {editor: neovim}").unwrap();
+    let p = plan(&s, &live, false);
+    assert!(p.errors.is_empty(), "{:?}", p.errors);
+    assert_eq!(p.changes.len(), 1, "{:?}", p.changes);
+    assert_eq!(p.changes[0].kind, "system_editor");
+    assert_eq!(p.changes[0].action, Action::Update);
+    assert_eq!(p.changes[0].details, ["editor: vim -> neovim"]);
+
+    // rollback = re-apply the earlier export: the plan from neovim back to vim
+    let after = Live {
+        editor: Some("neovim".into()),
+        ..Default::default()
+    };
+    assert!(plan(&s, &after, false).in_sync());
+    let p = plan(&e, &after, false);
+    assert_eq!(p.changes.len(), 1);
+    assert_eq!(p.changes[0].details, ["editor: neovim -> vim"]);
+
+    // absolute paths are fine; anything else is a clear plan error
+    assert!(plan(
+        &parse("system: {editor: /usr/bin/emacs}").unwrap(),
+        &live,
+        false
+    )
+    .errors
+    .is_empty());
+    for bad in ["emacs", "nvim", "relative/vi", "/a b"] {
+        let s = parse(&format!("system: {{editor: \"{bad}\"}}")).unwrap();
+        let p = plan(&s, &live, false);
+        assert_eq!(p.errors.len(), 1, "{bad}: {:?}", p.errors);
+        assert!(p.errors[0].starts_with("system.editor: "), "{:?}", p.errors);
+        assert!(p.changes.is_empty());
+    }
+    // an unknown key under system is rejected at parse time
+    assert!(parse("system: {editr: vim}").is_err());
+
+    // no default-editor tool on the node: blocked (not applied), nothing exported
+    let none = Live::default();
+    assert!(export(&none).system.is_none());
+    let p = plan(&s, &none, false);
+    assert_eq!(p.changes.len(), 1);
+    assert_eq!(p.changes[0].action, Action::Blocked);
+    // unmanaged when absent
+    assert!(plan(&Spec::default(), &live, true).in_sync());
+}

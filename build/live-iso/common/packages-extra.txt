@@ -12,3 +12,6 @@ x86_64? sys-firmware/intel-microcode
 # out-of-tree kernel modules (zfs-kmod rebuilt after every kernel update): the dist kernel has CONFIG_DEBUG_INFO_BTF, so `make modules` runs pahole;
 # without it the module build dies in BTF (QEMU gate kernel-module-builds-against-running-kernel found it)
 dev-util/pahole
+# neovim: the one-setting alternative default editor (`default-editor set neovim`; vim stays the default), on every tier so the choice has a binary
+x86_64? app-editors/neovim
+aarch64? app-editors/neovim

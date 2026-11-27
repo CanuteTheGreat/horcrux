@@ -357,6 +357,7 @@ pub fn SystemConfigurationPage() -> impl IntoView {
                 <div class="tab-content">
                     {move || match active_tab.get().as_str() {
                         "general" => view! {
+                            <DefaultEditorCard/>
                             <div class="general-config-section">
                                 <h2>"General System Settings"</h2>
                                 <div class="config-form">
@@ -748,6 +749,113 @@ fn VmDefaultNetworkCard() -> impl IntoView {
     }
 }
 
+/// System default text editor (`EDITOR` / `VISUAL`): vim by default, neovim
+/// as the one-setting alternative (also the declarative key `system.editor`).
+#[component]
+fn DefaultEditorCard() -> impl IntoView {
+    let (state, set_state) = create_signal(None::<EditorState>);
+    let (unavailable, set_unavailable) = create_signal(None::<crate::api::Unavailable>);
+    let (choice, set_choice) = create_signal(String::new());
+    let (msg, set_msg) = create_signal(None::<(bool, String)>);
+    let (loaded, set_loaded) = create_signal(false);
+    let load = move || {
+        spawn_local(async move {
+            match crate::api::get_editor().await {
+                Ok(s) => {
+                    set_choice.set(s.choice.clone());
+                    set_unavailable.set(None);
+                    set_state.set(Some(s));
+                }
+                // 424: no default-editor tool on this node: an empty state, never a bare error
+                Err(e) if e.unavailable().is_some() => set_unavailable.set(e.unavailable()),
+                Err(e) => set_msg.set(Some((false, e.message))),
+            }
+            set_loaded.set(true);
+        });
+    };
+    load();
+    let save = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let v = choice.get_untracked();
+        spawn_local(async move {
+            match crate::api::put_editor(&v).await {
+                Ok(s) => {
+                    set_msg.set(Some((true, format!("Default editor saved: {}", s.choice))));
+                    set_choice.set(s.choice.clone());
+                    set_state.set(Some(s));
+                }
+                Err(e) => set_msg.set(Some((false, e.message))),
+            }
+        });
+    };
+    let options = move || {
+        let s = state.get().unwrap_or_default();
+        let cur = choice.get();
+        let mut names: Vec<(String, bool)> = s
+            .installed
+            .iter()
+            .map(|i| (i.choice.clone(), i.installed))
+            .collect();
+        // a custom absolute path stays selectable
+        if !cur.is_empty() && !names.iter().any(|(n, _)| *n == cur) {
+            names.push((cur.clone(), true));
+        }
+        names
+            .into_iter()
+            .map(|(n, inst)| {
+                let sel = n == cur;
+                let label = match (n.as_str(), inst) {
+                    ("vim", _) => "vim (default)".to_string(),
+                    ("neovim", true) => "neovim (nvim)".to_string(),
+                    (_, false) => format!("{n} (not installed)"),
+                    _ => n.clone(),
+                };
+                view! { <option value=n.clone() selected=sel>{label}</option> }
+            })
+            .collect_view()
+    };
+    let missing = move || {
+        state.get().map_or(false, |s| {
+            s.installed
+                .iter()
+                .any(|i| i.choice == choice.get() && !i.installed)
+        })
+    };
+    view! {
+        <div class="general-config-section" id="default-editor">
+            <h2>"Default editor"</h2>
+            {move || if let Some(u) = unavailable.get() {
+                view! { <crate::components::UnavailableState info=u on_retry=Callback::new(move |_: ()| load())/> }.into_view()
+            } else if !loaded.get() {
+                view! { <div class="loading">"Loading the default editor..."</div> }.into_view()
+            } else {
+                view! {
+                    <form on:submit=save>
+                        <div class="form-row">
+                            <select id="default-editor-select" aria-label="Default text editor"
+                                on:change=move |ev| set_choice.set(event_target_value(&ev))>
+                                {options}
+                            </select>
+                            <button type="submit" id="default-editor-save" class="btn btn-primary">"Save"</button>
+                        </div>
+                        <small class="form-help">
+                            "EDITOR and VISUAL for login shells, git, crontab -e, visudo and sudoedit. vim is the default; neovim is the one-setting alternative. Now: "
+                            {move || state.get().and_then(|s| s.effective).unwrap_or_else(|| "no editor installed".into())}
+                        </small>
+                        {move || missing().then(|| view! {
+                            <div class="alert alert-warning" id="default-editor-missing">
+                                "That editor is not installed, so the node falls back to vim. "
+                                <a href="/system/packages">"Install it from Packages"</a>
+                            </div>
+                        })}
+                        {move || msg.get().map(|(ok, m)| view! { <div class=if ok { "alert alert-success" } else { "alert alert-error" } id="default-editor-msg">{m}</div> })}
+                    </form>
+                }.into_view()
+            }}
+        </div>
+    }
+}
+
 /// The choices a search box narrows `all` to: case-insensitive substring
 /// match (a space also matches `_`, so "new york" finds America/New_York),
 /// with `current` always kept so the select never shows a blank value.
@@ -811,6 +919,17 @@ fn SearchSelect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_state_reads_the_api_answer() {
+        let s: EditorState = serde_json::from_str(
+            r#"{"choice":"neovim","effective":"/usr/bin/nvim","installed":[{"choice":"vim","installed":true},{"choice":"neovim","installed":true}]}"#,
+        )
+        .unwrap();
+        assert_eq!(s.choice, "neovim");
+        assert_eq!(s.effective.as_deref(), Some("/usr/bin/nvim"));
+        assert_eq!(s.installed.len(), 2);
+    }
 
     #[test]
     fn search_narrows_the_list_but_keeps_the_current_value() {
