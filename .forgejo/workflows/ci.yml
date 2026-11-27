@@ -1320,7 +1320,7 @@ jobs:
     container: catthehacker/ubuntu:act-26.04
     needs: [check, plan]
     if: needs.plan.outputs.dup != 'true'
-    timeout-minutes: 60
+    timeout-minutes: 90  # green runs take 50-60 min; 60 clipped healthy runs on loaded runners
     env:
       HX_RUN_TAG: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}   # run-scoped sibling container/network/volume names: exact cleanup, no collision with other jobs
     steps:
