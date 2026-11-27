@@ -56,8 +56,8 @@ fi
 
 # --- default editor (owner 2026-11-27): vim (system.editor in /etc/default-editor.conf), written to /etc/env.d/99editor so every login shell,
 # git, crontab -e, sudoedit, visudo and systemctl edit open it. A missing editor is a build failure: nano must never be the fallback.
-chmod 755 /usr/sbin/default-editor
-/usr/sbin/default-editor apply
+chmod 755 /usr/bin/default-editor
+/usr/bin/default-editor apply
 grep -q '^EDITOR="/usr/bin/vim"$' /etc/env.d/99editor || { echo "FATAL: default EDITOR is not vim: $(cat /etc/env.d/99editor)" >&2; exit 1; }
 
 # --- no fstab entries (live: overlay root; installer writes its own) ------

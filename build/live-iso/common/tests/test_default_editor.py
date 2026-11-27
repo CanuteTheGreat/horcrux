@@ -1,6 +1,6 @@
 """The default editor is vim on every Horcrux and Patronus tier (owner 2026-11-27: "I hate nano as the default editor").
 
-`default-editor` (common/overlay/usr/sbin) turns the one setting /etc/default-editor.conf (declarative key system.editor) into /etc/env.d/99editor.
+`default-editor` (common/overlay/usr/bin) turns the one setting /etc/default-editor.conf (declarative key system.editor) into /etc/env.d/99editor.
 These tests run it against a fake root; the QEMU gates (qemu-test.py headless_gates.editor_gate) prove the booted image.
 Runs identically in the vendored copy of common/ in Patronus."""
 import os
@@ -11,7 +11,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COMMON = os.path.abspath(os.path.join(HERE, ".."))
-TOOL = os.path.join(COMMON, "overlay", "usr", "sbin", "default-editor")
+TOOL = os.path.join(COMMON, "overlay", "usr", "bin", "default-editor")
 
 
 def atoms(path):
@@ -113,7 +113,7 @@ class ImageLists(unittest.TestCase):
 
     def test_setup_rootfs_applies_the_default_and_checks_it(self):
         s = open(os.path.join(COMMON, "setup-rootfs.sh")).read()
-        self.assertIn("/usr/sbin/default-editor apply", s)
+        self.assertIn("/usr/bin/default-editor apply", s)
         self.assertRegex(s, r"EDITOR=\"/usr/bin/vim\"")
 
     def test_tool_is_executable_and_posix_sh(self):

@@ -10,7 +10,7 @@ OVL = os.path.join(ROOT, "build", "live-iso", "common", "overlay")
 
 class Mirror(unittest.TestCase):
     def test_tool_and_conf_identical(self):
-        for name, ov in (("default-editor", "usr/sbin/default-editor"), ("default-editor.conf", "etc/default-editor.conf")):
+        for name, ov in (("default-editor", "usr/bin/default-editor"), ("default-editor.conf", "etc/default-editor.conf")):
             self.assertEqual(open(os.path.join(PKG, "files", name)).read(), open(os.path.join(OVL, ov)).read(), name)
 
     def test_ebuild_depends_on_vim_and_installs_both(self):

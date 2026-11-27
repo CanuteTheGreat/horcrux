@@ -180,10 +180,12 @@ def probe(label, user, shcmd):
             if p not in before and c in EDITORS:
                 found = c
         time.sleep(0.2)
-    for p in [p for p in comms() if p not in before]:
+    # kill only the probe's own session (pty.fork makes the child a session leader); never every new process on the machine
+    for p in list(comms()):
         try:
-            os.kill(p, signal.SIGKILL)
-        except OSError:
+            if p != pid and int(open("/proc/%d/stat" % p).read().rsplit(")", 1)[1].split()[3]) == pid:
+                os.kill(p, signal.SIGKILL)
+        except (OSError, ValueError, IndexError):
             pass
     try:
         os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0)

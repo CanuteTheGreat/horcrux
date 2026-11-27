@@ -231,7 +231,7 @@ async fn needs_a_login() {
 
 fn tool_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../build/live-iso/common/overlay/usr/sbin/default-editor")
+        .join("../build/live-iso/common/overlay/usr/bin/default-editor")
 }
 
 /// A scratch system root with the real `default-editor` tool and some editor

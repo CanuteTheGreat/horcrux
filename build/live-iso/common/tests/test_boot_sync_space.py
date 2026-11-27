@@ -18,6 +18,7 @@ class BootSyncSpace(unittest.TestCase):
         s = SCRIPT.read_text()
         self.assertLess(s.index("if sync_tree /boot"), s.index("grub.cfg.new"))
 
+    @unittest.skipUnless(PKG.exists(), "no packaged copy in this repo")
     def test_package_copy_identical(self):
         self.assertEqual(SCRIPT.read_text(), PKG.read_text())
 
