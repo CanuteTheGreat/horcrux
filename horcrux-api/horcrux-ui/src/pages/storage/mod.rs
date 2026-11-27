@@ -5,11 +5,14 @@
 //! - Disk management
 //! - Volume management (per pool, in pool_management)
 //! - SMART monitoring
+//! - SAN (iSCSI / NVMe-oF / FC targets, path view, add-storage wizard)
 
 mod disk_management;
 mod pool_management;
+mod san;
 mod smart_monitoring;
 
 pub use disk_management::DiskManagementPage;
 pub use pool_management::StorageManagement;
+pub use san::{SanPage, SanWizard};
 pub use smart_monitoring::SmartMonitoringPage;

@@ -6,6 +6,7 @@ pub mod directory;
 pub mod glusterfs;
 pub mod iscsi;
 pub mod lvm;
+pub mod lvm_chain;
 pub mod migration;
 pub mod nfs;
 pub mod s3;
@@ -57,6 +58,10 @@ pub struct StoragePool {
     /// the same directory code as a directory pool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// LVM pools only: shared-VG locking and what happens to removed
+    /// volumes (absent = defaults: local VG, plain `lvremove`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lvm: Option<lvm::LvmPoolOptions>,
 }
 
 /// (total, available) GB of the filesystem holding `path`, via statvfs(2).
@@ -130,6 +135,42 @@ pub fn parse_ceph_df(json: &str, pool: &str) -> Option<(u64, u64)> {
     Some(((used + avail) / gb, avail / gb))
 }
 
+/// (total, available) GB of an LVM volume group (`vgs --units b -o
+/// vg_size,vg_free`): an LVM pool's path is the VG NAME, so statvfs on it
+/// fails and the pool reported 0 GB (every `lvcreate` was then refused by the
+/// space check, shared VGs on a SAN LUN included).
+pub fn lvm_capacity_gb(vg: &str) -> Option<(u64, u64)> {
+    // HORCRUX_VGS_BIN lets tests (and unusual installs) point at another vgs binary.
+    let bin = std::env::var_os("HORCRUX_VGS_BIN").unwrap_or_else(|| "vgs".into());
+    let out = std::process::Command::new(bin)
+        .args([
+            "--noheadings",
+            "--units",
+            "b",
+            "--nosuffix",
+            "-o",
+            "vg_size,vg_free",
+            "--",
+        ])
+        .arg(vg)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_vgs_capacity(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse one `vgs --units b --nosuffix -o vg_size,vg_free` line into (total, available) GB.
+pub fn parse_vgs_capacity(text: &str) -> Option<(u64, u64)> {
+    let line = text.lines().find(|l| !l.trim().is_empty())?;
+    let mut f = line.split_whitespace();
+    let size: u64 = f.next()?.parse().ok()?;
+    let free: u64 = f.next()?.parse().ok()?;
+    let gb = 1024 * 1024 * 1024;
+    Some((size / gb, free / gb))
+}
+
 /// How the manager measures a pool's filesystem: `fs_capacity_gb`
 /// (tests substitute a fake to pin or move the numbers).
 pub type CapacityProbe = fn(&str) -> Option<(u64, u64)>;
@@ -153,9 +194,9 @@ fn measured_by_statvfs(t: &StorageType) -> bool {
 }
 
 /// Pools measured by a probe: statvfs for filesystem pools, `zfs list` for ZFS,
-/// `ceph df` for Ceph RBD.
+/// `ceph df` for Ceph RBD, `vgs` for LVM.
 fn measured_by_probe(t: &StorageType) -> bool {
-    measured_by_statvfs(t) || matches!(t, StorageType::Zfs | StorageType::Ceph)
+    measured_by_statvfs(t) || matches!(t, StorageType::Zfs | StorageType::Ceph | StorageType::Lvm)
 }
 
 /// Defence in depth: every backend re-checks each name it joins onto a pool
@@ -255,6 +296,13 @@ fn parse_lvs_volumes(text: &str, vg: &str) -> Vec<VolumeInfo> {
     out
 }
 
+/// Volume-chain options of an LVM pool that keeps snapshots that way.
+fn chain_opts(pool: &StoragePool) -> Option<&lvm::LvmPoolOptions> {
+    pool.lvm
+        .as_ref()
+        .filter(|o| pool.storage_type == StorageType::Lvm && o.snapshot_as_volume_chain)
+}
+
 fn unsupported(op: &str, t: &StorageType) -> horcrux_common::Error {
     horcrux_common::Error::InvalidConfig(format!("{op} is not supported on {t:?} storage pools"))
 }
@@ -297,6 +345,7 @@ pub struct StorageManager {
     /// Same for ZFS pools (dataset names, measured with `zfs list`).
     zfs_probe: CapacityProbe,
     ceph_probe: CapacityProbe,
+    lvm_probe: CapacityProbe,
     /// Pools whose last measurement hasn't returned yet (hung mount): not
     /// probed again until it does, so blocked threads don't pile up.
     measuring: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
@@ -334,6 +383,7 @@ impl StorageManager {
             capacity_probe: fs_capacity_gb,
             zfs_probe: zfs_capacity_gb,
             ceph_probe: ceph_capacity_gb,
+            lvm_probe: lvm_capacity_gb,
             measuring: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
@@ -394,6 +444,7 @@ impl StorageManager {
         self.capacity_probe = probe;
         self.zfs_probe = probe;
         self.ceph_probe = probe;
+        self.lvm_probe = probe;
         self
     }
 
@@ -403,6 +454,8 @@ impl StorageManager {
             self.zfs_probe
         } else if matches!(t, StorageType::Ceph) {
             self.ceph_probe
+        } else if matches!(t, StorageType::Lvm) {
+            self.lvm_probe
         } else {
             self.capacity_probe
         }
@@ -516,6 +569,39 @@ impl StorageManager {
                 "Storage pool {} already exists",
                 pool.id
             )));
+        }
+
+        if let Some(o) = &pool.lvm {
+            if pool.storage_type != StorageType::Lvm {
+                return Err(horcrux_common::Error::InvalidConfig(
+                    "lvm options only apply to LVM pools".into(),
+                ));
+            }
+            o.validate()?;
+            let tools = crate::san::tools::ToolStatus::probe();
+            if o.wipe_removed || o.discard_removed {
+                crate::san::tools::Need::Discard.check(&tools)?;
+            }
+            if o.shared {
+                crate::san::tools::Need::SharedLvm.check(&tools)?;
+                let t = std::time::Duration::from_secs(o.command_timeout_secs.into());
+                match crate::san::lvm_shared::vg_lock_type(&pool.path, t).await {
+                    Ok(Some(l)) if l == "sanlock" => {}
+                    Ok(Some(l)) => {
+                        return Err(horcrux_common::Error::InvalidConfig(format!(
+                            "volume group {} is not shared (lock type {l}); create it through /api/san/lvm",
+                            pool.path
+                        )))
+                    }
+                    Ok(None) => {
+                        return Err(horcrux_common::Error::NotFound(format!(
+                            "volume group {} is not visible on this node",
+                            pool.path
+                        )))
+                    }
+                    Err(e) => return Err(horcrux_common::Error::System(e)),
+                }
+            }
         }
 
         // Validate the pool based on type
@@ -698,11 +784,18 @@ impl StorageManager {
                     .create_volume(&pool.path, volume_name, size_gb)
                     .await?
             }
-            StorageType::Lvm => {
-                self.lvm
-                    .create_volume(&pool.path, volume_name, size_gb)
-                    .await?
-            }
+            StorageType::Lvm => match chain_opts(pool) {
+                Some(o) => {
+                    self.lvm
+                        .chain_create(&pool.path, volume_name, size_gb, o)
+                        .await?
+                }
+                None => {
+                    self.lvm
+                        .create_volume(&pool.path, volume_name, size_gb)
+                        .await?
+                }
+            },
             StorageType::Directory => {
                 self.directory
                     .create_volume(&pool.path, volume_name, size_gb)
@@ -887,7 +980,15 @@ impl StorageManager {
                     ],
                 )
                 .await?;
-                out.extend(parse_lvs_volumes(&text, &pool.path));
+                let mut v = parse_lvs_volumes(&text, &pool.path);
+                if chain_opts(&pool).is_some() {
+                    // Snapshot LVs are part of their volume, not volumes.
+                    v.retain(|x| !lvm_chain::is_snap_lv(&x.name));
+                    for x in &mut v {
+                        x.format = "qcow2".into();
+                    }
+                }
+                out.extend(v);
             }
             StorageType::Ceph => {
                 let text = run_tool("rbd", &["ls", "-l", "--format", "json", &pool.path]).await?;
@@ -965,7 +1066,19 @@ impl StorageManager {
         match pool.storage_type {
             StorageType::Zfs => self.zfs.delete_volume(&pool.path, volume_name).await,
             StorageType::Ceph => self.ceph.delete_volume(&pool.path, volume_name).await,
-            StorageType::Lvm => self.lvm.delete_volume(&pool.path, volume_name).await,
+            StorageType::Lvm => match &pool.lvm {
+                Some(o) if o.snapshot_as_volume_chain => {
+                    self.lvm
+                        .chain_delete_volume(&pool.path, volume_name, o)
+                        .await
+                }
+                Some(o) => {
+                    self.lvm
+                        .delete_volume_with(&pool.path, volume_name, o)
+                        .await
+                }
+                None => self.lvm.delete_volume(&pool.path, volume_name).await,
+            },
             ref t => Err(unsupported("Deleting volumes", t)),
         }
     }
@@ -1067,11 +1180,18 @@ impl StorageManager {
                     .create_snapshot(&pool.path, volume_name, snapshot_name)
                     .await?
             }
-            StorageType::Lvm => {
-                self.lvm
-                    .create_snapshot(&pool.path, volume_name, snapshot_name)
-                    .await?
-            }
+            StorageType::Lvm => match chain_opts(pool) {
+                Some(o) => {
+                    self.lvm
+                        .chain_snapshot(&pool.path, volume_name, snapshot_name, o)
+                        .await?
+                }
+                None => {
+                    self.lvm
+                        .create_snapshot(&pool.path, volume_name, snapshot_name)
+                        .await?
+                }
+            },
             StorageType::Directory => {
                 return Err(horcrux_common::Error::InvalidConfig(
                     "Directory storage does not support snapshots".to_string(),
@@ -1121,6 +1241,46 @@ impl StorageManager {
         Ok(())
     }
 
+    /// The pool and its volume-chain options, for the chain-only calls.
+    async fn chain_pool(&self, pool_id: &str) -> Result<(String, lvm::LvmPoolOptions)> {
+        let pools = self.pools.read().await;
+        let pool = pools.get(pool_id).ok_or_else(|| {
+            horcrux_common::Error::NotFound(format!("Storage pool {} not found", pool_id))
+        })?;
+        match chain_opts(pool) {
+            Some(o) => Ok((pool.path.clone(), o.clone())),
+            None => Err(horcrux_common::Error::InvalidConfig(format!(
+                "Storage pool {pool_id} does not keep snapshots as a volume chain \
+                 (an LVM pool created with snapshot_as_volume_chain)"
+            ))),
+        }
+    }
+
+    /// A volume's snapshot chain (volume-chain LVM pools).
+    pub async fn volume_snapshots(
+        &self,
+        pool_id: &str,
+        volume_name: &str,
+    ) -> Result<lvm_chain::ChainView> {
+        check_names(&[volume_name])?;
+        let (vg, o) = self.chain_pool(pool_id).await?;
+        self.lvm.chain_info(&vg, volume_name, &o).await
+    }
+
+    /// Delete one snapshot of a volume (volume-chain LVM pools).
+    pub async fn delete_volume_snapshot(
+        &self,
+        pool_id: &str,
+        volume_name: &str,
+        snapshot_name: &str,
+    ) -> Result<()> {
+        check_names(&[volume_name, snapshot_name])?;
+        let (vg, o) = self.chain_pool(pool_id).await?;
+        self.lvm
+            .chain_delete_snapshot(&vg, volume_name, snapshot_name, &o)
+            .await
+    }
+
     /// Restore a volume from a snapshot
     pub async fn restore_snapshot(
         &self,
@@ -1145,11 +1305,18 @@ impl StorageManager {
                     .restore_snapshot(&pool.path, volume_name, snapshot_name)
                     .await?
             }
-            StorageType::Lvm => {
-                self.lvm
-                    .restore_snapshot(&pool.path, volume_name, snapshot_name)
-                    .await?
-            }
+            StorageType::Lvm => match chain_opts(pool) {
+                Some(o) => {
+                    self.lvm
+                        .chain_rollback(&pool.path, volume_name, snapshot_name, o)
+                        .await?
+                }
+                None => {
+                    self.lvm
+                        .restore_snapshot(&pool.path, volume_name, snapshot_name)
+                        .await?
+                }
+            },
             StorageType::Directory => {
                 return Err(horcrux_common::Error::InvalidConfig(
                     "Directory storage does not support snapshots".to_string(),
@@ -1222,6 +1389,7 @@ mod tests {
             total: 0,
             enabled: true,
             source: None,
+            lvm: None,
         }
     }
 
@@ -1305,8 +1473,14 @@ mod tests {
         StorageManager::refresh_capacity(fake_fs, &mut gp);
         assert_eq!((gp.total, gp.available), (10, 4));
 
-        // Block pools (LVM/iSCSI) and S3 aren't statvfs'd.
-        for t in [StorageType::Lvm, StorageType::Iscsi, StorageType::S3] {
+        // LVM pools are measured (by `vgs`, the fake here) like the rest.
+        let mut lp = pool("l", StorageType::Lvm, "vg_x");
+        lp.available = 7;
+        m.pools.write().await.insert("l".into(), lp);
+        assert_eq!(m.get_pool("l").await.unwrap().available, 4);
+
+        // iSCSI (sized at attach) and S3 aren't probed.
+        for t in [StorageType::Iscsi, StorageType::S3] {
             let mut bp = pool("b", t.clone(), "tank/vms");
             bp.available = 7;
             m.pools.write().await.insert("b".into(), bp.clone());
@@ -2000,6 +2174,31 @@ mod tests {
         std::env::set_var("HORCRUX_CEPH_BIN", dir.join("no-such-ceph"));
         assert_eq!(ceph_capacity_gb("hxpool"), None);
         std::env::remove_var("HORCRUX_CEPH_BIN");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `lvm_capacity_gb` runs `vgs` in bytes and reports the VG in GB; None
+    /// when vgs fails (VG not visible). (The only test that sets HORCRUX_VGS_BIN.)
+    #[test]
+    fn lvm_capacity_gb_runs_vgs_and_reports_its_numbers() {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            parse_vgs_capacity("\n  3217031168 2143289344\n"),
+            Some((2, 1))
+        );
+        assert_eq!(parse_vgs_capacity("  garbage\n"), None);
+        let dir = scratch("vgs-bin");
+        let f = dir.join("vgs");
+        std::fs::write(
+            &f,
+            "#!/bin/sh\n[ \"$*\" = '--noheadings --units b --nosuffix -o vg_size,vg_free -- vg_t' ] || exit 5\necho '  5368709120 4294967296'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("HORCRUX_VGS_BIN", &f);
+        assert_eq!(lvm_capacity_gb("vg_t"), Some((5, 4)));
+        assert_eq!(lvm_capacity_gb("vg_other"), None);
+        std::env::remove_var("HORCRUX_VGS_BIN");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

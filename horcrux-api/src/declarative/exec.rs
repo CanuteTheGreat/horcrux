@@ -25,6 +25,10 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         security: crate::api::security::load_settings(state).await,
         power_node: crate::api::guest_state::policy::load_node(state).await,
         power_vms: power_vms(state).await,
+        #[cfg(feature = "san")]
+        san: crate::api::san::live_spec(state).await,
+        #[cfg(not(feature = "san"))]
+        san: Default::default(),
     }
 }
 
@@ -135,6 +139,15 @@ async fn run_change(
             ))
         }
 
+        #[cfg(feature = "san")]
+        (k @ ("san_settings" | "san_target" | "san_lvm" | "san_nvme_target"), a) => {
+            let w = spec.san.as_ref().ok_or("not in spec")?;
+            crate::api::san::declarative_apply(state, w, k, &c.name, a).await?;
+            Ok(Some(
+                "replicated to every cluster member and applied on each".into(),
+            ))
+        }
+
         ("remote_play", Action::Update) => {
             let w = spec.remote_play.clone().ok_or("not in spec")?;
             crate::api::remote_play::set_settings(state, w).await?;
@@ -167,6 +180,7 @@ async fn run_change(
                 total: 0,
                 enabled: w.enabled,
                 source: None,
+                lvm: None,
             };
             state
                 .storage_manager

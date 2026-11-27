@@ -69,6 +69,10 @@ pub struct Spec {
     /// defaults to saving state to encrypted storage).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_power: Option<GuestPowerSpec>,
+    /// SAN storage (cluster-wide: iSCSI targets, multipath settings,
+    /// shared VGs; docs/SAN.md). Needs USE=san. Absent = unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub san: Option<horcrux_storage::san::SanSpec>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
@@ -344,6 +348,8 @@ pub struct Live {
     pub power_node: crate::api::guest_state::NodePolicy,
     /// Per-VM power overrides by VM name (only VMs that have one).
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
+    /// The cluster-wide SAN config (empty without USE=san).
+    pub san: horcrux_storage::san::SanSpec,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -379,6 +385,114 @@ impl Plan {
     /// Nothing to do and nothing wrong.
     pub fn in_sync(&self) -> bool {
         self.changes.is_empty() && self.errors.is_empty()
+    }
+}
+
+/// Field-by-field differences of two serializable values (`k: a -> b`).
+fn json_diff<T: Serialize>(a: &T, b: &T) -> Vec<String> {
+    let a = serde_json::to_value(a).unwrap_or_default();
+    let b = serde_json::to_value(b).unwrap_or_default();
+    let mut d = Vec::new();
+    if let (Some(a), Some(b)) = (a.as_object(), b.as_object()) {
+        for (k, bv) in b {
+            let av = a.get(k).cloned().unwrap_or_default();
+            if av != *bv {
+                d.push(format!("{k}: {av} -> {bv}"));
+            }
+        }
+    }
+    d
+}
+
+fn san_plan(
+    p: &mut Plan,
+    creates: &mut Vec<Change>,
+    deletes: &mut Vec<Change>,
+    want: &horcrux_storage::san::SanSpec,
+    live: &horcrux_storage::san::SanSpec,
+    prune: bool,
+) {
+    if !cfg!(feature = "san") {
+        p.errors
+            .push("san: SAN storage is not compiled into this build (rebuild with USE=san)".into());
+        return;
+    }
+    let mut w = want.clone();
+    if let Err(e) = w.validate() {
+        p.errors.push(format!("san.{e}"));
+        return;
+    }
+    let (w, l) = (w.normalized(), live.normalized());
+    if w.settings != l.settings {
+        creates.push(ch(
+            "san_settings",
+            horcrux_storage::san::SETTINGS_ID,
+            Action::Update,
+            json_diff(&l.settings, &w.settings),
+        ));
+    }
+    for t in &w.targets {
+        match l.targets.iter().find(|x| x.id == t.id) {
+            None => creates.push(ch("san_target", &t.id, Action::Create, vec![t.iqn.clone()])),
+            Some(x) if x != t => {
+                creates.push(ch("san_target", &t.id, Action::Update, json_diff(x, t)))
+            }
+            _ => {}
+        }
+    }
+    for v in &w.shared_lvm {
+        match l.shared_lvm.iter().find(|x| x.id == v.id) {
+            None => creates.push(ch(
+                "san_lvm",
+                &v.id,
+                Action::Create,
+                vec![format!("VG {} on {}", v.vg_name, v.device)],
+            )),
+            Some(x) if x != v => {
+                creates.push(ch("san_lvm", &v.id, Action::Update, json_diff(x, v)))
+            }
+            _ => {}
+        }
+    }
+    for t in &w.nvme_targets {
+        match l.nvme_targets.iter().find(|x| x.id == t.id) {
+            None => creates.push(ch(
+                "san_nvme_target",
+                &t.id,
+                Action::Create,
+                vec![t.subnqn.clone()],
+            )),
+            Some(x) if x != t => creates.push(ch(
+                "san_nvme_target",
+                &t.id,
+                Action::Update,
+                json_diff(x, t),
+            )),
+            _ => {}
+        }
+    }
+    if prune {
+        for t in l
+            .nvme_targets
+            .iter()
+            .filter(|t| !w.nvme_targets.iter().any(|x| x.id == t.id))
+        {
+            deletes.push(ch("san_nvme_target", &t.id, Action::Delete, vec![]));
+        }
+        for t in l
+            .targets
+            .iter()
+            .filter(|t| !w.targets.iter().any(|x| x.id == t.id))
+        {
+            deletes.push(ch("san_target", &t.id, Action::Delete, vec![]));
+        }
+        for v in l
+            .shared_lvm
+            .iter()
+            .filter(|v| !w.shared_lvm.iter().any(|x| x.id == v.id))
+        {
+            deletes.push(ch("san_lvm", &v.id, Action::Delete, vec![]));
+        }
     }
 }
 
@@ -731,6 +845,11 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // SAN (cluster-wide rows): settings, then targets, then shared VGs.
+    if let Some(w) = &spec.san {
+        san_plan(&mut p, &mut creates, &mut deletes, w, &live.san, prune);
+    }
+
     // Creates/updates run dependency-first (pools, zones, vnets, subnets,
     // VMs, guest power); deletes run in the opposite order (VMs first, pools last).
     let rank = |k: &str| {
@@ -738,6 +857,9 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
             "console",
             "remote_play",
             "security",
+            "san_settings",
+            "san_target",
+            "san_lvm",
             "storage_pool",
             "zone",
             "vnet",
@@ -1016,6 +1138,7 @@ pub fn export(live: &Live) -> Spec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),
         }),
+        san: cfg!(feature = "san").then(|| live.san.normalized()),
         extra: BTreeMap::new(),
     }
 }

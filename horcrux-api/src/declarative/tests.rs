@@ -32,6 +32,7 @@ fn pool(id: &str, name: &str) -> StoragePool {
         total: 10,
         enabled: true,
         source: None,
+        lvm: None,
     }
 }
 
@@ -423,4 +424,63 @@ fn security_settings_are_planned_validated_and_exported() {
         serde_yaml::from_str("version: 1\nsecurity: {vuln_scan: {schedule_hours: 0}}\n").unwrap();
     assert_eq!(y.security.unwrap().vuln_scan.schedule_hours, 0);
     assert!(export(&live).security.is_some());
+}
+
+#[cfg(feature = "san")]
+#[test]
+fn san_section_plans_creates_updates_and_prunes() {
+    use horcrux_storage::san::SanSpec;
+    let t = |id: &str, portal: &str| -> horcrux_storage::san::IscsiTargetSpec {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "iqn": format!("iqn.2003-01.org.x:{id}"), "portals": [portal]
+        }))
+        .unwrap()
+    };
+    let live = Live {
+        san: SanSpec {
+            targets: vec![t("a", "10.0.0.1:3260"), t("old", "10.0.0.9:3260")],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    // export -> plan is in sync
+    let e = export(&live);
+    assert!(e.san.is_some());
+    assert!(plan(&e, &live, true).changes.is_empty());
+    // a new target, a changed one, a missing one (pruned), new settings
+    let mut want = e.san.clone().unwrap();
+    want.targets = vec![t("a", "10.0.0.2"), t("b", "10.0.1.1")];
+    want.settings.polling_interval_secs = 10;
+    want.nvme_targets = vec![serde_json::from_value(serde_json::json!({
+        "id": "nv", "subnqn": "nqn.2014-08.org.x:nv", "addresses": ["10.0.2.1"]
+    }))
+    .unwrap()];
+    let s = Spec {
+        san: Some(want),
+        ..Default::default()
+    };
+    let p = plan(&s, &live, true);
+    assert!(p.errors.is_empty(), "{:?}", p.errors);
+    let got: Vec<(String, String, Action)> = p
+        .changes
+        .iter()
+        .map(|c| (c.kind.clone(), c.name.clone(), c.action))
+        .collect();
+    assert!(got.contains(&("san_settings".into(), "cluster".into(), Action::Update)));
+    assert!(got.contains(&("san_target".into(), "a".into(), Action::Update)));
+    assert!(got.contains(&("san_target".into(), "b".into(), Action::Create)));
+    assert!(got.contains(&("san_target".into(), "old".into(), Action::Delete)));
+    assert!(got.contains(&("san_nvme_target".into(), "nv".into(), Action::Create)));
+    // invalid sections are plan errors, not applies
+    let mut bad = SanSpec::default();
+    bad.settings.config_path = "/etc/multipath.conf".into();
+    let p = plan(
+        &Spec {
+            san: Some(bad),
+            ..Default::default()
+        },
+        &live,
+        false,
+    );
+    assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
 }
