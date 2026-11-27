@@ -55,6 +55,9 @@ struct Registry {
     /// UPID -> process group id of a running task.
     running: Mutex<HashMap<String, u32>>,
     stopped: Mutex<std::collections::HashSet<String>>,
+    /// UPIDs of guest operations running inside an API request (see
+    /// `record_guest_actions`): live, but there is no process to stop.
+    inline: Mutex<std::collections::HashSet<String>>,
 }
 
 static REGISTRY: OnceLock<Registry> = OnceLock::new();
@@ -68,6 +71,7 @@ fn registry() -> &'static Registry {
             dir,
             running: Mutex::new(HashMap::new()),
             stopped: Mutex::new(Default::default()),
+            inline: Mutex::new(Default::default()),
         }
     })
 }
@@ -125,7 +129,8 @@ fn load(upid: &str) -> Option<TaskRecord> {
     // first, record still running after" really is a dead task. Checking the
     // registry after the read called a task that finished in between
     // "interrupted" (CI flake: system-admin e2e "update runs emerge --sync").
-    let in_registry = registry().running.lock().unwrap().contains_key(upid);
+    let in_registry = registry().running.lock().unwrap().contains_key(upid)
+        || registry().inline.lock().unwrap().contains(upid);
     let mut rec: TaskRecord =
         serde_json::from_slice(&std::fs::read(record_path(upid)).ok()?).ok()?;
     // A task still marked running that this process isn't running died with
@@ -393,6 +398,13 @@ async fn stop_task(Path(upid): Path<String>) -> Result<Json<TaskRecord>, ApiErro
     }
     let pid = registry().running.lock().unwrap().get(&upid).copied();
     let Some(pid) = pid else {
+        if registry().inline.lock().unwrap().contains(&upid) {
+            return Err(ApiError::Conflict(
+                "this guest operation cannot be stopped from the task log; it ends on its own \
+                 (use Stop on the guest to force a stuck shutdown)"
+                    .into(),
+            ));
+        }
         return Err(ApiError::Conflict("task is not running".into()));
     };
     registry().stopped.lock().unwrap().insert(upid.clone());
@@ -419,6 +431,249 @@ async fn stop_task(Path(upid): Path<String>) -> Result<Json<TaskRecord>, ApiErro
         }
     }
     Ok(Json(find(&upid)?))
+}
+
+// ---------------------------------------------------------------------------
+// Guest operations in the task log
+// ---------------------------------------------------------------------------
+//
+// Proxmox records every guest operation (qmstart, qmshutdown, qmclone, vzdump,
+// ...) in the task log, so "who did what to which guest, when, and did it
+// work" has one answer. Horcrux's guest handlers run inline in the request,
+// so instead of touching each handler, one middleware (innermost, after
+// authentication and the permission check) records the operations listed in
+// `guest_action` as tasks: "running" while the request runs, then ok/error
+// with the HTTP status and the error text in the task's log.
+
+/// The task type and target of a guest operation, or None for any other
+/// request (reads, config edits, consoles, ...).
+pub fn guest_action(method: &axum::http::Method, path: &str) -> Option<(&'static str, String)> {
+    use axum::http::Method;
+    let segs: Vec<&str> = path
+        .trim_start_matches("/api/")
+        .trim_end_matches('/')
+        .split('/')
+        .collect();
+    let post = method == Method::POST;
+    let del = method == Method::DELETE;
+    let t = |kind: &'static str, target: &str| Some((kind, target.to_string()));
+    match segs.as_slice() {
+        // Virtual machines
+        ["vms"] if post => t("vm-create", "new"),
+        ["vms", "gaming"] if post => t("vm-create", "new"),
+        ["vms", "import", kind] if post && matches!(*kind, "ovf" | "esxi" | "libvirt") => {
+            t("vm-import", kind)
+        }
+        ["vms", "import", ..] => None,
+        ["vms", id] if del => t("vm-destroy", id),
+        ["vms", id, action] if post => match *action {
+            "start" => t("vm-start", id),
+            "stop" => t("vm-stop", id),
+            "shutdown" => t("vm-shutdown", id),
+            "reboot" => t("vm-reboot", id),
+            "reset" => t("vm-reset", id),
+            "pause" => t("vm-pause", id),
+            "resume" => t("vm-resume", id),
+            "hibernate" => t("vm-hibernate", id),
+            "save-state" => t("vm-save-state", id),
+            "resume-state" => t("vm-resume-state", id),
+            "clone" | "clone-cross-node" => t("vm-clone", id),
+            "snapshots" => t("vm-snapshot", id),
+            "import-disk" => t("vm-import-disk", id),
+            _ => None,
+        },
+        ["vms", id, "snapshots", _snap] if del => t("vm-snapshot-delete", id),
+        ["vms", id, "snapshots", _snap, "restore"] if post => t("vm-rollback", id),
+        ["migrate", id] if post => t("vm-migrate", id),
+        // Containers
+        ["containers"] if post => t("ct-create", "new"),
+        ["containers", id] if del => t("ct-destroy", id),
+        ["containers", id, action] if post => match *action {
+            "start" => t("ct-start", id),
+            "stop" => t("ct-stop", id),
+            "shutdown" => t("ct-shutdown", id),
+            "reboot" => t("ct-reboot", id),
+            "pause" => t("ct-pause", id),
+            "resume" => t("ct-resume", id),
+            "save-state" => t("ct-save-state", id),
+            "resume-state" => t("ct-resume-state", id),
+            "clone" => t("ct-clone", id),
+            "resize" => t("ct-resize", id),
+            "snapshots" => t("ct-snapshot", id),
+            _ => None,
+        },
+        ["containers", id, "snapshots", _snap] if del => t("ct-snapshot-delete", id),
+        ["containers", id, "snapshots", _snap, "rollback"] if post => t("ct-rollback", id),
+        // Backups
+        ["backups"] if post => t("backup", "new"),
+        ["backups", "prune"] if post => t("backup-prune", "all"),
+        ["backups", id] if del => t("backup-delete", id),
+        ["backups", id, "restore"] if post => t("backup-restore", id),
+        ["backups", id, "verify"] if post => t("backup-verify", id),
+        ["backup-jobs", id, "run"] if post => t("backup-job", id),
+        _ => None,
+    }
+}
+
+/// A guest operation running inside a request. Dropped without `finish`
+/// (the client went away and the request was cancelled) it ends as an error.
+struct InlineTask {
+    rec: Option<TaskRecord>,
+}
+
+impl InlineTask {
+    fn begin(task_type: &str, target: &str, user: &str, what: &str) -> Self {
+        let upid = new_upid(task_type, target, user);
+        let _ = std::fs::write(log_path(&upid), format!("{what}\n"));
+        let rec = TaskRecord {
+            upid: upid.clone(),
+            node: hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            task_type: task_type.into(),
+            target: Some(target.into()),
+            user: user.into(),
+            status: "running".into(),
+            exit_code: None,
+            start_time: now(),
+            end_time: None,
+        };
+        registry().inline.lock().unwrap().insert(upid);
+        save(&rec);
+        prune();
+        InlineTask { rec: Some(rec) }
+    }
+
+    fn finish(mut self, ok: bool, target: Option<String>, line: &str) {
+        if let Some(rec) = self.rec.take() {
+            end_inline(rec, ok, target, line);
+        }
+    }
+}
+
+impl Drop for InlineTask {
+    fn drop(&mut self) {
+        if let Some(rec) = self.rec.take() {
+            end_inline(
+                rec,
+                false,
+                None,
+                "request cancelled before it finished (client disconnected)",
+            );
+        }
+    }
+}
+
+fn end_inline(mut rec: TaskRecord, ok: bool, target: Option<String>, line: &str) {
+    if let Some(t) = target {
+        rec.target = Some(t);
+    }
+    rec.status = if ok { "ok" } else { "error" }.into();
+    rec.exit_code = Some(if ok { 0 } else { 1 });
+    rec.end_time = Some(now());
+    if !line.is_empty() {
+        append_log(&rec.upid, line);
+    }
+    append_log(&rec.upid, &format!("TASK {}", rec.status.to_uppercase()));
+    save(&rec);
+    registry().inline.lock().unwrap().remove(&rec.upid);
+}
+
+/// Bodies read back for the task log: API errors and create responses are
+/// small JSON; anything without an exact size this small is left untouched.
+const DETAIL_MAX: u64 = 256 * 1024;
+
+/// The readable part of an API answer: `message`/`error` of a JSON error,
+/// else the text itself, shortened.
+fn detail_text(body: &[u8]) -> String {
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) {
+        for k in ["message", "error", "detail", "reason"] {
+            if let Some(m) = v.get(k).and_then(|m| m.as_str()) {
+                return m.chars().take(2000).collect();
+            }
+        }
+    }
+    String::from_utf8_lossy(body).chars().take(2000).collect()
+}
+
+/// The id (and name) of what a create call made, from its JSON answer.
+fn created_target(body: &[u8]) -> Option<(String, Option<String>)> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let v = v.get("vm").or_else(|| v.get("container")).unwrap_or(&v);
+    let id = v.get("id").and_then(|i| {
+        i.as_str()
+            .map(str::to_string)
+            .or_else(|| i.as_u64().map(|n| n.to_string()))
+    })?;
+    let name = v.get("name").and_then(|n| n.as_str()).map(str::to_string);
+    Some((id, name))
+}
+
+/// Middleware: record guest operations (`guest_action`) as tasks.
+pub async fn record_guest_actions(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::body::{Body, HttpBody};
+    let Some((kind, target)) = guest_action(request.method(), request.uri().path()) else {
+        return next.run(request).await;
+    };
+    let user = request
+        .extensions()
+        .get::<crate::middleware::auth::AuthUser>()
+        .map(|u| u.username.clone())
+        .unwrap_or_else(|| "unknown".into());
+    let what = format!("{} {}", request.method(), request.uri().path());
+    let task = InlineTask::begin(kind, &target, &user, &what);
+    let resp = next.run(request).await;
+    let status = resp.status();
+    let ok = status.is_success();
+    let wants_body = !ok || target == "new";
+    let small = resp
+        .body()
+        .size_hint()
+        .exact()
+        .is_some_and(|n| n <= DETAIL_MAX);
+    if !(wants_body && small) {
+        let line = if ok {
+            format!("HTTP {}", status.as_u16())
+        } else {
+            format!("failed: HTTP {}", status.as_u16())
+        };
+        task.finish(ok, None, &line);
+        return resp;
+    }
+    let (parts, body) = resp.into_parts();
+    let bytes = match axum::body::to_bytes(body, DETAIL_MAX as usize).await {
+        Ok(b) => b,
+        Err(e) => {
+            task.finish(
+                ok,
+                None,
+                &format!("HTTP {} (answer unreadable: {e})", status.as_u16()),
+            );
+            return axum::response::Response::from_parts(parts, Body::empty());
+        }
+    };
+    if ok {
+        match created_target(&bytes) {
+            Some((id, name)) => {
+                let line = match &name {
+                    Some(n) => format!("created {n} (id {id})"),
+                    None => format!("created id {id}"),
+                };
+                task.finish(true, Some(id), &line);
+            }
+            None => task.finish(true, None, &format!("HTTP {}", status.as_u16())),
+        }
+    } else {
+        task.finish(
+            false,
+            None,
+            &format!("failed: HTTP {}: {}", status.as_u16(), detail_text(&bytes)),
+        );
+    }
+    axum::response::Response::from_parts(parts, Body::from(bytes))
 }
 
 #[cfg(test)]
@@ -490,5 +745,138 @@ mod tests {
             stop_task(Path(long)).await.is_err(),
             "stopping a finished task is a conflict"
         );
+    }
+
+    #[test]
+    fn guest_operations_are_tasks_reads_and_edits_are_not() {
+        use axum::http::Method;
+        let g = |m: Method, p: &str| guest_action(&m, p).map(|(k, t)| (k.to_string(), t));
+        let some = |k: &str, t: &str| Some((k.to_string(), t.to_string()));
+        assert_eq!(
+            g(Method::POST, "/api/vms/101/start"),
+            some("vm-start", "101")
+        );
+        assert_eq!(
+            g(Method::POST, "/api/vms/101/shutdown"),
+            some("vm-shutdown", "101")
+        );
+        assert_eq!(g(Method::DELETE, "/api/vms/101"), some("vm-destroy", "101"));
+        assert_eq!(g(Method::POST, "/api/vms"), some("vm-create", "new"));
+        assert_eq!(
+            g(Method::POST, "/api/vms/import/ovf"),
+            some("vm-import", "ovf")
+        );
+        assert_eq!(g(Method::POST, "/api/vms/import/ovf/preview"), None);
+        assert_eq!(
+            g(Method::POST, "/api/vms/101/snapshots/s1/restore"),
+            some("vm-rollback", "101")
+        );
+        assert_eq!(g(Method::POST, "/api/containers/c1/rollback"), None);
+        assert_eq!(
+            g(Method::POST, "/api/containers/c1/snapshots/s/rollback"),
+            some("ct-rollback", "c1")
+        );
+        assert_eq!(
+            g(Method::POST, "/api/backup-jobs/j1/run"),
+            some("backup-job", "j1")
+        );
+        assert_eq!(
+            g(Method::POST, "/api/backups/prune"),
+            some("backup-prune", "all")
+        );
+        assert_eq!(
+            g(Method::POST, "/api/migrate/101"),
+            some("vm-migrate", "101")
+        );
+        assert_eq!(g(Method::GET, "/api/vms/101"), None);
+        assert_eq!(g(Method::GET, "/api/vms/101/start"), None);
+        assert_eq!(g(Method::PUT, "/api/vms/101/config"), None);
+        assert_eq!(g(Method::POST, "/api/vms/101/agent/ping"), None);
+        assert_eq!(g(Method::POST, "/api/tasks"), None);
+    }
+
+    #[test]
+    fn error_and_create_answers_are_readable_in_the_log() {
+        assert_eq!(
+            detail_text(br#"{"error":"VM is already running"}"#),
+            "VM is already running"
+        );
+        assert_eq!(detail_text(b"plain failure"), "plain failure");
+        assert_eq!(
+            created_target(br#"{"id":"104","name":"web"}"#),
+            Some(("104".into(), Some("web".into())))
+        );
+        assert_eq!(
+            created_target(br#"{"vm":{"id":7}}"#),
+            Some(("7".into(), None))
+        );
+        assert_eq!(created_target(b"[]"), None);
+    }
+
+    #[tokio::test]
+    async fn the_middleware_records_a_guest_operation_and_its_failure() {
+        use axum::{routing::post, Router};
+        use tower::ServiceExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HORCRUX_DATA_DIR", dir.path());
+        let app = Router::new()
+            .route("/api/vms/:id/start", post(|| async { "started" }))
+            .route(
+                "/api/vms/:id/stop",
+                post(|| async {
+                    (
+                        axum::http::StatusCode::CONFLICT,
+                        axum::Json(serde_json::json!({"error": "VM is not running"})),
+                    )
+                }),
+            )
+            .route("/api/vms/:id/config", axum::routing::put(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(record_guest_actions));
+        let call = |m: &str, p: &str| {
+            axum::http::Request::builder()
+                .method(m)
+                .uri(p)
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let r = app
+            .clone()
+            .oneshot(call("POST", "/api/vms/unit-vm-9/start"))
+            .await
+            .unwrap();
+        assert!(r.status().is_success());
+        let r = app
+            .clone()
+            .oneshot(call("POST", "/api/vms/unit-vm-9/stop"))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), axum::http::StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(r.into_body(), 4096).await.unwrap();
+        assert!(
+            String::from_utf8_lossy(&body).contains("VM is not running"),
+            "the error body still reaches the client"
+        );
+        app.oneshot(call("PUT", "/api/vms/unit-vm-9/config"))
+            .await
+            .unwrap();
+        let mine: Vec<TaskRecord> = list_all()
+            .into_iter()
+            .filter(|t| t.target.as_deref() == Some("unit-vm-9"))
+            .collect();
+        assert_eq!(
+            mine.len(),
+            2,
+            "start + stop recorded, config edit not: {mine:?}"
+        );
+        let start = mine.iter().find(|t| t.task_type == "vm-start").unwrap();
+        assert_eq!(start.status, "ok");
+        let stop = mine.iter().find(|t| t.task_type == "vm-stop").unwrap();
+        assert_eq!(stop.status, "error");
+        let log = std::fs::read_to_string(log_path(&stop.upid)).unwrap();
+        assert!(
+            log.contains("HTTP 409") && log.contains("VM is not running"),
+            "{log}"
+        );
+        assert!(stop_task(Path(stop.upid.clone())).await.is_err());
     }
 }
