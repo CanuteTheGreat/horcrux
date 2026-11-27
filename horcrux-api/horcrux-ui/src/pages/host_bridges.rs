@@ -1,9 +1,10 @@
 //! Infrastructure > Host Bridges (`/network/bridges`): the Linux bridges VM
 //! network cards attach to; create and delete Horcrux-managed ones.
 use crate::api::{
-    create_bond, create_bridge, create_vlan, delete_bond, delete_bridge, delete_vlan, list_bonds,
-    list_bridges, list_host_interfaces, list_vlans, set_bridge_trunk_vlans, update_bridge,
-    BridgeInfo, HostInterface, ManagedBond, ManagedVlan, NewBridge,
+    confirm_bridge_change, create_bond, create_bridge, create_vlan, delete_bond, delete_bridge,
+    delete_vlan, list_bonds, list_bridges, list_host_interfaces, list_vlans,
+    set_bridge_trunk_vlans, update_bridge, BridgeInfo, HostInterface, ManagedBond, ManagedVlan,
+    NewBridge,
 };
 use leptos::*;
 
@@ -18,6 +19,15 @@ pub fn HostBridgesPage() -> impl IntoView {
     let ed_addr = create_rw_signal(String::new());
     let ed_ports = create_rw_signal(String::new());
     let ed_comment = create_rw_signal(String::new());
+    // A saved address/port change that undoes itself unless kept: (bridge, deadline ms).
+    let keep = create_rw_signal(None::<(String, f64)>);
+    let now = create_rw_signal(js_sys::Date::now());
+    if let Ok(h) = set_interval_with_handle(
+        move || now.set(js_sys::Date::now()),
+        std::time::Duration::from_millis(1000),
+    ) {
+        on_cleanup(move || h.clear());
+    }
     let bond_name = create_rw_signal(String::new());
     let bond_mode = create_rw_signal("active-backup".to_string());
     let bond_slaves = create_rw_signal(String::new());
@@ -188,15 +198,48 @@ pub fn HostBridgesPage() -> impl IntoView {
         });
     };
 
+    create_effect(move |_| {
+        if let Some((n, dl)) = keep.get() {
+            if now.get() > dl + 1500.0 {
+                keep.set(None);
+                set_notice.set(Some(format!(
+                    "The change to {n} was not kept and has been undone"
+                )));
+                reload();
+            }
+        }
+    });
+
     let save_edit = move |_| {
         let Some(n) = editing.get() else { return };
         let (a, p, c) = (ed_addr.get(), split_list(&ed_ports.get()), ed_comment.get());
+        // Address or port changes can cut this browser off: they undo
+        // themselves unless kept within REVERT_SECS.
+        let risky = bridges.get_untracked().iter().any(|b| {
+            b.name == n
+                && (b.addresses.first().cloned().unwrap_or_default() != a.trim()
+                    || b.ports
+                        .iter()
+                        .filter(|x| !x.starts_with("tap") && !x.starts_with("veth"))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        != p)
+        });
+        let secs = if risky { REVERT_SECS } else { 0 };
         spawn_local(async move {
-            match update_bridge(&n, a.trim(), &p, c.trim()).await {
+            match update_bridge(&n, a.trim(), &p, c.trim(), secs).await {
                 Ok(_) => {
-                    set_notice.set(Some(format!("Bridge {n} updated")));
                     set_error.set(None);
                     editing.set(None);
+                    if secs > 0 {
+                        set_notice.set(None);
+                        keep.set(Some((
+                            n.clone(),
+                            js_sys::Date::now() + secs as f64 * 1000.0,
+                        )));
+                    } else {
+                        set_notice.set(Some(format!("Bridge {n} updated")));
+                    }
                 }
                 Err(e) => set_error.set(Some(e.message)),
             }
@@ -246,6 +289,26 @@ pub fn HostBridgesPage() -> impl IntoView {
                 "VM network cards are plugged into a Linux bridge on this host. A bridge with an address gives VMs a network with the host; add a port (a NIC without an IP address) to connect it to a physical network. Bridges created here are re-created when Horcrux starts."
             </p>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="bridge-notice">{n}</div> })}
+            {move || keep.get().map(|(n, dl)| {
+                let left = ((dl - now.get()) / 1000.0).max(0.0).round() as i64;
+                let n2 = n.clone();
+                view! {
+                    <div class="alert alert-warning" id="bridge-keep">
+                        {format!("Bridge {n} changed. Keep the change? It is undone automatically in {left} s unless you keep it. ")}
+                        <button id="bridge-keep-btn" class="btn btn-sm btn-primary" on:click=move |_| {
+                            let n = n2.clone();
+                            spawn_local(async move {
+                                match confirm_bridge_change(&n).await {
+                                    Ok(()) => set_notice.set(Some(format!("Change to {n} kept"))),
+                                    Err(e) => set_error.set(Some(e.message)),
+                                }
+                                keep.set(None);
+                                reload();
+                            });
+                        }>"Keep change"</button>
+                    </div>
+                }
+            })}
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="bridge-error">{e}</div> })}
 
             <form id="bridge-create-form" class="form-row fields" on:submit=create>
@@ -457,6 +520,10 @@ pub fn HostBridgesPage() -> impl IntoView {
         </div>
     }
 }
+
+/// Seconds an address/port change of a bridge waits to be kept before the
+/// node undoes it (sent as `revert_after`).
+const REVERT_SECS: u64 = 60;
 
 /// Bond modes (value, label) in the order Proxmox lists them.
 const BOND_MODES: [(&str, &str); 7] = [

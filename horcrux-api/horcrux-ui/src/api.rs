@@ -7194,10 +7194,23 @@ pub async fn update_bridge(
     address: &str,
     ports: &[String],
     comment: &str,
+    revert_after_secs: u64,
 ) -> Result<serde_json::Value, ApiError> {
     put_json(
-        &format!("/network/bridges/{}", urlencoding::encode(name)),
+        &format!(
+            "/network/bridges/{}?revert_after={revert_after_secs}",
+            urlencoding::encode(name)
+        ),
         &serde_json::json!({ "address": address, "ports": ports, "comment": comment }),
+    )
+    .await
+}
+
+/// Keep a bridge change made with a revert timer.
+pub async fn confirm_bridge_change(name: &str) -> Result<(), ApiError> {
+    post_json_no_response(
+        &format!("/network/bridges/{}/confirm", urlencoding::encode(name)),
+        &serde_json::json!({}),
     )
     .await
 }

@@ -25,7 +25,7 @@ use crate::AppState;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -135,6 +135,8 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/network/bridges", get(list).post(create))
         .route("/api/network/bridges/:name", delete(remove).put(update))
+        .route("/api/network/bridges/:name/confirm", post(confirm_change))
+        .route("/api/network/pending", get(list_pending))
         .route("/api/network/interfaces", get(list_interfaces))
         .route("/api/network/vlans", get(list_vlans).post(create_vlan))
         .route("/api/network/vlans/:name", delete(remove_vlan))
@@ -989,7 +991,7 @@ async fn create(
 
 /// Body of `PUT /api/network/bridges/:name`: new ports / trunk VLANs / comment
 /// (fields left out keep their value).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct BridgeUpdate {
     /// New host address (CIDR); "" removes it.
     address: Option<String>,
@@ -999,11 +1001,110 @@ struct BridgeUpdate {
     comment: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct UpdateQuery {
+    /// Undo the change after this many seconds unless it is confirmed with
+    /// `POST /api/network/bridges/:name/confirm` (Proxmox-style safe apply:
+    /// a change that cuts off the browser's own path reverts by itself).
+    revert_after: Option<u64>,
+}
+
+/// A bridge change waiting for confirmation, with what to restore.
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingChange {
+    pub bridge: String,
+    /// Seconds since the epoch when it reverts.
+    pub revert_at: i64,
+    #[serde(skip)]
+    previous: Option<ManagedBridge>,
+}
+
+fn pending() -> &'static std::sync::Mutex<BTreeMap<String, PendingChange>> {
+    static CELL: std::sync::OnceLock<std::sync::Mutex<BTreeMap<String, PendingChange>>> =
+        std::sync::OnceLock::new();
+    CELL.get_or_init(|| std::sync::Mutex::new(BTreeMap::new()))
+}
+
+/// The update that puts `old` back (every editable field).
+fn restore_of(old: &ManagedBridge) -> BridgeUpdate {
+    BridgeUpdate {
+        address: Some(old.address.clone().unwrap_or_default()),
+        ports: Some(old.ports.clone()),
+        trunk_vlans: Some(old.trunk_vlans.clone()),
+        port_vlans: Some(old.port_vlans.clone()),
+        comment: Some(old.comment.clone().unwrap_or_default()),
+    }
+}
+
 async fn update(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<UpdateQuery>,
     Json(u): Json<BridgeUpdate>,
 ) -> Result<Json<ManagedBridge>, ApiError> {
+    if pending().lock().unwrap().contains_key(&name) {
+        return Err(ApiError::Conflict(format!(
+            "an earlier change of {name} is waiting to be kept or reverted"
+        )));
+    }
+    let (old, new) = update_inner(&state, &name, u).await?;
+    if let Some(secs) = q.revert_after.filter(|s| *s > 0) {
+        let secs = secs.min(3600);
+        let at = chrono::Utc::now().timestamp() + secs as i64;
+        pending().lock().unwrap().insert(
+            name.clone(),
+            PendingChange {
+                bridge: name.clone(),
+                revert_at: at,
+                previous: Some(old),
+            },
+        );
+        let st = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+            let taken = pending().lock().unwrap().remove(&name);
+            if let Some(PendingChange {
+                previous: Some(prev),
+                ..
+            }) = taken
+            {
+                match update_inner(&st, &name, restore_of(&prev)).await {
+                    Ok(_) => {
+                        tracing::warn!("bridge {name}: change not confirmed in {secs} s, reverted")
+                    }
+                    Err(e) => tracing::error!(
+                        "bridge {name}: reverting the unconfirmed change failed: {e:?}"
+                    ),
+                }
+            }
+        });
+    }
+    Ok(Json(new))
+}
+
+/// `POST /api/network/bridges/:name/confirm`: keep a change made with
+/// `revert_after`.
+async fn confirm_change(Path(name): Path<String>) -> Result<StatusCode, ApiError> {
+    match pending().lock().unwrap().remove(&name) {
+        Some(_) => Ok(StatusCode::NO_CONTENT),
+        None => Err(ApiError::NotFound(format!(
+            "no change of {name} is waiting (it was kept or already reverted)"
+        ))),
+    }
+}
+
+/// `GET /api/network/pending`: bridge changes waiting to be kept.
+async fn list_pending() -> Json<Vec<PendingChange>> {
+    Json(pending().lock().unwrap().values().cloned().collect())
+}
+
+/// Apply `u` to managed bridge `name` (live and stored); returns (before, after).
+async fn update_inner(
+    state: &Arc<AppState>,
+    name: &str,
+    u: BridgeUpdate,
+) -> Result<(ManagedBridge, ManagedBridge), ApiError> {
+    let name = name.to_string();
     let store = ConfigStore::new(&state.database);
     let old = store
         .load_values::<ManagedBridge>(KIND)
@@ -1077,7 +1178,7 @@ async fn update(
         }
     }
     store.put(KIND, &b.name, &b).await?;
-    Ok(Json(b))
+    Ok((old, b))
 }
 
 async fn remove(
@@ -1141,6 +1242,19 @@ mod tests {
             port_vlans: BTreeMap::new(),
             comment: None,
         }
+    }
+
+    #[test]
+    fn restoring_a_bridge_sets_every_editable_field() {
+        let mut old = b("vmbr9");
+        old.address = None;
+        old.ports = vec!["eth9".into()];
+        let r = restore_of(&old);
+        // no address before -> "" (= remove), comment none -> ""
+        assert_eq!(r.address.as_deref(), Some(""));
+        assert_eq!(r.comment.as_deref(), Some(""));
+        assert_eq!(r.ports, Some(vec!["eth9".to_string()]));
+        assert!(r.trunk_vlans.is_some() && r.port_vlans.is_some());
     }
 
     #[test]
