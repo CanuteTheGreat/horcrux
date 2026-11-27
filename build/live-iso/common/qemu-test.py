@@ -2156,6 +2156,7 @@ class Runner:
         dlg = [("Interface to configure", nic), ("IP configuration", "s"), ("IP address/prefix", addr)]
         if a.project == "horcrux":
             dlg += [("Gateway", "10.0.2.2"), ("DNS server", "10.0.2.3")]
+        dlg += [(r"IPv6: \(a\)uto", "a")]               # Set interface IP asks IPv6 last (auto/static/none); auto keeps dhcpcd's default
         t = self.opt(vm, "2", dlg, timeout=120)
         # dhcpcd re-applies the address and the port-forwarded sshd can be unreachable for a while afterwards: on the aarch64 TCG
         # guest the single immediate ssh failed (run 1302, rc 255 -> "ssh still works" FAIL) while x86 KVM passed. Retry for up to
