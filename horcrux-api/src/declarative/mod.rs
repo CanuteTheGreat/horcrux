@@ -60,6 +60,10 @@ pub struct Spec {
     /// docs/design/gaming-vm.md section 16). Absent = unmanaged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_play: Option<horcrux_common::remote_play::RemotePlaySettings>,
+    /// Security settings (vulnerability scanning, hardening baseline;
+    /// docs/design/security-suite.md). Absent = unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<horcrux_common::security::SecuritySettings>,
     /// What happens to guests when the host goes down and restarts: node
     /// defaults plus per-VM overrides (the stop action `host_shutdown_action`
     /// defaults to saving state to encrypted storage).
@@ -207,7 +211,7 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
     }
     if let Some(k) = spec.extra.keys().next() {
         return Err(format!(
-            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms and guest_power)"
+            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms, guest_power, console, remote_play and security)"
         ));
     }
     if let Some(gp) = &spec.guest_power {
@@ -336,6 +340,7 @@ pub struct Live {
     pub vms: Vec<VmConfig>,
     pub console: horcrux_common::console::ConsoleSettings,
     pub remote_play: horcrux_common::remote_play::RemotePlaySettings,
+    pub security: horcrux_common::security::SecuritySettings,
     pub power_node: crate::api::guest_state::NodePolicy,
     /// Per-VM power overrides by VM name (only VMs that have one).
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
@@ -648,6 +653,28 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         }
     }
 
+    // Security settings: one node-wide object.
+    if let Some(w) = &spec.security {
+        if let Err(e) = w.validate() {
+            p.errors.push(format!("security: {e}"));
+        } else if *w != live.security {
+            let mut d = Vec::new();
+            let a = serde_json::to_value(&live.security).unwrap_or_default();
+            let b = serde_json::to_value(w).unwrap_or_default();
+            for sec in ["vuln_scan", "hardening"] {
+                if let (Some(x), Some(y)) = (a[sec].as_object(), b[sec].as_object()) {
+                    for (k, bv) in y {
+                        let av = x.get(k).cloned().unwrap_or_default();
+                        if av != *bv {
+                            d.push(format!("{sec}.{k}: {av} -> {bv}"));
+                        }
+                    }
+                }
+            }
+            creates.push(ch("security", "settings", Action::Update, d));
+        }
+    }
+
     // Remote Play node settings: one node-wide object.
     if let Some(w) = &spec.remote_play {
         if let Err(e) = w.validate() {
@@ -710,6 +737,7 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         [
             "console",
             "remote_play",
+            "security",
             "storage_pool",
             "zone",
             "vnet",
@@ -983,6 +1011,7 @@ pub fn export(live: &Live) -> Spec {
         vms: Some(vms),
         console: Some(live.console.clone()),
         remote_play: Some(live.remote_play.clone()),
+        security: Some(live.security.clone()),
         guest_power: Some(GuestPowerSpec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),

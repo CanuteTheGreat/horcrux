@@ -1329,3 +1329,44 @@ td .actions { flex-wrap: nowrap; }
 .navbar.login-page .menu-toggle {
     display: none;
 }
+
+/* Security pages: severity badges (red only for critical/high, never for zero) */
+.sev-badge { display: inline-block; padding: .05rem .5rem; margin: 0 .25rem .15rem 0; border-radius: 999px; font-size: .75rem;
+    font-weight: 600; border: 1px solid var(--border); background: var(--light); color: var(--text); text-transform: capitalize; white-space: nowrap; }
+.sev-badge.sev-critical { background: var(--danger-solid); color: #fff; border-color: var(--danger-solid); }
+.sev-badge.sev-high { background: var(--bad-bg); color: var(--danger); }
+.sev-badge.sev-medium { background: var(--warn-bg); color: var(--warning-text); }
+.sev-badge.sev-low, .sev-badge.sev-negligible, .sev-badge.sev-unknown { background: var(--note-bg); color: var(--text); }
+.sev-badge.sev-none { background: var(--ok-bg); color: var(--success); text-transform: none; }
+.rule-status { font-weight: 600; text-transform: capitalize; }
+.rule-status.rule-fail { color: var(--danger); }
+.rule-status.rule-manual { color: var(--warning-text); }
+.rule-status.rule-pass { color: var(--success); }
+.rule-status.rule-na, .rule-status.rule-excluded { color: var(--secondary); }
+.security-page .toolbar { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: space-between; margin: .75rem 0; }
+.security-page .toolbar .filter-links { margin-bottom: 0; }
+.security-page .form-group.inline { display: flex; align-items: center; gap: .5rem; margin: 0; }
+.security-page .mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: .85rem; overflow-wrap: break-word; }
+.security-page .nowrap, .security-page .nowrap .mono { white-space: nowrap; }
+.security-page .help-text { margin-bottom: 1rem; }
+.security-page input[type="checkbox"] { width: auto; display: inline-block; margin: 0 .35rem 0 0; vertical-align: middle; }
+.security-page .form-group.inline label { display: inline-flex; align-items: center; margin: 0; }
+.security-page .rule-now { margin-top: .25rem; font-size: .875rem; }
+.security-page .rule-fix { margin-top: .25rem; font-size: .875rem; }
+.hardening-table { table-layout: fixed; width: 100%; }
+.hardening-table th:first-child { width: 6rem; }
+.hardening-table th:last-child { width: 6rem; }
+.hardening-table td { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+    .security-tabs { flex-wrap: nowrap; overflow-x: auto; }
+    .security-tabs .tab { white-space: nowrap; }
+    /* Phone: one card per rule (status, rule text, then its buttons), no sideways scrolling. */
+    .security-page table.hardening-table, .hardening-table tbody, .hardening-table tr, .hardening-table td { display: block; width: 100%; }
+    .hardening-table thead { display: none; }
+    .hardening-table tr { border-bottom: 1px solid var(--border); padding: .5rem 0; }
+    .hardening-table td { border: 0; padding: .2rem .25rem; }
+    .hardening-table td:first-child { display: flex; gap: .5rem; align-items: center; }
+    .hardening-table td.actions:empty { display: none; }
+}
+.hardening-table td { vertical-align: top; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }

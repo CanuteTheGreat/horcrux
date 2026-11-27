@@ -79,6 +79,10 @@ fn exact(path: &str) -> Option<&'static str> {
         "/system/licenses" => "Open-source licenses",
         "/system/certificates" => "Certificates",
         "/audit" => "Audit Log",
+        "/security" => "Security",
+        "/security/vulnerabilities" => "Vulnerabilities",
+        "/security/hardening" => "Hardening",
+        "/security/settings" => "Security Settings",
         "/tasks" => "Tasks",
         "/gpu" => "GPU / PCI Passthrough",
         "/containers" => "Containers",
@@ -154,6 +158,7 @@ pub fn title_for(path: &str, subject: Option<&str>) -> String {
     } else {
         match segs.as_slice() {
             ["vms", id] => named(id),
+            ["security", "vulnerabilities", id] => format!("Scan {} · Vulnerabilities", named(id)),
             ["vms", id, "console"] => format!("{} · Console", named(id)),
             ["vms", id, "hardware"] => format!("{} · Hardware", named(id)),
             ["containers", id, sub] => format!(

@@ -14,6 +14,7 @@
 mod agent;
 mod audio;
 mod config;
+mod inventory;
 #[cfg(target_os = "linux")]
 mod linux;
 mod power;
@@ -30,6 +31,9 @@ fn main() {
     };
     if let Some(a) = cfg.action {
         std::process::exit(power::run(&cfg, a));
+    }
+    if cfg.inventory {
+        std::process::exit(inventory::run());
     }
     if cfg.print_caps {
         let p = platform(&cfg);
