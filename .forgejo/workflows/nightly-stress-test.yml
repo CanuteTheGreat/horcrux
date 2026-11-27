@@ -33,8 +33,8 @@ env:
 jobs:
   stress-test:
     name: Concurrent VM/container fleet + isolation + failure-injection + load test
-    # Same dedicated runner as nightly-realistic-test.yml: kvm-x86_64 (rw-man-01,
-    # /dev/kvm + privileged containers; ctg-infrastructure ci-runners/rw-man-kvm),
+    # Same dedicated runner as nightly-realistic-test.yml: kvm-x86_64 (the CI host,
+    # /dev/kvm + privileged containers; runner definition kept outside this repo),
     # so VMs boot with KVM and the CNI isolation scenario's `ip netns` works
     # (it was skipped every night on the unprivileged linux-cross pool).
     runs-on: kvm-x86_64
@@ -190,7 +190,7 @@ jobs:
             echo "mount-namespace capability available"
           else
             echo "NIGHTLY_NETNS_OK=false" >> "$GITHUB_ENV"
-            echo "::error::unshare --mount is blocked on this runner ($(tr -d '\n' < /tmp/unshare-probe.err)). kvm-x86_64 job containers are privileged (ctg-infrastructure ci-runners/rw-man-kvm), so this means the runner config regressed. The CNI test cannot run; the other scenarios still run below and the job fails at the end instead of passing with a skipped test."
+            echo "::error::unshare --mount is blocked on this runner ($(tr -d '\n' < /tmp/unshare-probe.err)). kvm-x86_64 job containers are privileged (runner definition kept outside this repo), so this means the runner config regressed. The CNI test cannot run; the other scenarios still run below and the job fails at the end instead of passing with a skipped test."
           fi
 
       - name: Run concurrent container fleet test

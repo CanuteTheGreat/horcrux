@@ -42,16 +42,15 @@ Model, agreed 2026-10-28, in the style of Proxmox:
 
 - A paid, tested **stable update channel** (a subscription binhost/repo), plus **email support during business hours, best effort**. There is **no 24/7 SLA** and no response-time guarantee.
 - The free community channel stays fully functional. No feature is removed or locked.
-- Billing through Errant Solutions' Stripe account (test mode only until this phase starts).
 
-What it requires technically (design in [stable-channel.md](stable-channel.md)):
+What it requires technically (overview in [stable-channel.md](stable-channel.md)):
 
 - [ ] A separate binhost/repo with a **delayed, extra-tested promotion pipeline** from the community channel.
 - [ ] **Per-subscription repo credentials** (revocable, rotatable).
-- [ ] A **Stripe subscription wired to key issuance** (webhooks create, suspend and revoke keys).
-- [ ] A **support inbox** through the Errant Solutions mail flow.
+- [ ] **Self-service subscriptions** that issue and revoke access keys automatically.
+- [ ] A **support inbox** for subscribers.
 - [ ] A **published support policy**: business hours, best effort, scope, exclusions.
-- [ ] **Terms of service with a limitation of liability.** A lawyer must review these before anything is sold. Nothing in this repository is legal advice or a final text.
+- [ ] **Published terms of service** for the subscription, before anything is sold.
 - [ ] A signed release process (criterion 8) and the EOL policy (criterion 9), which phase 3 depends on.
 
 ## Not planned

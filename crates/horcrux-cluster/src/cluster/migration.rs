@@ -1273,7 +1273,7 @@ mod tests {
         // resolvers that answer NXDOMAIN lookups with a wildcard/captive
         // IP (e.g. a management host with sshd on :22), so asserting on
         // DNS-resolution failure for a *hostname* is not portable across
-        // runner infra (observed on the rw-man-0* fleet: the ".invalid"
+        // runner infra (observed on the CI fleet: the ".invalid"
         // TLD resolved and happened to hit an open port). A reserved,
         // non-routable literal IP skips the resolver entirely and is
         // guaranteed unreachable on every network, so the TCP-connect

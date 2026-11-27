@@ -95,7 +95,7 @@ KVM present and arch == host: x1. TCG: x4 on every wait and deadline (`VMTEST_SL
 
 * **Local / lab laptop**: `python3 -m vmtest run scenarios/selftest_alpine.py --out /tmp/o`. Needs qemu-system-x86_64,
   qemu-img, OVMF (uefi), openssh-client, mke2fs/openssl (install_smoke). Lab laptops: take the lab-laptop-scheduler lease first.
-* **rw-man-01 / agent runs**: inside `agent-workdir`, in the `isoqa-qemu:1` image with `--device /dev/kvm`.
+* **the CI host / agent runs**: inside `agent-workdir`, in the `isoqa-qemu:1` image with `--device /dev/kvm`.
 * **Forgejo CI**: `.forgejo/workflows/vmtest.yml` on label `kvm-x86_64`, container `isoqa-qemu`, same invocation; artifacts =
   the `--out` dir minus disks (uploaded on failure).
 

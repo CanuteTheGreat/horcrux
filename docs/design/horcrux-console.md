@@ -355,7 +355,7 @@ whose pixels changed. No GPU anywhere: the guests encode in software.
 
 | Measurement | Result | Conditions |
 |---|---|---|
-| Keystroke to picture, Debian 13 console, guest tools (FFmpeg kmsgrab + x264 in the guest) | median 76-101 ms, p90 151-178 ms (16/16 per run, 2 runs) | 2 vCPUs, 1280x800, shared rw-man host with other CI jobs |
+| Keystroke to picture, Debian 13 console, guest tools (FFmpeg kmsgrab + x264 in the guest) | median 76-101 ms, p90 151-178 ms (16/16 per run, 2 runs) | 2 vCPUs, 1280x800, shared CI build host with other CI jobs |
 | Keystroke to picture, Windows 11 text field (Notepad / Run box), guest tools (DXGI duplication + Media Foundation software H.264) | median 189-195 ms, p90 231-614 ms, fastest 3.5-29 ms (every keystroke seen, 3 runs) | 4 vCPUs, 1280x800, a minute after the tools were installed (Windows still busy: search indexing, first-logon tasks), same shared host |
 | In-guest encode time per frame, Windows (agent-reported) | 24-64 ms |
 | Absolute pointer + button to picture (QEMU tablet, desktop selection rectangle) | 497-617 ms | same Windows guest |

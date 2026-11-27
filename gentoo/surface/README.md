@@ -17,12 +17,12 @@ and the verified/device-only split are in **[docs/SURFACE.md](../../docs/SURFACE
 HW_PROFILE=surface build/live-iso/build.sh -o OUT          # = the Horcrux ISO + build/live-iso/common/Dockerfile.profile layer
 # -> OUT/horcrux-surface-<date>-x86_64.iso
 ```
-Run it on an rw-man host inside `agent-workdir run`. The profile layer is its own Docker layer: editing `overlay/` never redoes the product emerge.
+Run it on a CI build host inside `agent-workdir run`. The profile layer is its own Docker layer: editing `overlay/` never redoes the product emerge.
 
 ## Test
 
 ```sh
-python3 gentoo/surface/tests/surface-qemu-test.py --iso OUT/horcrux-surface-*.iso --out EVIDENCE   # on a KVM host (rw-man-01)
+python3 gentoo/surface/tests/surface-qemu-test.py --iso OUT/horcrux-surface-*.iso --out EVIDENCE   # on a KVM host (the CI host)
 python3 -m unittest discover -s build/live-iso/common/tests                                         # unit tests (hwprofile, luksroot)
 ```
 

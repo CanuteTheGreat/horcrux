@@ -380,5 +380,4 @@ Performance is an ongoing effort. Always:
 
 ---
 
-**Last Updated**: 2025-10-09
 **Version**: 0.1.0

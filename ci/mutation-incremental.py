@@ -2,7 +2,7 @@
 """Incremental mutation testing: mutate only what changed since the last green baseline.
 
 Canonical copy: ctg-infrastructure ci-runners/mutation-incremental/ (README there). Each repo that
-runs mutation testing on the colo lane (rw-man-01, colo-x86_64) carries an identical copy; fix
+runs mutation testing on the colo lane (the CI host, colo-x86_64) carries an identical copy; fix
 bugs there first, then copy.
 
 Why: the colo lane has 2 slots on one CPU-bound host. Full mutation passes (1-3 h per job) every
@@ -11,7 +11,7 @@ re-proves yesterday's result.
 
 State (one per mutation job id). SHARED STORE (2026-10-22): the baseline lives on the orphan branch
 `mutation-baseline` of the repo itself (one `<id>/baseline.json` per job id, no workflow files on it so no CI
-fires), read by `plan` and written after every green `gate`/skip, so every runner (rw-man-01..05) sees the same
+fires), read by `plan` and written after every green `gate`/skip, so every runner (the CI host) sees the same
 last green sha and known survivors. Until then it was a per-runner actions/cache entry: a nightly landing on
 another runner restored an old baseline (or none: "Cache not found" -> a diff of the last 26 h with no known
 survivors) and went red on old survivors or mutated a huge change set. The branch is read/written with the

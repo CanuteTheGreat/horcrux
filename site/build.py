@@ -43,7 +43,7 @@ def rel(frm, to):
 # ---- documents rendered from the repo -------------------------------------------------------
 PAGES = {}   # source path under docs/ -> (site dir, title)
 PAGES["ROADMAP.md"] = ("roadmap/", "Roadmap to 1.0")
-PAGES["stable-channel.md"] = ("stable-channel/", "Stable channel design")
+PAGES["stable-channel.md"] = ("stable-channel/", "Stable channel")
 for fn, title in CFG["docs"]:
     PAGES[fn] = ("docs/" + re.sub(r"[^a-z0-9]+", "-", fn[:-3].lower()).strip("-") + "/", title)
 
@@ -242,7 +242,7 @@ Older download names (for example <code>{CFG['key']}-daily-x86_64.iso</code>) st
 <section class="wrap" id="plans"><h2>Support plans for businesses</h2>
 <p>Running {CFG['name']} at work? A yearly plan gives your team <strong>best-effort email support</strong> with a first-reply target: <strong>Plus $99</strong> (about 5 business days), <strong>Business $499</strong> (about 3) or <strong>Priority $1,499</strong> (about 1) per year. It is not an SLA: no guaranteed response or fix time, no phone line, no on-site visits. {CFG['name']} stays free and identical for everyone; a plan buys support, not features. Cancel any time yourself.</p>
 <p class="cta"><a class="btn" href="{SUPPORT}#plans">See the plans</a> <a class="btn ghost" href="https://errant.solutions/support/terms/">Plan terms</a></p>
-<p>Separately, a paid stable update channel is <strong>planned after 1.0</strong>, in the style of Proxmox; the free channel stays complete. Nothing of that is for sale yet. The <a href="{rel('', 'stable-channel/')}">design</a> is public.</p></section>
+<p>Separately, a paid stable update channel is <strong>planned after 1.0</strong>, in the style of Proxmox; the free channel stays complete. Nothing of that is for sale yet. <a href="{rel('', 'stable-channel/')}">What it will be</a>.</p></section>
 </main>"""
     write("index.html", page("", CFG["name"], land, "", CFG["tagline"]))
     nf = page("", "Not found", '<main class="wrap doc"><h1>Page not found</h1><p><a href="/">Back to the start page</a>.</p></main>')

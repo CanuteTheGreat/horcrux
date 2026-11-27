@@ -3,7 +3,6 @@
 > **Superseded for release planning:** the live stable-1.0 checklist is [docs/ROADMAP.md](docs/ROADMAP.md). This older file is a feature backlog and may be out of date.
 
 **Version**: 0.1.0 → 1.0.0
-**Last Updated**: 2025-10-12
 **Status**: Post-Enhancement Phase → Testing & Validation Complete
 
 ---
@@ -833,7 +832,6 @@ a per-node placement weight:
 ---
 
 *Roadmap Version: 1.1*
-*Last Updated: 2025-10-12*
 *Next Review: 2025-11-12*
 
 **Note**: This roadmap is a living document and will be updated based on user feedback, market demands, and technical discoveries.

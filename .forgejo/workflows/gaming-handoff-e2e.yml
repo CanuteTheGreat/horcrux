@@ -6,7 +6,7 @@ name: Gaming VM hand-off (real kernel, KVM)
 # while a program holds the card, bochs-drm -> vfio-pci, a nested QEMU with the
 # device + Hyper-V flags + huge-page memory, CPU pinning from QMP thread ids,
 # release waiting for QEMU, device back on its driver. Needs /dev/kvm with
-# nested virtualisation: rw-man-01's kvm-x86_64 runner.
+# nested virtualisation: the CI host's kvm-x86_64 runner.
 on:
   push:
     # every branch: the path filter keeps it to hand-off changes, so a fix is

@@ -3186,7 +3186,6 @@ For code examples in different languages, see:
 
 ---
 
-**Last Updated**: 2025-10-09
 **API Version**: 1.0
 
 

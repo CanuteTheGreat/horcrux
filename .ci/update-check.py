@@ -212,7 +212,7 @@ def main():
         body = (f"Upstream released **{n}** (overlay has **{o}**).\n\n"
                 f"Bump `{p}`: copy the newest ebuild to `{p.split('/')[1]}-{n}.ebuild`, delete the superseded ebuild(s) "
                 f"(owner rule: only the newest release + live 9999 stay) and its unused `files/`, "
-                f"regenerate the Manifest, `pkgcheck scan`, test-emerge in a Gentoo container on an rw-man host, commit.\n\n"
+                f"regenerate the Manifest, `pkgcheck scan`, test-emerge in a Gentoo container on a CI build host, commit.\n\n"
                 f"Opened by `.forgejo/workflows/update-check.yml` ({CFG}).")
         if title in titles:
             print("issue exists:", title); continue

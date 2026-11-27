@@ -589,5 +589,3 @@ done
 ---
 
 **Made with ❤️ for the Gentoo community**
-
-Last Updated: 2025-10-12

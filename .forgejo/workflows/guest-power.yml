@@ -18,7 +18,7 @@ name: Guest save state + cluster drain (2 nodes, KVM)
 # (CRIU; `incus move`), cold when the target has no CRIU, and with rollback
 # when the target cannot take them (drain_ct_vm_e2e.py). Nightly (and on
 # demand) the VM save/resume + drain e2e also run once under TCG.
-# Runs on rw-man-01's kvm-x86_64 runner on every push that touches the code
+# Runs on the CI host's kvm-x86_64 runner on every push that touches the code
 # involved, nightly, and on demand.
 on:
   push:

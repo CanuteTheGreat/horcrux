@@ -173,7 +173,7 @@ if [ "$result" = pass ]; then
   with_deadline() { local s=$1; shift; QEMU_TEST_DEADLINE=$s timeout -k 30 $((s+180)) "$@"; }
   # zfs-enc-test.py with its hard deadline. A run that dies by SIGKILL (rc 137: exit status of a process killed from OUTSIDE the harness, which prints
   # [FAIL] hard-deadline and exits 124 on its own deadline/SIGTERM and prints a [FAIL]/FAILED STEPS line on every assertion) says nothing about the image:
-  # gnome-light run 2726 (rw-man-06, elastic kvm lane) lost the whole 60-min test ~27 min in, during the boot2 passphrase wait, with no [FAIL] at all, while
+  # gnome-light run 2726 (the CI host, elastic kvm lane) lost the whole 60-min test ~27 min in, during the boot2 passphrase wait, with no [FAIL] at all, while
   # the identical hibernate/resume flow had passed 5 h earlier on the same image code. Such a kill is infrastructure (a runner/host action on the job's
   # processes): print what the job container's cgroup saw, then run the test ONCE more on a fresh disk. Assertion failures and deadline hits are never retried.
   zfs_enc_run() {

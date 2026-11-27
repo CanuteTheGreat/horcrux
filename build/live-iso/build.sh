@@ -16,7 +16,7 @@ case $(uname -m) in x86_64|amd64) HOST_ARCH=x86_64;; aarch64|arm64) HOST_ARCH=aa
 ARCH=${ARCH:-$HOST_ARCH}
 [ -f "$HERE/common/arch/$ARCH.env" ] || { echo "unsupported ARCH=$ARCH (see common/arch/)"; exit 2; }
 . "$HERE/common/arch/$ARCH.env"
-# Native builds only (x86_64 on rw-man-01..03, aarch64 on rw-man-04/05). A foreign ARCH needs --platform + binfmt
+# Native builds only (x86_64 on the CI host, aarch64 on the CI host). A foreign ARCH needs --platform + binfmt
 # (qemu-user); the app stage then cannot use the host toolchain images, so it is refused unless forced.
 if [ "$ARCH" != "$HOST_ARCH" ] && [ -z "${ALLOW_EMULATED:-}" ]; then echo "ARCH=$ARCH on a $HOST_ARCH host needs emulation: set ALLOW_EMULATED=1 (slow)"; exit 2; fi
 PLAT=""; [ "$ARCH" != "$HOST_ARCH" ] && PLAT="--platform $DOCKER_PLATFORM"

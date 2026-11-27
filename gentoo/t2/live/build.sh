@@ -1,5 +1,5 @@
 #!/bin/bash
-# gentoo/t2/live/build.sh - build the hogshead (Apple T2 MacBook) live ISO. Run on an rw-man host (docker + BuildKit only).
+# gentoo/t2/live/build.sh - build the hogshead (Apple T2 MacBook) live ISO. Run on a CI build host (docker + BuildKit only).
 #   gentoo/t2/live/build.sh -o OUTDIR [-p PRIVDIR] [-n NAME]
 #   KEEP_ROOTFS=<tag> keeps the finished rootfs image under that tag; REBASE=<tag> skips stage 1 and only adds the PRIVDIR files
 #   (fw/, authorized_keys) on top of such a kept image (fast re-bake of a key, no kernel rebuild).

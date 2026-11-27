@@ -52,7 +52,7 @@ fails when a row names no check or a check file that does not exist. `pending:<b
   `ux_crawl.py` against the built UI (every nav page, desktop + 1440 + phone, light + dark), `check_foreign_vms.py`.
 - **Per new build (QA cron `horcrux-ux-review`, gated on the published build changing, >= 5 h apart; the gate cannot wedge: see `~/.hermes/scripts/ux-review.py` gate()):** also runs the journey with screenshots and reviews them against `ci/ux-qa/journey-review-checklist.md`.
 - **(previously) per release:** deploys the release build to a throwaway
-  container on rw-man-01, runs `ux_crawl.py` with screenshots, `check_public_text.py` on the release tarball, then a Sonnet
+  container on the CI host, runs `ux_crawl.py` with screenshots, `check_public_text.py` on the release tarball, then a Sonnet
   vision review of the screenshots against `ci/ux-qa/ux-checklist.md`. Fixable findings are fixed with a test; judgement
   calls go in the daily summary.
 - **When the owner reports something:** the product-qa lane adds the check for the class, adds a row here, and links the commit.

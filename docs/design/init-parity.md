@@ -28,7 +28,7 @@ Before this change Horcrux was OpenRC-only in practice. This is the audit, what 
 
 ## Ordered plan
 1. Phase 2: remaining Rust call sites onto `init`; owner-ws-tools unit after its OpenRC fix lands; exempt list to empty.
-2. Phase 3: systemd live ISO, server first (live-* units, stage3 systemd rootfs, installer), then `live-iso-server-systemd-x86_64.yml` on rw-man-01 (KVM, one ISO build at a time; the aarch64 TCG lane stays OpenRC until x86 is green); GNOME/XFCE after.
+2. Phase 3: systemd live ISO, server first (live-* units, stage3 systemd rootfs, installer), then `live-iso-server-systemd-x86_64.yml` on the CI host (KVM, one ISO build at a time; the aarch64 TCG lane stays OpenRC until x86 is green); GNOME/XFCE after.
 3. Phase 4: docs and an INIT dimension in every edition's matrix.
 
 ## Phase 3: systemd live ISOs (2026-11-13)

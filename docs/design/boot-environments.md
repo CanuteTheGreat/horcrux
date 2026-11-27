@@ -108,7 +108,7 @@ until then BE install is OpenRC-only on the installer side, but a systemd host t
 every other part unchanged.
 
 ## Test
-`build/live-iso/common/zfs-enc-test.py` (QEMU, KVM on rw-man): install on encrypted ZFS, then in the installed system install a
+`build/live-iso/common/zfs-enc-test.py` (QEMU, KVM on a CI host): install on encrypted ZFS, then in the installed system install a
 probe package 1.0 through emerge, **upgrade it to 2.0 through emerge** (the Portage hook must snapshot by itself), write files
 into the VM datasets and /home, `horcrux-be rollback` (no argument), reboot with the passphrase, and assert: booted the rolled-back BE,
 probe package is 1.0, every VM/user file is byte-identical, the old BE is still listed. Unit tests (no VM):

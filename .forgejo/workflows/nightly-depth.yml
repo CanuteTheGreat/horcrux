@@ -36,8 +36,8 @@ env:
 jobs:
   depth:
     name: Depth journeys (real QEMU/KVM)
-    # rw-man-01: /dev/kvm + privileged job containers (tmpfs mount for the
-    # disk-full test). ctg-infrastructure ci-runners/rw-man-kvm.
+    # the CI host: /dev/kvm + privileged job containers (tmpfs mount for the
+    # disk-full test). runner definition kept outside this repo.
     runs-on: kvm-x86_64
     container: catthehacker/ubuntu:act-26.04
     timeout-minutes: 120

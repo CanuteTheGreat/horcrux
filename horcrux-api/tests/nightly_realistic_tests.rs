@@ -206,7 +206,7 @@ async fn test_real_qemu_vm_boot() {
     let serial_log = vm.disk_path.with_extension("serial.log");
     // 120s, then 240s, were each tuned assuming the datasource-probe
     // backoff would burn a bounded ~100s before giving up. Measured on the
-    // real rw-man-0x fallback runner (no /dev/kvm, so this is genuine
+    // real CI host fallback runner (no /dev/kvm, so this is genuine
     // TCG software emulation) on 2026-10-15: after a short initial burst
     // of ~2s-spaced attempts, the retry interval settles into a
     // *constant* ~49s per attempt (not exponential), and the datasource

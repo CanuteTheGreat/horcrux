@@ -46,7 +46,7 @@ It differs from Proxmox in a few deliberate ways:
 - **Gentoo-native:** ebuilds and USE flags select which features get built.
 - **Rust throughout**, including the web UI (Leptos/WASM).
 
-Yearly **support plans for businesses** (best-effort email support, no SLA) are available: [errant.solutions/support/horcrux/#plans](https://errant.solutions/support/horcrux/#plans). A paid stable update channel is **planned after a stable 1.0** (the free channel stays complete). Design: [docs/stable-channel.md](docs/stable-channel.md).
+Yearly **support plans for businesses** (best-effort email support, no SLA) are available: [errant.solutions/support/horcrux/#plans](https://errant.solutions/support/horcrux/#plans). A paid stable update channel is **planned after a stable 1.0** (the free channel stays complete). Overview: [docs/stable-channel.md](docs/stable-channel.md).
 
 ## Current status
 

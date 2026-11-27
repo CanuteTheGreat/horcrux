@@ -347,7 +347,7 @@ layout + `auto` pinning, real `sched_setaffinity` on test threads, huge-page
 pool accounting, quirks table.
 
 Real-kernel spike (`ci/gaming-handoff-e2e.sh`, workflow
-`gaming-handoff-e2e.yml`, passed 2026-11-18 on rw-man-01): a Debian 13 VM with an
+`gaming-handoff-e2e.yml`, passed 2026-11-18 on the CI host): a Debian 13 VM with an
 emulated IOMMU (`intel-iommu`) and a spare PCI display on bochs-drm runs the
 `handoff_e2e` test as root. Results: verdict `ready`; hand-off refused while a
 program held `/dev/dri/card1` (the error names it); device moved
@@ -357,7 +357,7 @@ flags; vCPU threads pinned to their CPUs and QEMU's own threads to the rest;
 release waited while QEMU held the VFIO group; after QEMU exited the device was
 back on bochs-drm with its device nodes, and the huge pages were returned.
 
-Windows spike (2026-11-18, rw-man-01, no GPU): Windows 11 Enterprise evaluation
+Windows spike (2026-11-18, the CI host, no GPU): Windows 11 Enterprise evaluation
 installed unattended with the gaming configuration (q35 + SMM, Secure Boot OVMF
 with Microsoft keys, swtpm TPM 2.0, `-cpu host` + Hyper-V flags, virtio-blk/net
 drivers from virtio-win in windowsPE, guest agent). Result: installed and at
