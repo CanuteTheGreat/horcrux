@@ -2575,7 +2575,7 @@ class Runner:
                "dmesg | grep -m1 -o 'Secure boot enabled'; mokutil --sb-state 2>&1 | head -1; "
                "ls /boot/efi/EFI/BOOT/; sbverify --list /boot/efi/EFI/BOOT/grub*.efi 2>/dev/null | grep -m1 'subject:'; "
                "echo ZFSMOD=$(lsmod | grep -cE '^(zfs|spl) '); echo REJECTED=$(dmesg | grep -c 'Loading of unsigned module is rejected'); "
-               "ls /etc/*/secureboot/ 2>/dev/null; echo SBEND")
+               "ls /etc/secureboot/ 2>/dev/null; echo SBEND")
         rc, out = ssh(FWD_SSH, self.key, cmd, timeout=int(T(60)))
         o = out.replace("\r", "")
         flat = re.sub(r"\s+", " ", o)[:300]
