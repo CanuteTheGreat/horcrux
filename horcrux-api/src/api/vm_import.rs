@@ -337,15 +337,22 @@ async fn import_disk(
             "VM {id} is running; stop it before importing a disk"
         )));
     }
-    let disk = PathBuf::from(
-        &vm.disks
-            .first()
-            .ok_or_else(|| ApiError::BadRequest(format!("VM {id} has no disk")))?
-            .path,
-    );
-    let dir = disk
+    let disk0 = vm
+        .disks
+        .first()
+        .ok_or_else(|| ApiError::BadRequest(format!("VM {id} has no disk")))?
+        .clone();
+    let disk = PathBuf::from(&disk0.path);
+    // A disk on a block pool (an LVM volume) is written in place; the
+    // download lands in the VM storage dir, never next to it in /dev.
+    let block = disk0.is_block_volume();
+    let stem = horcrux_common::runtime_stem(&disk);
+    let dir = stem
         .parent()
         .ok_or_else(|| ApiError::Internal("disk has no directory".into()))?;
+    if block {
+        tokio::fs::create_dir_all(dir).await?;
+    }
     let tmp_src = dir.join(format!(".{id}.import-src.tmp"));
     let tmp_out = dir.join(format!(".{id}.import.qcow2.tmp"));
     let _cleanup = TempFiles(vec![tmp_src.clone(), tmp_out.clone()]);
@@ -381,6 +388,24 @@ async fn import_disk(
         serde_json::from_str(&qemu_img(&["info", "--output=json", &src]).await?)
             .map_err(|e| ApiError::Internal(format!("qemu-img info: {e}")))?;
     let fmt = checked_format(&info).map_err(ApiError::BadRequest)?;
+    if block {
+        let virtual_size = info["virtual-size"].as_u64().unwrap_or(0);
+        let room = disk0.size_gb.saturating_mul(1024 * 1024 * 1024);
+        if virtual_size > room {
+            return Err(ApiError::BadRequest(format!(
+                "the image is {virtual_size} bytes, more than disk0's {} GB volume in storage \
+                 pool {}",
+                disk0.size_gb,
+                disk0.storage.as_deref().unwrap_or_default()
+            )));
+        }
+        let to_fmt = disk0.format.as_deref().unwrap_or("raw");
+        let dev = disk.to_string_lossy().to_string();
+        // -n: the volume exists (a raw LV, or a chain pool's qcow2 on it)
+        qemu_img(&["convert", "-n", "-f", &fmt, "-O", to_fmt, &src, &dev]).await?;
+        tracing::info!("VM {id}: imported disk from {} into {dev}", req.source);
+        return Ok(Json(state.vm_manager.get_vm(&id).await?));
+    }
     let out = tmp_out.to_string_lossy().to_string();
     qemu_img(&["convert", "-f", &fmt, "-O", "qcow2", &src, &out]).await?;
     let virtual_size = info["virtual-size"].as_u64().unwrap_or(0);

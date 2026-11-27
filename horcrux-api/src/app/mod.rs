@@ -1872,14 +1872,26 @@ async fn create_vm(
     Json(mut payload): Json<CreateVmRequest>,
 ) -> Result<(StatusCode, Json<VmConfig>), ApiError> {
     let vm_name = payload.config.name.clone();
-    // Disks placed on a storage pool: resolve the pool to its directory.
-    api::storage_volumes::place_vm_disks(&state, &mut payload.config).await?;
+    // Disks placed on a storage pool: resolve a file pool to its
+    // directory, create a block pool's volume (LVM, SAN LVM).
+    api::storage_volumes::place_vm_disks_with_volumes(&state, &mut payload.config).await?;
+    let placed = payload.config.disks.clone();
     // Bridges exist on this host, the ISO is in the ISO library.
-    api::vm_hw::check_host_hardware(&state, &payload.config.hardware).await?;
-    let vm = state
+    if let Err(e) = api::vm_hw::check_host_hardware(&state, &payload.config.hardware).await {
+        api::storage_volumes::release_block_disks(&state, &placed).await;
+        return Err(e);
+    }
+    let vm = match state
         .vm_manager
         .create_vm_from_image(payload.config, payload.image)
-        .await?;
+        .await
+    {
+        Ok(vm) => vm,
+        Err(e) => {
+            api::storage_volumes::release_block_disks(&state, &placed).await;
+            return Err(e.into());
+        }
+    };
 
     // Broadcast VM created event
     let username = auth_user
@@ -2041,8 +2053,25 @@ async fn delete_vm(
         .await
         .map(|vm| vm.name)
         .unwrap_or_else(|_| id.clone());
+    let block_disks: Vec<horcrux_common::VmDisk> = state
+        .vm_manager
+        .get_vm(&id)
+        .await
+        .map(|vm| {
+            vm.disks
+                .into_iter()
+                .filter(|d| d.is_block_volume())
+                .collect()
+        })
+        .unwrap_or_default();
 
     state.vm_manager.delete_vm(&id).await?;
+    // Its volumes on block pools (LVM, SAN LVM) go through their pool, so
+    // the pool's wipe/discard settings apply.
+    let left = api::storage_volumes::release_block_disks(&state, &block_disks).await;
+    if !left.is_empty() {
+        tracing::warn!("VM {id} deleted, but volumes stayed: {}", left.join("; "));
+    }
     api::protection::forget(&state, &api::protection::vm_key(&id)).await;
     // Its firewall goes with it: the rules used to stay stored, be
     // re-installed at every start, and apply to a new VM with the same id.

@@ -376,17 +376,25 @@ async fn create_vm(state: &Arc<AppState>, spec: &Spec, name: &str) -> Result<Str
         hardware: w.hardware.clone().unwrap_or_default(),
     };
     let api = api_msg;
-    crate::api::storage_volumes::place_vm_disks(state, &mut cfg)
+    crate::api::storage_volumes::place_vm_disks_with_volumes(state, &mut cfg)
         .await
         .map_err(api)?;
-    crate::api::vm_hw::check_host_hardware(state, &cfg.hardware)
-        .await
-        .map_err(api)?;
-    let vm = state
+    let placed = cfg.disks.clone();
+    if let Err(e) = crate::api::vm_hw::check_host_hardware(state, &cfg.hardware).await {
+        crate::api::storage_volumes::release_block_disks(state, &placed).await;
+        return Err(api(e));
+    }
+    let vm = match state
         .vm_manager
         .create_vm_from_image(cfg, w.image.clone())
         .await
-        .map_err(|e| format!("{e:?}"))?;
+    {
+        Ok(vm) => vm,
+        Err(e) => {
+            crate::api::storage_volumes::release_block_disks(state, &placed).await;
+            return Err(format!("{e:?}"));
+        }
+    };
     Ok(format!("id {}", vm.id))
 }
 

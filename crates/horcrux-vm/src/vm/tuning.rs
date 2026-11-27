@@ -467,7 +467,7 @@ fn human_kb(kb: u64) -> String {
 
 /// Where a VM's huge-page reservation is recorded (next to its disk).
 pub fn reservation_file(disk: &Path) -> PathBuf {
-    disk.with_extension("hugepages.json")
+    horcrux_common::runtime_stem(disk).with_extension("hugepages.json")
 }
 
 /// Pool sizes of this host: (page KiB, total, free).

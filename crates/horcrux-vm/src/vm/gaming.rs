@@ -771,6 +771,7 @@ pub fn compose(
             ssd: false,
             iothread: true,
             storage: req.storage.clone().filter(|s| !s.trim().is_empty()),
+            format: None,
         }],
         display: VmDisplay::default(),
         hardware: hw,

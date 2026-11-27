@@ -135,6 +135,7 @@ impl VmManager {
     /// hardcoded `/var/lib/horcrux/vms` default, which doesn't exist and
     /// isn't writable in unprivileged environments like CI runners).
     pub fn with_database_and_storage_path(db: Arc<Database>, vm_storage_path: PathBuf) -> Self {
+        horcrux_common::set_vm_state_dir(vm_storage_path.clone());
         Self {
             vms: Arc::new(RwLock::new(HashMap::new())),
             qemu: QemuManager::with_storage_path(vm_storage_path),

@@ -149,25 +149,25 @@ pub fn ovmf_missing() -> Error {
 
 /// The VM's EFI variable store.
 pub fn efivars_path(disk0: &Path) -> PathBuf {
-    disk0.with_extension("efivars.qcow2")
+    horcrux_common::runtime_stem(disk0).with_extension("efivars.qcow2")
 }
 
 /// swtpm's state directory of the VM.
 pub fn tpm_state_dir(disk0: &Path) -> PathBuf {
-    disk0.with_extension("tpm")
+    horcrux_common::runtime_stem(disk0).with_extension("tpm")
 }
 
 /// swtpm's control socket (QEMU's `-chardev socket`).
 pub fn tpm_socket(disk0: &Path) -> PathBuf {
-    disk0.with_extension("tpm.sock")
+    horcrux_common::runtime_stem(disk0).with_extension("tpm.sock")
 }
 
 fn tpm_pidfile(disk0: &Path) -> PathBuf {
-    disk0.with_extension("tpm.pid")
+    horcrux_common::runtime_stem(disk0).with_extension("tpm.pid")
 }
 
 fn tpm_log(disk0: &Path) -> PathBuf {
-    disk0.with_extension("tpm.log")
+    horcrux_common::runtime_stem(disk0).with_extension("tpm.log")
 }
 
 /// Every per-VM firmware/TPM file next to `disk0` (removed with the VM,

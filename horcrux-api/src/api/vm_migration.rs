@@ -349,7 +349,7 @@ impl Plan {
     /// migration on shared storage.
     async fn source_qmp(&self) -> PathBuf {
         if self.progress.lock().await.runtime_aside {
-            self.disk0()
+            horcrux_common::runtime_stem(&self.disk0())
                 .with_extension(format!("qmp.sock.{}", crate::vm::migrate::MIG_SRC_SUFFIX))
         } else {
             self.qmp()
@@ -900,7 +900,7 @@ impl Plan {
             return Ok(());
         }
         let sock = if p.runtime_aside {
-            self.disk0()
+            horcrux_common::runtime_stem(&self.disk0())
                 .with_extension(format!("qmp.sock.{}", crate::vm::migrate::MIG_SRC_SUFFIX))
         } else {
             self.qmp()

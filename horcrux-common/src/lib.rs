@@ -75,6 +75,95 @@ pub struct VmDisk {
     /// storage directory. Chosen at create / add-disk time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<String>,
+    /// Image format QEMU opens the disk with ("qcow2" or "raw"). Set by
+    /// the server when it places a disk on a block pool (an LVM volume is
+    /// raw, a volume-chain LVM volume holds qcow2); never probed from the
+    /// content. `None` = from the file name (`.qcow2` -> qcow2, else raw).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+}
+
+impl VmDisk {
+    /// Whether the disk is a block device a storage pool provisioned (an
+    /// LVM volume under `/dev`), not an image file Horcrux created.
+    pub fn is_block_volume(&self) -> bool {
+        self.storage.is_some() && is_block_volume_path(&self.path)
+    }
+}
+
+/// A path under `/dev/` (a pool's block volume such as `/dev/<vg>/<lv>`).
+pub fn is_block_volume_path(path: &str) -> bool {
+    path.starts_with("/dev/") && !path.contains("/../")
+}
+
+static VM_STATE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Set once at start-up to the node's VM storage directory
+/// (`paths.vm_storage`): side files of VMs whose first disk is a block
+/// volume live under its `blk/` subdirectory.
+pub fn set_vm_state_dir(dir: std::path::PathBuf) {
+    let _ = VM_STATE_DIR.set(dir);
+}
+
+fn vm_state_dir() -> std::path::PathBuf {
+    VM_STATE_DIR.get().cloned().unwrap_or_else(|| {
+        std::env::var("HORCRUX_VM_STORAGE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(
+                    std::env::var("HORCRUX_DATA_DIR").unwrap_or_else(|_| "/var/lib/horcrux".into()),
+                )
+                .join("vms")
+            })
+    })
+}
+
+/// The path a VM's side files hang off (`<stem>.qmp.sock`, `.serial.sock`,
+/// `.display.json`, `.efivars.qcow2`, `.tpm`, ...): the first disk's own
+/// path for an image file. A block volume (`/dev/<vg>/<lv>`) must never get
+/// files next to it in /dev, so its stem is
+/// `<VM storage dir>/blk/<vg>--<lv>.disk` on the node.
+pub fn runtime_stem(disk: &std::path::Path) -> std::path::PathBuf {
+    match disk.to_str() {
+        Some(s) if is_block_volume_path(s) => vm_state_dir().join("blk").join(format!(
+            "{}.disk",
+            s.trim_start_matches("/dev/").replace('/', "--")
+        )),
+        _ => disk.to_path_buf(),
+    }
+}
+
+#[cfg(test)]
+mod runtime_stem_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn image_files_keep_their_path_block_volumes_map_into_the_vm_dir() {
+        assert_eq!(
+            runtime_stem(Path::new("/var/lib/horcrux/vms/100.qcow2")),
+            Path::new("/var/lib/horcrux/vms/100.qcow2")
+        );
+        let s = runtime_stem(Path::new("/dev/vg_san/vm-100-disk-0"));
+        assert!(s.ends_with("blk/vg_san--vm-100-disk-0.disk"), "{s:?}");
+        assert!(!s.starts_with("/dev"));
+        assert_eq!(
+            s.with_extension("qmp.sock").file_name().unwrap(),
+            "vg_san--vm-100-disk-0.qmp.sock"
+        );
+        assert!(!is_block_volume_path("/dev/../etc/x"));
+        let d = VmDisk {
+            path: "/dev/vg/lv".into(),
+            storage: Some("p".into()),
+            ..Default::default()
+        };
+        assert!(d.is_block_volume());
+        let f = VmDisk {
+            path: "/dev/vg/lv".into(),
+            ..Default::default()
+        };
+        assert!(!f.is_block_volume());
+    }
 }
 
 /// Disk buses a VM disk can use (`VmDisk::disk_type`).

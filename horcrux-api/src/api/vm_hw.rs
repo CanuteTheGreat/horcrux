@@ -783,11 +783,25 @@ async fn add_disk(
     Path(id): Path<String>,
     Json(mut spec): Json<crate::vm::hardware::DiskSpec>,
 ) -> Result<(StatusCode, Json<VmConfig>), ApiError> {
-    crate::api::storage_volumes::place_new_disk(&state, &mut spec).await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(state.vm_manager.add_disk(&id, spec).await?),
-    ))
+    crate::api::storage_volumes::place_new_disk_with_volume(&state, &id, &mut spec).await?;
+    let volume = spec.volume.clone();
+    let storage = spec.storage.clone();
+    match state.vm_manager.add_disk(&id, spec).await {
+        Ok(cfg) => Ok((StatusCode::CREATED, Json(cfg))),
+        Err(e) => {
+            // the volume made for it goes again
+            if let Some((dev, fmt)) = volume {
+                let d = horcrux_common::VmDisk {
+                    path: dev,
+                    storage,
+                    format: Some(fmt),
+                    ..Default::default()
+                };
+                crate::api::storage_volumes::release_block_disks(&state, &[d]).await;
+            }
+            Err(e.into())
+        }
+    }
 }
 
 /// Change a disk's bus/cache/options (stopped VM) or grow it (any time).
@@ -813,12 +827,27 @@ async fn remove_disk(
     axum::extract::Query(q): axum::extract::Query<RemoveDiskQuery>,
 ) -> Result<Json<VmConfig>, ApiError> {
     crate::api::protection::ensure_vm_config_unprotected(&state, &id, "removing a disk").await?;
-    Ok(Json(
-        state
-            .vm_manager
-            .remove_disk(&id, index, q.delete_file)
-            .await?,
-    ))
+    let before = state
+        .vm_manager
+        .get_vm(&id)
+        .await
+        .ok()
+        .and_then(|vm| vm.disks.get(index).cloned());
+    let cfg = state
+        .vm_manager
+        .remove_disk(&id, index, q.delete_file)
+        .await?;
+    // A block pool's volume is deleted through its pool (wipe/discard).
+    if let Some(d) = before.filter(|d| q.delete_file && d.is_block_volume()) {
+        let failed = crate::api::storage_volumes::release_block_disks(&state, &[d]).await;
+        if !failed.is_empty() {
+            return Err(ApiError::Internal(format!(
+                "disk{index} detached, but its volume stayed: {}",
+                failed.join("; ")
+            )));
+        }
+    }
+    Ok(Json(cfg))
 }
 
 async fn update_config(

@@ -329,6 +329,7 @@ pub fn to_disk(d: &DiskSpec, pool_id: Option<String>) -> VmDisk {
         ssd: d.ssd,
         iothread: d.iothread,
         storage: pool_id,
+        format: None,
     }
 }
 

@@ -370,16 +370,21 @@ impl VmManager {
             ));
         }
         let mut n = disks.len();
-        let path = loop {
-            let mut p = self.qemu.disk_file(id, n);
-            if let (Some(dir), Some(file)) = (&spec.dir, p.file_name()) {
-                p = dir.join(file);
+        let path = if let Some((dev, _)) = &spec.volume {
+            std::path::PathBuf::from(dev)
+        } else {
+            loop {
+                let mut p = self.qemu.disk_file(id, n);
+                if let (Some(dir), Some(file)) = (&spec.dir, p.file_name()) {
+                    p = dir.join(file);
+                }
+                if !p.exists() && !disks.iter().any(|d| d.path == p.to_string_lossy()) {
+                    break p;
+                }
+                n += 1;
             }
-            if !p.exists() && !disks.iter().any(|d| d.path == p.to_string_lossy()) {
-                break p;
-            }
-            n += 1;
         };
+        let block = spec.volume.is_some();
         let disk = horcrux_common::VmDisk {
             path: path.to_string_lossy().to_string(),
             size_gb: spec.size_gb,
@@ -389,16 +394,21 @@ impl VmManager {
             ssd: spec.ssd,
             iothread: spec.iothread,
             storage: spec.storage.clone(),
+            format: spec.volume.as_ref().map(|(_, f)| f.clone()),
         };
         disk.validate(disks.len()).map_err(Error::Validation)?;
         disks.push(disk);
         qemu::validate_disk_set(&disks).map_err(Error::Validation)?;
-        QemuManager::create_disk_image(&path, spec.size_gb).await?;
+        if !block {
+            QemuManager::create_disk_image(&path, spec.size_gb).await?;
+        }
         vm.disks = disks;
         let config = vm.to_config();
         if let Some(db) = &self.db {
             if let Err(e) = db.update_vm(&config).await {
-                let _ = tokio::fs::remove_file(&path).await;
+                if !block {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
                 vm.disks.pop();
                 return Err(e);
             }
@@ -464,6 +474,13 @@ impl VmManager {
                 }
                 Some(s) if s > 65536 => {
                     return Err(Error::Validation("size must be at most 65536 GB".into()))
+                }
+                Some(s) if s > cur.size_gb && cur.is_block_volume() => {
+                    return Err(Error::Validation(format!(
+                        "disk{index} is a volume of storage pool {}: growing block volumes is not \
+                         supported yet (extend the logical volume on the node)",
+                        cur.storage.as_deref().unwrap_or_default()
+                    )))
                 }
                 Some(s) if s > cur.size_gb => Some(s),
                 _ => None,
@@ -568,7 +585,8 @@ impl VmManager {
         if let Some(db) = &self.db {
             db.update_vm(&config).await?;
         }
-        if delete_file {
+        // A block pool's volume is deleted by the API through its pool.
+        if delete_file && !removed.is_block_volume() {
             if let Err(e) = tokio::fs::remove_file(&removed.path).await {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     tracing::warn!("VM {id}: could not delete {}: {e}", removed.path);
@@ -627,6 +645,10 @@ pub struct DiskSpec {
     pub storage: Option<String>,
     #[serde(skip)]
     pub dir: Option<std::path::PathBuf>,
+    /// A block pool's volume the API provisioned for this disk: (device
+    /// path, image format). The disk uses it as is; nothing is created.
+    #[serde(skip)]
+    pub volume: Option<(String, String)>,
 }
 
 fn default_bus() -> String {

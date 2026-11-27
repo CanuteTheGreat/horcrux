@@ -97,7 +97,7 @@ pub struct HandoffRecord {
 }
 
 pub fn record_file(disk: &Path) -> PathBuf {
-    disk.with_extension("handoff.json")
+    horcrux_common::runtime_stem(disk).with_extension("handoff.json")
 }
 
 /// Sysfs/procfs/devfs roots (fixtures in tests).

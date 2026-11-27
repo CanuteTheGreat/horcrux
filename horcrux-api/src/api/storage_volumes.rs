@@ -249,6 +249,25 @@ fn holds_vm_disks(p: &crate::storage::StoragePool) -> bool {
         && std::path::Path::new(&p.path).is_dir()
 }
 
+/// Block pools that hold VM disks as volumes (Proxmox: a disk on LVM is
+/// a logical volume `vm-<id>-disk-<n>`): enabled LVM pools, including a
+/// shared VG on a SAN LUN and pools with `snapshot_as_volume_chain` (the
+/// volume then holds a qcow2 image). Only Create VM and Add disk place
+/// disks there; importers copy into files and keep file pools.
+fn holds_vm_block_volumes(p: &crate::storage::StoragePool) -> bool {
+    p.enabled && p.storage_type == crate::storage::StorageType::Lvm
+}
+
+/// Image format of a VM disk on block pool `p`: qcow2 in a volume-chain
+/// pool, raw otherwise.
+fn block_volume_format(p: &crate::storage::StoragePool) -> &'static str {
+    if p.lvm.as_ref().is_some_and(|o| o.snapshot_as_volume_chain) {
+        "qcow2"
+    } else {
+        "raw"
+    }
+}
+
 /// Pools offered by the Create VM / Add disk pool selector.
 pub async fn vm_disk_pools(state: &AppState) -> Vec<VmDiskPool> {
     let mut out: Vec<VmDiskPool> = state
@@ -256,7 +275,7 @@ pub async fn vm_disk_pools(state: &AppState) -> Vec<VmDiskPool> {
         .list_pools()
         .await
         .into_iter()
-        .filter(holds_vm_disks)
+        .filter(|p| holds_vm_disks(p) || holds_vm_block_volumes(p))
         .map(|p| VmDiskPool {
             id: p.id,
             name: p.name,
@@ -322,6 +341,172 @@ pub async fn place_vm_disks(
             }
         };
     }
+    Ok(())
+}
+
+/// The block pool `pool_id` if it holds VM disks as volumes (`None` for a
+/// file pool or an unknown id: the file path then decides).
+async fn block_pool(state: &AppState, pool_id: &str) -> Option<crate::storage::StoragePool> {
+    state
+        .storage_manager
+        .get_pool(pool_id)
+        .await
+        .ok()
+        .filter(holds_vm_block_volumes)
+}
+
+/// Create a VM's disk `name` of `size_gb` GB in block pool `pool`:
+/// (device path, image format).
+async fn provision_block_disk(
+    state: &AppState,
+    pool: &crate::storage::StoragePool,
+    name: &str,
+    size_gb: u64,
+) -> Result<(String, String), ApiError> {
+    if size_gb == 0 {
+        return Err(ApiError::BadRequest(
+            "disk size must be at least 1 GB".into(),
+        ));
+    }
+    let existing = state
+        .storage_manager
+        .list_volumes(&pool.id)
+        .await
+        .map_err(err)?;
+    if existing.iter().any(|v| v.name == name) {
+        return Err(ApiError::Conflict(format!(
+            "storage pool {} already holds a volume {name}",
+            pool.name
+        )));
+    }
+    state
+        .storage_manager
+        .create_volume(&pool.id, name, size_gb)
+        .await
+        .map_err(err)?;
+    let dev = crate::storage::StorageManager::volume_location(pool, name).map_err(err)?;
+    Ok((dev, block_volume_format(pool).to_string()))
+}
+
+/// Delete the block-pool volumes among `disks` (VM deleted, create failed,
+/// disk removed with its data): through the pool, so its wipe/discard
+/// settings apply. Failures are logged and returned as text.
+pub async fn release_block_disks(
+    state: &AppState,
+    disks: &[horcrux_common::VmDisk],
+) -> Vec<String> {
+    let mut failed = Vec::new();
+    for d in disks.iter().filter(|d| d.is_block_volume()) {
+        let (Some(pool), Some(name)) = (
+            d.storage.as_deref(),
+            std::path::Path::new(&d.path)
+                .file_name()
+                .and_then(|n| n.to_str()),
+        ) else {
+            continue;
+        };
+        if let Err(e) = state.storage_manager.delete_volume(pool, name).await {
+            tracing::warn!("volume {name} of storage pool {pool} stayed: {e}");
+            failed.push(format!("{pool}/{name}: {e}"));
+        }
+    }
+    failed
+}
+
+/// Create VM (and the declarative config): like `place_vm_disks`, and a
+/// disk on a block pool (LVM, shared LVM on a SAN LUN) gets its own
+/// volume `vm-<id>-disk-<n>` created now. On error every volume made
+/// here is deleted again; the caller deletes them if creating the VM fails
+/// later (`release_block_disks`).
+pub async fn place_vm_disks_with_volumes(
+    state: &AppState,
+    config: &mut horcrux_common::VmConfig,
+) -> Result<(), ApiError> {
+    let mut made: Vec<horcrux_common::VmDisk> = Vec::new();
+    for i in 0..config.disks.len() {
+        let size = if i == 0 && config.disks[i].size_gb == 0 {
+            config.disk_size
+        } else {
+            config.disks[i].size_gb
+        };
+        let d = &mut config.disks[i];
+        d.storage = d.storage.take().filter(|s| !s.trim().is_empty());
+        d.format = None;
+        let placed: Result<String, ApiError> = match d.storage.clone() {
+            None => Ok(String::new()),
+            Some(pool_id) => match block_pool(state, &pool_id).await {
+                Some(pool) => {
+                    let name = format!("vm-{}-disk-{i}", config.id);
+                    let r = match crate::validation::validate_vm_id(&config.id) {
+                        Err(e) => Err(ApiError::from(e)),
+                        Ok(()) => provision_block_disk(state, &pool, &name, size).await,
+                    };
+                    match r {
+                        Ok((dev, fmt)) => {
+                            let d = &mut config.disks[i];
+                            d.size_gb = size;
+                            d.format = Some(fmt);
+                            d.path = dev.clone();
+                            made.push(d.clone());
+                            Ok(dev)
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                None => vm_disk_dir(state, &pool_id, size)
+                    .await
+                    .map(|dir| dir.join("pending.qcow2").to_string_lossy().to_string()),
+            },
+        };
+        match placed {
+            Ok(path) => config.disks[i].path = path,
+            Err(e) => {
+                release_block_disks(state, &made).await;
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Add disk on the VM's Hardware page: like `place_new_disk`, and a disk
+/// on a block pool gets its own volume `vm-<id>-disk-<n>` (the first free
+/// `n`) created now; the caller deletes it if attaching fails.
+pub async fn place_new_disk_with_volume(
+    state: &AppState,
+    vm_id: &str,
+    spec: &mut crate::vm::hardware::DiskSpec,
+) -> Result<(), ApiError> {
+    spec.storage = spec.storage.take().filter(|s| !s.trim().is_empty());
+    spec.volume = None;
+    let Some(pool) = (match &spec.storage {
+        Some(p) => block_pool(state, p).await,
+        None => None,
+    }) else {
+        return place_new_disk(state, spec).await;
+    };
+    crate::validation::validate_vm_id(vm_id)?;
+    let taken: Vec<String> = state
+        .storage_manager
+        .list_volumes(&pool.id)
+        .await
+        .map_err(err)?
+        .into_iter()
+        .map(|v| v.name)
+        .collect();
+    let used: Vec<String> = state
+        .vm_manager
+        .get_vm(vm_id)
+        .await
+        .map(|vm| vm.disks.into_iter().map(|d| d.path).collect())
+        .unwrap_or_default();
+    let name = (1..256)
+        .map(|n| format!("vm-{vm_id}-disk-{n}"))
+        .find(|n| !taken.contains(n) && !used.iter().any(|p| p.ends_with(&format!("/{n}"))))
+        .ok_or_else(|| ApiError::Conflict(format!("no free volume name for VM {vm_id}")))?;
+    let (dev, fmt) = provision_block_disk(state, &pool, &name, spec.size_gb).await?;
+    spec.storage = Some(pool.id.clone());
+    spec.volume = Some((dev, fmt));
     Ok(())
 }
 

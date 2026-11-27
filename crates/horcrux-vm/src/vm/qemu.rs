@@ -157,7 +157,7 @@ fn qemu_running_from_pidfile(path: &std::path::Path) -> bool {
 
 /// Where a VM's cloud-init seed ISO lives (next to its first disk).
 pub fn cloudinit_seed(disk: &std::path::Path) -> PathBuf {
-    disk.with_extension("cidata.iso")
+    horcrux_common::runtime_stem(disk).with_extension("cidata.iso")
 }
 
 /// Whether `vm` boots with UEFI (OVMF): only x86 guests set to OVMF (the
@@ -545,7 +545,7 @@ fn escape(v: &str) -> String {
 /// disk, like the cloud-init seed). Attached while the file exists; Horcrux
 /// deletes it once the installed guest's agent answers.
 pub fn unattend_iso(disk: &std::path::Path) -> PathBuf {
-    disk.with_extension("unattend.iso")
+    horcrux_common::runtime_stem(disk).with_extension("unattend.iso")
 }
 
 /// The extra CD-ROM drives (`hardware.extra_cdroms`, read-only ISOs from the
@@ -699,7 +699,11 @@ fn disk_args(vm: &QemuVm, boot: &BootIndex) -> Vec<String> {
     let mut sata_port = 0usize;
     for (i, d) in vm.all_disks().iter().enumerate() {
         let id = disk_drive_id(i);
-        let fmt = disk_format(&d.path);
+        let fmt = match d.format.as_deref() {
+            Some("qcow2") => "qcow2",
+            Some(_) => "raw",
+            None => disk_format(&d.path),
+        };
         if d.disk_type == "default" {
             // Exactly the drive every VM got before buses existed (QEMU's
             // default interface), plus a stable id.
@@ -1290,6 +1294,21 @@ impl QemuManager {
             let file = self.disk_file(&config.id, i);
             d.path = match &d.storage {
                 None => file.to_string_lossy().to_string(),
+                // A block pool's volume the API provisioned for this disk
+                // (`/dev/<vg>/<lv>`): kept as is, it must be a block device.
+                Some(pool) if horcrux_common::is_block_volume_path(&d.path) => {
+                    use std::os::unix::fs::FileTypeExt;
+                    let is_blk = std::fs::metadata(&d.path)
+                        .map(|m| m.file_type().is_block_device())
+                        .unwrap_or(false);
+                    if !is_blk {
+                        return Err(horcrux_common::Error::Validation(format!(
+                            "disk{i}: {} of storage pool {pool} is not a block device",
+                            d.path
+                        )));
+                    }
+                    d.path.clone()
+                }
                 Some(pool) => {
                     let p = std::path::Path::new(&d.path);
                     let dir = p.parent().filter(|dir| {
@@ -1328,6 +1347,11 @@ impl QemuManager {
         let mut created: Vec<PathBuf> = Vec::new();
         for d in &disks {
             let path = PathBuf::from(&d.path);
+            // A block pool's volume was provisioned (and is removed on
+            // failure) by the API through its storage pool.
+            if d.is_block_volume() {
+                continue;
+            }
             // A pool may already hold a volume of that name: never truncate it.
             let taken = d.storage.is_some() && path.exists();
             let made = if taken {
@@ -1347,7 +1371,7 @@ impl QemuManager {
             }
             created.push(path);
         }
-        let disk_path = created[0].clone();
+        let disk_path = PathBuf::from(&disks[0].path);
 
         info!("VM {} created successfully", config.id);
 
@@ -1425,6 +1449,29 @@ impl QemuManager {
                 "VM {} is already running",
                 vm.id
             )));
+        }
+        // A first disk on a block volume keeps its side files (sockets,
+        // console state, firmware vars) in the VM storage dir's blk/.
+        let stem = horcrux_common::runtime_stem(&vm.disk_path);
+        if stem != vm.disk_path {
+            if let Some(dir) = stem.parent() {
+                tokio::fs::create_dir_all(dir).await.map_err(|e| {
+                    horcrux_common::Error::System(format!("creating {}: {e}", dir.display()))
+                })?;
+            }
+        }
+        for d in vm.all_disks() {
+            if d.is_block_volume() && !std::path::Path::new(&d.path).exists() {
+                return Err(horcrux_common::Error::NodeLacks {
+                    reason: "vm-block-volume-inactive",
+                    message: format!(
+                        "{} is not active on this node (storage pool {})",
+                        d.path,
+                        d.storage.as_deref().unwrap_or_default()
+                    ),
+                    hint: "Check the storage pool on this node (Storage > SAN): its volume group must be visible and its lockspace started.".into(),
+                });
+            }
         }
 
         // Consoles: serial Unix socket (+ <disk>.serial.log), QMP, and the
@@ -1737,7 +1784,10 @@ impl QemuManager {
         // hold marker.
         super::display::DisplayRuntime::remove(&vm.disk_path).await;
         for ext in ["cidata.iso", "serial.log", "display.json", "hold.json"] {
-            let _ = tokio::fs::remove_file(vm.disk_path.with_extension(ext)).await;
+            let _ = tokio::fs::remove_file(
+                horcrux_common::runtime_stem(&vm.disk_path).with_extension(ext),
+            )
+            .await;
         }
         let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
         HostNet::system().remove_taps(&vm.id).await;
@@ -1747,9 +1797,12 @@ impl QemuManager {
         // Delete the disk images (already gone is fine: the rest is
         // cleaned). The first disk last, since the others' side files
         // are found through it.
+        // Block volumes of storage pools are not files: the API deletes
+        // them through their pool (wipe/discard as the pool says).
         let mut disks: Vec<PathBuf> = vm
             .all_disks()
             .iter()
+            .filter(|d| !horcrux_common::is_block_volume_path(&d.path))
             .map(|d| PathBuf::from(&d.path))
             .collect();
         disks.rotate_left(1);
