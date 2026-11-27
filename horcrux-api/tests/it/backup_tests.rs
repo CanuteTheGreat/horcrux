@@ -435,6 +435,124 @@ async fn jobs_persist_run_and_apply_retention() {
 }
 
 #[tokio::test]
+async fn restore_puts_vm_disks_into_the_chosen_storage_pool() {
+    use horcrux_api::storage::{StorageManager, StoragePool, StorageType};
+    let env = Env::new().await;
+    let disk = env.vm_with_data("vm-pool").await;
+    let original = content_sha(&disk, &env.root);
+    let pool_dir = env.root.join("pool-fast");
+    std::fs::create_dir_all(&pool_dir).unwrap();
+    let sm = Arc::new(StorageManager::new());
+    sm.add_pool(StoragePool {
+        id: "fast".into(),
+        name: "fast".into(),
+        storage_type: StorageType::Directory,
+        path: pool_dir.to_string_lossy().into(),
+        available: 0,
+        total: 0,
+        enabled: true,
+        source: None,
+        lvm: None,
+    })
+    .await
+    .unwrap();
+    let mgr = Arc::new(
+        BackupManager::with_database(
+            env.db.clone(),
+            env.root.join("backups"),
+            env.root.join("restore"),
+        )
+        .await
+        .unwrap(),
+    );
+    mgr.attach_runtime(BackupRuntime {
+        vm_manager: env.vms.clone(),
+        container_manager: env.containers.clone(),
+        storage_manager: Some(sm),
+        vm_storage: env.root.join("vms"),
+        lxc_path: env.root.join("lxc"),
+        on_job_finished: None,
+    })
+    .unwrap();
+    let b = mgr
+        .create_backup(backup_req("vm-pool", Compression::Zstd))
+        .await
+        .unwrap();
+    let r = mgr
+        .restore_backup(
+            &b.id,
+            RestoreRequest {
+                target_id: Some("vm-pool-copy".into()),
+                storage: Some("fast".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let copy = env.vms.get_vm(&r.target_id).await.unwrap();
+    let p = PathBuf::from(&copy.disks[0].path);
+    assert!(p.starts_with(&pool_dir), "{}", p.display());
+    assert_eq!(copy.disks[0].storage.as_deref(), Some("fast"));
+    assert_eq!(content_sha(&p, &env.root), original);
+    // An unknown pool is refused before anything is written.
+    let err = mgr
+        .restore_backup(
+            &b.id,
+            RestoreRequest {
+                target_id: Some("vm-pool-x".into()),
+                storage: Some("nope".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("nope"), "{err}");
+    assert!(env.vms.get_vm("vm-pool-x").await.is_err());
+}
+
+#[tokio::test]
+async fn all_guests_job_includes_guests_created_later_minus_excluded() {
+    let env = Env::new().await;
+    let mgr = env.manager().await;
+    env.vm_with_data("vm-all-a").await;
+    env.vm_with_data("vm-all-skip").await;
+    let mut j: BackupJob = serde_json::from_value(serde_json::json!({
+        "id": "everything",
+        "enabled": false,
+        "schedule": "daily",
+        "all_guests": true,
+        "exclude": ["vm-all-skip"],
+        "mode": "stop",
+        "compression": "zstd",
+    }))
+    .unwrap();
+    j = mgr.create_job(j).await.unwrap();
+    assert!(j.all_guests && j.targets.is_empty());
+    // A VM created after the job is backed up without editing it.
+    env.vm_with_data("vm-all-new").await;
+    let mut got = mgr.job_targets(&j).await.unwrap();
+    got.sort();
+    assert!(got.contains(&"vm-all-a".to_string()));
+    assert!(got.contains(&"vm-all-new".to_string()));
+    assert!(!got.contains(&"vm-all-skip".to_string()));
+    // Run it, leaving out anything else this host has (other tests' guests,
+    // containers of the CI host's runtimes).
+    j.exclude = got
+        .iter()
+        .filter(|g| !g.starts_with("vm-all-"))
+        .cloned()
+        .chain(["vm-all-skip".to_string()])
+        .collect();
+    mgr.update_job("everything", j).await.unwrap();
+    let r = mgr.run_job("everything").await.unwrap();
+    assert!(r.ok, "{:?}", r.results);
+    for (id, want) in [("vm-all-a", 1), ("vm-all-new", 1), ("vm-all-skip", 0)] {
+        let n = mgr.list_backups(Some(id.into())).await.unwrap().len();
+        assert_eq!(n, want, "{id}");
+    }
+}
+
+#[tokio::test]
 async fn scheduler_fires_due_jobs() {
     let env = Env::new().await;
     let mgr = env.manager().await;

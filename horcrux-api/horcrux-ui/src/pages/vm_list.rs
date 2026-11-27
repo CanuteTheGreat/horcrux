@@ -136,12 +136,24 @@ pub fn VmList() -> impl IntoView {
     let (clone_start, set_clone_start) = create_signal(false);
     let (clone_error, set_clone_error) = create_signal(None::<String>);
     let (cloning, set_cloning) = create_signal(false);
+    let (clone_storage, set_clone_storage) = create_signal(String::new());
+    let (file_pools, set_file_pools) = create_signal(Vec::<api::StoragePoolInfo>::new());
 
     let open_clone = move |vm: VmConfig| {
         set_clone_name.set(format!("{}-clone", vm.name));
         set_clone_mode.set("full".to_string());
         set_clone_start.set(false);
         set_clone_error.set(None);
+        set_clone_storage.set(String::new());
+        spawn_local(async move {
+            if let Ok(p) = api::get_storage_pools().await {
+                set_file_pools.set(
+                    p.into_iter()
+                        .filter(crate::pages::backup::dashboard::restore_pool)
+                        .collect(),
+                );
+            }
+        });
         set_clone_src.set(Some(vm));
     };
 
@@ -154,9 +166,10 @@ pub fn VmList() -> impl IntoView {
             return;
         }
         let (mode, start) = (clone_mode.get(), clone_start.get());
+        let storage = clone_storage.get();
         set_cloning.set(true);
         spawn_local(async move {
-            let r = api::clone_vm(&src.id, &name, &mode, start).await;
+            let r = api::clone_vm_to(&src.id, &name, &mode, start, Some(&storage)).await;
             set_cloning.set(false);
             match r {
                 Ok(vm) => {
@@ -361,6 +374,20 @@ pub fn VmList() -> impl IntoView {
                                         "A linked clone only stores its own changes and reads the rest from this VM's disk, so this VM can't be deleted while the clone exists."
                                     </small>
                                 })}
+                            </div>
+                            <div class="form-group">
+                                <label for="clone-storage">"Target storage"</label>
+                                <select id="clone-storage" on:change=move |ev| set_clone_storage.set(event_target_value(&ev))>
+                                    <option value="" selected=move || clone_storage.get().is_empty()>"VM storage (default)"</option>
+                                    {move || file_pools.get().into_iter().map(|p| {
+                                        let id = p.id.clone();
+                                        view! {
+                                            <option value=p.id.clone() selected=move || clone_storage.get() == id>
+                                                {format!("{} ({} free)", p.name, api::human_bytes(p.available_bytes))}
+                                            </option>
+                                        }
+                                    }).collect_view()}
+                                </select>
                             </div>
                             <div class="form-group">
                                 <label>

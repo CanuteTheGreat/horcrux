@@ -4,6 +4,14 @@ use super::common::{confirm, load_guests, non_empty, short, Guest};
 use crate::api::backup as bk;
 use leptos::*;
 
+/// Pools whose content is files (a restored VM's qcow2 disks can go there).
+pub fn restore_pool(p: &crate::api::StoragePoolInfo) -> bool {
+    matches!(
+        p.pool_type.as_str(),
+        "directory" | "nfs" | "cifs" | "cephfs" | "glusterfs" | "btrfs"
+    ) && p.status == "active"
+}
+
 #[component]
 pub fn BackupDashboard() -> impl IntoView {
     let (backups, set_backups) = create_signal(Vec::<bk::Backup>::new());
@@ -15,6 +23,16 @@ pub fn BackupDashboard() -> impl IntoView {
     let (notice, set_notice) = create_signal(None::<String>);
     let (busy, set_busy) = create_signal(false);
     let (filter, set_filter) = create_signal(String::new());
+    // `?guest=<id>` (the VM page's Backups tab): that guest's archives, and
+    // "Back up now" preselected on it.
+    let guest_param = leptos_router::use_query_map()
+        .get_untracked()
+        .get("guest")
+        .cloned()
+        .filter(|g| !g.is_empty());
+    if let Some(g) = &guest_param {
+        set_filter.set(g.clone());
+    }
 
     // "Back up now" form
     let (target, set_target) = create_signal(String::new());
@@ -30,6 +48,14 @@ pub fn BackupDashboard() -> impl IntoView {
     let (r_name, set_r_name) = create_signal(String::new());
     let (r_force, set_r_force) = create_signal(false);
     let (r_start, set_r_start) = create_signal(false);
+    let (r_storage, set_r_storage) = create_signal(String::new());
+    // File-image pools a VM can be restored into.
+    let (pools, set_pools) = create_signal(Vec::<crate::api::StoragePoolInfo>::new());
+    spawn_local(async move {
+        if let Ok(p) = crate::api::get_storage_pools().await {
+            set_pools.set(p.into_iter().filter(restore_pool).collect());
+        }
+    });
 
     let reload = move || {
         spawn_local(async move {
@@ -54,9 +80,15 @@ pub fn BackupDashboard() -> impl IntoView {
 
     create_effect(move |_| {
         reload();
+        let guest_param = guest_param.clone();
         spawn_local(async move {
             let g = load_guests().await;
-            if let Some(first) = g.first() {
+            if let Some(p) = guest_param
+                .as_ref()
+                .filter(|p| g.iter().any(|x| &x.id == *p))
+            {
+                set_target.set(p.clone());
+            } else if let Some(first) = g.first() {
                 set_target.set(first.id.clone());
             }
             set_guests.set(g);
@@ -163,6 +195,7 @@ pub fn BackupDashboard() -> impl IntoView {
         set_r_name.set(String::new());
         set_r_force.set(false);
         set_r_start.set(false);
+        set_r_storage.set(String::new());
         set_restore_of.set(Some(b));
     };
 
@@ -174,6 +207,9 @@ pub fn BackupDashboard() -> impl IntoView {
             name: non_empty(&r_name.get()),
             force: r_force.get(),
             start: r_start.get(),
+            storage: (b.target_type == "vm")
+                .then(|| r_storage.get())
+                .filter(|s| !s.is_empty()),
         };
         set_busy.set(true);
         spawn_local(async move {
@@ -189,6 +225,8 @@ pub fn BackupDashboard() -> impl IntoView {
                     )));
                     set_error.set(None);
                     set_restore_of.set(None);
+                    // A restore to a new id adds a guest: refresh the pickers.
+                    set_guests.set(load_guests().await);
                 }
                 Err(e) => set_error.set(Some(format!("Restore failed: {}", e.message))),
             }
@@ -325,6 +363,22 @@ pub fn BackupDashboard() -> impl IntoView {
                             <input id="restore-name" type="text" prop:value=move || r_name.get()
                                 on:input=move |ev| set_r_name.set(event_target_value(&ev))/>
                         </div>
+                        {(b.target_type == "vm").then(|| view! {
+                            <div class="form-group">
+                                <label for="restore-storage">"Disk storage"</label>
+                                <select id="restore-storage" on:change=move |ev| set_r_storage.set(event_target_value(&ev))>
+                                    <option value="" selected=move || r_storage.get().is_empty()>"VM storage (default)"</option>
+                                    {move || pools.get().into_iter().map(|p| {
+                                        let id = p.id.clone();
+                                        view! {
+                                            <option value=p.id.clone() selected=move || r_storage.get() == id>
+                                                {format!("{} ({} free)", p.name, crate::api::human_bytes(p.available_bytes))}
+                                            </option>
+                                        }
+                                    }).collect_view()}
+                                </select>
+                            </div>
+                        })}
                         <div class="form-group">
                             <label>
                                 <input id="restore-force" type="checkbox" prop:checked=move || r_force.get()

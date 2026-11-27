@@ -12,13 +12,27 @@ const SCHEDULE_PRESETS: [(&str, &str); 5] = [
     ("*/15 * * * *", "every 15 minutes"),
 ];
 
+/// The Targets column: the list, or "All guests" with its exclusions.
+pub fn targets_label(j: &bk::BackupJob) -> String {
+    if !j.all_guests {
+        return j.targets.join(", ");
+    }
+    if j.exclude.is_empty() {
+        "All VMs and containers".to_string()
+    } else {
+        format!("All VMs and containers except {}", j.exclude.join(", "))
+    }
+}
+
 /// Build the job from the raw form values (kept browser-free for tests).
+/// With `all_guests`, `targets` are the guests to EXCLUDE.
 #[allow(clippy::too_many_arguments)]
 pub fn build_job(
     id: &str,
     comment: &str,
     enabled: bool,
     schedule: &str,
+    all_guests: bool,
     targets: &[String],
     storage: &str,
     mode: &str,
@@ -29,15 +43,22 @@ pub fn build_job(
     if schedule.trim().is_empty() {
         return Err("Schedule is required".into());
     }
-    if targets.is_empty() {
-        return Err("Pick at least one VM or container".into());
+    if !all_guests && targets.is_empty() {
+        return Err("Pick at least one VM or container, or back up all of them".into());
     }
+    let (targets, exclude) = if all_guests {
+        (Vec::new(), targets.to_vec())
+    } else {
+        (targets.to_vec(), Vec::new())
+    };
     Ok(bk::BackupJob {
         id: id.trim().to_string(),
         comment: non_empty(comment),
         enabled,
         schedule: schedule.trim().to_string(),
-        targets: targets.to_vec(),
+        all_guests,
+        targets,
+        exclude,
         storage: storage.to_string(),
         mode: mode.to_string(),
         compression: compression.to_string(),
@@ -64,6 +85,7 @@ pub fn BackupJobsPage() -> impl IntoView {
     let (f_enabled, set_f_enabled) = create_signal(true);
     let (f_schedule, set_f_schedule) = create_signal("0 2 * * *".to_string());
     let (f_targets, set_f_targets) = create_signal(Vec::<String>::new());
+    let (f_all, set_f_all) = create_signal(false);
     let (f_storage, set_f_storage) = create_signal("local".to_string());
     let (f_mode, set_f_mode) = create_signal("snapshot".to_string());
     let (f_comp, set_f_comp) = create_signal("zstd".to_string());
@@ -107,6 +129,7 @@ pub fn BackupJobsPage() -> impl IntoView {
         set_f_enabled.set(true);
         set_f_schedule.set("0 2 * * *".into());
         set_f_targets.set(Vec::new());
+        set_f_all.set(false);
         set_f_storage.set("local".into());
         set_f_mode.set("snapshot".into());
         set_f_comp.set("zstd".into());
@@ -124,7 +147,12 @@ pub fn BackupJobsPage() -> impl IntoView {
         set_f_comment.set(j.comment.clone().unwrap_or_default());
         set_f_enabled.set(j.enabled);
         set_f_schedule.set(j.schedule.clone());
-        set_f_targets.set(j.targets.clone());
+        set_f_all.set(j.all_guests);
+        set_f_targets.set(if j.all_guests {
+            j.exclude.clone()
+        } else {
+            j.targets.clone()
+        });
         set_f_storage.set(if j.storage.is_empty() {
             "local".into()
         } else {
@@ -156,6 +184,7 @@ pub fn BackupJobsPage() -> impl IntoView {
             &f_comment.get(),
             f_enabled.get(),
             &f_schedule.get(),
+            f_all.get(),
             &f_targets.get(),
             &f_storage.get(),
             &f_mode.get(),
@@ -271,8 +300,18 @@ pub fn BackupJobsPage() -> impl IntoView {
                                 {SCHEDULE_PRESETS.iter().map(|(v, l)| view! { <option value=*v>{format!("{l} ({v})")}</option> }).collect_view()}
                             </select>
                         </div>
+                        <div class="form-group">
+                            <label for="job-selection">"Back up"</label>
+                            <select id="job-selection" on:change=move |ev| {
+                                set_f_all.set(event_target_value(&ev) == "all");
+                                set_f_targets.set(Vec::new());
+                            }>
+                                <option value="selected" selected=move || !f_all.get()>"Selected VMs and containers"</option>
+                                <option value="all" selected=move || f_all.get()>"All VMs and containers (new ones included)"</option>
+                            </select>
+                        </div>
                         <div class="form-group" id="job-targets">
-                            <label>"VMs / containers"</label>
+                            <label>{move || if f_all.get() { "Except (leave these out)" } else { "VMs / containers" }}</label>
                             {move || guests.get().into_iter().map(|g| {
                                 let id = g.id.clone();
                                 let id2 = g.id.clone();
@@ -397,7 +436,7 @@ pub fn BackupJobsPage() -> impl IntoView {
                                         <td>{j.id.clone()}{j.comment.clone().map(|c| format!(" - {c}")).unwrap_or_default()}
                                             {if j.enabled { "" } else { " (disabled)" }}</td>
                                         <td>{j.schedule.clone()}</td>
-                                        <td>{j.targets.join(", ")}</td>
+                                        <td class="job-targets">{targets_label(&j)}</td>
                                         <td>{format!("{} / {} / {}", bk::storage_label(if j.storage.is_empty() { "local" } else { &j.storage }, &storages.get()), j.mode, j.compression)}</td>
                                         <td>{j.retention.summary()}</td>
                                         <td class="job-last-run">{last}</td>
@@ -432,6 +471,7 @@ mod tests {
             " nightly ",
             true,
             "0 2 * * *",
+            false,
             &["vm1".to_string()],
             "local",
             "stop",
@@ -453,6 +493,7 @@ mod tests {
             "",
             true,
             "",
+            false,
             &["a".into()],
             "",
             "",
@@ -461,6 +502,39 @@ mod tests {
             "never"
         )
         .is_err());
-        assert!(build_job("", "", true, "daily", &[], "", "", "", [""; 6], "never").is_err());
+        assert!(build_job(
+            "",
+            "",
+            true,
+            "daily",
+            false,
+            &[],
+            "",
+            "",
+            "",
+            [""; 6],
+            "never"
+        )
+        .is_err());
+        // all guests: no list needed, the checked guests become the exclusions
+        let all = build_job(
+            "",
+            "",
+            true,
+            "daily",
+            true,
+            &["ci1".into()],
+            "",
+            "",
+            "",
+            [""; 6],
+            "never",
+        )
+        .unwrap();
+        assert!(all.all_guests && all.targets.is_empty());
+        assert_eq!(all.exclude, vec!["ci1"]);
+        assert_eq!(targets_label(&all), "All VMs and containers except ci1");
+        let v = serde_json::to_value(&all).unwrap();
+        assert_eq!(v["all_guests"], true);
     }
 }

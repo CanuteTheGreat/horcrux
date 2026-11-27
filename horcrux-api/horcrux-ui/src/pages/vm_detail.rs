@@ -131,6 +131,9 @@ pub fn VmDetailPage() -> impl IntoView {
                 <A href=move || format!("/vms/{}/console", id()) class="tab">"Console"</A>
                 <A href=move || format!("/vms/{}/remote-play", id()) class="tab">"Remote Play"</A>
                 <A href=move || format!("/snapshots?vm={}", id()) class="tab">"Snapshots"</A>
+                <crate::features::IfFeature feature="backup">
+                    <A href=move || format!("/backup?guest={}", id()) class="tab" id="vm-tab-backups">"Backups"</A>
+                </crate::features::IfFeature>
                 <A href="/network/firewall-objects" class="tab">"Firewall"</A>
                 <A href="/security/vulnerabilities" class="tab">"Security"</A>
             </nav>

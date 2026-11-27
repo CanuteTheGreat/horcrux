@@ -2380,6 +2380,36 @@ struct CloneVmRequest {
     description: Option<String>,
     #[serde(default)]
     network_config: Option<vm::clone::NetworkConfig>,
+    /// Storage pool (id) the clone's file disks go to (Proxmox "Target
+    /// Storage"); default the node's VM storage directory. Directory-type
+    /// pools only.
+    #[serde(default)]
+    storage: Option<String>,
+}
+
+/// The directory of a pool a clone's / restore's qcow2 disks can go to.
+async fn file_pool_dir(state: &AppState, id: &str) -> Result<(String, String), ApiError> {
+    let pool =
+        state.storage_manager.get_pool(id).await.map_err(|_| {
+            ApiError::ValidationError(format!("storage pool '{id}' does not exist"))
+        })?;
+    use storage::StorageType as T;
+    if !matches!(
+        pool.storage_type,
+        T::Directory | T::Nfs | T::Cifs | T::CephFs | T::GlusterFs | T::BtrFs
+    ) {
+        return Err(ApiError::ValidationError(format!(
+            "storage pool '{}' holds block volumes; clone into a directory-type pool",
+            pool.name
+        )));
+    }
+    if !pool.enabled {
+        return Err(ApiError::ValidationError(format!(
+            "storage pool '{}' is disabled",
+            pool.name
+        )));
+    }
+    Ok((pool.id, pool.path))
 }
 
 fn default_clone_mode() -> String {
@@ -2437,6 +2467,10 @@ async fn clone_vm(
 
     // Recorded as a clone job, so it shows on the Clones page and in
     // `horcrux clone list/status`.
+    let target_pool = match req.storage.as_deref().map(str::trim) {
+        Some(id) if !id.is_empty() => Some(file_pool_dir(&state, id).await?),
+        _ => None,
+    };
     let jobs = &state.clone_job_manager;
     let job_id = jobs
         .create_job(vm_id.clone(), new_id.clone(), name.clone())
@@ -2457,8 +2491,12 @@ async fn clone_vm(
     };
 
     let result: Result<VmConfig, ApiError> = async {
-        let cloned_vm = state
-            .clone_manager
+        let pool_cloner = target_pool
+            .as_ref()
+            .map(|(_, dir)| vm::clone::VmCloneManager::new(dir.clone()));
+        let cloned_vm = pool_cloner
+            .as_ref()
+            .unwrap_or(state.clone_manager.as_ref())
             .clone_vm(&source_vm, clone_options)
             .await
             .map_err(|e| match e {
@@ -2470,6 +2508,14 @@ async fn clone_vm(
         let _ = jobs
             .update_progress(&job_id, vm::clone_progress::CloneStage::Finalizing, 90)
             .await;
+        let mut cloned_vm = cloned_vm;
+        if let Some((pool_id, dir)) = &target_pool {
+            for d in cloned_vm.disks.iter_mut() {
+                if std::path::Path::new(&d.path).starts_with(dir) {
+                    d.storage = Some(pool_id.clone());
+                }
+            }
+        }
         state.database.create_vm(&cloned_vm).await.map_err(|e| {
             ApiError::Internal(format!("Failed to save cloned VM to database: {}", e))
         })?;

@@ -3727,6 +3727,22 @@ pub fn clone_vm_body(name: &str, mode: &str, start: bool) -> serde_json::Value {
     serde_json::json!({"name": name.trim(), "mode": mode, "start": start})
 }
 
+/// Clone a VM with its file disks placed in storage pool `storage`
+/// (`None` = the node's VM storage directory).
+pub async fn clone_vm_to(
+    vm_id: &str,
+    name: &str,
+    mode: &str,
+    start: bool,
+    storage: Option<&str>,
+) -> Result<horcrux_common::VmConfig, ApiError> {
+    let mut body = clone_vm_body(name, mode, start);
+    if let Some(s) = storage.filter(|s| !s.is_empty()) {
+        body["storage"] = serde_json::Value::String(s.to_string());
+    }
+    post_json(&format!("/vms/{}/clone", vm_id), &body).await
+}
+
 // =============================================================================
 // High Availability & Clustering API
 // =============================================================================

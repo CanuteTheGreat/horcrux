@@ -120,8 +120,16 @@ pub struct BackupJob {
     pub enabled: bool,
     /// Cron expression (`0 2 * * *`) or alias (`daily`, `weekly`, ...).
     pub schedule: String,
-    /// VM and/or container ids.
+    /// VM and/or container ids (ignored when `all_guests` is set).
+    #[serde(default)]
     pub targets: Vec<String>,
+    /// Back up every VM and container on the node at run time (Proxmox
+    /// "Selection mode: All"): guests created later are included without
+    /// editing the job. `exclude` lists the ids to leave out.
+    #[serde(default)]
+    pub all_guests: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
     #[serde(default)]
     pub storage: String,
     #[serde(default)]
@@ -149,6 +157,24 @@ pub struct BackupJob {
 
 fn default_true() -> bool {
     true
+}
+
+/// Pools whose content is files in a directory (VM images can be restored
+/// into them).
+fn pool_holds_files(t: &crate::storage::StorageType) -> bool {
+    use crate::storage::StorageType as T;
+    matches!(
+        t,
+        T::Directory | T::Nfs | T::Cifs | T::CephFs | T::GlusterFs | T::BtrFs
+    )
+}
+
+/// Every guest id once, in order, minus the excluded ones.
+pub fn select_guests(all: Vec<String>, exclude: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    all.into_iter()
+        .filter(|id| !exclude.contains(id) && seen.insert(id.clone()))
+        .collect()
 }
 
 /// Retention policy (Proxmox `prune-backups` semantics).
@@ -230,6 +256,11 @@ pub struct RestoreRequest {
     /// Start the guest after restoring it.
     #[serde(default)]
     pub start: bool,
+    /// VMs: storage pool (id) the restored disks go to (Proxmox "Storage"
+    /// in the restore dialog); default the node's VM storage directory.
+    /// Directory-type pools only (file images).
+    #[serde(default)]
+    pub storage: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1176,10 +1207,12 @@ impl BackupManager {
 
         match b.target_type {
             TargetType::Vm => {
-                tokio::fs::create_dir_all(&rt.vm_storage).await?;
-                let dir = self.unpack_checked(&b, Some(&rt.vm_storage)).await?;
+                let (pool, disk_dir) = self.restore_disk_dir(rt, &req).await?;
+                tokio::fs::create_dir_all(&disk_dir).await?;
+                let dir = self.unpack_checked(&b, Some(&disk_dir)).await?;
                 let m = archive::read_manifest(&dir.0)?;
-                self.restore_vm(rt, &b, &m, &dir.0, &target, &req).await
+                self.restore_vm(rt, &b, &m, &dir.0, &target, &req, &disk_dir, pool)
+                    .await
             }
             TargetType::Container => {
                 tokio::fs::create_dir_all(&self.work_dir).await?;
@@ -1191,6 +1224,38 @@ impl BackupManager {
         }
     }
 
+    /// Where a VM restore puts its disks: the chosen pool's directory (and
+    /// its id, recorded on the disks), or the VM storage directory.
+    async fn restore_disk_dir(
+        &self,
+        rt: &BackupRuntime,
+        req: &RestoreRequest,
+    ) -> Result<(Option<String>, PathBuf)> {
+        let Some(id) = req
+            .storage
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return Ok((None, rt.vm_storage.clone()));
+        };
+        let sm = rt.storage_manager.as_ref().ok_or_else(|| {
+            Error::Validation("this node has no storage pools to restore into".into())
+        })?;
+        let pool = sm
+            .get_pool(id)
+            .await
+            .map_err(|_| Error::Validation(format!("storage pool '{id}' does not exist")))?;
+        if !pool_holds_files(&pool.storage_type) {
+            return Err(Error::Validation(format!(
+                "storage pool '{}' is {:?} (block volumes); restore VM disks into a directory-type pool",
+                pool.name, pool.storage_type
+            )));
+        }
+        Ok((Some(pool.id.clone()), PathBuf::from(&pool.path)))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn restore_vm(
         &self,
         rt: &BackupRuntime,
@@ -1199,6 +1264,8 @@ impl BackupManager {
         dir: &Path,
         target: &str,
         req: &RestoreRequest,
+        disk_dir: &Path,
+        pool: Option<String>,
     ) -> Result<RestoreResult> {
         let mut config: VmConfig = serde_json::from_value(m.config.clone())
             .map_err(|e| Error::System(format!("backup has an unreadable VM config: {e}")))?;
@@ -1224,7 +1291,7 @@ impl BackupManager {
         }
         let dests: Vec<PathBuf> = (0..disks.len())
             .map(|i| {
-                rt.vm_storage.join(if i == 0 {
+                disk_dir.join(if i == 0 {
                     format!("{target}.qcow2")
                 } else {
                     format!("{target}-disk{i}.qcow2")
@@ -1313,8 +1380,9 @@ impl BackupManager {
                         ..Default::default()
                     });
                 d.path = p.to_string_lossy().into();
-                // Restored into the VM storage directory, not the old pool.
-                d.storage = None;
+                // Restored into the chosen pool (or the VM storage directory),
+                // not the old pool.
+                d.storage = pool.clone();
                 d
             })
             .collect();
@@ -1560,9 +1628,19 @@ impl BackupManager {
             .filter(|t| !t.is_empty())
             .collect();
         job.targets.dedup();
-        if job.targets.is_empty() {
+        job.exclude = job
+            .exclude
+            .iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        job.exclude.sort();
+        job.exclude.dedup();
+        if job.all_guests {
+            job.targets.clear();
+        } else if job.targets.is_empty() {
             return Err(Error::Validation(
-                "a backup job needs at least one VM or container".into(),
+                "a backup job needs at least one VM or container, or all guests".into(),
             ));
         }
         match job.notify.as_deref().map(str::trim) {
@@ -1640,6 +1718,30 @@ impl BackupManager {
         }
     }
 
+    /// The guests a job backs up now: its list, or for an all-guests job
+    /// every VM and container on the node minus `exclude`.
+    pub async fn job_targets(&self, job: &BackupJob) -> Result<Vec<String>> {
+        if !job.all_guests {
+            return Ok(job.targets.clone());
+        }
+        let rt = self.rt()?;
+        let mut ids: Vec<String> = rt
+            .vm_manager
+            .list_vms()
+            .await
+            .into_iter()
+            .map(|v| v.id)
+            .collect();
+        ids.extend(
+            rt.container_manager
+                .list_containers()
+                .await
+                .into_iter()
+                .map(|c| c.id),
+        );
+        Ok(select_guests(ids, &job.exclude))
+    }
+
     pub async fn list_jobs(&self) -> Result<Vec<BackupJob>> {
         self.store.list_jobs().await
     }
@@ -1650,13 +1752,10 @@ impl BackupManager {
         let job = self.get_job(job_id).await?;
         let _running = claim(&self.running_jobs, &job.id, &format!("job {}", job.id))?;
         let started_at = now();
-        tracing::info!(
-            "Running backup job {} ({} targets)",
-            job.id,
-            job.targets.len()
-        );
+        let targets = self.job_targets(&job).await?;
+        tracing::info!("Running backup job {} ({} targets)", job.id, targets.len());
         let mut results = Vec::new();
-        for target in &job.targets {
+        for target in &targets {
             let cfg = BackupConfig {
                 target_id: target.clone(),
                 storage: job.storage.clone(),
@@ -2154,6 +2253,8 @@ mod tests {
             enabled: true,
             schedule: "0 2 * * *".into(),
             targets: vec![" vm1 ".into(), "".into()],
+            all_guests: false,
+            exclude: Vec::new(),
             storage: String::new(),
             mode: BackupMode::Stop,
             compression: Compression::Zstd,
@@ -2172,5 +2273,21 @@ mod tests {
         j.schedule = "daily".into();
         j.notify = Some("someone@example.com".into());
         assert!(BackupManager::validate_job(&mut j).is_err());
+        // all guests: no list needed, a stale list is dropped, excludes trimmed
+        j.notify = None;
+        j.targets.clear();
+        assert!(BackupManager::validate_job(&mut j).is_err());
+        j.all_guests = true;
+        j.targets = vec!["vm1".into()];
+        j.exclude = vec![" vm9 ".into(), "".into(), "vm9".into()];
+        BackupManager::validate_job(&mut j).unwrap();
+        assert!(j.targets.is_empty());
+        assert_eq!(j.exclude, vec!["vm9"]);
+    }
+
+    #[test]
+    fn all_guests_selection_skips_excluded_and_duplicates() {
+        let ids = vec!["a".to_string(), "b".into(), "c".into(), "a".into()];
+        assert_eq!(select_guests(ids, &["b".to_string()]), vec!["a", "c"]);
     }
 }

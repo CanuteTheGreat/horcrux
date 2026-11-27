@@ -70,6 +70,9 @@ pub struct RestoreRequest {
     pub name: Option<String>,
     pub force: bool,
     pub start: bool,
+    /// VMs: storage pool the restored disks go to (None = VM storage dir).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,7 +195,14 @@ pub struct BackupJob {
     #[serde(default)]
     pub enabled: bool,
     pub schedule: String,
+    #[serde(default)]
     pub targets: Vec<String>,
+    /// Every VM and container at run time (new guests included), minus
+    /// `exclude`.
+    #[serde(default)]
+    pub all_guests: bool,
+    #[serde(default)]
+    pub exclude: Vec<String>,
     #[serde(default)]
     pub storage: String,
     #[serde(default)]

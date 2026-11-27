@@ -103,6 +103,14 @@ fn is_container_file_bind(mp: &str) -> bool {
     matches!(mp, "/etc/resolv.conf" | "/etc/hostname" | "/etc/hosts")
 }
 
+/// `zd<N>` (ZFS zvol), `rbd<N>` (mapped Ceph image), `nbd<N>`.
+fn is_virtual_block(name: &str) -> bool {
+    ["zd", "rbd", "nbd"].iter().any(|p| {
+        name.strip_prefix(p)
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
 /// Disks (and their partitions) from `lsblk -J -b` output. Loop, ram, rom
 /// and device-mapper devices, and empty (0-byte) devices such as unattached
 /// `nbd*`, are not physical disks and are left out.
@@ -119,8 +127,10 @@ pub fn parse_lsblk(json: &str) -> Result<Vec<DiskInfo>, String> {
         }
         let name = s(d, "name");
         // zram is swap; an unattached nbd/loop-like device or any 0-byte
-        // device has no media and is not a disk the user can manage.
-        if name.starts_with("zram") || num(d, "size") == 0 {
+        // device has no media and is not a disk the user can manage. ZFS
+        // volumes (zd*: VM disks on a zpool) and mapped Ceph/NBD images are
+        // virtual block devices, not hardware (Proxmox lists neither).
+        if name.starts_with("zram") || is_virtual_block(&name) || num(d, "size") == 0 {
             continue;
         }
         let tran = s(d, "tran");
@@ -652,6 +662,20 @@ mod tests {
         assert_eq!(d[0].partitions[1].mount_point.as_deref(), Some("/"));
         assert_eq!(d[0].used_bytes, 501_048_576);
         assert_eq!(d[1].disk_type, "nvme");
+    }
+
+    #[test]
+    fn zvols_and_mapped_images_are_not_physical_disks() {
+        let j = r#"{"blockdevices":[
+          {"name":"zd0","path":"/dev/zd0","size":1000,"type":"disk","rota":false},
+          {"name":"zd16","path":"/dev/zd16","size":1000,"type":"disk","rota":false},
+          {"name":"rbd0","path":"/dev/rbd0","size":1000,"type":"disk","rota":false},
+          {"name":"zdisk","path":"/dev/zdisk","size":1000,"type":"disk","rota":true}]}"#;
+        let d = parse_lsblk(j).unwrap();
+        assert_eq!(
+            d.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(),
+            ["zdisk"]
+        );
     }
 
     #[test]

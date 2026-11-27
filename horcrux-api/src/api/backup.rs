@@ -143,7 +143,11 @@ async fn job_finished(state: Arc<AppState>, job: BackupJob, report: JobRunReport
             AlertStatus::Firing
         },
         message,
-        target: job.targets.join(","),
+        target: if job.all_guests {
+            "all guests".to_string()
+        } else {
+            job.targets.join(",")
+        },
         metric_value: failed.len() as f64,
         threshold: 0.0,
         fired_at: report.finished_at,

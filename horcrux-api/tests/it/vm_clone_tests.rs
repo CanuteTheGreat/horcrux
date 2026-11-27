@@ -418,3 +418,81 @@ fn qmp_json(sock: &Path, cmd: &str) -> Option<Value> {
     }
     None
 }
+
+/// Clone with a target storage pool: the clone's disk is written into that
+/// pool's directory and recorded on the disk; an unknown pool is refused
+/// before anything is written. The pool list reports what each pool's space
+/// comes from (`backing`), so totals count it once.
+#[tokio::test]
+async fn clone_into_a_chosen_storage_pool() {
+    let dir = scratch("vm-clone-pool");
+    let pool_dir = dir.join("pool-b");
+    std::fs::create_dir_all(&pool_dir).unwrap();
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let a = srv.api().await;
+    let (s, p) = a
+        .post(
+            "/storage/pools",
+            json!({"name": "pool-b", "storage_type": "directory",
+                   "path": pool_dir.to_string_lossy()}),
+        )
+        .await;
+    assert!((200..300).contains(&s), "create pool: {s} {p}");
+    let pool_id = p["id"].as_str().expect("pool id").to_string();
+    let (s, pools) = a.get("/storage/pools").await;
+    assert_eq!(s, 200);
+    let me = pools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == pool_id.as_str())
+        .expect("new pool listed");
+    assert!(
+        me["backing"].as_str().is_some_and(|b| b.contains(':')),
+        "pool backing: {me}"
+    );
+
+    let src = format!("clpool{}", std::process::id());
+    let (s, b) = a
+        .post(
+            "/vms",
+            json!({"id": src, "name": "pool source", "hypervisor": "qemu",
+                   "architecture": "x86_64", "cpus": 1, "memory": 128, "disk_size": 1,
+                   "status": "stopped", "display": {"protocol": "none"}}),
+        )
+        .await;
+    assert!((200..300).contains(&s), "create: {s} {b}");
+    let (s, c) = clone(
+        &a,
+        &src,
+        json!({"name": "in pool b", "mode": "full", "storage": pool_id}),
+    )
+    .await;
+    assert!((200..300).contains(&s), "clone into pool: {s} {c}");
+    let disk = PathBuf::from(c["disks"][0]["path"].as_str().unwrap());
+    assert!(disk.starts_with(&pool_dir), "{}", disk.display());
+    assert!(disk.is_file());
+    assert_eq!(c["disks"][0]["storage"], pool_id.as_str());
+
+    let (s, e) = clone(
+        &a,
+        &src,
+        json!({"name": "nowhere", "mode": "full", "storage": "no-such-pool"}),
+    )
+    .await;
+    assert_eq!(s, 422, "unknown pool: {e}");
+    let (_, jobs) = a.get("/clone-jobs").await;
+    assert!(
+        !jobs
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|j| j["target_vm_name"] == "nowhere"),
+        "a refused clone is not recorded as a job"
+    );
+    let id = c["id"].as_str().unwrap().to_string();
+    let _ = a.delete(&format!("/vms/{id}")).await;
+    let _ = a.delete(&format!("/vms/{src}")).await;
+}

@@ -755,6 +755,24 @@ def main():
         job_row.locator(".run-btn").click()
         expect(page.locator(f"tr.job-row[data-job-id='{BK_JOB}'] .job-last-run")).to_contain_text("OK", timeout=180000)
         assert any(b.get("job_id") == BK_JOB for b in api_get(f"/api/backups?target_id={REP_VM}", token()))
+        # ... an "all guests" job needs no list; the checked guests become exclusions.
+        page.locator("#new-job-btn").click()
+        page.fill("#job-id", BK_JOB + "-all")
+        page.select_option("#job-selection", "all")
+        page.locator(f"#job-targets input[value='{REP_VM}']").check()
+        page.locator("#job-enabled").uncheck()
+        page.locator("#job-submit").click()
+        all_row = page.locator(f"tr.job-row[data-job-id='{BK_JOB}-all']")
+        expect(all_row.locator(".job-targets")).to_contain_text(f"All VMs and containers except {REP_VM}",
+                                                                timeout=30000)
+        j = api_get(f"/api/backup-jobs/{BK_JOB}-all", token())
+        assert j["all_guests"] is True and j["exclude"] == [REP_VM] and j["targets"] == [], j
+        _req("DELETE", f"/api/backup-jobs/{BK_JOB}-all", token())
+        # ... the VM page's Backups tab lands on that guest's backups.
+        page.goto(f"{BASE}/vms/{REP_VM}")
+        page.locator("#vm-tab-backups").click()
+        expect(page.locator("#backup-filter")).to_have_value(REP_VM, timeout=30000)
+        expect(page.locator("#backup-target")).to_have_value(REP_VM, timeout=30000)
 
         # ---- retention preview + verify-all pages render real data --------
         page.goto(f"{BASE}/backup/retention")
