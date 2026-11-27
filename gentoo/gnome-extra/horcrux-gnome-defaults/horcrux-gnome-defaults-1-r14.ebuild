@@ -14,6 +14,7 @@ KEYWORDS="amd64 arm64"
 # would be shadowed), so every default extension of the machine is listed here, in the one compiled db.
 IUSE="awcc systemd"
 
+# -r14: app-misc/horcrux-tmux-config (tmux drag-select reaches the desktop clipboard).
 # -r12: horcrux-keyring-pam also makes sure /etc/pam.d/passwd re-keys the login keyring (the systemd profile's passwd only includes system-auth).
 # -r11: GNOME on OpenRC comes from gnome-base/gnome-session-openrc-49.2-r2::horcrux (the gsd/PipeWire/user-bus fixes that were /etc/portage/patches in
 # the images, plus session-scoped user services: a GNOME logout stops the session's gnome-shell & co. even while an ssh login of the user keeps the OpenRC
@@ -40,6 +41,7 @@ RDEPEND="
 	gnome-base/gnome-keyring[pam]
 	app-crypt/libsecret
 	x11-themes/gentoo-xcursors
+	app-misc/horcrux-tmux-config
 	!systemd? ( >=gnome-base/gnome-session-openrc-49.2-r2 )
 "
 BDEPEND="gnome-base/dconf"

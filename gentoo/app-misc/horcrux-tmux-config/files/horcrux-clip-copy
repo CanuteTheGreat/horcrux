@@ -1,0 +1,16 @@
+#!/bin/sh
+# Reads stdin, puts it on the desktop clipboard (Wayland: wl-copy, X11: xclip). Used as tmux's copy-command.
+# Silent no-op with exit 0 when there is no display (headless/server), so tmux never shows an error for it.
+# Picks the tool at call time from the environment, so a long-lived tmux server follows the session it is attached from.
+if [ -n "${WAYLAND_DISPLAY:-}" ] && command -v wl-copy >/dev/null 2>&1; then
+	rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+	case $WAYLAND_DISPLAY in /*) sock=$WAYLAND_DISPLAY ;; *) sock=$rt/$WAYLAND_DISPLAY ;; esac
+	if [ -S "$sock" ]; then
+		XDG_RUNTIME_DIR=$rt exec wl-copy
+	fi
+fi
+if [ -n "${DISPLAY:-}" ] && command -v xclip >/dev/null 2>&1; then
+	exec xclip -in -selection clipboard
+fi
+cat >/dev/null
+exit 0
