@@ -1085,7 +1085,7 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                         </div>
                         <div class="form-group">
                             <label for="sec-g-key">"Encryption key file"</label>
-                            <input id="sec-g-key" type="text" placeholder="default: guest-secrets.key in the data directory" prop:value=g.key_file.clone()
+                            <input id="sec-g-key" type="text" placeholder="default key file" prop:value=g.key_file.clone()
                                 on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.guest_secrets.key_file = c.clone())) }/>
                             <small class="form-help">"Created on first use (mode 0600). Keep it out of database backups so a copy of the database alone reveals nothing. Changing it makes the existing secrets unreadable."</small>
                         </div>
@@ -1182,8 +1182,7 @@ pub fn SecuritySecretsPage() -> impl IntoView {
             <SecurityTabs active="secrets"/>
             <p class="help-text">
                 "Passwords, SSH keys and tokens for guest provisioning. They are stored encrypted, shown nowhere after saving, and put into a VM only while its first-boot disc is built. Refer to one as "
-                <span class="mono">"secret:name"</span>" in a cloud-init setup or a Windows answer file, or as "
-                <span class="mono">"{{secret:name}}"</span>" inside a longer command."
+                <span class="mono">"secret:name"</span>" in a cloud-init setup or a Windows answer file, or, inside a longer command, as the same reference wrapped in doubled curly braces."
             </p>
             {move || err.get().map(|m| view! { <div class="alert alert-error">{m}</div> })}
             {move || ok.get().map(|m| view! { <div class="alert alert-success">{m}</div> })}
@@ -1212,7 +1211,7 @@ pub fn SecuritySecretsPage() -> impl IntoView {
                 </div>
                 <div class="form-group">
                     <label for="gs-value">"Value"</label>
-                    <input id="gs-value" type="password" autocomplete="new-password" placeholder="write-only; leave empty to change only the kind or description"
+                    <input id="gs-value" type="password" autocomplete="new-password" placeholder="write-only value"
                         prop:value=move || value.get() on:input=move |e| set_value.set(event_target_value(&e))/>
                     <small class="form-help">"An existing name is rotated: every VM provisioned from now on gets the new value."</small>
                 </div>
