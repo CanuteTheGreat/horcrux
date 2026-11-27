@@ -25,7 +25,11 @@ pub fn NotificationsPage() -> impl IntoView {
     // links such as ?tab=routing&matcher=<id> switch tabs without a reload
     create_effect(move |_| {
         if query.with(|q| q.get("tab").map(|t| t == "routing").unwrap_or(false)) {
-            set_active_tab.set("routing".to_string());
+            // set only on a real change: a repeat set re-runs the tab view and
+            // remounts the routing tab, dropping its "Saved matcher" notice
+            if active_tab.get_untracked() != "routing" {
+                set_active_tab.set("routing".to_string());
+            }
         }
     });
 
