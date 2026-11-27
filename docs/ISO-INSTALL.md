@@ -17,7 +17,7 @@ Horcrux is built in three layers; every fix that applies to every install lives 
 |---|---|---|
 | **core** | the headless server: kernel + ZFS (with `dist-kernel`, so every kernel update rebuilds `zfs-kmod`), installer, `horcrux-api` + web UI, chrony + the clock rules (`makestep 1 -1`, `rtcsync`, UTC RTC, sources re-resolved when a network comes up on dhcpcd/static/NetworkManager), the first-boot network wait + Portage tree sync, the overlay sync config, backup (restic to B2, 30 days, secrets provisioned after first boot), the password-separation and no-autologin rules | package `sys-apps/horcrux-core` (overlay `gentoo/`), image layer `build/live-iso/project/variants/core`, applied by `build.sh` to **every** image |
 | **desktop edition** (optional) | GNOME on Wayland (OpenRC + elogind, `gnome-light`); an XFCE edition for small devices follows the same pattern. Depends on core; adds only the desktop (`gnome-extra/horcrux-gnome-defaults`: tray icons, first-login Wi-Fi chooser, working login keyring) and generic desktop tools (Firefox, terminator, vim, virt-manager, CUPS, Bluetooth, ...) | `build/live-iso/project/variants/gnome-light` |
-| **machine layers** (private) | the owner's own machines (gringotts, hogshead, surface/madammalkins, owner-ws): his personal apps (Nextcloud client, Tailscale, ClamAV, rustinion agent, keepalived, ...), per-machine kernels, firmware, restore helpers and backup lists. Steam is owner-ws only | `build/live-iso/project/variants/{owner-common,gringotts,hogshead,...}` |
+| **machine layers** (private) | per-machine layers kept outside the public images: machine-specific apps, kernels, firmware, restore helpers and backup lists for individual installs | private overlay (not in this repository) |
 
 **Nothing personal or machine-specific is in a public image** (the server image and the public desktop editions). `build/live-iso/project/public-forbidden.txt` lists the
 packages that must never appear in one; the core and desktop Dockerfiles and the QEMU gates (`zfs-enc-test.py --public`) fail on any of them.
@@ -41,7 +41,7 @@ Always verify: `sha256sum -c horcrux-server-openrc-daily-x86_64.iso.sha256` (run
 
 | part | values |
 |---|---|
-| product | `horcrux`, `patronus` (a private per-machine image adds its machine name: `horcrux-hogshead-gnome-light-openrc-...`) |
+| product | `horcrux`, `patronus` (a private per-machine image adds its machine name: `horcrux-<machine>-gnome-light-openrc-...`) |
 | desktop env | `server` (no desktop), `gnome-light` (GNOME on Wayland, small app set); later `xfce`, `kde`, ... each as its own name |
 | init | `openrc` or `systemd` (both are built for every edition and architecture; see "OpenRC or systemd") |
 | channel | `daily` (rolling pre-release) or the release tag (`v0.2.0`) |
@@ -501,7 +501,7 @@ unsigned, so keep Secure Boot off after installing.
 
 ## Target-hardware notes
 
-**Lenovo ThinkBook 16 G6 IRL ("gringotts"; NVMe, UEFI, Intel Wi-Fi AX203)** - expected to work, **not yet tested on the real laptop**:
+**Lenovo ThinkBook 16 G6 IRL (NVMe, UEFI, Intel Wi-Fi AX203)** - expected to work, **not yet tested on the real laptop**:
 firmware setup: **F2** (or **Fn+F2**), or the **Novo button** (with the laptop off) -> *BIOS Setup* -> Security -> Secure Boot -> *Disabled*;
 **F12** for the one-time boot menu, pick the USB stick (UEFI entry).
 The kernel is Gentoo's generic distribution kernel with the full `linux-firmware` set; the AX203 Wi-Fi needs `iwlwifi` firmware (included; use `iwctl`

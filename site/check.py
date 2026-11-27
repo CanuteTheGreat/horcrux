@@ -66,6 +66,17 @@ if "<title>Privacy" not in _pv or "<script" in _pv:
 _lic = os.path.join(D, "licenses/THIRD-PARTY-LICENSES.txt")
 if os.path.exists(_lic) and os.path.getsize(_lic) < 10000:
     bad.append((_lic, "", "license inventory suspiciously small"))
+# --- shared donation component: give.py + give.css must match give.lock (the same hash in horcrux and patronus) ---
+import hashlib
+_h = hashlib.sha256()
+for _f in ("give.py", "give.css"):
+    _h.update(open(os.path.join(HERE, _f), "rb").read())
+_lock = open(os.path.join(HERE, "give.lock")).read().split()[0]
+if _h.hexdigest() != _lock:
+    bad.append(("give.py/give.css", _h.hexdigest(), "shared donation component changed: copy it to BOTH product repos and update give.lock in both"))
+_ix = open(os.path.join(D, "index.html"), encoding="utf-8").read() if os.path.exists(os.path.join(D, "index.html")) else ""
+if _ix.count('class="wrap givebar"') != 1 or _ix.count('<div class="card">') < 4 or 'id="support"' not in _ix or 'class="give-foot"' not in _ix:
+    bad.append(("index.html", "", "donation strip, #support cards or footer line missing"))
 for b in bad:
     print("BROKEN", *b, file=sys.stderr)
 print(f"checked {pages} pages, {len(bad)} problems")

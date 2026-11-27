@@ -72,3 +72,19 @@ footer p{margin:.3em 0}
  .dl tr{padding:.7em 0;border-bottom:1px solid #222}
  .dl td{border:0;padding:.2em .4em}
 }
+/* light palette: follows the device setting (logos keep their dark tile) */
+@media (prefers-color-scheme: light){
+ :root{--bg:#fff;--panel:#f4f5f7;--line:#d6dae1;--text:#15171c;--muted:#565d69;--accent:#86600c;--accent-fg:#fff}
+ body.patronus{--accent:#0a58a8;--accent-fg:#fff}
+ .top{background:rgba(255,255,255,.95)}
+ code{background:#eceef2}
+ pre{background:#f4f5f7}
+ th{background:#eceef2}
+ .banner{background:#fbf3dc;border-color:#e3cf92;color:#4a390a}
+ body.patronus .banner{background:#e6f0fb;border-color:#b3d0ef;color:#0b2d50}
+ .lead{color:#373d47}
+ .logo{background:#000;padding:10px}
+ .brand img{background:#000;border-radius:6px}
+ .dl tr{border-bottom-color:#ddd}
+ .btn.ghost{border-color:#98a0ab}
+}

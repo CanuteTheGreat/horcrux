@@ -33,7 +33,10 @@ concurrency:
 
 jobs:
   deploy-site:
-    runs-on: linux-cross-x86_64
+    # arm64-light lane: this job builds a COPY-only image for ollivanders (arm64) and needs no x86. On
+    # linux-cross-x86_64 it queued for hours behind ~150 netlab/test jobs, and on the bulk arm64 label it waited
+    # hours behind embedded/image builds. arm64-light is the short-job slot that bulk jobs cannot occupy.
+    runs-on: arm64-light
     timeout-minutes: 25
     steps:
       - name: Ubuntu mirror failover (build-cache hub)
@@ -49,17 +52,13 @@ jobs:
           python3 site/build.py
           python3 site/check.py
           echo "${{ github.sha }}" > site/dist/version.txt
-      - name: Validate the nginx config
-        run: |
-          set -e
-          docker build --platform linux/amd64 -t "horcrux-site-configtest:${{ github.sha }}" site
-          docker run --rm "horcrux-site-configtest:${{ github.sha }}" nginx -t
-          docker rmi "horcrux-site-configtest:${{ github.sha }}" >/dev/null
       - name: Build site image (linux/arm64 for ollivanders; COPY-only, no emulation)
         run: |
           set -e
           docker build --platform linux/arm64 -t "horcrux-site:${{ github.sha }}" site
           test "$(docker image inspect -f '{{.Architecture}}' "horcrux-site:${{ github.sha }}")" = arm64
+      - name: Validate the nginx config (in the image that ships, on this arm64 runner)
+        run: docker run --rm "horcrux-site:${{ github.sha }}" nginx -t
       - name: Drop the signed image for ollivanders' watcher, then wait for its result
         env:
           OLLIVANDERS_DEPLOY_KEY: ${{ secrets.OLLIVANDERS_DEPLOY_KEY }}
