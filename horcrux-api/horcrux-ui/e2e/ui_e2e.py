@@ -1085,6 +1085,13 @@ def metric_server_checks(page):
     gl.close()
 
 
+def open_import_menu(page):
+    """VMs page: the import links live in the closed "Import" dropdown."""
+    link = page.locator("details.row-more .menu a").first
+    if not link.is_visible():
+        page.locator("details.row-more > summary", has_text="Import").click()
+
+
 def ovf_import_checks(page):
     """VMs > Import OVF / OVA: an OVA (real qemu-img VMDK + descriptor, served
     from a URL like a vendor download) is previewed in the UI (mapped CPU,
@@ -1131,6 +1138,7 @@ def ovf_import_checks(page):
             _req("DELETE", f"/api/vms/{v['id']}", tok)
 
     page.goto(f"{BASE}/vms")
+    open_import_menu(page)
     page.get_by_role("link", name="Import OVF / OVA").click()
     page.wait_for_url(f"{BASE}/vms/import-ovf")
     page.fill("#ovf-source", url)
@@ -1235,6 +1243,7 @@ def esxi_import_checks(page):
             _req("DELETE", f"/api/vms/{v['id']}", tok)
 
     page.goto(f"{BASE}/vms")
+    open_import_menu(page)
     page.get_by_role("link", name="Import from ESXi").click()
     page.wait_for_url(f"{BASE}/vms/import-esxi")
     page.fill("#esxi-host", f"{mirror}:{srv.server_address[1]}")

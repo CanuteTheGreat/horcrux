@@ -324,13 +324,14 @@ pub fn Sidebar() -> impl IntoView {
             {item("/monitoring/dashboards", "Dashboards")}
             {item("/monitoring/metrics", "Metrics Explorer")}
         </NavGroup>
-        <NavGroup title="Node" prefixes=vec!["/system/health", "/system/config", "/system/console", "/system/services", "/system/shell", "/system/logs", "/system/packages", "/system/boot-environments", "/system/diagnostics", "/system/about", "/system/licenses", "/audit", "/resources"]>
+        <NavGroup title="Node" prefixes=vec!["/system/health", "/system/config", "/system/console", "/system/services", "/system/shell", "/security", "/system/logs", "/system/packages", "/system/boot-environments", "/system/diagnostics", "/system/about", "/system/licenses", "/audit", "/resources"]>
             {item("/resources", "Resources (search, tags)")}
             {item("/system/health", "Node Health")}
             {item("/system/config", "Node Configuration")}
             {item("/system/console", "Horcrux Console")}
             {item("/system/services", "Node Services")}
             {item("/system/shell", "Node Shell")}
+            {item("/security", "Security")}
             {item("/system/logs", "System Log")}
             {item("/audit", "Audit Log")}
             {item("/system/packages", "Packages")}
