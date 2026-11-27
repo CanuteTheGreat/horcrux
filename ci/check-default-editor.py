@@ -57,7 +57,7 @@ for p in walk():
             fails.append(f"{r}:{i}: makes nano the editor: {l.strip()[:100]}")
         if (r.endswith((".md", ".txt", ".html", ".sh", ".yml", ".yaml", ".toml")) and DOC_NANO.match(l)):
             fails.append(f"{r}:{i}: example runs nano (use vim): {l.strip()[:100]}")
-    if re.search(r"(^|/)profile\.d/[^/]*editor[^/]*$", r) and re.search(r"nano", txt):
+    if re.search(r"(^|/)profile\.d/[^/]*editor[^/]*$", r) and re.search(r"nano", "\n".join(x for x in txt.splitlines() if not x.lstrip().startswith("#"))):
         fails.append(f"{r}: embedded editor profile points at nano")
 
 common = None
