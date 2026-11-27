@@ -7231,6 +7231,31 @@ pub async fn list_host_interfaces() -> Result<Vec<HostInterface>, ApiError> {
     fetch_json("/network/interfaces").await
 }
 
+/// A Horcrux-managed VLAN interface (`/api/network/vlans`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct ManagedVlan {
+    #[serde(default)]
+    pub name: String,
+    pub parent: String,
+    pub id: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+pub async fn list_vlans() -> Result<Vec<ManagedVlan>, ApiError> {
+    fetch_json("/network/vlans").await
+}
+
+pub async fn create_vlan(v: &ManagedVlan) -> Result<ManagedVlan, ApiError> {
+    post_json("/network/vlans", v).await
+}
+
+pub async fn delete_vlan(name: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/network/vlans/{}", urlencoding::encode(name))).await
+}
+
 pub async fn create_bridge(b: &NewBridge) -> Result<NewBridge, ApiError> {
     post_json("/network/bridges", b).await
 }

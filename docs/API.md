@@ -484,6 +484,11 @@ Authorization: Bearer <token>
   bridges and tunnels (kind, state, carrier, MAC, MTU, speed, master, VLAN
   parent/tag, addresses) and whether each can be a bridge port (with the
   reason when not). Guest tap/veth ports only with `all=1`.
+- `GET|POST /api/network/vlans`, `DELETE /api/network/vlans/:name`: Horcrux-managed
+  802.1Q VLAN interfaces `{"parent": "eno1", "id": 20, "name": "eno1.20",
+  "address": "10.20.0.1/24"}` (name defaults to `<parent>.<id>`, address optional),
+  re-created at startup before the bridges that may use them as a port. Delete is
+  refused while the VLAN is a bridge port and for interfaces Horcrux did not create.
 - `GET /api/network/bridges`: every Linux bridge (ports, addresses, VLAN
   filtering, `managed`).
 - `POST /api/network/bridges` `{"name": "vmbr0", "vlan_aware": true,

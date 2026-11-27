@@ -81,6 +81,23 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     // Re-create managed bridges after a host reboot.
     let store = ConfigStore::new(&state.database);
     tokio::spawn(async move {
+        // VLAN interfaces first: a bridge may use one as its port.
+        match store.load_values::<ManagedVlan>(VLAN_KIND).await {
+            Ok(list) => {
+                for v in list {
+                    if !std::path::Path::new("/sys/class/net")
+                        .join(&v.name)
+                        .exists()
+                    {
+                        match apply_vlan(&v).await {
+                            Ok(()) => tracing::info!("Re-created VLAN interface {}", v.name),
+                            Err(e) => tracing::warn!("Could not re-create VLAN {}: {e}", v.name),
+                        }
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("Could not load managed VLAN interfaces: {e}"),
+        }
         match store.load_values::<ManagedBridge>(KIND).await {
             Ok(list) => {
                 for b in list {
@@ -102,6 +119,172 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/network/bridges", get(list).post(create))
         .route("/api/network/bridges/:name", delete(remove).put(update))
         .route("/api/network/interfaces", get(list_interfaces))
+        .route("/api/network/vlans", get(list_vlans).post(create_vlan))
+        .route("/api/network/vlans/:name", delete(remove_vlan))
+}
+
+const VLAN_KIND: &str = "host_vlan";
+
+/// A VLAN interface Horcrux creates (and re-creates at startup): an
+/// 802.1Q sub-interface of a NIC, bond or bridge (Proxmox "Linux VLAN").
+/// It can carry a host address or be the port of a bridge.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ManagedVlan {
+    /// Interface name; default `<parent>.<id>`.
+    #[serde(default)]
+    pub name: String,
+    pub parent: String,
+    pub id: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+/// Fill the default name and check a VLAN definition.
+pub fn validate_vlan(v: &mut ManagedVlan) -> Result<(), String> {
+    v.parent = v.parent.trim().to_string();
+    v.name = v.name.trim().to_string();
+    if v.name.is_empty() {
+        v.name = format!("{}.{}", v.parent, v.id);
+    }
+    v.address = v
+        .address
+        .take()
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty());
+    if !(1..=4094).contains(&v.id) {
+        return Err(format!("VLAN id {} must be 1-4094", v.id));
+    }
+    if !horcrux_common::valid_ifname(&v.parent) {
+        return Err(format!("{:?} is not a valid parent interface", v.parent));
+    }
+    if !horcrux_common::valid_ifname(&v.name) {
+        return Err(format!(
+            "{:?} is not a valid interface name (1-15 of a-z 0-9 - _ .); choose a shorter name",
+            v.name
+        ));
+    }
+    if v.name == v.parent {
+        return Err("the VLAN interface needs its own name".into());
+    }
+    if let Some(a) = &v.address {
+        if !valid_cidr(a) {
+            return Err(format!(
+                "address {a:?} must be an IP with a prefix length, e.g. 10.20.0.1/24"
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn apply_vlan(v: &ManagedVlan) -> Result<(), String> {
+    let id = v.id.to_string();
+    run(
+        "ip",
+        &[
+            "link", "add", "link", &v.parent, "name", &v.name, "type", "vlan", "id", &id,
+        ],
+    )
+    .await?;
+    let r: Result<(), String> = async {
+        if let Some(a) = &v.address {
+            run("ip", &["addr", "add", a, "dev", &v.name]).await?;
+        }
+        run("ip", &["link", "set", &v.name, "up"]).await
+    }
+    .await;
+    if r.is_err() {
+        let _ = run("ip", &["link", "del", &v.name]).await;
+    }
+    r
+}
+
+async fn list_vlans(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<ManagedVlan>>, ApiError> {
+    Ok(Json(
+        ConfigStore::new(&state.database)
+            .load_values::<ManagedVlan>(VLAN_KIND)
+            .await?,
+    ))
+}
+
+async fn create_vlan(
+    State(state): State<Arc<AppState>>,
+    Json(mut v): Json<ManagedVlan>,
+) -> Result<(StatusCode, Json<ManagedVlan>), ApiError> {
+    validate_vlan(&mut v).map_err(ApiError::BadRequest)?;
+    let net = std::path::Path::new("/sys/class/net");
+    if !net.join(&v.parent).exists() {
+        return Err(ApiError::BadRequest(format!(
+            "parent interface {} does not exist",
+            v.parent
+        )));
+    }
+    if net.join(&v.name).exists() {
+        return Err(ApiError::Conflict(format!(
+            "an interface called {} already exists",
+            v.name
+        )));
+    }
+    apply_vlan(&v).await.map_err(ApiError::Internal)?;
+    if let Err(e) = ConfigStore::new(&state.database)
+        .put(VLAN_KIND, &v.name, &v)
+        .await
+    {
+        let _ = run("ip", &["link", "del", &v.name]).await;
+        return Err(e.into());
+    }
+    tracing::info!(
+        "Created VLAN interface {} ({} tag {})",
+        v.name,
+        v.parent,
+        v.id
+    );
+    Ok((StatusCode::CREATED, Json(v)))
+}
+
+async fn remove_vlan(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let store = ConfigStore::new(&state.database);
+    let managed = store.load_values::<ManagedVlan>(VLAN_KIND).await?;
+    if !managed.iter().any(|m| m.name == name) {
+        return Err(
+            if std::path::Path::new("/sys/class/net").join(&name).exists() {
+                ApiError::Conflict(format!(
+                    "{name} was not created by Horcrux (it belongs to the host's network \
+                     configuration), so it is not removed here"
+                ))
+            } else {
+                ApiError::NotFound(format!("VLAN interface {name} not found"))
+            },
+        );
+    }
+    let bridges = store.load_values::<ManagedBridge>(KIND).await?;
+    if let Some(b) = bridges.iter().find(|b| b.ports.contains(&name)) {
+        return Err(ApiError::Conflict(format!(
+            "{name} is a port of bridge {}: remove it from the bridge first",
+            b.name
+        )));
+    }
+    if let Some(m) = std::fs::read_link(format!("/sys/class/net/{name}/master"))
+        .ok()
+        .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
+    {
+        return Err(ApiError::Conflict(format!(
+            "{name} is a port of {m}: remove it from there first"
+        )));
+    }
+    if std::path::Path::new("/sys/class/net").join(&name).exists() {
+        run("ip", &["link", "del", &name])
+            .await
+            .map_err(ApiError::Internal)?;
+    }
+    store.delete(VLAN_KIND, &name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// One host network interface (Infrastructure > Host Bridges > Network
@@ -677,6 +860,41 @@ mod tests {
             port_vlans: BTreeMap::new(),
             comment: None,
         }
+    }
+
+    #[test]
+    fn vlan_definitions_get_a_name_and_are_checked() {
+        let mut v = ManagedVlan {
+            name: String::new(),
+            parent: " eno1 ".into(),
+            id: 20,
+            address: Some(" ".into()),
+            comment: None,
+        };
+        validate_vlan(&mut v).unwrap();
+        assert_eq!(
+            (v.name.as_str(), v.parent.as_str(), v.address.as_deref()),
+            ("eno1.20", "eno1", None)
+        );
+        let mut bad = v.clone();
+        bad.id = 0;
+        assert!(validate_vlan(&mut bad).is_err());
+        let mut bad = v.clone();
+        bad.id = 4095;
+        assert!(validate_vlan(&mut bad).is_err());
+        let mut bad = v.clone();
+        bad.address = Some("10.0.0.1".into());
+        assert!(validate_vlan(&mut bad).unwrap_err().contains("prefix"));
+        let mut long = ManagedVlan {
+            name: String::new(),
+            parent: "enp132s0f1np1".into(),
+            id: 4000,
+            address: None,
+            comment: None,
+        };
+        assert!(validate_vlan(&mut long)
+            .unwrap_err()
+            .contains("shorter name"));
     }
 
     #[test]

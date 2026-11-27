@@ -1,8 +1,8 @@
 //! Infrastructure > Host Bridges (`/network/bridges`): the Linux bridges VM
 //! network cards attach to; create and delete Horcrux-managed ones.
 use crate::api::{
-    create_bridge, delete_bridge, list_bridges, list_host_interfaces, set_bridge_trunk_vlans,
-    BridgeInfo, HostInterface, NewBridge,
+    create_bridge, create_vlan, delete_bridge, delete_vlan, list_bridges, list_host_interfaces,
+    list_vlans, set_bridge_trunk_vlans, BridgeInfo, HostInterface, ManagedVlan, NewBridge,
 };
 use leptos::*;
 
@@ -10,6 +10,11 @@ use leptos::*;
 pub fn HostBridgesPage() -> impl IntoView {
     let (bridges, set_bridges) = create_signal(Vec::<BridgeInfo>::new());
     let (ifaces, set_ifaces) = create_signal(Vec::<HostInterface>::new());
+    let (vlans, set_vlans) = create_signal(Vec::<ManagedVlan>::new());
+    let vlan_parent = create_rw_signal(String::new());
+    let vlan_id = create_rw_signal(String::new());
+    let vlan_name = create_rw_signal(String::new());
+    let vlan_addr = create_rw_signal(String::new());
     let (error, set_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
     let name = create_rw_signal(String::new());
@@ -27,6 +32,9 @@ pub fn HostBridgesPage() -> impl IntoView {
             // Older nodes lack the route: the table just stays empty.
             if let Ok(l) = list_host_interfaces().await {
                 set_ifaces.set(l);
+            }
+            if let Ok(l) = list_vlans().await {
+                set_vlans.set(l);
             }
         });
     };
@@ -81,6 +89,53 @@ pub fn HostBridgesPage() -> impl IntoView {
                     set_notice.set(Some(format!("Trunk VLANs of {n} updated")));
                     set_error.set(None);
                 }
+                Err(e) => set_error.set(Some(e.message)),
+            }
+            reload();
+        });
+    };
+
+    let create_vlan_ev = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let Ok(id) = vlan_id.get().trim().parse::<u16>() else {
+            set_error.set(Some("VLAN id must be a number from 1 to 4094".into()));
+            return;
+        };
+        let v = ManagedVlan {
+            name: vlan_name.get().trim().to_string(),
+            parent: vlan_parent.get(),
+            id,
+            address: Some(vlan_addr.get().trim().to_string()).filter(|a| !a.is_empty()),
+            comment: None,
+        };
+        spawn_local(async move {
+            match create_vlan(&v).await {
+                Ok(v) => {
+                    set_notice.set(Some(format!("VLAN interface {} created", v.name)));
+                    set_error.set(None);
+                    vlan_id.set(String::new());
+                    vlan_name.set(String::new());
+                    vlan_addr.set(String::new());
+                }
+                Err(e) => set_error.set(Some(e.message)),
+            }
+            reload();
+        });
+    };
+
+    let remove_vlan = move |n: String| {
+        if !web_sys::window()
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Delete VLAN interface {n}?"))
+                    .ok()
+            })
+            .unwrap_or(false)
+        {
+            return;
+        }
+        spawn_local(async move {
+            match delete_vlan(&n).await {
+                Ok(()) => set_notice.set(Some(format!("VLAN interface {n} deleted"))),
                 Err(e) => set_error.set(Some(e.message)),
             }
             reload();
@@ -205,18 +260,39 @@ pub fn HostBridgesPage() -> impl IntoView {
             </table>
 
             <h2>"Network interfaces"</h2>
+            <form id="vlan-create-form" class="form-row fields" on:submit=create_vlan_ev>
+                <div class="form-group"><label for="vlan-parent">"VLAN on"</label>
+                    <select id="vlan-parent" required prop:value=vlan_parent on:change=move |ev| vlan_parent.set(event_target_value(&ev))>
+                        <option value="">"Choose an interface..."</option>
+                        {move || ifaces.get().into_iter()
+                            .filter(|i| matches!(i.kind.as_str(), "physical" | "bond" | "bridge"))
+                            .map(|i| view! { <option value=i.name.clone()>{i.name.clone()}</option> })
+                            .collect_view()}
+                    </select></div>
+                <div class="form-group"><label for="vlan-id">"VLAN id"</label><input id="vlan-id" type="number" min="1" max="4094" required placeholder="20"
+                    prop:value=vlan_id on:input=move |ev| vlan_id.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="vlan-name">"Name (optional)"</label><input id="vlan-name" type="text" maxlength="15"
+                    placeholder=move || if vlan_parent.get().is_empty() { "eno1.20".to_string() } else { format!("{}.{}", vlan_parent.get(), if vlan_id.get().is_empty() { "20".to_string() } else { vlan_id.get() }) }
+                    prop:value=vlan_name on:input=move |ev| vlan_name.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="vlan-address">"Host address (optional)"</label><input id="vlan-address" type="text" placeholder="10.20.0.1/24"
+                    prop:value=vlan_addr on:input=move |ev| vlan_addr.set(event_target_value(&ev))/></div>
+                <button id="vlan-create" type="submit" class="btn btn-primary">"Create VLAN interface"</button>
+            </form>
             <p class="form-help">"Every interface of this host. Wired NICs, bonds and VLANs without an address can be a bridge port (pick them in the form above); guest ports (tap/veth) are not listed."</p>
             <table class="vm-table" id="iface-table">
                 <thead>
-                    <tr><th>"Name"</th><th>"Type"</th><th>"State"</th><th>"MAC"</th><th>"Speed"</th><th>"MTU"</th><th>"Addresses"</th><th>"Member of"</th><th>"Bridge port"</th></tr>
+                    <tr><th>"Name"</th><th>"Type"</th><th>"State"</th><th>"MAC"</th><th>"Speed"</th><th>"MTU"</th><th>"Addresses"</th><th>"Member of"</th><th>"Bridge port"</th><th>"Actions"</th></tr>
                 </thead>
                 <tbody>
                     {move || {
                         let list = ifaces.get();
                         if list.is_empty() {
-                            view! { <tr><td colspan="9" class="no-data">"Loading interfaces..."</td></tr> }.into_view()
+                            view! { <tr><td colspan="10" class="no-data">"Loading interfaces..."</td></tr> }.into_view()
                         } else {
+                            let managed: Vec<String> = vlans.get().into_iter().map(|v| v.name).collect();
                             list.into_iter().map(|i| {
+                                let is_managed = managed.contains(&i.name);
+                                let del_name = i.name.clone();
                                 let state = iface_state(&i);
                                 let state_cls = if i.state == "up" && i.carrier { "status-running" } else if i.state == "down" { "status-stopped" } else { "status-unknown" };
                                 view! {
@@ -232,6 +308,9 @@ pub fn HostBridgesPage() -> impl IntoView {
                                         <td title=i.bridge_port_note.clone().unwrap_or_default()>
                                             {if i.bridge_port_ok { "available".to_string() } else { i.bridge_port_note.clone().unwrap_or_else(|| "no".into()) }}
                                         </td>
+                                        <td>{is_managed.then(|| view! {
+                                            <button class="btn btn-sm btn-danger vlan-delete" on:click=move |_| remove_vlan(del_name.clone())>"Delete"</button>
+                                        })}</td>
                                     </tr>
                                 }
                             }).collect_view()
