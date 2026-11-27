@@ -99,8 +99,12 @@ def install_esp(inst, esp_dir, boot_uuid):
     inst.log(f"secure boot: shim + signed GRUB + MokManager on {esp_dir} (boot fs {boot_uuid})")
 
 
+KEYDIR = "/etc/secureboot"
+
+
 def keydir(inst):
-    return f"/etc/{inst.p['name']}/secureboot"
+    """outside /etc/<product>: product config backups (console menu, web UI) must never carry this private key"""
+    return KEYDIR
 
 
 def portage_config(kd):

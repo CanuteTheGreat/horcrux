@@ -75,6 +75,10 @@ class Installer(unittest.TestCase):
         for v in ("SECUREBOOT_SIGN_KEY", "SECUREBOOT_SIGN_CERT", "MODULES_SIGN_KEY", "MODULES_SIGN_CERT"):
             self.assertIn(f'{v}="/etc/horcrux/secureboot/machine.', mk)
 
+    def test_machine_key_outside_product_config(self):
+        # product config backups (console menu / web UI) archive /etc/<product>: the private key must not be in there
+        self.assertEqual(SB.keydir(mock.Mock(p={"name": "patronus"})), "/etc/secureboot")
+
     def test_password_is_typeable(self):
         for _ in range(50):
             pw = SB.gen_password()
