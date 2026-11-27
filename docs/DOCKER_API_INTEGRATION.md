@@ -618,6 +618,5 @@ systemctl restart horcrux-api
 
 ---
 
-**Last Updated**: 2025-10-12
 **Status**: Production Ready
 **Version**: 0.1.1

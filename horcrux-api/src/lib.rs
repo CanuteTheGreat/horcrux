@@ -20,7 +20,7 @@ pub mod state;
 #[cfg(test)]
 pub(crate) mod test_env {
     /// True when this process may signal its own child. Some CI job
-    /// containers (rw-man-03 burst runner: `docker exec` processes carry the
+    /// containers (the CI host burst runner: `docker exec` processes carry the
     /// AppArmor label `docker-default//&unconfined`) deny EVERY signal, even
     /// SIGKILL from root to its own child (EACCES/EPERM), so tests that assert a
     /// kill took effect cannot say anything there. A test that needs it

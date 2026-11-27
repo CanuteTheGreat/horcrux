@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the Debian guest the guest-hibernate e2e uses: the stock Debian cloud image plus qemu-guest-agent, the Horcrux guest
 # agent binary, cloud-init off (the e2e talks to the guest over the guest-agent channel, not ssh). Needs qemu + /dev/kvm
-# (or TCG), ssh, curl, python3: run it in isoqa-qemu:1 on rw-man-01.
+# (or TCG), ssh, curl, python3: run it in isoqa-qemu:1 on the CI host.
 #
 #   hx_hibernate_image.sh HORCRUX_GUEST_AGENT_BINARY OUT.qcow2 [WORKDIR]
 #

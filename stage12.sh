@@ -1,5 +1,5 @@
 #!/bin/bash
-# stage 1+2 of build.sh only (app image + server rootfs), tagged for REUSE_ROOTFS. Runs on a rw-man host.
+# stage 1+2 of build.sh only (app image + server rootfs), tagged for REUSE_ROOTFS. Runs on a CI build host.
 set -euo pipefail
 cd "$(dirname "$0")/build/live-iso"
 HERE=$PWD; REPO=$(cd ../.. && pwd)

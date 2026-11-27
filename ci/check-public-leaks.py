@@ -28,9 +28,13 @@ PATTERNS = [
     (re.compile(r"\b(?:owner|ron|he)\b[^.\n]{0,24}\b(?:is|are|was|went|gets?|comes?|coming)\s+(?:back|away|home|idle|asleep|active|out)\b", re.I), "owner presence language"),
     (re.compile(r"while (?:he|the owner) (?:is|was) (?:away|home|out|asleep|idle)", re.I), "owner presence language"),
     (re.compile(r"\bHogsm\w*\s+Station\b", re.I), "home network name"),
+    # RedWeek CI host names (rw-man-01, rw-man-0x, ...): say "a CI build host" or name the runner label instead
+    (re.compile(r"\brw" + "-man\\b", re.I), "RedWeek CI host name (use the runner label or 'a CI build host')"),
 ]
 HERE = os.path.dirname(os.path.abspath(__file__))
 SELF = {"ci/check-public-leaks.py", "ci/public-leaks.allow"}
+# the public-text/OS-release QA checkers hold the same names as their own deny patterns
+SELF |= {"ci/ux-qa/check_os_release.py", "ci/ux-qa/check_public_text.py", "ci/ux-qa/ux-crawl.json"}
 
 
 def h(w):

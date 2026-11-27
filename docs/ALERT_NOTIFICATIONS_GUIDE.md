@@ -1,7 +1,6 @@
 # Alert Notifications Configuration Guide
 
 **Version**: 0.1.0
-**Last Updated**: 2025-10-10
 **Status**: Production Ready
 
 ---
@@ -793,7 +792,6 @@ On **Monitoring > Alert Center**:
 ---
 
 *Guide Version: 1.0.0*
-*Last Updated: 2025-10-10*
 *Horcrux Version: 0.1.0+*
 
 ## Matchers: route alerts to chosen channels

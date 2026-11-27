@@ -483,5 +483,4 @@ Content-Type: application/json
 
 ---
 
-**Last Updated**: 2025-10-09
 **Version**: 1.0

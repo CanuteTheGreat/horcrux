@@ -82,7 +82,7 @@ Image name: the Surface image follows the repo-wide scheme `<product>-<desktop e
   hibernate button) on top of elogind/UPower, `xfce4-screensaver` locks before sleeping. Apps: Firefox (`firefox-bin`),
   the Rustinion agent (`app-admin/rustinion-agent`), Tailscale, `intel-microcode`, `sof-firmware`, `linux-firmware`.
   GNOME was not measured or compared (owner chose XFCE).
-* Binpkg-first: the tablet never compiles anything. The image is built on an rw-man host (official binhost; source builds only for what the USE flags force:
+* Binpkg-first: the tablet never compiles anything. The image is built on a CI build host (official binhost; source builds only for what the USE flags force:
   the kernel, zfs-kmod, a few libraries); the installer copies the ISO's squashfs.
 
 ## XFCE image, packages and ownership (2026-10-29)

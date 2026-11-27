@@ -7,8 +7,8 @@ name: VM migration + hardware (2 nodes, KVM)
 # shared storage - see horcrux-api/tests/vm_migrate_e2e.py. Two sibling
 # containers with their own network namespaces on one docker network, real
 # QEMU (KVM) + OVMF + swtpm and CirrOS guests. Needs /dev/kvm for guest boot
-# times that fit a push check, so it runs on rw-man-01's kvm-x86_64 runner
-# (ctg-infrastructure ci-runners/rw-man-kvm): on every push that touches the
+# times that fit a push check, so it runs on the CI host's kvm-x86_64 runner
+# (runner definition kept outside this repo): on every push that touches the
 # VM runtime / migration code, nightly, and on demand.
 on:
   push:

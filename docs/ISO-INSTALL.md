@@ -71,8 +71,8 @@ A systemd download is listed on the download page only after its image was publi
 
 | arch | boot | serial console | built on | tested with | assets |
 |---|---|---|---|---|---|
-| **x86_64** | UEFI **and** legacy BIOS (hybrid ISO) | `ttyS0` | rw-man-01 (`kvm-x86_64` runner) | QEMU/KVM, OVMF + SeaBIOS | `horcrux-server-openrc-daily-x86_64.iso` |
-| **aarch64** | UEFI only (GRUB `arm64-efi`, `EFI/BOOT/BOOTAA64.EFI`); there is no BIOS on arm64 | `ttyAMA0` (PL011) | rw-man-04/05 (`arm64` runner, native Graviton build, no emulation) | QEMU `virt` + AAVMF; **TCG** (the Graviton hosts have no `/dev/kvm`), timeouts x3 | `horcrux-server-openrc-daily-aarch64.iso` |
+| **x86_64** | UEFI **and** legacy BIOS (hybrid ISO) | `ttyS0` | the CI host (`kvm-x86_64` runner) | QEMU/KVM, OVMF + SeaBIOS | `horcrux-server-openrc-daily-x86_64.iso` |
+| **aarch64** | UEFI only (GRUB `arm64-efi`, `EFI/BOOT/BOOTAA64.EFI`); there is no BIOS on arm64 | `ttyAMA0` (PL011) | the CI host (`arm64` runner, native Graviton build, no emulation) | QEMU `virt` + AAVMF; **TCG** (the Graviton hosts have no `/dev/kvm`), timeouts x3 | `horcrux-server-openrc-daily-aarch64.iso` |
 | riscv64 | UEFI only (GRUB `riscv64-efi`) | `ttyS0` | not built in CI yet | not tested | - |
 
 Per-architecture facts (stage3 tag, GRUB target, EFI file name, serial device, squashfs filter, the **per-arch
@@ -525,7 +525,7 @@ Horcrux specifics: XFS+LUKS / ext4 / XFS / ZFS (single or mirror) from the wizar
 
 ## What is tested automatically
 
-`.forgejo/workflows/live-iso-<variant>.yml (one workflow per image since 2026-11-06)` (daily, and on every `v*` tag) builds the ISO on a rw-man host and runs
+`.forgejo/workflows/live-iso-<variant>.yml (one workflow per image since 2026-11-06)` (daily, and on every `v*` tag) builds the ISO on a CI build host and runs
 `build/live-iso/common/qemu-test.py` under QEMU/KVM. Five QEMU runs per build (four full installs plus the no-answer-file check; the headless server gate below is an additional run):
 
 | run | firmware / media | installer | file system | network | SSH |

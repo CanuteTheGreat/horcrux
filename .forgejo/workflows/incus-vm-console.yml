@@ -3,8 +3,8 @@ name: Incus VM consoles (KVM)
 # In-browser consoles of LXD/Incus VMs, against a real Incus daemon with
 # real KVM guests: serial console round-trip, SPICE relay handshake (TCP
 # and the browser WebSocket proxy), .vv download, and the console page in
-# a real browser. Needs /dev/kvm, so it runs on rw-man-01's kvm-x86_64
-# runner (ctg-infrastructure ci-runners/rw-man-kvm) - on every push that
+# a real browser. Needs /dev/kvm, so it runs on the CI host's kvm-x86_64
+# runner (runner definition kept outside this repo) - on every push that
 # touches the console code, nightly, and on demand. Container consoles
 # (no KVM needed) are covered on every push by ci.yml's Test and UI E2E jobs.
 on:
