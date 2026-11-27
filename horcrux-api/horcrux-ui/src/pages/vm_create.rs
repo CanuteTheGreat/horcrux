@@ -462,6 +462,21 @@ pub fn VmCreate() -> impl IntoView {
                     </p>
                 })}
 
+                // Proxmox ends its wizard on a Confirm tab: the same summary, right above Create.
+                <fieldset class="vm-hardware" id="vm-create-summary">
+                    <legend>"Summary"</legend>
+                    <table class="vm-table">
+                        <tr><th>"VM"</th><td id="vm-sum-id">{move || format!("{} ({})", if name.get().trim().is_empty() { "unnamed".to_string() } else { name.get().trim().to_string() }, vm_id.get().trim())}</td></tr>
+                        <tr><th>"Hypervisor"</th><td>{move || format!("{:?}, {:?}", hypervisor.get(), architecture.get()).to_lowercase()}</td></tr>
+                        <tr><th>"CPU / memory"</th><td>{move || format!("{} vCPUs, {} MB", cpus.get(), memory.get())}</td></tr>
+                        <tr><th>"Disks"</th><td>{move || if is_instance() { "from the instance image".to_string() } else { format!("{} GB{}", disk_size.get(), match extra_disks.get().len() { 0 => String::new(), n => format!(" + {n} more") }) }}</td></tr>
+                        <tr><th>"Network"</th><td id="vm-sum-net">{move || { let n = hardware.get().nets; if n.is_empty() { "no network card".to_string() } else { n.iter().map(|c| c.bridge.clone()).collect::<Vec<_>>().join(", ") } }}</td></tr>
+                        <tr><th>"Install from"</th><td>{move || hardware.get().cdrom.filter(|c| !c.is_empty()).or_else(|| Some(image.get()).filter(|i| !i.trim().is_empty())).unwrap_or_else(|| "nothing (empty disk)".into())}</td></tr>
+                        <tr><th>"Display"</th><td>{move || format!("{:?}", display.get().protocol).to_lowercase()}</td></tr>
+                        <tr><th>"After create"</th><td id="vm-sum-after">{move || if start_after.get() { "start it, then open its page" } else { "open its page (stopped)" }}</td></tr>
+                    </table>
+                </fieldset>
+
                 <div class="form-actions">
                     <button
                         type="submit"
