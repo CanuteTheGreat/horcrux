@@ -1,45 +1,13 @@
 //! Cloud-init integration for automated VM provisioning
 //! Generates cloud-init ISO images with user-data and meta-data
 use horcrux_common::Result;
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Cloud-init configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CloudInitConfig {
-    pub hostname: String,
-    pub user: Option<UserConfig>,
-    pub ssh_keys: Vec<String>,
-    pub network: Option<NetworkConfig>,
-    pub packages: Vec<String>,
-    pub runcmd: Vec<String>,
-}
+pub use horcrux_common::cloudinit::{CloudInitConfig, EthernetConfig, NetworkConfig, UserConfig};
 
-/// User configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserConfig {
-    pub name: String,
-    pub password: Option<String>,       // Hashed password
-    pub plain_password: Option<String>, // Will be hashed
-    pub sudo: bool,
-    pub shell: Option<String>,
-}
-
-/// Network configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkConfig {
-    pub version: u8, // Version 1 or 2
-    pub ethernets: Vec<EthernetConfig>,
-}
-
-/// Ethernet interface configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EthernetConfig {
-    pub name: String, // e.g., "eth0"
-    pub dhcp4: bool,
-    pub addresses: Vec<String>, // CIDR notation
-    pub gateway4: Option<String>,
-    pub nameservers: Vec<String>,
+async fn set_private(p: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = tokio::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600)).await;
 }
 
 /// Cloud-init manager
@@ -57,8 +25,21 @@ impl CloudInitManager {
         tracing::info!("Generating cloud-init ISO for VM {}", vm_id);
 
         // Create temporary directory for cloud-init files
+        // Private working directory (0700): it holds the rendered user-data
+        // (with resolved secrets) until the ISO is built, then is removed.
         let temp_dir = self.iso_dir.join(format!("cloudinit-{}", vm_id));
-        tokio::fs::create_dir_all(&temp_dir).await?;
+        tokio::fs::create_dir_all(&self.iso_dir).await?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                tokio::fs::set_permissions(&self.iso_dir, std::fs::Permissions::from_mode(0o700))
+                    .await;
+        }
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+        tokio::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&temp_dir)
+            .await?;
 
         // Generate meta-data
         let meta_data = self.generate_meta_data(&config.hostname, &config.ssh_keys);
@@ -79,10 +60,14 @@ impl CloudInitManager {
 
         // Create ISO image using genisoimage or mkisofs
         let iso_path = self.iso_dir.join(format!("cloudinit-{}.iso", vm_id));
-        self.create_iso(&temp_dir, &iso_path).await?;
+        if let Err(e) = self.create_iso(&temp_dir, &iso_path).await {
+            tokio::fs::remove_dir_all(&temp_dir).await.ok();
+            return Err(e);
+        }
 
-        // Clean up temporary directory
+        // Clean up temporary directory (also when the ISO could not be built)
         tokio::fs::remove_dir_all(&temp_dir).await.ok();
+        set_private(&iso_path).await;
 
         tracing::info!("Cloud-init ISO created: {}", iso_path.display());
         Ok(iso_path)
@@ -223,39 +208,39 @@ impl CloudInitManager {
         config
     }
 
-    /// Hash password using SHA-512
+    /// Hash a password with SHA-512 crypt. The clear text goes to the hasher
+    /// on stdin, never on its command line (visible to every local user).
     async fn hash_password(&self, password: &str) -> Result<String> {
-        // Use mkpasswd or openssl to hash the password
-        let output = tokio::process::Command::new("mkpasswd")
-            .arg("--method=SHA-512")
-            .arg(password)
-            .output()
-            .await;
-
-        match output {
-            Ok(out) if out.status.success() => {
-                let hashed = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                Ok(hashed)
+        use tokio::io::AsyncWriteExt;
+        for (cmd, args) in [
+            ("mkpasswd", vec!["--method=SHA-512", "--stdin"]),
+            ("openssl", vec!["passwd", "-6", "-stdin"]),
+        ] {
+            let Ok(mut child) = tokio::process::Command::new(cmd)
+                .args(&args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            else {
+                continue;
+            };
+            if let Some(mut si) = child.stdin.take() {
+                let _ = si.write_all(password.as_bytes()).await;
+                let _ = si.write_all(b"\n").await;
             }
-            _ => {
-                // Fallback to openssl if mkpasswd not available
-                let output = tokio::process::Command::new("openssl")
-                    .arg("passwd")
-                    .arg("-6")
-                    .arg(password)
-                    .output()
-                    .await?;
-
-                if output.status.success() {
-                    let hashed = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    Ok(hashed)
-                } else {
-                    Err(horcrux_common::Error::System(
-                        "Failed to hash password. Install mkpasswd or openssl.".to_string(),
-                    ))
+            if let Ok(out) = child.wait_with_output().await {
+                if out.status.success() {
+                    let h = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if h.starts_with('$') {
+                        return Ok(h);
+                    }
                 }
             }
         }
+        Err(horcrux_common::Error::System(
+            "Failed to hash password. Install mkpasswd or openssl.".to_string(),
+        ))
     }
 
     /// Create ISO image from directory

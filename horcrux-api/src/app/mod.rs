@@ -470,6 +470,11 @@ pub async fn run() -> anyhow::Result<()> {
     api::idle_power::spawn(state.clone());
     // Scheduled vulnerability scans and hardening baseline checks.
     api::security::spawn_scheduler(state.clone());
+    // Upgrade: drop old seed copies, watch seeds of running guests.
+    {
+        let st = state.clone();
+        tokio::spawn(async move { api::security::guest_secrets::migrate_existing(&st).await });
+    }
 
     // Save/resume of guests across host shutdown: token, boot pass, running snapshot.
     api::guest_state::engine::spawn(state.clone());
@@ -1959,6 +1964,11 @@ pub(crate) async fn start_vm_by_id(state: &Arc<AppState>, id: &str) -> Result<Vm
         .map(|vm| format!("{:?}", vm.status))
         .unwrap_or_else(|_| "unknown".to_string());
 
+    // First start of a VM with stored provisioning: inject its secrets into
+    // a seed disc now (never earlier, never kept after the boot).
+    if !api::guest_state::engine::has_saved(&state, api::guest_state::GuestKind::Vm, &id) {
+        api::security::guest_secrets::provision_on_start(&state, &id).await?;
+    }
     // A guest with saved state resumes from it (starting it cold would make
     // the saved state stale).
     let vm = if api::guest_state::engine::has_saved(&state, api::guest_state::GuestKind::Vm, &id) {
@@ -1971,6 +1981,7 @@ pub(crate) async fn start_vm_by_id(state: &Arc<AppState>, id: &str) -> Result<Vm
     #[cfg(feature = "cluster")]
     ha_user_intent(&state, &id, ha::HaState::Started).await;
     emit_vm_state(&state, &vm, &old_status).await;
+    api::security::guest_secrets::watch_seed(&state, &id).await;
     // A gaming VM still installing Windows: its answer disc goes once the
     // installed guest's agent answers.
     if let Some(d) = vm.disks.first().map(|d| std::path::PathBuf::from(&d.path)) {
@@ -3344,27 +3355,33 @@ async fn clone_container(
 
 async fn generate_cloudinit(
     State(state): State<Arc<AppState>>,
+    user: Option<axum::Extension<crate::middleware::auth::AuthUser>>,
     Path(vm_id): Path<String>,
     Json(config): Json<CloudInitConfig>,
 ) -> Result<Json<CloudInitResponse>, ApiError> {
     // The seed is attached to the VM (as a CD-ROM at its next start), so
-    // the VM must exist; it used to be generated and never attached.
-    let vm = state.vm_manager.get_vm(&vm_id).await?;
-    let iso_path = state
-        .cloudinit_manager
-        .generate_iso(&vm_id, &config)
-        .await?;
-    let attached = match vm.disks.first() {
-        Some(d) => {
-            let seed = vm::qemu::cloudinit_seed(std::path::Path::new(&d.path));
-            tokio::fs::copy(&iso_path, &seed).await?;
-            Some(seed.to_string_lossy().to_string())
-        }
-        None => None,
-    };
+    // the VM must exist. `secret:<name>` references are resolved only while
+    // the seed is built; the seed lives 0600 next to the VM's disk and goes
+    // after the first boot (api::security::guest_secrets).
+    state.vm_manager.get_vm(&vm_id).await?;
+    let who = user
+        .map(|axum::Extension(u)| u.username)
+        .unwrap_or_else(|| "system".into());
+    let vault = api::security::guest_secrets::Vault::open(&state).await?;
+    let attached = api::security::guest_secrets::build_seed(
+        &state,
+        &vault,
+        &who,
+        &vm_id,
+        &config,
+        "cloud-init request",
+    )
+    .await?;
+    api::security::guest_secrets::watch_seed(&state, &vm_id).await;
+    let attached = attached.map(|p| p.to_string_lossy().to_string());
     Ok(Json(CloudInitResponse {
         vm_id,
-        iso_path: iso_path.to_string_lossy().to_string(),
+        iso_path: attached.clone().unwrap_or_default(),
         attached_as: attached,
     }))
 }

@@ -1,6 +1,6 @@
 # Security: vulnerability scans and the hardening baseline
 
-Security (System menu > Security, or `/security`) has four pages:
+Security (System menu > Security, or `/security`) has five pages:
 
 - **Overview**: critical and high findings across the newest scan of each target, how many
   targets have been scanned, and the node's hardening score. Every number links to the list
@@ -11,6 +11,8 @@ Security (System menu > Security, or `/security`) has four pages:
 - **Hardening**: the Horcrux baseline, checked live, with a score, per-rule status, what to do
   for each failing rule, **Apply baseline**, per-rule Apply and Revert, and a downloadable report
   (HTML for people, text, JSON for tools).
+- **Secrets**: passwords, SSH keys and tokens for guest provisioning, stored encrypted and
+  write-only (see "Guest secrets" below), with their audit trail.
 - **Settings**: everything below, also settable as the declarative `security:` section.
 
 Design and the comparison with other platforms: [design/security-suite.md](design/security-suite.md).
@@ -114,6 +116,44 @@ security:
       kernel-aslr: "2"
 ```
 
+## Guest secrets
+
+Cloud-init passwords, SSH keys and tokens, and the password of a Windows answer file, are never
+kept in a VM's configuration, in an export or in a backup. They live in an encrypted store
+(Security > Secrets) and a VM refers to them by name:
+
+- `secret:<name>` as a whole value (`user.plain_password: secret:admin-pw`, an `ssh_keys` entry),
+- `{{secret:<name>}}` inside a longer string (a `runcmd` line that needs a token),
+- a Windows gaming VM's `password: secret:<name>` in `POST /api/gaming/vms`.
+
+A stored provisioning record (`PUT /api/security/provisioning/<vm>`, or `guest_secrets.provisioning`
+in the declarative spec) is refused when a password is a literal or an SSH entry is neither a public
+key nor a reference. Public keys may stay literal.
+
+How a value travels:
+
+1. It is saved write-only (`POST /api/security/guest-secrets` `{name, kind, description, value}`;
+   `PUT .../<name>` with a `value` rotates it, version +1). No call returns a value.
+2. It is encrypted with AES-256-GCM using a key in its own file (`guest_secrets.key_file`, default
+   `<data_dir>/guest-secrets.key`, created mode 0600 on first use). The database holds only
+   ciphertext, so a copy of the database, a declarative export or a backup reveals nothing; keep the
+   key file out of database backups (without it the secrets cannot be read, and that is the point).
+3. At the VM's first start (or `POST /api/security/provisioning/<vm>/seed`, or a cloud-init request
+   that carries references) the references are resolved and the seed disc is built in a private
+   0700 directory. The disc is kept 0600 next to the VM's disk. Every injection is in the audit trail
+   (who, which secret, which VM) and counts in the secret's usage.
+4. The disc is removed after the first boot: as soon as the guest agent answers, or after
+   `guest_secrets.seed_grace_secs` of uptime (also when the VM stops after that time). Turn it off
+   with `guest_secrets.remove_seed_after_first_boot`. The Windows answer disc is removed once the
+   installed Windows' agent answers, as before.
+5. On upgrade, the copies the cloud-init manager used to keep for ever (`cloudinit-<vm>.iso`) are
+   deleted at startup and the seeds of running VMs are watched like new ones.
+
+A secret older than `guest_secrets.rotation_warn_days` shows "rotation due". A secret that
+provisioning still names cannot be deleted. The declarative `guest_secrets:` section lists secret
+names (kind, description) and `provisioning` by VM name; a spec never carries a value, so a declared
+secret that does not exist yet shows as blocked until its value is set.
+
 ## Settings reference
 
 `GET/PUT /api/security/settings`, declarative `security:` (`docs/design/declarative-config.md`).
@@ -139,6 +179,13 @@ security:
 | `vuln_scan.vm_disk_scan` | `true` | scan stopped VMs from a read-only disk mount |
 | `vuln_scan.vm_agent_scan` | `true` | scan running VMs from the guest agent's inventory |
 | `vuln_scan.vm_mount_timeout_secs` | `120` | give up a stopped-VM disk mount after this long (10-3600) |
+| `guest_secrets.remove_seed_after_first_boot` | `true` | delete the cloud-init disc once the guest has booted |
+| `guest_secrets.seed_grace_secs` | `600` | uptime after which the disc goes without a guest agent answer (30-86400) |
+| `guest_secrets.seed_poll_secs` | `15` | seconds between checks (5-3600) |
+| `guest_secrets.rotation_warn_days` | `90` | flag a value older than this for rotation; 0 = never |
+| `guest_secrets.audit_keep` | `2000` | audit entries kept (100-100000) |
+| `guest_secrets.max_value_bytes` | `4096` | largest accepted value (16-65536) |
+| `guest_secrets.key_file` | empty | encryption key file; empty = `<data_dir>/guest-secrets.key` |
 | `hardening.exclude` | `[]` | rule ids not checked or applied |
 | `hardening.overrides` | `{}` | rule id -> wanted sysctl value |
 | `hardening.sysctl_file` | `/etc/sysctl.d/60-horcrux-hardening.conf` | the managed drop-in |
@@ -165,6 +212,11 @@ security:
 | `POST /api/security/scans/all` | scan every target (202) | Sys.Modify |
 | `GET /api/security/scans/:id`, `DELETE` | one scan with its findings / remove it (409 while running) | Sys.Audit / Sys.Modify |
 | `GET /api/security/host`, `POST /api/security/host/check` | host advisory exposure (cached) / re-check now | Sys.Audit / Sys.Modify |
+| `GET /api/security/guest-secrets`, `POST` | list (never values) / create `{name, kind, description, value}` | Sys.Audit / Sys.Modify |
+| `GET /api/security/guest-secrets/:name`, `PUT`, `DELETE` | metadata / rotate or edit / delete (409 while provisioning names it) | Sys.Audit / Sys.Modify |
+| `GET /api/security/guest-secrets-audit?name=&limit=` | audit trail | Sys.Audit |
+| `GET /api/security/provisioning/:vm`, `PUT`, `DELETE` | a VM's provisioning (references only) | Sys.Audit / Sys.Modify |
+| `POST /api/security/provisioning/:vm/seed` | inject now: build the seed disc | Sys.Modify |
 | `GET /api/security/hardening` | check the baseline now | Sys.Audit |
 | `GET /api/security/hardening/report?format=html\|text\|json` | report download | Sys.Audit |
 | `POST /api/security/hardening/apply` `{rules?, dry_run?}` | apply the named (or every failing automatic) rule | Sys.Modify |

@@ -14,6 +14,7 @@
 //! * `POST /api/security/host/check`                re-check now
 //!
 //! Reads need Sys.Audit, changes Sys.Modify (privileges.rs area `security`).
+pub mod guest_secrets;
 pub mod hardening;
 pub mod host_cve;
 pub mod vmscan;
@@ -42,6 +43,7 @@ const SETTINGS_KIND: &str = "security_settings";
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(guest_secrets::routes())
         .route("/api/security/overview", get(overview))
         .route(
             "/api/security/settings",

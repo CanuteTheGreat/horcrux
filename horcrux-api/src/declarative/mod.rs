@@ -64,6 +64,11 @@ pub struct Spec {
     /// docs/design/security-suite.md). Absent = unmanaged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<horcrux_common::security::SecuritySettings>,
+    /// Guest provisioning secrets: the NAMES of the secrets (never their
+    /// values, which are write-only) and what each VM is provisioned with
+    /// (cloud-init with `secret:<name>` references). Absent = unmanaged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_secrets: Option<GuestSecretsSpec>,
     /// What happens to guests when the host goes down and restarts: node
     /// defaults plus per-VM overrides (the stop action `host_shutdown_action`
     /// defaults to saving state to encrypted storage).
@@ -76,6 +81,27 @@ pub struct Spec {
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+/// `guest_secrets:` section (docs/design/security-suite.md).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GuestSecretsSpec {
+    /// Declared secrets (metadata only). A secret that does not exist yet
+    /// must get its value through the API/UI: a spec never carries one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<Vec<GuestSecretDecl>>,
+    /// Provisioning by VM name; references only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioning: Option<BTreeMap<String, horcrux_common::guest_secrets::GuestProvisioning>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GuestSecretDecl {
+    pub name: String,
+    #[serde(default)]
+    pub kind: horcrux_common::guest_secrets::SecretKind,
+    #[serde(default)]
+    pub description: String,
 }
 
 /// Host shutdown / boot behaviour of guests (see docs/SAVE_STATE.md). Every
@@ -215,8 +241,21 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
     }
     if let Some(k) = spec.extra.keys().next() {
         return Err(format!(
-            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms, guest_power, console, remote_play and security)"
+            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms, guest_power, guest_secrets, console, remote_play and security)"
         ));
+    }
+    if let Some(gs) = &spec.guest_secrets {
+        if let Some(d) = &gs.secrets {
+            dup("guest secret", d.iter().map(|x| x.name.as_str()))?;
+            for x in d {
+                horcrux_common::guest_secrets::valid_name(&x.name)
+                    .map_err(|e| format!("guest_secrets.secrets: {e}"))?;
+            }
+        }
+        for (vm, p) in gs.provisioning.iter().flatten() {
+            p.validate()
+                .map_err(|e| format!("guest_secrets.provisioning.{vm}: {e}"))?;
+        }
     }
     if let Some(gp) = &spec.guest_power {
         gp.node
@@ -345,6 +384,10 @@ pub struct Live {
     pub console: horcrux_common::console::ConsoleSettings,
     pub remote_play: horcrux_common::remote_play::RemotePlaySettings,
     pub security: horcrux_common::security::SecuritySettings,
+    /// Secret metadata (never values).
+    pub guest_secrets: Vec<horcrux_common::guest_secrets::GuestSecretMeta>,
+    /// Provisioning by VM name.
+    pub provisioning: BTreeMap<String, horcrux_common::guest_secrets::GuestProvisioning>,
     pub power_node: crate::api::guest_state::NodePolicy,
     /// Per-VM power overrides by VM name (only VMs that have one).
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
@@ -775,7 +818,7 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
             let mut d = Vec::new();
             let a = serde_json::to_value(&live.security).unwrap_or_default();
             let b = serde_json::to_value(w).unwrap_or_default();
-            for sec in ["vuln_scan", "hardening"] {
+            for sec in ["vuln_scan", "hardening", "guest_secrets"] {
                 if let (Some(x), Some(y)) = (a[sec].as_object(), b[sec].as_object()) {
                     for (k, bv) in y {
                         let av = x.get(k).cloned().unwrap_or_default();
@@ -808,6 +851,77 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
                 }
             }
             creates.push(ch("remote_play", "settings", Action::Update, d));
+        }
+    }
+
+    // guest secrets: declared names + per-VM provisioning (references only)
+    if let Some(gs) = &spec.guest_secrets {
+        let declared: BTreeSet<&str> = gs
+            .secrets
+            .iter()
+            .flatten()
+            .map(|d| d.name.as_str())
+            .collect();
+        for d in gs.secrets.iter().flatten() {
+            match live.guest_secrets.iter().find(|l| l.name == d.name) {
+                None => creates.push(ch(
+                    "guest_secret",
+                    &d.name,
+                    Action::Blocked,
+                    vec![
+                        "declared, but it has no value yet: set it with PUT /api/security/guest-secrets (or Security > Secrets); a spec never carries values"
+                            .into(),
+                    ],
+                )),
+                Some(l) if l.kind != d.kind || l.description != d.description => {
+                    creates.push(ch(
+                        "guest_secret",
+                        &d.name,
+                        Action::Update,
+                        vec![format!(
+                            "kind/description: {:?}/{:?} -> {:?}/{:?}",
+                            l.kind, l.description, d.kind, d.description
+                        )],
+                    ))
+                }
+                Some(_) => {}
+            }
+        }
+        for (vm, w) in gs.provisioning.iter().flatten() {
+            let known = live.vms.iter().any(|v| v.name == *vm)
+                || spec.vms.iter().flatten().any(|v| v.name == *vm);
+            if !known {
+                p.errors.push(format!(
+                    "guest_secrets.provisioning.{vm}: there is no VM with that name"
+                ));
+                continue;
+            }
+            for n in w.secret_refs() {
+                if !declared.contains(n.as_str()) && !live.guest_secrets.iter().any(|l| l.name == n)
+                {
+                    p.errors.push(format!(
+                        "guest_secrets.provisioning.{vm}: secret {n:?} is neither declared nor present"
+                    ));
+                }
+            }
+            if live.provisioning.get(vm) != Some(w) {
+                creates.push(ch(
+                    "vm_provisioning",
+                    vm,
+                    Action::Update,
+                    vec![
+                        "provisioning references changed (injected at the VM's next first start)"
+                            .into(),
+                    ],
+                ));
+            }
+        }
+        if prune {
+            if let Some(m) = &gs.provisioning {
+                for vm in live.provisioning.keys().filter(|n| !m.contains_key(*n)) {
+                    deletes.push(ch("vm_provisioning", vm, Action::Delete, vec![]));
+                }
+            }
         }
     }
 
@@ -860,11 +974,13 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
             "san_settings",
             "san_target",
             "san_lvm",
+            "guest_secret",
             "storage_pool",
             "zone",
             "vnet",
             "subnet",
             "vm",
+            "vm_provisioning",
             "guest_power",
         ]
         .iter()
@@ -1134,6 +1250,19 @@ pub fn export(live: &Live) -> Spec {
         console: Some(live.console.clone()),
         remote_play: Some(live.remote_play.clone()),
         security: Some(live.security.clone()),
+        guest_secrets: Some(GuestSecretsSpec {
+            secrets: Some(
+                live.guest_secrets
+                    .iter()
+                    .map(|m| GuestSecretDecl {
+                        name: m.name.clone(),
+                        kind: m.kind,
+                        description: m.description.clone(),
+                    })
+                    .collect(),
+            ),
+            provisioning: Some(live.provisioning.clone()),
+        }),
         guest_power: Some(GuestPowerSpec {
             node: live.power_node.clone(),
             vms: live.power_vms.clone(),

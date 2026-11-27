@@ -106,6 +106,7 @@ fn SecurityTabs(active: &'static str) -> impl IntoView {
             {tab("/security", "overview", "Overview")}
             {tab("/security/vulnerabilities", "vulns", "Vulnerabilities")}
             {tab("/security/hardening", "hardening", "Hardening")}
+            {tab("/security/secrets", "secrets", "Secrets")}
             {tab("/security/settings", "settings", "Settings")}
         </nav>
     }
@@ -887,6 +888,7 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                 let v = cur.vuln_scan.clone();
                 let h = cur.hardening.clone();
                 let hc = cur.host_cve.clone();
+                let g = cur.guest_secrets.clone();
                 view! {
                     <form class="card settings-form" on:submit=move |e| { e.prevent_default(); if let Some(x) = s.get_untracked() { save.dispatch(x) } }>
                         <h2>"Vulnerability scanning"</h2>
@@ -1045,12 +1047,236 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                                 on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.host_cve.update_command = c.clone())) }/>
                             <small class="form-help">"Only displayed; Horcrux never runs it."</small>
                         </div>
+                        <h2>"Guest secrets"</h2>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-g-seed"><input id="sec-g-seed" type="checkbox" prop:checked=g.remove_seed_after_first_boot
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.guest_secrets.remove_seed_after_first_boot = c)) }/>" Remove the cloud-init disc after the first boot"</label>
+                                <small class="form-help">"The disc holds the injected passwords and keys, so it goes as soon as the guest agent answers or the time below has passed."</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-g-grace">"Remove after (s of uptime)"</label>
+                                <input id="sec-g-grace" type="number" min="30" prop:value=g.seed_grace_secs.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)) as u64; upd(Box::new(move |x| x.guest_secrets.seed_grace_secs = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-g-poll">"Check every (s)"</label>
+                                <input id="sec-g-poll" type="number" min="5" prop:value=g.seed_poll_secs.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)) as u64; upd(Box::new(move |x| x.guest_secrets.seed_poll_secs = c)) }/>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-g-rot">"Flag for rotation after (days)"</label>
+                                <input id="sec-g-rot" type="number" min="0" prop:value=g.rotation_warn_days.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.guest_secrets.rotation_warn_days = c)) }/>
+                                <small class="form-help">"0 = never."</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-g-audit">"Audit entries kept"</label>
+                                <input id="sec-g-audit" type="number" min="100" prop:value=g.audit_keep.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.guest_secrets.audit_keep = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-g-max">"Largest value (bytes)"</label>
+                                <input id="sec-g-max" type="number" min="16" prop:value=g.max_value_bytes.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.guest_secrets.max_value_bytes = c)) }/>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-g-key">"Encryption key file"</label>
+                            <input id="sec-g-key" type="text" placeholder="default: guest-secrets.key in the data directory" prop:value=g.key_file.clone()
+                                on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.guest_secrets.key_file = c.clone())) }/>
+                            <small class="form-help">"Created on first use (mode 0600). Keep it out of database backups so a copy of the database alone reveals nothing. Changing it makes the existing secrets unreadable."</small>
+                        </div>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary" disabled=move || save.pending().get()>"Save"</button>
                         </div>
                     </form>
                 }
             })}
+        </div>
+    }
+}
+
+// ------------------------------------------------------------ secrets
+
+#[component]
+pub fn SecuritySecretsPage() -> impl IntoView {
+    let query = use_query_map();
+    let filter = move || query.with(|q| q.get("name").cloned().filter(|n| !n.is_empty()));
+    let (list, set_list) = create_signal(None::<Vec<GuestSecretMeta>>);
+    let (audit, set_audit) = create_signal(Vec::<GuestSecretAudit>::new());
+    let (err, set_err) = create_signal(None::<String>);
+    let (ok, set_ok) = create_signal(None::<String>);
+    let (name, set_name) = create_signal(String::new());
+    let (kind, set_kind) = create_signal(SecretKind::Password);
+    let (desc, set_desc) = create_signal(String::new());
+    let (value, set_value) = create_signal(String::new());
+    let reload = create_action(move |_: &()| async move {
+        match list_guest_secrets().await {
+            Ok(v) => set_list.set(Some(v)),
+            Err(e) => set_err.set(Some(format!("Could not load secrets: {e}"))),
+        }
+        match list_guest_secret_audit(filter().as_deref()).await {
+            Ok(v) => set_audit.set(v),
+            Err(e) => set_err.set(Some(format!("Could not load the audit trail: {e}"))),
+        }
+    });
+    reload.dispatch(());
+    create_effect(move |_| {
+        filter();
+        reload.dispatch(());
+    });
+    let save = create_action(move |_: &()| async move {
+        set_err.set(None);
+        set_ok.set(None);
+        let n = name.get_untracked().trim().to_string();
+        let v = value.get_untracked();
+        let exists = list
+            .get_untracked()
+            .map(|l| l.iter().any(|m| m.name == n))
+            .unwrap_or(false);
+        if n.is_empty() || (!exists && v.is_empty()) {
+            set_err.set(Some("Enter a name and a value.".into()));
+            return;
+        }
+        let req = GuestSecretPut {
+            name: Some(n.clone()),
+            kind: Some(kind.get_untracked()),
+            description: Some(desc.get_untracked()),
+            value: (!v.is_empty()).then_some(v),
+        };
+        match save_guest_secret(exists, &req).await {
+            Ok(_) => {
+                set_value.set(String::new());
+                set_ok.set(Some(if exists && req.value.is_some() {
+                    format!("Rotated {n}.")
+                } else if exists {
+                    format!("Updated {n}.")
+                } else {
+                    format!("Created {n}.")
+                }));
+                reload.dispatch(());
+            }
+            Err(e) => set_err.set(Some(format!("Not saved: {e}"))),
+        }
+    });
+    let remove = create_action(move |n: &String| {
+        let n = n.clone();
+        async move {
+            set_err.set(None);
+            set_ok.set(None);
+            match delete_guest_secret(&n).await {
+                Ok(()) => {
+                    set_ok.set(Some(format!("Deleted {n}.")));
+                    reload.dispatch(());
+                }
+                Err(e) => set_err.set(Some(format!("Not deleted: {e}"))),
+            }
+        }
+    });
+    view! {
+        <div class="security-page">
+            <div class="page-header"><h1>"Guest Secrets"</h1></div>
+            <SecurityTabs active="secrets"/>
+            <p class="help-text">
+                "Passwords, SSH keys and tokens for guest provisioning. They are stored encrypted, shown nowhere after saving, and put into a VM only while its first-boot disc is built. Refer to one as "
+                <span class="mono">"secret:name"</span>" in a cloud-init setup or a Windows answer file, or as "
+                <span class="mono">"{{secret:name}}"</span>" inside a longer command."
+            </p>
+            {move || err.get().map(|m| view! { <div class="alert alert-error">{m}</div> })}
+            {move || ok.get().map(|m| view! { <div class="alert alert-success">{m}</div> })}
+            <form class="card settings-form" on:submit=move |e| { e.prevent_default(); save.dispatch(()) }>
+                <h2>"Add or rotate a secret"</h2>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="gs-name">"Name"</label>
+                        <input id="gs-name" type="text" autocomplete="off" placeholder="admin-password" prop:value=move || name.get()
+                            on:input=move |e| set_name.set(event_target_value(&e))/>
+                    </div>
+                    <div class="form-group">
+                        <label for="gs-kind">"Kind"</label>
+                        <select id="gs-kind" on:change=move |e| set_kind.set(match event_target_value(&e).as_str() {
+                            "sshkey" => SecretKind::Sshkey, "token" => SecretKind::Token, "other" => SecretKind::Other, _ => SecretKind::Password })>
+                            <option value="password" selected=move || kind.get() == SecretKind::Password>"Password"</option>
+                            <option value="sshkey" selected=move || kind.get() == SecretKind::Sshkey>"SSH key"</option>
+                            <option value="token" selected=move || kind.get() == SecretKind::Token>"Token"</option>
+                            <option value="other" selected=move || kind.get() == SecretKind::Other>"Other"</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="gs-desc">"Description"</label>
+                        <input id="gs-desc" type="text" prop:value=move || desc.get() on:input=move |e| set_desc.set(event_target_value(&e))/>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="gs-value">"Value"</label>
+                    <input id="gs-value" type="password" autocomplete="new-password" placeholder="write-only; leave empty to change only the kind or description"
+                        prop:value=move || value.get() on:input=move |e| set_value.set(event_target_value(&e))/>
+                    <small class="form-help">"An existing name is rotated: every VM provisioned from now on gets the new value."</small>
+                </div>
+                <div class="form-actions"><button type="submit" class="btn btn-primary" disabled=move || save.pending().get()>"Save"</button></div>
+            </form>
+            {move || match list.get() {
+                None => view! { <div class="loading">"Loading..."</div> }.into_view(),
+                Some(l) if l.is_empty() => view! { <div class="empty-state">"No secrets yet. Add one above, then reference it as secret:name from a VM's provisioning."</div> }.into_view(),
+                Some(l) => view! {
+                    <div class="table-container">
+                    <table class="data-table">
+                        <thead><tr><th>"Name"</th><th>"Kind"</th><th>"Description"</th><th>"Rotated"</th><th>"Used"</th><th>"Actions"</th></tr></thead>
+                        <tbody>
+                        {l.into_iter().map(|m| {
+                            let n = m.name.clone();
+                            let n2 = m.name.clone();
+                            let n3 = m.name.clone();
+                            let kd = m.kind;
+                            let ds = m.description.clone();
+                            let del = format!("Delete secret {}", m.name);
+                            let rot = format!("Rotate secret {}", m.name);
+                            view! {
+                                <tr>
+                                    <td><A href=format!("/security/secrets?name={}", m.name)><span class="mono">{m.name.clone()}</span></A></td>
+                                    <td>{format!("{:?}", m.kind).to_lowercase()}</td>
+                                    <td>{m.description.clone()}</td>
+                                    <td>{when(Some(m.rotated))}{format!(" (v{})", m.version)}
+                                        {m.rotation_due.then(|| view! { <div><span class="sev-badge sev-medium">"rotation due"</span></div> })}</td>
+                                    <td>{format!("{}x", m.used_count)}{m.last_used.map(|t| view! { <div class="dash-meta">{when(Some(t))}</div> })}</td>
+                                    <td class="actions">
+                                        <button class="btn btn-xs" aria-label=rot.clone() title=rot
+                                            on:click=move |_| { set_name.set(n2.clone()); set_kind.set(kd); set_desc.set(ds.clone()); set_value.set(String::new()); }>"Rotate"</button>
+                                        <button class="btn btn-xs btn-danger" aria-label=del.clone() title=del
+                                            on:click=move |_| if ask(&format!("Delete the secret {n3}? VMs that refer to it can no longer be provisioned.")) { remove.dispatch(n.clone()) }>"Delete"</button>
+                                    </td>
+                                </tr>
+                            }
+                        }).collect_view()}
+                        </tbody>
+                    </table>
+                    </div>
+                }.into_view(),
+            }}
+            <h2>{move || match filter() { Some(n) => format!("Audit trail: {n}"), None => "Audit trail".to_string() }}</h2>
+            {move || filter().map(|_| view! { <p><A href="/security/secrets">"Show all secrets"</A></p> })}
+            {move || {
+                let a = audit.get();
+                if a.is_empty() {
+                    return view! { <div class="empty-state">"Nothing recorded yet."</div> }.into_view();
+                }
+                view! {
+                    <div class="table-container">
+                    <table class="data-table">
+                        <thead><tr><th>"When"</th><th>"By"</th><th>"What"</th><th>"Secret"</th><th>"Detail"</th></tr></thead>
+                        <tbody>
+                        {a.into_iter().map(|e| view! {
+                            <tr><td>{when(Some(e.ts))}</td><td>{e.actor.clone()}</td><td>{e.action.clone()}</td>
+                                <td><span class="mono">{e.name.clone()}</span></td><td>{e.detail.clone()}</td></tr>
+                        }).collect_view()}
+                        </tbody>
+                    </table>
+                    </div>
+                }.into_view()
+            }}
         </div>
     }
 }

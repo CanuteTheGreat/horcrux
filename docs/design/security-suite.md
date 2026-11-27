@@ -154,7 +154,7 @@ the versions that fix it, the update command and a link to System > Packages.
 | 2 | Host IDS / integrity | auditd with a Horcrux rule set (logins, privilege use, /etc changes, horcrux binaries), AIDE database init + scheduled check, findings in Security > Events and as notifications; OpenRC + systemd units |
 | 2 | Pentest VM template library | Kali, Parrot, Pentoo as first-class templates (download + checksum/signature check, cloud-init or answer files where the distro supports it, sensible hardware defaults, isolated network by default) |
 | 3 | Security dashboard + events | one page joining access log (hx-api-access-log), audit log, failed logins, baseline drift and scan results; alerting through hx-notification-matchers |
-| 3 | Guest provisioning secrets | cloud-init/unattend passwords and keys referenced from an encrypted secrets store, never stored in VM config or exports; rotation |
+| 3 | Guest provisioning secrets | **shipped**: see "Phase 3: guest provisioning secrets" below |
 | 3 | Microsegmentation templates | per-guest default-deny profiles and "allow only from these groups" templates on the existing firewall objects, with a hit-count view |
 | 3 | Container runtime detection | Falco-class (eBPF, Apache-2.0) rules for containers on the node, optional and resource-capped |
 | 4 | Guest introspection (research) | spike done 2026-11: NO-GO for now (see "Phase 4 spike"); revisit when KVMI or a maintained per-kernel profile source exists |
@@ -189,3 +189,29 @@ Findings that decide the go/no-go:
 5. Quality of the signal: the two checks cover a narrow class (kernel rootkits that hide tasks or hook the syscall table). Modern rootkits use eBPF or ftrace and do not touch the table. The same value per effort is available from the guest agent plus host IDS (phase 2) with no profile problem.
 
 Decision: NO-GO as a product feature in this release cycle. Revisit only if (a) KVMI or an equivalent lands in a mainline kernel, or (b) a maintained, signed per-kernel profile source exists for Debian, Ubuntu and Gentoo kernels. If revisited, ship it as an off-by-default, read-only node setting `security.guest_introspection` (`enabled: false`, `interval_secs`, `profile_dir`, `max_guests`) with an UNKNOWN verdict for any guest whose kernel has no profile, per-VM opt-in, and findings routed into Security > Events. The phase 4 row stays in the table as "researched, deferred".
+
+## Phase 3: guest provisioning secrets (shipped)
+
+Cloud-init passwords, SSH keys, tokens and Windows answer-file passwords are held in an encrypted
+store and referenced by name (`secret:<name>`, `{{secret:<name>}}`). Choices:
+
+- Store: `config_objects` rows (`guest_secret`) holding AES-256-GCM ciphertext (horcrux-core
+  `EncryptionManager`), key in its own 0600 file (`guest_secrets.key_file`) so the database, a
+  declarative export and backups never contain a value. Per-secret metadata: kind, description,
+  version, rotated, use count, last use; "rotation due" after `rotation_warn_days`.
+- Provisioning records (`vm_provisioning`, references only) are validated: a literal password or a
+  private key is refused; every referenced secret must exist. They are injected at the VM's first
+  start (or on request) into a seed disc built in a private tmp dir, stored 0600 beside the disk,
+  removed after the first boot (guest agent answer or `seed_grace_secs`).
+- Audit: created, rotated, updated, deleted, injected (with the VM), seed-removed; kept to
+  `audit_keep`, never holding a value.
+- Declarative: `guest_secrets: {secrets: [{name, kind, description}], provisioning: {<vm>: ...}}`;
+  export lists names and references; a declared secret without a value is blocked (never created
+  empty).
+- Windows gaming wizard: `password: secret:<name>` reads the account password only at creation; the
+  answer disc is 0600 and goes once Windows is installed.
+- Upgrade: stale `cloudinit-<vm>.iso` copies are deleted at startup; seeds of running VMs get the
+  removal watch. The hashing of a cloud-init clear-text password now passes it on stdin, not argv.
+- Tests: common unit tests (names, references, refused literals), vault unit tests (ciphertext at
+  rest, rotation, audit, resolution), declarative plan tests and an end-to-end test that scans the
+  whole data directory for the values and checks the seed disc's hash against the referenced password.
