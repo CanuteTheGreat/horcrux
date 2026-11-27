@@ -22,6 +22,7 @@ on:
   # download only once its asset exists on the GitHub daily release). 18:30 UTC is after the nightly ISO slots.
   schedule:
     - cron: '30 18 * * *'
+    - cron: '30 3 * * *'   # second rebuild: x86_64 ISOs finish uploading ~01:00 UTC, so a single 18:30 run left them "coming soon" for up to 17 h
   workflow_dispatch: {}
 
 env:
