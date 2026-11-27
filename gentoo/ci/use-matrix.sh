@@ -108,7 +108,7 @@ run_set() {
 PROBES=(
     /api/nas/shares /api/k8s/clusters /api/containers /api/templates
     /api/backups /api/backup-jobs /api/cluster/status /api/cluster/nodes /api/ha/status
-    /api/ha/groups "/api/images?runtime=podman" "/api/images?runtime=docker"
+    /api/ha/groups /api/san/targets "/api/images?runtime=podman" "/api/images?runtime=docker"
     /api/volumes /api/container-networks /api/stacks /api/lxc/host
     'POST /api/containers {"id":"um-ct","name":"um-ct","runtime":"docker","rootfs":"busybox:latest","memory":64,"cpus":1,"status":"stopped"}'
     'POST /api/vms {"id":"um-vm","name":"um-vm","hypervisor":"qemu","memory":64,"cpus":1,"disk_size":1,"status":"stopped","architecture":"x86_64"}'
@@ -119,7 +119,7 @@ PROBES=(
 run_set full "cli webui monitoring -systemd docker lxc podman lxd incus -qemu -viewer \
     kubernetes backup cluster nas smb nfs-server afp webdav ftp ldap ldap-server \
     kerberos ad timemachine s3-gateway iscsi-target rsync-server \
-    nas-zfs nas-btrfs nas-mdraid nas-lvm pam"
+    nas-zfs nas-btrfs nas-mdraid nas-lvm pam san"
 has usr/bin/horcrux-api
 has usr/bin/horcrux
 # USE=viewer needs qemu (REQUIRED_USE), so this -qemu set installs no viewer.
@@ -137,8 +137,9 @@ has var/lib/horcrux/nas/iscsi
 "$IMAGE/usr/bin/horcrux" --help >/dev/null || fail "installed CLI does not run"
 out=$(route_status "${PROBES[@]}" /)
 echo "$out"
-features_are "ad afp backup cluster docker ftp incus iscsi-target kerberos kubernetes ldap ldap-server lxc lxd nas nas-auth nas-btrfs nas-lvm nas-mdraid nas-zfs nfs-server pam podman rsync-server s3-gateway smb timemachine webdav"
+features_are "ad afp backup cluster docker ftp incus iscsi-target kerberos kubernetes ldap ldap-server lxc lxd nas nas-auth nas-btrfs nas-lvm nas-mdraid nas-zfs nfs-server pam podman rsync-server s3-gateway san smb timemachine webdav"
 expect '^GET /api/nas/shares 200' "USE=nas: /api/nas/shares not served"
+expect '^GET /api/san/targets 200' "USE=san: /api/san/targets not served"
 expect '^GET /api/k8s/clusters 200' "USE=kubernetes: /api/k8s/clusters not served"
 expect '^GET /api/containers 200' "/api/containers not served"
 expect '^GET /api/templates 200' "/api/templates not served"
@@ -160,7 +161,7 @@ expect '^GET / 200' "USE=webui: UI index not served"
 
 # ---- 2. minimal, systemd ---------------------------------------------------
 run_set minimal "lxc systemd -docker -podman -qemu -viewer -webui -cli -monitoring \
-    -kubernetes -nas -backup -cluster -pam"
+    -kubernetes -nas -backup -cluster -pam -san"
 has usr/bin/horcrux-api
 hasnt usr/bin/horcrux
 hasnt opt/horcrux/horcrux-ui
@@ -173,6 +174,7 @@ echo "$out"
 features_are "lxc"
 expect '^GET /api/lxc/host 200' "USE=lxc: LXC routes (/api/lxc/host) not served"
 expect '^GET /api/nas/shares 404' "USE=-nas: NAS routes still compiled in"
+expect '^GET /api/san/targets 404' "USE=-san: SAN routes still compiled in"
 expect '^GET /api/k8s/clusters 404' "USE=-kubernetes: k8s routes still compiled in"
 expect '^GET /api/containers 200' "/api/containers not served"
 expect '^GET /api/templates 200' "templates are not a USE flag but went missing"
@@ -192,7 +194,7 @@ expect '^POST /api/containers 422 NOT_COMPILED' "USE=-docker: docker container c
 
 # ---- 3. podman + cluster, no docker/backup, OpenRC -------------------------
 run_set podman-cluster "podman cluster -docker -lxc -lxd -incus -qemu -viewer -systemd \
-    -webui -cli -monitoring -kubernetes -nas -backup -pam"
+    -webui -cli -monitoring -kubernetes -nas -backup -pam -san"
 out=$(route_status "${PROBES[@]}")
 echo "$out"
 features_are "cluster podman"

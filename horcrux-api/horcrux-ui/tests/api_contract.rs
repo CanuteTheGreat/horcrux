@@ -4381,3 +4381,35 @@ async fn passthrough_metric_servers_and_alert_silence_read_into_ui_types() {
     let p: api::AlertPreview = decode("alert preview", &body.to_string());
     assert_eq!(p.would_fire, p.targets.len());
 }
+
+/// Storage > SAN page and wizard: every read the page makes decodes into
+/// its own types on a node without any SAN (empty lists, no FC HBA), and
+/// the FC rescan answers the 424 the page turns into an empty state.
+#[tokio::test]
+async fn san_page_reads_real_api_responses() {
+    let c = client();
+    let token = login(&c).await;
+    let (code, _) = get_raw(&c, &token, "/san/status").await;
+    if code == 404 {
+        eprintln!("server built without san: skipping");
+        return;
+    }
+    let st: api::san::SanStatus = fetch(&c, &token, "/san/status").await;
+    assert!(!st.node.is_empty());
+    let _: Vec<api::san::IscsiTarget> = fetch(&c, &token, "/san/targets").await;
+    let _: Vec<api::san::NvmeTarget> = fetch(&c, &token, "/san/nvme/targets").await;
+    let _: Vec<api::san::SharedLvm> = fetch(&c, &token, "/san/lvm").await;
+    let p: api::san::NodePaths = fetch(&c, &token, "/san/paths").await;
+    assert_eq!(p.node, st.node);
+    let p2: api::san::NodePaths = fetch(&c, &token, &format!("/san/nodes/{}/paths", st.node)).await;
+    assert_eq!(p2.node, st.node);
+    let fc: api::san::FcView = fetch(&c, &token, "/san/fc").await;
+    if fc.hosts.is_empty() {
+        let (code, body) = post(&c, &token, "/san/fc/rescan", json!({})).await;
+        assert_eq!(code, 424, "{body}");
+        assert_eq!(body["reason"], "san-fc-no-hba", "{body}");
+    }
+    let (code, body) = post(&c, &token, "/san/apply", json!({})).await;
+    assert_eq!(code, 200, "{body}");
+    let _: api::san::ApplyReport = serde_json::from_value(body).unwrap();
+}

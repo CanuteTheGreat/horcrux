@@ -1370,3 +1370,41 @@ td .actions { flex-wrap: nowrap; }
 }
 .hardening-table td { vertical-align: top; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+/* Storage > SAN page and the Add SAN storage wizard */
+.san-page .page-header, .san-wizard .page-header { align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+.page-header-text { min-width: 0; flex: 1 1 24rem; }
+.page-header-text .page-title { margin: 0; }
+.page-description { color: var(--secondary); margin: .35rem 0 0; max-width: 48rem; }
+.page-actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+.card-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.card-header h2 { font-size: 1.15rem; margin: 0; }
+.inline-field { display: flex; gap: .5rem; align-items: center; }
+.inline-field select, .field input, .field select { padding: .55rem .7rem; border: 1px solid var(--border); border-radius: 4px;
+    background: var(--surface); color: var(--text); font: inherit; }
+.field { display: block; margin: 0 0 1rem; max-width: 36rem; }
+.field > span { display: block; font-weight: 600; margin-bottom: .35rem; }
+.field input, .field select { width: 100%; box-sizing: border-box; }
+.check { display: block; margin: .5rem 0; }
+.muted { color: var(--secondary); }
+.badge-danger { background: var(--bad-bg); color: var(--danger); border-color: var(--danger); }
+.badge-info { background: var(--note-bg); color: var(--info); }
+.table-wrap { overflow-x: auto; }
+.path-list { list-style: none; margin: 0; padding: 0; }
+.path-list li { padding: .15rem 0; white-space: nowrap; }
+.san-meta { display: flex; gap: 1rem; flex-wrap: wrap; color: var(--secondary); margin-bottom: .5rem; }
+.wizard-steps { display: flex; gap: .5rem; flex-wrap: wrap; list-style: none; padding: 0; margin: 0 0 1rem; }
+.wizard-steps li { padding: .35rem .85rem; border-radius: 999px; border: 1px solid var(--border); background: var(--surface);
+    color: var(--secondary); font-size: .9rem; }
+.wizard-steps li.current { background: var(--primary-solid); border-color: var(--primary-solid); color: #fff; font-weight: 600; }
+.wizard-steps li.done { color: var(--success); border-color: var(--success); }
+.wizard-panel fieldset { border: 0; padding: 0; margin: 0 0 1rem; display: flex; gap: 1.25rem; flex-wrap: wrap; }
+.wizard-panel legend { font-weight: 600; margin-bottom: .5rem; width: 100%; }
+.wizard-actions { display: flex; gap: .75rem; flex-wrap: wrap; margin-top: 1.25rem; }
+.pick-row { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; padding: .6rem .75rem; margin: .5rem 0;
+    border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.pick-row code { font-size: 1rem; overflow-wrap: anywhere; }
+.pick-row .muted { flex-basis: 100%; padding-left: 1.6rem; }
+.review { display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1rem; margin: 0; }
+.review dt { font-weight: 600; }
+.review dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .review { grid-template-columns: 1fr; } .path-list li { white-space: normal; } }

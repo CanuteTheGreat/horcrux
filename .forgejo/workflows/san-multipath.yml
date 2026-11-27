@@ -1,0 +1,85 @@
+name: SAN multipath (iSCSI on 4 portals, shared LVM, path loss, discard; KVM)
+
+# Real-effect SAN test: a throwaway Debian 13 VM (own kernel, KVM) runs an
+# LIO target on 4 portals (2 NICs x 2 addresses) and the manager under test.
+# Discovery must return every portal, apply logs in on all 4 paths and builds
+# one dm-multipath map from the Horcrux-owned drop-in, a shared (sanlock) VG
+# on the LUN holds a volume activated exclusively, dropping one NIC keeps a
+# writer going while the path view shows the 2 failed paths, deleting the
+# volume with discard_removed shrinks the array's backing file, and a missing
+# iscsiadm answers 424; NVMe/TCP (nvmet on 2 addresses) connects both paths
+# with native multipath and survives one NIC; snapshots as a qcow2 volume
+# chain on the shared VG (take, refuse on a full VG, rollback, delete with
+# merge, volume delete removes the chain); FC without an HBA answers 424
+# (horcrux-api/tests/san_vm_e2e.sh + san_guest_e2e.sh).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/horcrux-storage/src/san/**'
+      - 'crates/horcrux-storage/src/storage/lvm.rs'
+      - 'crates/horcrux-storage/src/storage/lvm_chain.rs'
+      - 'horcrux-api/src/api/storage_volumes.rs'
+      - 'horcrux-api/src/api/san.rs'
+      - 'horcrux-api/tests/san_*.sh'
+      - 'horcrux-api/tests/hx_node.py'
+      - '.forgejo/workflows/san-multipath.yml'
+  workflow_dispatch: {}
+
+# Burst of pushes = ONE run: newest unstarted run replaces older unstarted ones; a started run is never cancelled.
+concurrency:
+  group: "replace:${{ github.workflow }}@${{ github.ref }}"
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  san-multipath:
+    name: iSCSI multipath + shared LVM in a KVM guest
+    runs-on: kvm-x86_64
+    container: catthehacker/ubuntu:act-26.04
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: "4"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: https://github.com/dtolnay/rust-toolchain@stable
+
+      - name: Ubuntu mirror failover (build-cache hub)
+        run: curl -fsS -m 5 http://10.1.10.103:8088/ci/apt-mirror.sh | sh || true
+      - name: Install build tools and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libvirt-dev libpam0g-dev qemu-system-x86 qemu-utils openssh-client
+          ls -l /dev/kvm
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-san-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-san-
+
+      - name: Build API
+        run: cargo build -p horcrux-api --bin horcrux-api
+
+      - name: Cache the Debian cloud image
+        uses: actions/cache@v4
+        with:
+          path: /tmp/hxsan-vm/base.qcow2
+          key: hxsan-debian-13-base
+
+      - name: SAN multipath end to end in a KVM guest
+        run: bash horcrux-api/tests/san_vm_e2e.sh target/debug/horcrux-api /tmp/hxsan-vm
+
+      - name: Remove leftovers
+        if: always()
+        run: pkill -f '[h]xsan-vm/disk.qcow2' || true

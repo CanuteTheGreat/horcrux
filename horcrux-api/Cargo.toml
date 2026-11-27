@@ -129,7 +129,7 @@ k8s-openapi = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 
 [features]
-default = ["qemu", "lxc", "podman", "docker", "backup", "cluster", "pam"]
+default = ["qemu", "lxc", "podman", "docker", "backup", "cluster", "pam", "san"]
 
 # Virtualization backends
 qemu = ["virt", "horcrux-core/qemu", "horcrux-monitoring/qemu", "horcrux-vm/qemu"]  # QEMU/KVM support with libvirt
@@ -145,6 +145,10 @@ podman = ["horcrux-core/podman", "horcrux-container/podman"]      # Podman conta
 # Additional features
 cluster = ["horcrux-core/cluster", "horcrux-cluster/cluster"]     # Clustering/HA support
 backup = ["horcrux-core/backup", "dep:horcrux-backup", "horcrux-backup/backup"]      # Backup and restore
+
+# SAN block storage: iSCSI on every path, dm-multipath, shared LVM
+# (lvmlockd + sanlock) on the LUNs, cluster-wide config (/api/san/*).
+san = ["horcrux-core/san"]
 
 # Linux-PAM realm (host accounts). Links libpam.
 pam = ["horcrux-core/pam", "horcrux-auth/pam"]

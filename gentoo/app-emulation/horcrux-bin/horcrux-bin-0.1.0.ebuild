@@ -34,6 +34,9 @@ RESTRICT="network-sandbox mirror strip"    # tarball fetch at src_unpack; the bi
 LICENSE="GPL-2"
 SLOT="0"
 KEYWORDS="amd64 arm64 riscv"
+# The prebuilt manager always has the SAN API (/api/san/*, a default feature); USE=san only pulls the host tools it drives
+# (iSCSI initiator, dm-multipath, lvmlockd + sanlock for shared VGs, blkdiscard). Without them the API answers 424.
+IUSE="san"
 
 # ffmpeg[vpx,x264]: the Horcrux Console encodes guest screens with an ffmpeg child process (H.264, VP8 fallback);
 # QEMU's D-Bus display (gio + gdbus-codegen, always on in the Gentoo ebuild) is its frame source.
@@ -54,6 +57,14 @@ RDEPEND="
 	sys-libs/pam
 	virtual/libudev
 !app-emulation/horcrux
+	san? (
+		sys-apps/nvme-cli
+		sys-apps/util-linux
+		sys-block/open-iscsi
+		sys-cluster/sanlock
+		sys-fs/lvm2[lvm,sanlock]
+		sys-fs/multipath-tools
+	)
 "
 BDEPEND="app-arch/zstd net-misc/curl"
 

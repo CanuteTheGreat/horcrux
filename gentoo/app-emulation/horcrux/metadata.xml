@@ -61,6 +61,7 @@
 		<!-- Core features -->
 		<flag name="backup">Enable automated backup and restore functionality</flag>
 		<flag name="kubernetes">Enable Kubernetes cluster management (kube-rs client for k8s/k3s clusters)</flag>
+		<flag name="san">SAN block storage: iSCSI on every advertised portal, NVMe over Fabrics (nvme-cli) on every path, dm-multipath, shared LVM with lvmlockd and sanlock, configuration replicated across the cluster</flag>
 		<flag name="cluster">Enable high availability clustering with Corosync</flag>
 		<flag name="ldap">Enable LDAP client authentication for NAS users (requires nas)</flag>
 		<flag name="viewer">Install horcrux-viewer, the native Horcrux Console window (raw frames from the VM's shared-memory frame ring on the same host, keyboard, mouse with pointer lock and gamepads)</flag>

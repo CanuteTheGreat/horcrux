@@ -21,5 +21,6 @@ pub use horcrux_core::secrets;
 #[allow(unused_imports)]
 pub use horcrux_core::validation;
 pub mod cloudinit;
+pub mod san;
 pub mod storage;
 pub mod template;

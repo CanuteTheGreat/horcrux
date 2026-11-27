@@ -5,6 +5,14 @@
 //! - `POST   /api/storage/pools/:pool_id/volumes`              create `{name, size}` (GB)
 //! - `DELETE /api/storage/pools/:pool_id/volumes/:name`        delete (409 while a VM uses it)
 //! - `POST   /api/storage/pools/:pool_id/volumes/:name/resize` grow `{size}` (GB)
+//! - `GET    /api/storage/pools/:pool_id/volumes/:name/snapshots`  snapshot chain (oldest first)
+//! - `POST   /api/storage/pools/:pool_id/volumes/:name/snapshots`  take `{name}`
+//! - `DELETE /api/storage/pools/:pool_id/volumes/:name/snapshots/:snap`  delete one (merged into its child)
+//! - `POST   /api/storage/pools/:pool_id/volumes/:name/snapshots/:snap/rollback`  back to the newest
+//!
+//!   The snapshot routes work on LVM pools with `snapshot_as_volume_chain`
+//!   (qcow2 volume chain on thick LVs, e.g. a shared VG on a SAN LUN); a
+//!   volume a VM uses is refused (409), like delete and resize.
 //!
 //! Every volume name goes through `validation::validate_volume_name` here
 //! (400 for `../x`, `a/b`, `/abs`, `.`, ...) and again inside each storage
@@ -33,6 +41,18 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/api/storage/pools/:pool_id/volumes/:name/resize",
             post(resize_volume),
+        )
+        .route(
+            "/api/storage/pools/:pool_id/volumes/:name/snapshots",
+            get(list_snapshots).post(create_snapshot),
+        )
+        .route(
+            "/api/storage/pools/:pool_id/volumes/:name/snapshots/:snap",
+            axum::routing::delete(delete_snapshot),
+        )
+        .route(
+            "/api/storage/pools/:pool_id/volumes/:name/snapshots/:snap/rollback",
+            post(rollback_snapshot),
         )
 }
 
@@ -316,4 +336,110 @@ pub async fn place_new_disk(
         Some(pool) => Some(vm_disk_dir(state, pool, spec.size_gb).await?),
     };
     Ok(())
+}
+
+/// The pool and the location of its volume `name`, 404 for an unknown pool.
+async fn pool_location(state: &AppState, pool_id: &str, name: &str) -> Result<String, ApiError> {
+    let pool = state
+        .storage_manager
+        .get_pool(pool_id)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Storage pool {pool_id} not found")))?;
+    crate::storage::StorageManager::volume_location(&pool, name).map_err(err)
+}
+
+async fn list_snapshots(
+    State(state): State<Arc<AppState>>,
+    Path((pool_id, name)): Path<(String, String)>,
+) -> Result<Json<crate::storage::lvm_chain::ChainView>, ApiError> {
+    check_name(&name)?;
+    pool_location(&state, &pool_id, &name).await?;
+    Ok(Json(
+        state
+            .storage_manager
+            .volume_snapshots(&pool_id, &name)
+            .await
+            .map_err(err)?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSnapshotRequest {
+    pub name: String,
+}
+
+async fn create_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path((pool_id, name)): Path<(String, String)>,
+    Json(req): Json<CreateSnapshotRequest>,
+) -> Result<
+    (
+        axum::http::StatusCode,
+        Json<crate::storage::lvm_chain::ChainView>,
+    ),
+    ApiError,
+> {
+    check_name(&name)?;
+    check_name(&req.name)?;
+    let location = pool_location(&state, &pool_id, &name).await?;
+    refuse_in_use(&state, &name, &location, "snapshot the VM instead").await?;
+    state
+        .storage_manager
+        .create_snapshot(&pool_id, &name, &req.name)
+        .await
+        .map_err(err)?;
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(
+            state
+                .storage_manager
+                .volume_snapshots(&pool_id, &name)
+                .await
+                .map_err(err)?,
+        ),
+    ))
+}
+
+async fn delete_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path((pool_id, name, snap)): Path<(String, String, String)>,
+) -> Result<Json<crate::storage::lvm_chain::ChainView>, ApiError> {
+    check_name(&name)?;
+    check_name(&snap)?;
+    let location = pool_location(&state, &pool_id, &name).await?;
+    refuse_in_use(&state, &name, &location, "stop the VM first").await?;
+    state
+        .storage_manager
+        .delete_volume_snapshot(&pool_id, &name, &snap)
+        .await
+        .map_err(err)?;
+    Ok(Json(
+        state
+            .storage_manager
+            .volume_snapshots(&pool_id, &name)
+            .await
+            .map_err(err)?,
+    ))
+}
+
+async fn rollback_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path((pool_id, name, snap)): Path<(String, String, String)>,
+) -> Result<Json<crate::storage::lvm_chain::ChainView>, ApiError> {
+    check_name(&name)?;
+    check_name(&snap)?;
+    let location = pool_location(&state, &pool_id, &name).await?;
+    refuse_in_use(&state, &name, &location, "stop the VM first").await?;
+    state
+        .storage_manager
+        .restore_snapshot(&pool_id, &name, &snap)
+        .await
+        .map_err(err)?;
+    Ok(Json(
+        state
+            .storage_manager
+            .volume_snapshots(&pool_id, &name)
+            .await
+            .map_err(err)?,
+    ))
 }
