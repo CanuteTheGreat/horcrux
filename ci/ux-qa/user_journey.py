@@ -608,6 +608,12 @@ def main():
             def settled(check_id, path):
                 page.wait_for_timeout(6000)
                 t = j.text()
+                # the console's noVNC page is an iframe: the raw 422 JSON was printed inside it
+                for fr in page.frames[1:]:
+                    try:
+                        t += "\n" + fr.inner_text("body", timeout=2000)
+                    except Exception:  # noqa: BLE001  (a frame that is navigating or blank)
+                        pass
                 m = raw_err.search(t)
                 expect("j9-object-states", f"{check_id}-no-raw-error", not m, f"{path} shows a raw API error: {t[max(0, m.start() - 40):m.end() + 80] if m else ''}")
                 s = spinner.search(t)

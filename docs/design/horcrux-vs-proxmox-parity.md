@@ -43,7 +43,7 @@ landing it (named), **queued** = planned, not started.
 | G18 | Restore of a RAM snapshot never sends `restore_memory` (always disk-only) | P1 | queued |
 | G19 | No Migrate on a VM (only `/ha/migration`, hidden without the cluster feature) | P1 | queued |
 | G20 | No task model in the UI: long actions (shutdown, clone, backup, migrate) are a spinner or a toast; `/tasks` exists but nothing links to a task, no live log, no Stop | P1 | queued |
-| G21 | No persistent resource tree (Datacenter > node > guest) with a per-guest context menu; `/resources` is a read-only page | P1 | queued (shell work: coordinate with the ui-kit track) |
+| G21 | Resource tree: the ui-kit v0.3 shell adds a left Resources tree (Datacenter > node > guests, storage); a per-guest context menu (Start, Console, Migrate, Clone, Remove) is still missing | P1 | in flight (tree, branch ui-system-7); context menu queued |
 | G22 | No bulk actions (start/shutdown/stop/migrate several guests) | P1 | queued |
 | G23 | Backup Now, Clone, Convert to template, Snapshots, Replication not reachable from the VM's own page | P1 | queued (VmTabs gives the place) |
 | G24 | Node network: changes apply live, no pending list / Apply / automatic revert; no bond or VLAN create | P1 | queued |
