@@ -36,11 +36,10 @@ SLOT="0"
 KEYWORDS="amd64 arm64 riscv"
 # The prebuilt manager always has the SAN API (/api/san/*, a default feature); USE=san only pulls the host tools it drives
 # (iSCSI initiator, dm-multipath, lvmlockd + sanlock for shared VGs, blkdiscard). Without them the API answers 424.
-IUSE="san"
 
 # security: the vulnerability scanner (Grype) behind Security > Vulnerabilities, on by default so every edition can scan images, containers and VMs.
 # The scanning code is always in the manager; without the scanner the page says so. Offline databases: docs/SECURITY-SUITE.md.
-IUSE="+security"
+IUSE="san +security"
 
 # ffmpeg[vpx,x264]: the Horcrux Console encodes guest screens with an ffmpeg child process (H.264, VP8 fallback);
 # QEMU's D-Bus display (gio + gdbus-codegen, always on in the Gentoo ebuild) is its frame source.
