@@ -98,7 +98,7 @@
     host.innerHTML = '';
     var bar = h('div', 'ui-map-bar', null, host);
     var search = h('input', 'ui-input ui-map-filter', null, bar);
-    search.type = 'search'; search.placeholder = 'Filter: name, IP, MAC, class'; search.setAttribute('aria-label', 'Filter the map');
+    search.type = 'search'; search.placeholder = 'Filter'; search.title = 'Filter by name, IP, MAC or class'; search.setAttribute('aria-label', 'Filter the map');
     var sel = h('select', 'ui-input ui-map-status', null, bar);
     sel.setAttribute('aria-label', 'Status');
     [['', 'All states'], ['ok', 'Up'], ['crit', 'Down'], ['warn', 'Warning'], ['off', 'Unknown']].forEach(function (o) { var x = h('option', null, o[1], sel); x.value = o[0]; });

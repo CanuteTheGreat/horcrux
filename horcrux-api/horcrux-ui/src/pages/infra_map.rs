@@ -165,7 +165,7 @@ pub fn InfraMapPage() -> impl IntoView {
                         {move || {
                             let v = sources.get();
                             if v.is_empty() {
-                                view! { <tr><td colspan="5" class="muted">"No sources yet: the map shows this node only."</td></tr> }.into_view()
+                                view! { <tr><td colspan="5" class="muted">"Only this node is drawn until a source is added."</td></tr> }.into_view()
                             } else {
                                 v.into_iter().map(|s| {
                                     let id = s.id.clone();
@@ -191,7 +191,7 @@ pub fn InfraMapPage() -> impl IntoView {
                         <option value="proxmox">"Proxmox VE (read-only)"</option>
                     </select></div>
                     <div class="form-group wide"><label for="src-url">"URL"</label><input id="src-url" required placeholder="https://192.168.1.1" prop:value=s_url on:input=move |e| set_s_url.set(event_target_value(&e))/></div>
-                    <div class="form-group"><label for="src-secret">"Key or token"</label><input id="src-secret" required type="password" autocomplete="off" placeholder="pmk_... or user@pam!map=..." prop:value=s_secret on:input=move |e| set_s_secret.set(event_target_value(&e))/></div>
+                    <div class="form-group"><label for="src-secret">"Key or token"</label><input id="src-secret" required type="password" autocomplete="off" placeholder="pmk_... or API token" prop:value=s_secret on:input=move |e| set_s_secret.set(event_target_value(&e))/></div>
                     <div class="form-group"><label for="src-tls">"Check TLS certificate"</label><input id="src-tls" type="checkbox" prop:checked=s_verify on:change=move |e| set_s_verify.set(event_target_checked(&e))/></div>
                     <button class="btn btn-primary" type="submit">"Add source"</button>
                 </form>
