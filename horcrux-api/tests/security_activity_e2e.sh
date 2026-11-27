@@ -45,8 +45,8 @@ api() { # method path [json]
 }
 TOK=$(tok)
 [ -n "$TOK" ] && [ "$TOK" != null ] && ok "admin login" || { bad "no token"; cleanup; exit 1; }
-SET=$(api GET /security/settings | jq -c '.events.brute_force.failures=3 | .events.brute_force.block=true | .events.brute_force.block_minutes=5')
-api PUT /security/settings "$SET" | jq -e '.events.brute_force.block == true' >/dev/null && ok "blocking enabled in settings" || bad "settings not saved"
+SET=$(api GET /security/settings | jq -c '.detection.brute_force.failures=3 | .detection.brute_force.block=true | .detection.brute_force.block_minutes=5')
+api PUT /security/settings "$SET" | jq -e '.detection.brute_force.block == true' >/dev/null && ok "blocking enabled in settings" || bad "settings not saved"
 # the client cannot be seen by the server as loopback: it comes from $CIP
 reach() { docker exec $N-cli curl -sk -m 5 -o /dev/null https://$SIP:8006/api/health; echo $?; }
 [ "$(reach)" = 0 ] && ok "client reaches the server before the attack" || bad "client cannot reach the server at the start"
