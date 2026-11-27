@@ -604,6 +604,8 @@ def main():
             # "stopped-vm-summary-has-start" "stopped-vm-hardware-has-start" "stopped-vm-console-has-start"
             # "stopped-vm-summary-no-impossible-actions" "stopped-vm-hardware-no-impossible-actions"
             # "missing-vm-summary-explained" "missing-vm-hardware-explained" "missing-ct-console-explained"
+            # "missing-vm-summary-no-raw-error" "missing-vm-hardware-no-raw-error" "missing-ct-console-no-raw-error"
+            # "missing-vm-hardware-settles" "stopped-vm-console-settles" "stopped-vm-console-no-raw-error"
             raw_err = re.compile(r'\bHTTP\s?[45]\d\d\b|\{\s*"(status|error|message)"\s*:|\b(VALIDATION_ERROR|INTERNAL_ERROR|NOT_AVAILABLE|BAD_REQUEST)\b')
             spinner = re.compile(r"\b(Connecting|Loading)(\.\.\.|\u2026)")
             not_found = re.compile(r"\b(not found|no such|does not exist|doesn't exist|there is no|no longer exists|may have been deleted)\b", re.I)
