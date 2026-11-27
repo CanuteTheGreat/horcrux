@@ -192,6 +192,7 @@ pub fn App() -> impl IntoView {
                             </IfFeature>
                             <A href="/snapshots" class="dropdown-item">"Snapshots"</A>
                             <A href="/clones" class="dropdown-item">"Clones"</A>
+                            <A href="/templates" class="dropdown-item">"VM Templates"</A>
                             <A href="/replication" class="dropdown-item">"Replication"</A>
                         </div>
                     </div>
@@ -322,7 +323,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/backup/retention" view=|| view! { <Gated feature="backup"><RetentionPoliciesPage/></Gated> }/>
                     <Route path="/backup/verify" view=|| view! { <Gated feature="backup"><BackupVerifyPage/></Gated> }/>
                     <Route path="/backup/snapshots" view=SnapshotManagerPage/>
-                    <Route path="/backup/templates" view=TemplateManagerPage/>
+                    <Route path="/templates" view=TemplateManagerPage/>
                     <Route path="/ha" view=|| view! { <Gated feature="cluster"><HaDashboard/></Gated> }/>
                     <Route path="/ha/cluster" view=|| view! { <Gated feature="cluster"><ClusterManagementPage/></Gated> }/>
                     <Route path="/ha/failover" view=|| view! { <Gated feature="cluster"><HaFailoverPage/></Gated> }/>

@@ -667,6 +667,22 @@ def main():
         expect(page.get_by_text("e2e-snap").first).to_be_visible(timeout=30000)
         snaps = api_get(f"/api/vms/{REP_VM}/snapshots", token())
         assert any(s["name"] == "e2e-snap" for s in snaps), snaps
+        # ... rollback and delete name the snapshot (never its id) and report back.
+        srow = page.locator("tr[data-snapshot-name='e2e-snap']")
+        expect(srow.locator(".snapshot-parent")).to_have_text("-")
+        srow.get_by_role("button", name="Restore").click()  # confirm accepted by the dialog handler
+        expect(page.locator("#snapshot-notice")).to_contain_text("rolled back to snapshot e2e-snap",
+                                                                 timeout=60000)
+        page.get_by_role("button", name="Create Snapshot").click()
+        page.fill("#snap-name", "e2e-snap2")
+        page.locator("#snap-submit").click()
+        srow2 = page.locator("tr[data-snapshot-name='e2e-snap2']")
+        expect(srow2.locator(".snapshot-parent")).to_have_text("e2e-snap", timeout=60000)
+        srow2.get_by_role("button", name="Delete").click()
+        expect(page.locator("#snapshot-notice")).to_contain_text("Snapshot e2e-snap2", timeout=60000)
+        expect(page.locator("#snapshot-notice")).to_contain_text("deleted")
+        expect(srow2).to_have_count(0, timeout=30000)
+        assert not any(s["name"] == "e2e-snap2" for s in api_get(f"/api/vms/{REP_VM}/snapshots", token()))
 
         # ---- VM clone from the VM list: dialog, linked mode, base protected
         page.goto(f"{BASE}/vms")
@@ -1812,9 +1828,9 @@ def nas_share_checks(page):
 
 
 def template_checks(page):
-    """Backup > Templates: the card shows the template disk's real size, and
-    the Clone dialog's Linked mode deploys a VM whose qcow2 is backed by the
-    template disk and which reports the template's disk size."""
+    """VM Templates (Operations menu): the row shows the template disk's real
+    size, "New VM" deploys a linked clone backed by the template disk (with a
+    link to the new VM), and Delete removes the template from the page."""
     tok = token()
     api_post("/api/vms", tok, {"id": TPL_VM, "name": TPL_VM, "hypervisor": "qemu",
                                "architecture": "x86_64", "cpus": 1, "memory": 128,
@@ -1822,15 +1838,16 @@ def template_checks(page):
     tpl = api_post("/api/templates", tok, {"vm_id": TPL_VM, "name": TPL_NAME})
     tid = tpl["id"]
     assert tpl.get("virtual_size_bytes") == 1024 ** 3, tpl
-    page.goto(f"{BASE}/backup/templates")
-    card = page.locator(f".template-card[data-template-id='{tid}']")
-    expect(card.locator(".template-size")).to_contain_text("1.0 GB virtual", timeout=30000)
-    assert "0 B" != card.locator(".template-size").inner_text().strip()
-    card.get_by_role("button", name="Clone").click()
+    page.goto(f"{BASE}/templates")
+    row = page.locator(f".template-row[data-template-id='{tid}']")
+    expect(row.locator(".template-size")).to_contain_text("1.0 GiB", timeout=30000)
+    assert "0 B" != row.locator(".template-size").inner_text().strip()
+    row.locator(".template-deploy").click()
     page.fill("#template-clone-name", TPL_CLONE)
     page.select_option("#template-clone-mode", "linked")
     expect(page.locator("#template-clone-linked-help")).to_be_visible()
     page.locator("#template-clone-submit").click()
+    expect(page.locator("#template-notice-link")).to_be_visible(timeout=120000)
     assert wait_for(lambda: any(v["name"] == TPL_CLONE for v in api_get("/api/vms", tok)),
                     "VM deployed from the template", timeout=120)
     vm = next(v for v in api_get("/api/vms", tok) if v["name"] == TPL_CLONE)
@@ -1841,9 +1858,11 @@ def template_checks(page):
     base = info.get("full-backing-filename") or info.get("backing-filename")
     assert base and os.path.realpath(base) == os.path.realpath(tpl["disk_path"]), info
     _req("DELETE", f"/api/vms/{vm['id']}", tok)
-    _req("DELETE", f"/api/templates/{tid}", tok)
+    row.locator(".template-delete").click()  # confirm accepted by the page's dialog handler
+    expect(row).to_have_count(0, timeout=30000)
+    assert not any(t["id"] == tid for t in api_get("/api/templates", tok))
     _req("DELETE", f"/api/vms/{TPL_VM}", tok)
-    print("UI E2E: templates (real size, linked clone from the Clone dialog) passed")
+    print("UI E2E: templates (real size, linked clone, delete) passed")
 
 
 def ui_login(page, user, password):

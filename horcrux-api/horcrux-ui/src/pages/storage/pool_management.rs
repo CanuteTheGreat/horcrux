@@ -155,8 +155,8 @@ pub fn StorageManagement() -> impl IntoView {
 
             // Storage overview
             {move || if !loading.get() && !pools.get().is_empty() {
-                let total_capacity: u64 = pools.get().iter().map(|p| p.total_bytes).sum();
-                let total_used: u64 = pools.get().iter().map(|p| p.used_bytes).sum();
+                // Pools on one filesystem / zpool share its space: count it once.
+                let (total_capacity, total_used, _) = crate::api::storage_totals(&pools.get());
                 let usage_percent = if total_capacity > 0 {
                     (total_used as f64 / total_capacity as f64) * 100.0
                 } else {

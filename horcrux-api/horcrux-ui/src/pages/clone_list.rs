@@ -40,8 +40,10 @@ pub fn CloneList() -> impl IntoView {
                     if job_list.is_empty() {
                         view! {
                             <div class="no-data">
-                                <p>"No clone jobs found. Clone a VM from its page."</p>
+                                <p>"No clone jobs yet. Clone a VM with the Clone button on its row in the VM list, or deploy a new VM from a template."</p>
                                 <a class="btn btn-primary" href="/vms">"Choose a VM to clone"</a>
+                                " "
+                                <a class="btn btn-secondary" href="/templates">"VM Templates"</a>
                             </div>
                         }.into_view()
                     } else {

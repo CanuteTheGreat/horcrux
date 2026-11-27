@@ -5189,6 +5189,26 @@ pub struct StoragePoolInfo {
     pub available_bytes: u64,
     pub status: String,
     pub path: Option<String>,
+    /// What the pool's space comes from (`zfs:<zpool>`, `<fstype>:<device>`);
+    /// pools with the same backing share their free space.
+    pub backing: Option<String>,
+}
+
+/// Capacity of all pools with every shared filesystem / zpool counted once:
+/// (total, used, available) bytes. Pools on one backing report the same free
+/// space, so the group's size is its largest pool (a dataset with a quota is
+/// a part of it); pools without a known backing count on their own.
+pub fn storage_totals(pools: &[StoragePoolInfo]) -> (u64, u64, u64) {
+    let mut groups: std::collections::BTreeMap<String, (u64, u64)> = Default::default();
+    for (i, p) in pools.iter().enumerate() {
+        let key = p.backing.clone().unwrap_or_else(|| format!("pool#{i}"));
+        let e = groups.entry(key).or_insert((0, 0));
+        e.0 = e.0.max(p.total_bytes);
+        e.1 = e.1.max(p.available_bytes);
+    }
+    let total: u64 = groups.values().map(|g| g.0).sum();
+    let avail: u64 = groups.values().map(|g| g.1.min(g.0)).sum();
+    (total, total - avail, avail)
 }
 
 #[derive(Deserialize)]
@@ -5206,6 +5226,8 @@ struct StoragePoolWire {
     total: u64,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    backing: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -5224,6 +5246,7 @@ impl From<StoragePoolWire> for StoragePoolInfo {
             available_bytes: w.available * GB,
             status: if w.enabled { "active" } else { "disabled" }.to_string(),
             path: w.path,
+            backing: w.backing,
         }
     }
 }
@@ -5783,6 +5806,29 @@ mod tests {
     //! actually sends. Each sample below is the real serialized shape of the
     //! named server type.
     use super::*;
+
+    #[test]
+    fn storage_totals_count_a_shared_zpool_once() {
+        let pool = |name: &str, total: u64, avail: u64, backing: Option<&str>| -> StoragePoolInfo {
+            serde_json::from_value(serde_json::json!({
+                "id": name, "name": name, "storage_type": "directory",
+                "total": total, "available": avail, "backing": backing,
+            }))
+            .unwrap()
+        };
+        const G: u64 = 1024 * 1024 * 1024;
+        let pools = vec![
+            pool("local", 12283, 11946, Some("zfs:rpool")),
+            pool("vmdata", 12005, 11946, Some("zfs:rpool")),
+            pool("kali", 160, 151, Some("zfs:rpool")),
+            pool("usb", 100, 40, Some("ext4:/dev/sdb1")),
+            pool("lvm", 50, 50, None),
+        ];
+        let (t, u, a) = storage_totals(&pools);
+        assert_eq!(t, (12283 + 100 + 50) * G);
+        assert_eq!(a, (11946 + 40 + 50) * G);
+        assert_eq!(u, t - a);
+    }
 
     #[test]
     fn ha_status_carries_the_failover_count_from_the_server() {

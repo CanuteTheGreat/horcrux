@@ -36,6 +36,28 @@ pub fn default_snapshot_vm(
         .or_else(|| vm_ids.first().cloned())
 }
 
+/// The confirmation shown before a rollback: what is lost and what is kept.
+pub fn restore_question(vm: &str, snapshot: &str) -> String {
+    format!(
+        "Roll {vm} back to snapshot {snapshot}? Changes made since the snapshot are lost; \
+         other snapshots are kept."
+    )
+}
+
+/// The Parent column: the snapshot this one was taken on top of, or "-"
+/// for the first one (Proxmox shows the same chain as a tree).
+pub fn parent_label(all: &[api::VmSnapshot], s: &api::VmSnapshot) -> String {
+    s.parent_id
+        .as_deref()
+        .map(|p| {
+            all.iter()
+                .find(|o| o.id == p)
+                .map(|o| o.name.clone())
+                .unwrap_or_else(|| "(deleted)".to_string())
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
 #[component]
 pub fn SnapshotList() -> impl IntoView {
     // "" = every VM (the default: a snapshot just taken is always visible).
@@ -116,38 +138,45 @@ pub fn SnapshotList() -> impl IntoView {
         })
     };
 
-    let restore_snapshot = move |vm_id: String, snapshot_id: String| {
-        if web_sys::window()
-            .and_then(|w| {
-                w.confirm_with_message(&format!(
-                    "Restore snapshot {}? Current state will be lost.",
-                    snapshot_id
-                ))
-                .ok()
-            })
+    let confirm = |msg: &str| {
+        web_sys::window()
+            .and_then(|w| w.confirm_with_message(msg).ok())
             .unwrap_or(false)
-        {
+    };
+
+    // Messages name the snapshot and its VM (users never see snapshot ids).
+    let restore_snapshot = move |vm_id: String, snapshot_id: String, name: String| {
+        let vm = vm_name(&vm_id);
+        if confirm(&restore_question(&vm, &name)) {
+            set_notice.set(None);
+            set_error.set(None);
             spawn_local(async move {
                 match api::restore_snapshot(&vm_id, &snapshot_id).await {
-                    Ok(_) => set_notice.set(Some(format!("Snapshot {} restored", snapshot_id))),
-                    Err(e) => set_error.set(Some(format!("Restore failed: {}", e.message))),
+                    Ok(_) => set_notice.set(Some(format!("{vm} rolled back to snapshot {name}"))),
+                    Err(e) => set_error.set(Some(format!(
+                        "Rolling {vm} back to {name} failed: {}",
+                        e.message
+                    ))),
                 }
                 set_refresh.update(|n| *n += 1);
             });
         }
     };
 
-    let delete_snapshot = move |vm_id: String, snapshot_id: String| {
-        if web_sys::window()
-            .and_then(|w| {
-                w.confirm_with_message(&format!("Delete snapshot {}?", snapshot_id))
-                    .ok()
-            })
-            .unwrap_or(false)
-        {
+    let delete_snapshot = move |vm_id: String, snapshot_id: String, name: String| {
+        let vm = vm_name(&vm_id);
+        if confirm(&format!(
+            "Delete snapshot {name} of {vm}? The VM keeps its current state; only this restore point is removed."
+        )) {
+            set_notice.set(None);
+            set_error.set(None);
             spawn_local(async move {
-                if let Err(e) = api::delete_snapshot(&vm_id, &snapshot_id).await {
-                    set_error.set(Some(format!("Delete failed: {}", e.message)));
+                match api::delete_snapshot(&vm_id, &snapshot_id).await {
+                    Ok(_) => set_notice.set(Some(format!("Snapshot {name} of {vm} deleted"))),
+                    Err(e) => set_error.set(Some(format!(
+                        "Deleting snapshot {name} of {vm} failed: {}",
+                        e.message
+                    ))),
                 }
                 set_refresh.update(|n| *n += 1);
             });
@@ -197,7 +226,12 @@ pub fn SnapshotList() -> impl IntoView {
                     if !f.is_empty() && f != vm_id {
                         set_selected_vm.set(vm_id.clone());
                     }
-                    set_notice.set(Some(format!("Snapshot {} created", name)));
+                    set_error.set(None);
+                    set_notice.set(Some(format!(
+                        "Snapshot {} of {} created",
+                        name,
+                        vm_name(&vm_id)
+                    )));
                     set_refresh.update(|n| *n += 1);
                 }
                 Err(e) => set_create_error.set(Some(e.message)),
@@ -270,6 +304,7 @@ pub fn SnapshotList() -> impl IntoView {
                                     <th>"VM"</th>
                                     <th>"Name"</th>
                                     <th>"Description"</th>
+                                    <th>"Parent"</th>
                                     <th>"Created"</th>
                                     <th>"Size"</th>
                                     <th>"Memory"</th>
@@ -277,7 +312,10 @@ pub fn SnapshotList() -> impl IntoView {
                                 </tr>
                             </thead>
                             <tbody>
-                                {list.into_iter().map(|snapshot| {
+                                {list.clone().into_iter().map(|snapshot| {
+                                    let parent = parent_label(&list, &snapshot);
+                                    let name_restore = snapshot.name.clone();
+                                    let name_delete = snapshot.name.clone();
                                     let vm_id_restore = snapshot.vm_id.clone();
                                     let snapshot_id_restore = snapshot.id.clone();
                                     let vm_id_delete = snapshot.vm_id.clone();
@@ -292,6 +330,7 @@ pub fn SnapshotList() -> impl IntoView {
                                             <td>
                                                 {snapshot.description.as_ref().map(|d| d.to_string()).unwrap_or_else(|| "-".to_string())}
                                             </td>
+                                            <td class="snapshot-parent">{parent}</td>
                                             <td>{&snapshot.created_at}</td>
                                             <td class="snapshot-size">{snapshot.size_label()}</td>
                                             <td>
@@ -304,11 +343,12 @@ pub fn SnapshotList() -> impl IntoView {
                                             <td class="actions">
                                                 <button
                                                     class="btn btn-sm btn-primary"
-                                                    on:click=move |_| restore_snapshot(vm_id_restore.clone(), snapshot_id_restore.clone())
+                                                    title="Roll the VM back to this snapshot"
+                                                    on:click=move |_| restore_snapshot(vm_id_restore.clone(), snapshot_id_restore.clone(), name_restore.clone())
                                                 >"Restore"</button>
                                                 <button
                                                     class="btn btn-sm btn-danger"
-                                                    on:click=move |_| delete_snapshot(vm_id_delete.clone(), snapshot_id_delete.clone())
+                                                    on:click=move |_| delete_snapshot(vm_id_delete.clone(), snapshot_id_delete.clone(), name_delete.clone())
                                                 >"Delete"</button>
                                             </td>
                                         </tr>
@@ -395,6 +435,22 @@ mod tests {
         sort_snapshots(&mut v);
         let names: Vec<_> = v.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["new", "mid", "old"]);
+    }
+
+    #[test]
+    fn rows_name_their_parent_and_messages_use_names() {
+        let mut child = snap("a", "two", 2);
+        let root = snap("a", "one", 1);
+        child.parent_id = Some(root.id.clone());
+        let mut orphan = snap("a", "three", 3);
+        orphan.parent_id = Some("gone".into());
+        let all = vec![child.clone(), root.clone(), orphan.clone()];
+        assert_eq!(parent_label(&all, &child), "one");
+        assert_eq!(parent_label(&all, &root), "-");
+        assert_eq!(parent_label(&all, &orphan), "(deleted)");
+        let q = restore_question("web01", "before-upgrade");
+        assert!(q.contains("web01") && q.contains("before-upgrade"));
+        assert!(!q.contains("a-one"));
     }
 
     #[test]

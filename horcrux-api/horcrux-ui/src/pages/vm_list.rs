@@ -243,6 +243,7 @@ pub fn VmList() -> impl IntoView {
                                         let vm_id_reboot = vm.id.clone();
                                         let hardware_href = format!("/vms/{}/hardware", vm.id);
                                         let detail_href = format!("/vms/{}", vm.id);
+                                        let template_href = format!("/templates?vm={}", vm.id);
                                         let is_qemu = vm.hypervisor == horcrux_common::VmHypervisor::Qemu;
                                         let vm_id_delete = vm.id.clone();
                                         let vm_id_save = vm.id.clone();
@@ -321,6 +322,7 @@ pub fn VmList() -> impl IntoView {
                                                         class="btn btn-sm btn-secondary"
                                                         on:click=move |_| open_clone(vm_for_clone.clone())
                                                     >"Clone"</button>
+                                                    <A href=template_href class="btn btn-sm btn-secondary vm-template-link">"Make template"</A>
                                                     <button
                                                         class="btn btn-sm btn-danger"
                                                         on:click=move |_| delete_vm(vm_id_delete.clone())

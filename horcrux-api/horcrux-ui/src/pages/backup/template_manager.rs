@@ -1,593 +1,467 @@
+//! VM templates: a stopped VM's disk + hardware saved as a base for new VMs
+//! (Proxmox: "Convert to template", then "Clone"). Templates are made from
+//! stopped VMs only (a disk copied while the guest writes is torn), deployed
+//! as full or linked clones, and deleted when no linked clone needs them.
 use crate::api::{
     clone_template, create_template, delete_template, get_templates, get_vms,
     CreateTemplateRequest, VmTemplate,
 };
-use horcrux_common::VmConfig;
+use horcrux_common::{VmConfig, VmStatus};
 use leptos::*;
+use leptos_router::use_query_map;
+
+/// Why a VM can't become a template right now (`None` = it can).
+pub fn template_blocker(vm: &VmConfig) -> Option<&'static str> {
+    match vm.status {
+        VmStatus::Running | VmStatus::Paused => Some("running: shut it down first"),
+        _ if vm.disks.is_empty() => Some("has no disk"),
+        _ => None,
+    }
+}
+
+/// "1 template", "3 templates", "2 of 5 templates".
+pub fn count_label(shown: usize, total: usize) -> String {
+    let noun = if total == 1 { "template" } else { "templates" };
+    if shown == total {
+        format!("{total} {noun}")
+    } else {
+        format!("{shown} of {total} {noun}")
+    }
+}
+
+fn confirm(msg: &str) -> bool {
+    web_sys::window()
+        .and_then(|w| w.confirm_with_message(msg).ok())
+        .unwrap_or(false)
+}
 
 #[component]
 pub fn TemplateManagerPage() -> impl IntoView {
     let (templates, set_templates) = create_signal(Vec::<VmTemplate>::new());
     let (vms, set_vms) = create_signal(Vec::<VmConfig>::new());
-    let (loading, set_loading) = create_signal(false);
+    let (loaded, set_loaded) = create_signal(false);
     let (error, set_error) = create_signal(None::<String>);
-    let (success_message, set_success_message) = create_signal(None::<String>);
+    // (message, link to the new VM)
+    let (notice, set_notice) = create_signal(None::<(String, Option<String>)>);
     let (search_query, set_search_query) = create_signal(String::new());
-    let (show_create_modal, set_show_create_modal) = create_signal(false);
-    let (show_clone_modal, set_show_clone_modal) = create_signal(false);
+    let (show_create, set_show_create) = create_signal(false);
     let (selected_template, set_selected_template) = create_signal(None::<VmTemplate>);
 
-    // Form state
     let (template_name, set_template_name) = create_signal(String::new());
     let (template_description, set_template_description) = create_signal(String::new());
     let (source_vm_id, set_source_vm_id) = create_signal(String::new());
     let (clone_name, set_clone_name) = create_signal(String::new());
     let (clone_mode, set_clone_mode) = create_signal("full".to_string());
+    let (busy, set_busy) = create_signal(false);
+    let (dialog_error, set_dialog_error) = create_signal(None::<String>);
 
     let load_templates = move || {
-        set_loading.set(true);
-        set_error.set(None);
-
         spawn_local(async move {
             match get_templates().await {
-                Ok(template_list) => set_templates.set(template_list),
-                Err(e) => set_error.set(Some(format!("Failed to load templates: {}", e))),
+                Ok(list) => {
+                    set_templates.set(list);
+                    set_error.set(None);
+                }
+                Err(e) => set_error.set(Some(format!("Could not load templates: {}", e.message))),
             }
-            set_loading.set(false);
+            set_loaded.set(true);
         });
     };
-
     let load_vms = move || {
         spawn_local(async move {
             match get_vms().await {
-                Ok(vm_list) => set_vms.set(vm_list),
-                Err(e) => set_error.set(Some(format!("Failed to load VMs: {}", e))),
+                Ok(list) => set_vms.set(list),
+                Err(e) => set_error.set(Some(format!("Could not load VMs: {}", e.message))),
             }
         });
     };
+    load_templates();
+    load_vms();
 
-    // Load data on mount
-    create_effect(move |_| {
-        load_templates();
-        load_vms();
-    });
-
-    // Auto-refresh every 60 seconds
-    use leptos::set_interval;
-    set_interval(load_templates, std::time::Duration::from_secs(60));
-
-    let filtered_templates = move || {
-        let query = search_query.get().to_lowercase();
-        if query.is_empty() {
-            templates.get()
-        } else {
-            templates
-                .get()
-                .into_iter()
-                .filter(|template| {
-                    template.name.to_lowercase().contains(&query)
-                        || template
-                            .description
-                            .as_ref()
-                            .is_some_and(|d| d.to_lowercase().contains(&query))
-                        || template.source_vm_id.to_lowercase().contains(&query)
-                })
-                .collect()
-        }
-    };
-
-    let reset_form = move || {
+    let open_create = move |vm_id: String| {
         set_template_name.set(String::new());
         set_template_description.set(String::new());
-        set_source_vm_id.set(String::new());
-        set_clone_name.set(String::new());
+        set_source_vm_id.set(vm_id);
+        set_dialog_error.set(None);
+        set_show_create.set(true);
     };
 
-    let create_template = move || {
-        let request = CreateTemplateRequest {
-            name: template_name.get(),
-            description: if template_description.get().is_empty() {
-                None
-            } else {
-                Some(template_description.get())
-            },
-            source_vm_id: source_vm_id.get(),
-        };
+    // `?vm=<id>` (the VM list's "Make template"): open the dialog on that VM.
+    let query = use_query_map();
+    create_effect(move |_| {
+        if let Some(v) = query.get().get("vm").cloned() {
+            if !v.is_empty() {
+                open_create(v);
+            }
+        }
+    });
 
+    let vm_name = move |vm_id: &str| -> String {
+        vms.with(|v| {
+            v.iter()
+                .find(|vm| vm.id == vm_id)
+                .map(|vm| vm.name.clone())
+                .unwrap_or_else(|| vm_id.to_string())
+        })
+    };
+
+    let filtered = move || {
+        let q = search_query.get().to_lowercase();
+        templates
+            .get()
+            .into_iter()
+            .filter(|t| {
+                q.is_empty()
+                    || t.name.to_lowercase().contains(&q)
+                    || t.description
+                        .as_ref()
+                        .is_some_and(|d| d.to_lowercase().contains(&q))
+                    || t.source_vm_id.to_lowercase().contains(&q)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let submit_create = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let name = template_name.get().trim().to_string();
+        let vm_id = source_vm_id.get();
+        if vm_id.is_empty() {
+            set_dialog_error.set(Some("Choose the VM to make a template of".into()));
+            return;
+        }
+        if name.is_empty() {
+            set_dialog_error.set(Some("The template needs a name".into()));
+            return;
+        }
+        if let Some(why) = vms.with(|v| v.iter().find(|x| x.id == vm_id).and_then(template_blocker))
+        {
+            set_dialog_error.set(Some(format!("{} is {why}", vm_name(&vm_id))));
+            return;
+        }
+        let desc = template_description.get();
+        let request = CreateTemplateRequest {
+            name: name.clone(),
+            description: (!desc.trim().is_empty()).then_some(desc),
+            source_vm_id: vm_id.clone(),
+        };
+        set_busy.set(true);
         spawn_local(async move {
             match create_template(request).await {
                 Ok(_) => {
-                    set_show_create_modal.set(false);
-                    reset_form();
+                    set_show_create.set(false);
+                    set_notice.set(Some((
+                        format!("Template {name} created from {}", vm_name(&vm_id)),
+                        None,
+                    )));
                     load_templates();
-                    set_success_message.set(Some("Template created successfully".to_string()));
-                    // Clear success message after 3 seconds
-                    set_timeout(
-                        move || set_success_message.set(None),
-                        std::time::Duration::from_secs(3),
-                    );
                 }
-                Err(e) => set_error.set(Some(format!("Failed to create template: {}", e))),
+                Err(e) => set_dialog_error.set(Some(e.message)),
             }
+            set_busy.set(false);
         });
     };
 
-    let delete_template_action = move |template_id: String, template_name: String| {
-        if web_sys::window()
-            .unwrap()
-            .confirm_with_message(&format!(
-                "Are you sure you want to delete template '{}'? This action cannot be undone.",
-                template_name
-            ))
-            .unwrap()
-        {
+    let delete_action = move |t: VmTemplate| {
+        if confirm(&format!(
+            "Delete template {}? Its disk image is removed; VMs already deployed from it as full clones keep working.",
+            t.name
+        )) {
+            set_notice.set(None);
             spawn_local(async move {
-                match delete_template(&template_id).await {
+                match delete_template(&t.id).await {
                     Ok(_) => {
+                        set_notice.set(Some((format!("Template {} deleted", t.name), None)));
                         load_templates();
-                        set_success_message.set(Some("Template deleted successfully".to_string()));
-                        set_timeout(
-                            move || set_success_message.set(None),
-                            std::time::Duration::from_secs(3),
-                        );
                     }
-                    Err(e) => set_error.set(Some(format!("Failed to delete template: {}", e))),
+                    Err(e) => set_error.set(Some(format!(
+                        "Deleting template {} failed: {}",
+                        t.name, e.message
+                    ))),
                 }
             });
         }
     };
 
-    let start_clone = move |template: VmTemplate| {
-        set_selected_template.set(Some(template.clone()));
-        set_clone_name.set(format!("{}-clone", template.name));
+    let open_clone = move |t: VmTemplate| {
+        set_clone_name.set(format!("{}-vm", t.name));
         set_clone_mode.set("full".to_string());
-        set_show_clone_modal.set(true);
+        set_dialog_error.set(None);
+        set_selected_template.set(Some(t));
     };
 
-    let clone_template_action = move || {
-        if let Some(template) = selected_template.get() {
-            let template_id = template.id.clone();
-            let new_name = clone_name.get();
-            let mode = clone_mode.get();
-
-            spawn_local(async move {
-                match clone_template(&template_id, new_name.clone(), &mode).await {
-                    Ok(_) => {
-                        set_show_clone_modal.set(false);
-                        reset_form();
-                        set_success_message.set(Some(format!(
-                            "Template cloned as '{}' successfully",
-                            new_name
-                        )));
-                        set_timeout(
-                            move || set_success_message.set(None),
-                            std::time::Duration::from_secs(3),
-                        );
-                    }
-                    Err(e) => set_error.set(Some(format!("Failed to clone template: {}", e))),
+    let submit_clone = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let Some(t) = selected_template.get() else {
+            return;
+        };
+        let name = clone_name.get().trim().to_string();
+        if name.is_empty() {
+            set_dialog_error.set(Some("The new VM needs a name".into()));
+            return;
+        }
+        let mode = clone_mode.get();
+        set_busy.set(true);
+        spawn_local(async move {
+            match clone_template(&t.id, name.clone(), &mode).await {
+                Ok(v) => {
+                    set_selected_template.set(None);
+                    let link = v["new_vm_id"].as_str().map(|id| format!("/vms/{id}"));
+                    set_notice.set(Some((
+                        format!("VM {name} created from template {}", t.name),
+                        link,
+                    )));
+                    load_vms();
                 }
-            });
-        }
-    };
-
-    let format_bytes = move |bytes: u64| {
-        if bytes < 1024 {
-            format!("{} B", bytes)
-        } else if bytes < 1024 * 1024 {
-            format!("{:.1} KB", bytes as f64 / 1024.0)
-        } else if bytes < 1024 * 1024 * 1024 {
-            format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-        } else {
-            format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-        }
-    };
-
-    let get_vm_name = move |vm_id: &str| -> String {
-        vms.get()
-            .iter()
-            .find(|vm| vm.id == vm_id)
-            .map(|vm| vm.name.clone())
-            .unwrap_or_else(|| vm_id.to_string())
+                Err(e) => set_dialog_error.set(Some(e.message)),
+            }
+            set_busy.set(false);
+        });
     };
 
     view! {
-        <div class="p-6">
-            <div class="flex justify-between items-center mb-6">
-                <div>
-                    <h1 class="text-2xl font-bold">VM Templates</h1>
-                    <p class="text-gray-600">
-                        "Create and manage virtual machine templates for rapid deployment"
-                    </p>
-                </div>
-                <div class="flex space-x-3">
-                    <button
-                        on:click=move |_| load_templates()
-                        class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg"
-                    >
-                        <i class="fas fa-sync mr-2"></i>
-                        "Refresh"
-                    </button>
-                    <button
-                        on:click=move |_| {
-                            reset_form();
-                            set_show_create_modal.set(true);
-                        }
-                        class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-                    >
-                        <i class="fas fa-plus"></i>
-                        "Create Template"
-                    </button>
+        <div class="template-manager">
+            <div class="page-header">
+                <h1>"VM Templates"</h1>
+                <div class="header-actions actions">
+                    <a class="btn btn-secondary" href="/clones">"Clone jobs"</a>
+                    <button id="template-create-btn" class="btn btn-primary"
+                        on:click=move |_| open_create(String::new())>"Create Template"</button>
                 </div>
             </div>
+            <p class="hint">
+                "A template is a stopped VM's disk and hardware saved as a base for new VMs. "
+                "Deploy it as a full clone (independent copy) or a linked clone (stores only its own changes)."
+            </p>
 
-            // Success message
-            {move || success_message.get().map(|msg| view! {
-                <div class="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded mb-6">
-                    <i class="fas fa-check-circle mr-2"></i>
+            {move || notice.get().map(|(msg, link)| view! {
+                <div class="alert alert-success" id="template-notice">
                     {msg}
+                    {link.map(|href| view! { " " <a href=href id="template-notice-link">"Open the VM"</a> })}
                 </div>
             })}
+            {move || error.get().map(|e| view! { <div class="alert alert-error" id="template-error">{e}</div> })}
 
-            // Error display
-            {move || error.get().map(|e| view! {
-                <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-6">
-                    <i class="fas fa-exclamation-triangle mr-2"></i>
-                    {e}
-                </div>
-            })}
-
-            // Template Info Card
-            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                <h3 class="text-lg font-medium text-blue-900 mb-2">
-                    <i class="fas fa-info-circle mr-2"></i>
-                    "About VM Templates"
-                </h3>
-                <div class="text-sm text-blue-800 space-y-2">
-                    <p>
-                        <strong>"Templates"</strong>
-                        " are pre-configured virtual machine images that can be used to quickly deploy new VMs with identical configurations."
-                    </p>
-                    <ul class="list-disc list-inside ml-4 space-y-1">
-                        <li>"Create templates from existing VMs to standardize deployments"</li>
-                        <li>"Clone templates to create new VMs with the same configuration"</li>
-                        <li>"Templates include the complete VM disk image and configuration"</li>
-                        <li>"Use templates for development environments, testing, or production standardization"</li>
-                    </ul>
-                </div>
+            <div class="form-group" style="max-width:32rem">
+                <label for="template-search">"Search"</label>
+                <input id="template-search" type="search" placeholder="Name, description or source VM"
+                    on:input=move |ev| set_search_query.set(event_target_value(&ev))/>
             </div>
 
-            // Search and Controls
-            <div class="bg-white rounded-lg shadow p-4 mb-6">
-                <div class="flex items-center space-x-4">
-                    <div class="flex-1">
-                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                            "Search Templates"
-                        </label>
-                        <input
-                            type="text"
-                            placeholder="Search by name, description, or source VM..."
-                            on:input=move |ev| set_search_query.set(event_target_value(&ev))
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                        />
-                    </div>
-                    <div class="text-sm text-gray-600">
-                        {move || {
-                            let filtered = filtered_templates();
-                            let total = templates.get().len();
-                            if filtered.len() == total {
-                                format!("{} templates", total)
-                            } else {
-                                format!("{} of {} templates", filtered.len(), total)
-                            }
-                        }}
-                    </div>
-                </div>
-            </div>
-
-            // Templates Grid
-            {move || if loading.get() {
-                view! {
-                    <div class="bg-white rounded-lg shadow p-8 text-center">
-                        <i class="fas fa-spinner fa-spin text-2xl text-gray-400 mb-2"></i>
-                        <p class="text-gray-600">"Loading templates..."</p>
-                    </div>
-                }
-            } else if filtered_templates().is_empty() {
-                if templates.get().is_empty() {
+            {move || {
+                let list = filtered();
+                let total = templates.with(|t| t.len());
+                if !loaded.get() {
+                    view! { <p class="loading">"Loading templates..."</p> }.into_view()
+                } else if total == 0 {
                     view! {
-                        <div class="bg-white rounded-lg shadow p-8 text-center">
-                            <i class="fas fa-file-archive text-6xl text-gray-300 mb-4"></i>
-                            <h3 class="text-xl font-medium text-gray-900 mb-2">"No Templates Found"</h3>
-                            <p class="text-gray-600 mb-6">
-                                "Create your first VM template to enable rapid virtual machine deployment"
-                            </p>
-                            <button
-                                on:click=move |_| {
-                                    reset_form();
-                                    set_show_create_modal.set(true);
-                                }
-                                class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg"
-                            >
-                                <i class="fas fa-plus mr-2"></i>
-                                "Create First Template"
-                            </button>
+                        <div class="no-data empty-state" id="templates-empty">
+                            <p>"No templates yet."</p>
+                            <p>"Shut down a VM that is set up the way new VMs should start, then make a template of it."</p>
+                            <button class="btn btn-primary" on:click=move |_| open_create(String::new())>"Create Template"</button>
                         </div>
-                    }
+                    }.into_view()
                 } else {
                     view! {
-                        <div class="bg-white rounded-lg shadow p-8 text-center">
-                            <i class="fas fa-search text-4xl text-gray-300 mb-4"></i>
-                            <h3 class="text-lg font-medium text-gray-900 mb-2">"No Templates Found"</h3>
-                            <p class="text-gray-600">"No templates match your search criteria"</p>
-                        </div>
-                    }
-                }
-            } else {
-                view! {
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {filtered_templates().into_iter().map(|template| {
-                            let template_id = template.id.clone();
-                            let template_name = template.name.clone();
-                            let template_name2 = template.name.clone();
-                            let template_clone = template.clone();
-                            let template_desc = template.description.clone();
-                            let source_vm_name = get_vm_name(&template.source_vm_id);
-                            let size = if template.virtual_size_bytes > 0 {
-                                format!(
-                                    "{} on disk / {} virtual",
-                                    format_bytes(template.size_bytes),
-                                    format_bytes(template.virtual_size_bytes)
-                                )
-                            } else {
-                                format_bytes(template.size_bytes)
-                            };
-                            let created_at = template.created_at.clone();
-                            let storage_location = template.storage_location.clone();
-                            let card_id = template.id.clone();
-
-                            view! {
-                                <div class="bg-white rounded-lg shadow hover:shadow-lg transition-shadow template-card" data-template-id=card_id>
-                                    <div class="p-6">
-                                        <div class="flex items-start justify-between mb-4">
-                                            <div class="flex-1">
-                                                <h3 class="text-lg font-medium text-gray-900 mb-1">{template_name}</h3>
-                                                {template_desc.map(|desc| view! {
-                                                    <p class="text-sm text-gray-600 mb-2 line-clamp-2">{desc}</p>
-                                                })}
-                                            </div>
-                                            <i class="fas fa-file-archive text-2xl text-purple-500"></i>
-                                        </div>
-
-                                        <div class="space-y-2 text-sm text-gray-600">
-                                            <div class="flex items-center">
-                                                <i class="fas fa-server w-4 mr-2 text-gray-400"></i>
-                                                <span class="font-medium">"Source VM: "</span>
-                                                <span class="ml-1">{source_vm_name}</span>
-                                            </div>
-                                            <div class="flex items-center">
-                                                <i class="fas fa-hdd w-4 mr-2 text-gray-400"></i>
-                                                <span class="font-medium">"Size: "</span>
-                                                <span class="ml-1 template-size">{size}</span>
-                                            </div>
-                                            <div class="flex items-center">
-                                                <i class="fas fa-calendar w-4 mr-2 text-gray-400"></i>
-                                                <span class="font-medium">"Created: "</span>
-                                                <span class="ml-1">{created_at}</span>
-                                            </div>
-                                            <div class="flex items-center">
-                                                <i class="fas fa-folder w-4 mr-2 text-gray-400"></i>
-                                                <span class="font-medium">"Location: "</span>
-                                                <span class="ml-1 font-mono text-xs">{storage_location}</span>
-                                            </div>
-                                        </div>
-
-                                        <div class="mt-6 flex space-x-2">
-                                            <button
-                                                on:click=move |_| start_clone(template_clone.clone())
-                                                class="flex-1 bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded text-sm"
-                                            >
-                                                <i class="fas fa-copy mr-1"></i>
-                                                "Clone"
-                                            </button>
-                                            <button
-                                                on:click=move |_| delete_template_action(template_id.clone(), template_name2.clone())
-                                                class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded text-sm"
-                                                title="Delete Template"
-                                            >
-                                                <i class="fas fa-trash"></i>
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
+                        <p class="hint" id="template-count">{count_label(list.len(), total)}</p>
+                        <table class="data-table" id="template-table">
+                            <thead>
+                                <tr>
+                                    <th>"Name"</th>
+                                    <th>"Source VM"</th>
+                                    <th>"Hardware"</th>
+                                    <th>"Disk"</th>
+                                    <th>"Created"</th>
+                                    <th>"Actions"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {list.into_iter().map(|t| {
+                                    let t_clone = t.clone();
+                                    let t_delete = t.clone();
+                                    let src = t.source_vm_id.clone();
+                                    let src_label = vm_name(&src);
+                                    let src_exists = vms.with(|v| v.iter().any(|x| x.id == src));
+                                    let disk = if t.virtual_size_bytes > 0 {
+                                        format!(
+                                            "{} ({} used)",
+                                            crate::api::human_bytes(t.virtual_size_bytes),
+                                            crate::api::human_bytes(t.size_bytes)
+                                        )
+                                    } else {
+                                        crate::api::human_bytes(t.size_bytes)
+                                    };
+                                    let hw = format!(
+                                        "{} vCPU, {} MB",
+                                        t.config["cpus"].as_u64().unwrap_or(0),
+                                        t.config["memory"].as_u64().unwrap_or(0)
+                                    );
+                                    view! {
+                                        <tr class="template-row" data-template-id=t.id.clone() data-template-name=t.name.clone()>
+                                            <td title=t.storage_location.clone()>
+                                                <strong>{t.name.clone()}</strong>
+                                                {t.description.clone().map(|d| view! { <div class="hint">{d}</div> })}
+                                            </td>
+                                            <td>{if src_exists {
+                                                view! { <a href=format!("/vms/{src}")>{src_label}</a> }.into_view()
+                                            } else {
+                                                view! { <span class="hint">{src_label} " (deleted)"</span> }.into_view()
+                                            }}</td>
+                                            <td>{hw}</td>
+                                            <td class="template-size">{disk}</td>
+                                            <td>{t.created_at.clone()}</td>
+                                            <td class="actions">
+                                                <button class="btn btn-sm btn-primary template-deploy"
+                                                    title="Create a new VM from this template"
+                                                    on:click=move |_| open_clone(t_clone.clone())>"New VM"</button>
+                                                <button class="btn btn-sm btn-danger template-delete"
+                                                    title="Delete this template"
+                                                    on:click=move |_| delete_action(t_delete.clone())>"Delete"</button>
+                                            </td>
+                                        </tr>
+                                    }
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                    }.into_view()
                 }
             }}
 
-            // Create Template Modal
-            {move || if show_create_modal.get() {
-                view! {
-                    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                        <div class="bg-white rounded-lg w-full max-w-lg">
-                            <div class="p-6 border-b border-gray-200">
-                                <h2 class="text-xl font-semibold">"Create VM Template"</h2>
-                            </div>
-
-                            <div class="p-6 space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">
-                                        "Template Name"
-                                    </label>
-                                    <input
-                                        type="text"
-                                        placeholder="ubuntu-22.04-template"
-                                        prop:value=move || template_name.get()
-                                        on:input=move |ev| set_template_name.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                                    />
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">
-                                        "Source Virtual Machine"
-                                    </label>
-                                    <select
-                                        on:change=move |ev| set_source_vm_id.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                                    >
-                                        <option value="">"Select a VM to template..."</option>
+            // Create Template dialog
+            {move || show_create.get().then(|| view! {
+                <div class="modal-overlay" id="template-create-dialog">
+                    <div class="modal-content">
+                        <form on:submit=submit_create>
+                            <div class="modal-header"><h2>"Create Template"</h2></div>
+                            <div class="modal-body">
+                                {move || dialog_error.get().map(|e| view! { <div class="alert alert-error" id="template-create-error">{e}</div> })}
+                                <div class="form-group">
+                                    <label for="template-source-vm">"From VM"</label>
+                                    <select id="template-source-vm"
+                                        on:change=move |ev| set_source_vm_id.set(event_target_value(&ev))>
+                                        <option value="" selected=move || source_vm_id.get().is_empty()>"Choose a stopped VM..."</option>
                                         {move || vms.get().into_iter().map(|vm| {
-                                            let vm_id = vm.id.clone();
-                                            let vm_display = format!("{} ({}) - {:?}", vm.name, vm.id, vm.status);
+                                            let blocker = template_blocker(&vm);
+                                            let id = vm.id.clone();
+                                            let label = match blocker {
+                                                Some(why) => format!("{} ({})", vm.name, why),
+                                                None => vm.name.clone(),
+                                            };
                                             view! {
-                                                <option value={vm_id}>{vm_display}</option>
+                                                <option value=vm.id.clone() disabled=blocker.is_some()
+                                                    selected=move || source_vm_id.get() == id>{label}</option>
                                             }
-                                        }).collect::<Vec<_>>()}
+                                        }).collect_view()}
                                     </select>
-                                    <p class="text-xs text-gray-500 mt-1">
-                                        "Note: The VM will be stopped during template creation"
-                                    </p>
+                                    <p class="hint">"The VM is not changed; its disk is copied into the template."</p>
                                 </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">
-                                        "Description"
-                                    </label>
-                                    <textarea
-                                        placeholder="Describe this template and its intended use..."
-                                        prop:value=move || template_description.get()
-                                        on:input=move |ev| set_template_description.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                                        rows="3"
-                                    />
+                                <div class="form-group">
+                                    <label for="template-name">"Template name"</label>
+                                    <input id="template-name" type="text" required placeholder="debian-13-base"
+                                        prop:value=template_name
+                                        on:input=move |ev| set_template_name.set(event_target_value(&ev))/>
                                 </div>
-
-                                <div class="bg-yellow-50 border border-yellow-200 rounded p-3">
-                                    <div class="flex items-start">
-                                        <i class="fas fa-exclamation-triangle text-yellow-600 mt-1 mr-2"></i>
-                                        <div class="text-sm text-yellow-800">
-                                            <p class="font-medium">"Important Notes:"</p>
-                                            <ul class="list-disc list-inside mt-1 space-y-1">
-                                                <li>"The source VM will be temporarily stopped during template creation"</li>
-                                                <li>"Template creation may take several minutes depending on VM size"</li>
-                                                <li>"Ensure the source VM is in a clean, deployable state"</li>
-                                            </ul>
-                                        </div>
-                                    </div>
+                                <div class="form-group">
+                                    <label for="template-description">"Description"</label>
+                                    <input id="template-description" type="text"
+                                        prop:value=template_description
+                                        on:input=move |ev| set_template_description.set(event_target_value(&ev))/>
                                 </div>
                             </div>
-
-                            <div class="p-6 border-t border-gray-200 flex justify-end space-x-3">
-                                <button
-                                    on:click=move |_| set_show_create_modal.set(false)
-                                    class="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
-                                >
-                                    "Cancel"
-                                </button>
-                                <button
-                                    on:click=move |_| create_template()
-                                    class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
-                                    disabled=move || template_name.get().is_empty() || source_vm_id.get().is_empty()
-                                >
-                                    "Create Template"
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary"
+                                    on:click=move |_| set_show_create.set(false)>"Cancel"</button>
+                                <button id="template-create-submit" type="submit" class="btn btn-primary" disabled=busy>
+                                    {move || if busy.get() { "Creating..." } else { "Create Template" }}
                                 </button>
                             </div>
-                        </div>
+                        </form>
                     </div>
-                }
-            } else {
-                view! { <div></div> }
-            }}
+                </div>
+            })}
 
-            // Clone Template Modal
-            {move || if show_clone_modal.get() {
-                view! {
-                    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                        <div class="bg-white rounded-lg w-full max-w-md">
-                            <div class="p-6 border-b border-gray-200">
-                                <h2 class="text-xl font-semibold">"Clone Template"</h2>
-                            </div>
-
-                            <div class="p-6 space-y-4">
-                                {move || selected_template.get().map(|template| view! {
-                                    <div class="bg-gray-50 rounded-lg p-4 mb-4">
-                                        <div class="text-sm">
-                                            <div class="font-medium text-gray-900">"Source Template:"</div>
-                                            <div class="text-gray-600">{&template.name}</div>
-                                            {template.description.as_ref().map(|desc| view! {
-                                                <div class="text-xs text-gray-500 mt-1">{desc}</div>
-                                            })}
-                                        </div>
-                                    </div>
-                                })}
-
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">
-                                        "New VM Name"
-                                    </label>
-                                    <input
-                                        id="template-clone-name"
-                                        type="text"
-                                        placeholder="new-vm-name"
-                                        prop:value=move || clone_name.get()
-                                        on:input=move |ev| set_clone_name.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                                    />
-                                    <p class="text-xs text-gray-500 mt-1">
-                                        "This will create a new VM from the template"
-                                    </p>
+            // New VM from template dialog
+            {move || selected_template.get().map(|t| view! {
+                <div class="modal-overlay" id="template-clone-dialog">
+                    <div class="modal-content">
+                        <form on:submit=submit_clone>
+                            <div class="modal-header"><h2>{format!("New VM from {}", t.name)}</h2></div>
+                            <div class="modal-body">
+                                {move || dialog_error.get().map(|e| view! { <div class="alert alert-error" id="template-clone-error">{e}</div> })}
+                                <div class="form-group">
+                                    <label for="template-clone-name">"VM name"</label>
+                                    <input id="template-clone-name" type="text" required
+                                        prop:value=clone_name
+                                        on:input=move |ev| set_clone_name.set(event_target_value(&ev))/>
                                 </div>
-
-                                <div>
-                                    <label for="template-clone-mode" class="block text-sm font-medium text-gray-700 mb-1">
-                                        "Mode"
-                                    </label>
-                                    <select id="template-clone-mode" prop:value=move || clone_mode.get()
-                                        on:change=move |ev| set_clone_mode.set(event_target_value(&ev))
-                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg">
-                                        <option value="full">"Full clone (independent copy of the template disk)"</option>
-                                        <option value="linked">"Linked clone (qcow2 overlay on the template disk)"</option>
+                                <div class="form-group">
+                                    <label for="template-clone-mode">"Mode"</label>
+                                    <select id="template-clone-mode"
+                                        on:change=move |ev| set_clone_mode.set(event_target_value(&ev))>
+                                        <option value="full" selected=move || clone_mode.get() == "full">"Full clone (independent copy of the template disk)"</option>
+                                        <option value="linked" selected=move || clone_mode.get() == "linked">"Linked clone (stores only its own changes)"</option>
                                     </select>
                                     {move || (clone_mode.get() == "linked").then(|| view! {
-                                        <p class="text-xs text-gray-500 mt-1" id="template-clone-linked-help">
-                                            "A linked clone only stores its own changes and reads the rest from the template disk, so the template can't be deleted while the clone exists."
+                                        <p class="hint" id="template-clone-linked-help">
+                                            "A linked clone reads unchanged data from the template disk, so the template can't be deleted while the clone exists."
                                         </p>
                                     })}
                                 </div>
-
-                                <div class="bg-blue-50 border border-blue-200 rounded p-3">
-                                    <div class="flex items-start">
-                                        <i class="fas fa-info-circle text-blue-600 mt-1 mr-2"></i>
-                                        <div class="text-sm text-blue-800">
-                                            <p>"The new VM will be created with the same configuration as the template but can be modified independently."</p>
-                                        </div>
-                                    </div>
-                                </div>
                             </div>
-
-                            <div class="p-6 border-t border-gray-200 flex justify-end space-x-3">
-                                <button
-                                    on:click=move |_| set_show_clone_modal.set(false)
-                                    class="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
-                                >
-                                    "Cancel"
-                                </button>
-                                <button
-                                    id="template-clone-submit"
-                                    on:click=move |_| clone_template_action()
-                                    class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
-                                    disabled=move || clone_name.get().is_empty()
-                                >
-                                    "Clone Template"
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary"
+                                    on:click=move |_| set_selected_template.set(None)>"Cancel"</button>
+                                <button id="template-clone-submit" type="submit" class="btn btn-primary" disabled=busy>
+                                    {move || if busy.get() { "Creating..." } else { "Create VM" }}
                                 </button>
                             </div>
-                        </div>
+                        </form>
                     </div>
-                }
-            } else {
-                view! { <div></div> }
-            }}
+                </div>
+            })}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vm(status: VmStatus, disks: usize) -> VmConfig {
+        let mut v: VmConfig = serde_json::from_value(serde_json::json!({
+            "id": "v1", "name": "web", "hypervisor": "qemu", "memory": 512, "cpus": 1,
+            "disk_size": 1, "status": "stopped", "architecture": "x86_64"
+        }))
+        .unwrap();
+        v.status = status;
+        v.disks = (0..disks)
+            .map(|i| {
+                serde_json::from_value(serde_json::json!({
+                    "path": format!("/d{i}.qcow2"), "size_gb": 1, "disk_type": "virtio", "cache": ""
+                }))
+                .unwrap()
+            })
+            .collect();
+        v
+    }
+
+    #[test]
+    fn only_stopped_vms_with_a_disk_become_templates() {
+        assert_eq!(template_blocker(&vm(VmStatus::Stopped, 1)), None);
+        assert!(template_blocker(&vm(VmStatus::Running, 1))
+            .unwrap()
+            .contains("shut it down"));
+        assert!(template_blocker(&vm(VmStatus::Paused, 1)).is_some());
+        assert_eq!(
+            template_blocker(&vm(VmStatus::Stopped, 0)),
+            Some("has no disk")
+        );
+    }
+
+    #[test]
+    fn counts_are_pluralised() {
+        assert_eq!(count_label(1, 1), "1 template");
+        assert_eq!(count_label(3, 3), "3 templates");
+        assert_eq!(count_label(1, 4), "1 of 4 templates");
+        assert_eq!(count_label(0, 1), "0 of 1 template");
     }
 }
