@@ -3268,5 +3268,7 @@ TCP peer; `X-Forwarded-For` is believed only from peers in
 
 `/api/security/*`: scan container images and containers for known vulnerabilities (Grype or
 Trivy), check the host against the Horcrux hardening baseline, apply and revert its automatic
-rules, download the compliance report. Reads need Sys.Audit, changes Sys.Modify. Full route
+rules, download the compliance report, run host intrusion detection (Linux audit) and file
+integrity (AIDE) checks and list their events (`/api/security/events`, `/api/security/ids`,
+`/api/security/integrity/*`). Reads need Sys.Audit, changes Sys.Modify. Full route
 list, settings and behaviour: [SECURITY-SUITE.md](SECURITY-SUITE.md).

@@ -434,6 +434,219 @@ impl HardeningSettings {
     }
 }
 
+/// Linux audit (auditd) settings: Horcrux's rule set and event collection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AuditSettings {
+    /// Load the Horcrux rule set, enable and start auditd, collect events.
+    pub enabled: bool,
+    /// Where the rule set is written (read by augenrules at boot on OpenRC
+    /// and systemd alike).
+    pub rules_file: String,
+    /// Extra files or directories watched for writes and attribute changes
+    /// (key `hx-watch`), on top of the built-in list.
+    pub extra_watch: Vec<String>,
+    /// Record kernel module loads and unloads.
+    pub watch_modules: bool,
+    /// Record changes of the system clock.
+    pub watch_time: bool,
+    /// Make the rule set immutable until the next boot (`-e 2`). Off by
+    /// default: turning the rules off again then needs a reboot.
+    pub immutable: bool,
+    /// Kernel audit backlog (`-b`).
+    pub backlog: u32,
+    /// Seconds between event collections (ausearch).
+    pub collect_secs: u32,
+    /// Send a `security` notification for these event kinds (see
+    /// `AUDIT_KINDS`); empty = none.
+    pub notify_kinds: Vec<String>,
+    /// Manage the auditd service (enable + start). Off when another tool
+    /// owns auditd; the rule file is still written and loaded.
+    pub manage_service: bool,
+}
+
+/// Event kinds of the audit rule set (the audit key without `hx-`).
+pub const AUDIT_KINDS: &[&str] = &[
+    "login", "auth", "sudo", "identity", "sshd", "horcrux", "binaries", "modules", "time", "watch",
+];
+
+impl Default for AuditSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            rules_file: "/etc/audit/rules.d/50-horcrux.rules".into(),
+            extra_watch: Vec::new(),
+            watch_modules: true,
+            watch_time: true,
+            immutable: false,
+            backlog: 8192,
+            collect_secs: 60,
+            notify_kinds: vec![
+                "identity".into(),
+                "sshd".into(),
+                "binaries".into(),
+                "modules".into(),
+            ],
+            manage_service: true,
+        }
+    }
+}
+
+impl AuditSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.rules_file.starts_with("/etc/audit/rules.d/")
+            || !self.rules_file.ends_with(".rules")
+            || self.rules_file.contains("..")
+        {
+            return Err("audit.rules_file: a /etc/audit/rules.d/*.rules path".into());
+        }
+        for p in &self.extra_watch {
+            if !p.starts_with('/') || p.contains(char::is_whitespace) || p.contains("..") {
+                return Err(format!(
+                    "audit.extra_watch: {p:?} is not an absolute path without spaces"
+                ));
+            }
+        }
+        if !(64..=1_048_576).contains(&self.backlog) {
+            return Err("audit.backlog: 64-1048576".into());
+        }
+        if !(10..=86_400).contains(&self.collect_secs) {
+            return Err("audit.collect_secs: 10-86400".into());
+        }
+        for k in &self.notify_kinds {
+            if !AUDIT_KINDS.contains(&k.as_str()) {
+                return Err(format!(
+                    "audit.notify_kinds: {k:?} is not one of {}",
+                    AUDIT_KINDS.join(", ")
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// File integrity (AIDE) settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct IntegritySettings {
+    /// Scheduled checks and the Initialize action.
+    pub enabled: bool,
+    /// AIDE program; empty = `aide` from PATH.
+    pub aide_path: String,
+    /// Directories whose files are recorded (content hash, owner, mode, ...).
+    pub paths: Vec<String>,
+    /// Paths left out (regular expressions are escaped; a path excludes
+    /// everything below it). VM disks, container and data dirs belong here.
+    pub exclude: Vec<String>,
+    /// Database directory. Empty = `<data_dir>/security/aide`.
+    pub db_dir: String,
+    /// Hours between scheduled checks; 0 = only on demand.
+    pub schedule_hours: u32,
+    /// CPU niceness of AIDE (0-19); IO runs idle-class.
+    pub nice: u8,
+    /// A run that takes longer is stopped.
+    pub timeout_secs: u32,
+    /// A check with differences sends a `security` notification.
+    pub notify: bool,
+    /// Per-file events recorded per check (the rest are counted in the
+    /// summary event).
+    pub max_file_events: u32,
+}
+
+impl Default for IntegritySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            aide_path: String::new(),
+            paths: vec!["/usr".into(), "/etc".into(), "/boot".into()],
+            exclude: vec![
+                "/usr/src".into(),
+                "/usr/portage".into(),
+                "/usr/share/man".into(),
+                "/usr/share/doc".into(),
+                "/etc/mtab".into(),
+                "/etc/adjtime".into(),
+                "/etc/resolv.conf".into(),
+                "/etc/ld.so.cache".into(),
+                "/etc/horcrux/state".into(),
+                "/var/lib/horcrux".into(),
+                "/var/lib/libvirt".into(),
+                "/var/lib/lxc".into(),
+                "/var/lib/incus".into(),
+                "/var/lib/containers".into(),
+                "/var/lib/docker".into(),
+            ],
+            db_dir: String::new(),
+            schedule_hours: 24,
+            nice: 19,
+            timeout_secs: 7200,
+            notify: true,
+            max_file_events: 200,
+        }
+    }
+}
+
+impl IntegritySettings {
+    pub fn program(&self) -> String {
+        if self.aide_path.trim().is_empty() {
+            "aide".into()
+        } else {
+            self.aide_path.trim().to_string()
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.paths.is_empty() {
+            return Err("integrity.paths: at least one directory".into());
+        }
+        for (what, list) in [
+            ("integrity.paths", &self.paths),
+            ("integrity.exclude", &self.exclude),
+        ] {
+            for p in list {
+                if !p.starts_with('/') || p.contains(char::is_whitespace) || p.contains("..") {
+                    return Err(format!(
+                        "{what}: {p:?} is not an absolute path without spaces"
+                    ));
+                }
+            }
+        }
+        if !self.db_dir.is_empty() && !self.db_dir.starts_with('/') {
+            return Err("integrity.db_dir: empty or an absolute path".into());
+        }
+        if self.aide_path.contains(char::is_whitespace) {
+            return Err("integrity.aide_path: one program path, no arguments".into());
+        }
+        if self.schedule_hours > 24 * 90 {
+            return Err("integrity.schedule_hours: 0 (off) to 2160".into());
+        }
+        if self.nice > 19 {
+            return Err("integrity.nice: 0-19".into());
+        }
+        if !(60..=86_400).contains(&self.timeout_secs) {
+            return Err("integrity.timeout_secs: 60-86400".into());
+        }
+        if self.max_file_events > 10_000 {
+            return Err("integrity.max_file_events: 0-10000".into());
+        }
+        Ok(())
+    }
+}
+
+/// Security event store settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct EventSettings {
+    /// Events kept (oldest removed first).
+    pub keep: u32,
+}
+
+impl Default for EventSettings {
+    fn default() -> Self {
+        Self { keep: 20_000 }
+    }
+}
+
 /// Node security settings (`GET/PUT /api/security/settings`, declarative
 /// `security:`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -441,13 +654,106 @@ impl HardeningSettings {
 pub struct SecuritySettings {
     pub vuln_scan: VulnScanSettings,
     pub hardening: HardeningSettings,
+    pub audit: AuditSettings,
+    pub integrity: IntegritySettings,
+    pub events: EventSettings,
 }
 
 impl SecuritySettings {
     pub fn validate(&self) -> Result<(), String> {
         self.vuln_scan.validate()?;
-        self.hardening.validate()
+        self.hardening.validate()?;
+        self.audit.validate()?;
+        self.integrity.validate()?;
+        if !(100..=10_000_000).contains(&self.events.keep) {
+            return Err("events.keep: 100-10000000".into());
+        }
+        Ok(())
     }
+}
+
+/// Where a security event came from.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum EventSource {
+    /// Linux audit (auditd / ausearch).
+    Audit,
+    /// File integrity check (AIDE).
+    Integrity,
+}
+
+impl EventSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EventSource::Audit => "audit",
+            EventSource::Integrity => "integrity",
+        }
+    }
+}
+
+/// One intrusion-detection or integrity finding (`GET /api/security/events`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct SecurityEvent {
+    pub id: String,
+    /// Unix seconds.
+    pub at: i64,
+    pub source: Option<EventSource>,
+    /// Audit: the rule kind (`identity`, `sudo`, ...) or the record type for
+    /// PAM events (`login`, `auth`); integrity: `added`, `removed`,
+    /// `changed` or `summary`.
+    pub kind: String,
+    pub severity: Option<Severity>,
+    /// One line for lists.
+    pub summary: String,
+    /// The account that acted (audit: login uid, interpreted).
+    pub user: String,
+    /// File or object involved.
+    pub path: String,
+    /// Program that acted.
+    pub exe: String,
+    /// Remote address (logins).
+    pub addr: String,
+    /// `success` / `failed` (audit), empty otherwise.
+    pub result: String,
+    /// Scanner detail: audit serial / record type, AIDE attribute diff.
+    pub detail: String,
+}
+
+/// `GET /api/security/ids`: state of audit and integrity on this node.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct IdsStatus {
+    pub audit_enabled: bool,
+    /// auditctl/auditd/ausearch are installed.
+    pub audit_installed: bool,
+    pub auditd_running: bool,
+    /// Rules with a `hx-` key are loaded in the kernel.
+    pub audit_rules_loaded: u32,
+    #[serde(default)]
+    pub audit_last_collect: Option<i64>,
+    #[serde(default)]
+    pub audit_error: Option<String>,
+    pub integrity_enabled: bool,
+    pub aide_installed: bool,
+    #[serde(default)]
+    pub aide_version: String,
+    /// A baseline database exists.
+    pub integrity_initialized: bool,
+    #[serde(default)]
+    pub integrity_initialized_at: Option<i64>,
+    /// `init`, `check` or `update` while one runs.
+    #[serde(default)]
+    pub integrity_running: Option<String>,
+    #[serde(default)]
+    pub integrity_last_check: Option<i64>,
+    /// Differences found by the last check (added + removed + changed).
+    #[serde(default)]
+    pub integrity_last_differences: Option<u32>,
+    #[serde(default)]
+    pub integrity_error: Option<String>,
+    pub events_total: u32,
+    pub events_24h: u32,
 }
 
 /// Result of one hardening rule.
@@ -607,6 +913,37 @@ mod tests {
         s.vuln_scan.notify_min_severity = "none".into();
         assert!(s.validate().is_ok());
         assert!(s.vuln_scan.notify_threshold().is_none());
+    }
+
+    #[test]
+    fn ids_settings_defaults_and_refusals() {
+        let s = SecuritySettings::default();
+        assert!(!s.audit.enabled && !s.integrity.enabled);
+        assert_eq!(s.integrity.paths, ["/usr", "/etc", "/boot"]);
+        assert!(s.integrity.exclude.iter().any(|p| p == "/var/lib/horcrux"));
+        assert_eq!(s.integrity.program(), "aide");
+        let mut b = s.clone();
+        b.audit.rules_file = "/etc/passwd".into();
+        assert!(b.validate().is_err());
+        let mut b = s.clone();
+        b.audit.notify_kinds = vec!["everything".into()];
+        assert!(b.validate().is_err());
+        let mut b = s.clone();
+        b.audit.extra_watch = vec!["relative/path".into()];
+        assert!(b.validate().is_err());
+        let mut b = s.clone();
+        b.integrity.paths = vec![];
+        assert!(b.validate().is_err());
+        let mut b = s.clone();
+        b.integrity.exclude = vec!["/a b".into()];
+        assert!(b.validate().is_err());
+        let mut b = s.clone();
+        b.events.keep = 1;
+        assert!(b.validate().is_err());
+        // Old settings without the new sections still load.
+        let old: SecuritySettings = serde_json::from_str(r#"{"hardening":{}}"#).unwrap();
+        assert_eq!(old.audit, AuditSettings::default());
+        assert_eq!(old.integrity.max_file_events, 200);
     }
 
     #[test]

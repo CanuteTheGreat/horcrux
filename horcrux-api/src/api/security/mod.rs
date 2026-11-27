@@ -13,6 +13,8 @@
 //!
 //! Reads need Sys.Audit, changes Sys.Modify (privileges.rs area `security`).
 pub mod hardening;
+pub mod ids;
+pub mod ids_api;
 pub mod vulnscan;
 
 use super::system_admin::{data_dir, run, which};
@@ -51,6 +53,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/security/hardening/report", get(hardening_report))
         .route("/api/security/hardening/apply", post(hardening_apply))
         .route("/api/security/hardening/revert", post(hardening_revert))
+        .merge(ids_api::routes())
 }
 
 // ------------------------------------------------------------ settings
@@ -77,13 +80,29 @@ pub async fn load_settings(state: &AppState) -> SecuritySettings {
     s
 }
 
-/// Validate and store (API and declarative apply).
+/// Validate and store (declarative apply).
 pub async fn set_settings(state: &AppState, s: SecuritySettings) -> Result<(), String> {
-    s.validate()?;
+    store_settings(state, s).await.map_err(|e| match e {
+        ApiError::NotAvailable { message, hint, .. } => format!("{message} {hint}"),
+        ApiError::BadRequest(m)
+        | ApiError::Conflict(m)
+        | ApiError::Internal(m)
+        | ApiError::NotFound(m) => m,
+        other => format!("{other:?}"),
+    })
+}
+
+/// Validate, apply what changes the host (audit rules), then store.
+pub async fn store_settings(state: &AppState, s: SecuritySettings) -> Result<(), ApiError> {
+    s.validate().map_err(ApiError::BadRequest)?;
+    let old = load_settings(state).await;
+    if old.audit != s.audit {
+        ids_api::apply_audit(&old.audit, &s.audit).await?;
+    }
     crate::db::config_store::ConfigStore::new(&state.database)
         .put(SETTINGS_KIND, "default", &s)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     if let Ok(mut c) = cell().lock() {
         *c = Some(s);
     }
@@ -98,9 +117,7 @@ async fn put_settings(
     State(state): State<Arc<AppState>>,
     Json(s): Json<SecuritySettings>,
 ) -> Result<Json<SecuritySettings>, ApiError> {
-    set_settings(&state, s.clone())
-        .await
-        .map_err(ApiError::BadRequest)?;
+    store_settings(&state, s.clone()).await?;
     Ok(Json(s))
 }
 
@@ -491,7 +508,7 @@ async fn delete_scan(Path(id): Path<String>) -> Result<StatusCode, ApiError> {
 
 // ------------------------------------------------------------ hardening
 
-async fn facts() -> hardening::Facts {
+async fn facts(state: &AppState) -> hardening::Facts {
     let sshd = if which("sshd").is_some() {
         run("sshd", &["-T"])
             .await
@@ -532,7 +549,11 @@ async fn facts() -> hardening::Facts {
             }
         }
     }
+    let (audit_installed, auditd_running, audit_rules) = ids_api::audit_facts().await;
+    let (aide_installed, integrity_active) = ids_api::integrity_facts(state).await;
     hardening::Facts {
+        audit: audit_installed.then_some(auditd_running && audit_rules > 0),
+        integrity: aide_installed.then_some(integrity_active),
         sshd,
         firewall_tables,
         access_log: horcrux_core::config::HorcruxConfig::load()
@@ -551,7 +572,7 @@ fn last_report() -> &'static Mutex<Option<HardeningReport>> {
 /// Evaluate the baseline now (and remember it for the overview).
 pub async fn check_now(state: &AppState) -> HardeningReport {
     let s = load_settings(state).await;
-    let f = facts().await;
+    let f = facts(state).await;
     let st = hardening::load_state(&data_dir());
     let r = hardening::evaluate(
         &s.hardening,
@@ -706,6 +727,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Json<SecurityOverview> 
 /// Periodic scans and baseline checks. Due times follow the newest scan /
 /// check on record, so a restart does not rescan everything at once.
 pub fn spawn_scheduler(state: Arc<AppState>) {
+    ids_api::spawn(state.clone());
     tokio::spawn(async move {
         // Let the node finish starting before the first look.
         tokio::time::sleep(Duration::from_secs(120)).await;

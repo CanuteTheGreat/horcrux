@@ -1,6 +1,6 @@
-# Security: vulnerability scans and the hardening baseline
+# Security: vulnerability scans, hardening, intrusion detection and file integrity
 
-Security (System menu > Security, or `/security`) has four pages:
+Security (System menu > Security, or `/security`) has five pages:
 
 - **Overview**: critical and high findings across the newest scan of each target, how many
   targets have been scanned, and the node's hardening score. Every number links to the list
@@ -11,6 +11,8 @@ Security (System menu > Security, or `/security`) has four pages:
 - **Hardening**: the Horcrux baseline, checked live, with a score, per-rule status, what to do
   for each failing rule, **Apply baseline**, per-rule Apply and Revert, and a downloadable report
   (HTML for people, text, JSON for tools).
+- **Events**: intrusion detection (Linux audit) and file integrity (AIDE) findings, with the
+  Initialize / Check now / Accept current files buttons.
 - **Settings**: everything below, also settable as the declarative `security:` section.
 
 Design and the comparison with other platforms: [design/security-suite.md](design/security-suite.md).
@@ -93,6 +95,42 @@ security:
       kernel-aslr: "2"
 ```
 
+## Intrusion detection and file integrity (Security > Events)
+
+Two free tools watch the node itself:
+
+- **Linux audit (auditd).** Turn it on in Security > Settings > Intrusion detection. Horcrux
+  writes its rule set to `/etc/audit/rules.d/50-horcrux.rules`, loads it, and enables and
+  starts `auditd` (OpenRC or systemd). It records logins and failed logins, sudo/su use,
+  changes to `/etc/passwd`, `shadow`, `group`, `gshadow`, `sudoers`, `sshd_config`,
+  `/etc/horcrux` and the Horcrux programs, kernel module loads and clock changes, plus any
+  paths you add under "Also watch". Turning it off removes exactly these rules.
+- **File integrity (AIDE).** Turn it on in Security > Settings > File integrity, then press
+  **Initialize** on Security > Events: AIDE records a hash, owner and mode for every file
+  below `/usr`, `/etc` and `/boot` (VM disks, container and data directories are left out).
+  A check then runs every 24 hours at the lowest priority and reports what was added,
+  removed or changed. After updates you expect, press **Accept current files**.
+
+Security > Events lists both, newest first, with filters (source, severity, time, text).
+A user name opens that user's events, and "API audit log" opens what they did through the
+Horcrux API. Events of the kinds in `audit.notify_kinds` and integrity checks with
+differences send a `security` notification (Notifications > channels).
+
+Install the tools with USE `ids` on `app-emulation/horcrux` (Gentoo: `sys-process/audit`,
+`app-forensics/aide`) or the distribution's `auditd` and `aide` packages. Without them the
+page says what is missing. The hardening rules `svc-auditd` and `svc-integrity` pass once
+both are on.
+
+| Event kind | Source | From |
+|---|---|---|
+| `login`, `auth` | audit | PAM: logins (with address), failed authentications |
+| `sudo` | audit | sudo commands (with the command line), su/doas runs |
+| `identity` | audit | accounts, groups, shadow, sudoers, doas.conf, useradd/usermod records |
+| `sshd` | audit | sshd_config and sshd_config.d |
+| `horcrux`, `binaries` | audit | /etc/horcrux, the Horcrux programs |
+| `modules`, `time`, `watch` | audit | module loads, clock changes, your extra paths |
+| `added`, `removed`, `changed`, `summary`, `baseline` | integrity | AIDE |
+
 ## Settings reference
 
 `GET/PUT /api/security/settings`, declarative `security:` (`docs/design/declarative-config.md`).
@@ -120,6 +158,27 @@ security:
 | `hardening.sysctl_file` | `/etc/sysctl.d/60-horcrux-hardening.conf` | the managed drop-in |
 | `hardening.schedule_hours` | `24` | hours between scheduled checks; 0 = on demand only |
 | `hardening.notify_on_regression` | `true` | notify when a rule starts failing |
+| `audit.enabled` | `false` | load the rule set, run auditd, collect events |
+| `audit.rules_file` | `/etc/audit/rules.d/50-horcrux.rules` | the managed rule drop-in |
+| `audit.extra_watch` | `[]` | more files/directories watched for writes (kind `watch`) |
+| `audit.watch_modules` | `true` | record kernel module loads |
+| `audit.watch_time` | `true` | record clock changes |
+| `audit.immutable` | `false` | lock the rules until reboot (`-e 2`) |
+| `audit.backlog` | `8192` | kernel audit backlog |
+| `audit.collect_secs` | `60` | seconds between collections |
+| `audit.notify_kinds` | `identity, sshd, binaries, modules` | kinds that send a notification |
+| `audit.manage_service` | `true` | enable and start auditd |
+| `integrity.enabled` | `false` | scheduled checks and Initialize |
+| `integrity.aide_path` | empty | program; empty = `aide` in PATH |
+| `integrity.paths` | `/usr, /etc, /boot` | directories recorded |
+| `integrity.exclude` | VM, container and data dirs, volatile /etc files | paths left out |
+| `integrity.db_dir` | empty | database; empty = `<data_dir>/security/aide` |
+| `integrity.schedule_hours` | `24` | hours between checks; 0 = on demand only |
+| `integrity.nice` | `19` | CPU niceness (IO is idle class) |
+| `integrity.timeout_secs` | `7200` | a run that takes longer is stopped |
+| `integrity.notify` | `true` | notify when a check finds differences |
+| `integrity.max_file_events` | `200` | per-file events recorded per check |
+| `events.keep` | `20000` | security events kept |
 
 ## API
 
@@ -136,3 +195,7 @@ security:
 | `GET /api/security/hardening/report?format=html\|text\|json` | report download | Sys.Audit |
 | `POST /api/security/hardening/apply` `{rules?, dry_run?}` | apply the named (or every failing automatic) rule | Sys.Modify |
 | `POST /api/security/hardening/revert` `{rules?, dry_run?}` | revert the named (or every applied) rule | Sys.Modify |
+| `GET /api/security/ids` | audit and integrity state | Sys.Audit |
+| `GET /api/security/events?source=&kind=&severity=&user=&q=&since=&until=&limit=&offset=` | events, newest first (`{total, events}`) | Sys.Audit |
+| `POST /api/security/audit/collect` | take in new audit events now (424 `audit-disabled` / `auditd-missing`) | Sys.Modify |
+| `POST /api/security/integrity/init\|check\|accept` | run AIDE (202; 424 `integrity-disabled` / `aide-missing`; 409 no baseline or a run in progress) | Sys.Modify |

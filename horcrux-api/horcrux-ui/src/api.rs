@@ -7990,10 +7990,40 @@ pub async fn delete_boot_environment(path: &str) -> Result<(), ApiError> {
 // ============================================================================
 
 pub use horcrux_common::security::{
-    HardeningApplyRequest, HardeningApplyResult, HardeningReport, HardeningRuleResult, RuleStatus,
-    ScanRequest, ScanResult, ScanStatus, ScanSummary, ScanTarget, ScanTargetKind, SecurityOverview,
-    SecuritySettings, Severity, SeverityCounts,
+    EventSource, HardeningApplyRequest, HardeningApplyResult, HardeningReport, HardeningRuleResult,
+    IdsStatus, RuleStatus, ScanRequest, ScanResult, ScanStatus, ScanSummary, ScanTarget,
+    ScanTargetKind, SecurityEvent, SecurityOverview, SecuritySettings, Severity, SeverityCounts,
+    AUDIT_KINDS,
 };
+
+/// `GET /api/security/events` answer.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct SecurityEventPage {
+    pub total: usize,
+    pub events: Vec<SecurityEvent>,
+}
+
+pub async fn get_ids_status() -> Result<IdsStatus, ApiError> {
+    fetch_json("/security/ids").await
+}
+
+/// `query` is the URL query string without `?` (`source=audit&severity=high`).
+pub async fn list_security_events(query: &str) -> Result<SecurityEventPage, ApiError> {
+    fetch_json(&format!("/security/events?{query}")).await
+}
+
+/// `what` = `init`, `check` or `accept`.
+pub async fn integrity_action(what: &str) -> Result<(), ApiError> {
+    post_json_no_response(
+        &format!("/security/integrity/{what}"),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+pub async fn audit_collect_now() -> Result<serde_json::Value, ApiError> {
+    post_json("/security/audit/collect", &serde_json::json!({})).await
+}
 
 pub async fn get_security_overview() -> Result<SecurityOverview, ApiError> {
     fetch_json("/security/overview").await

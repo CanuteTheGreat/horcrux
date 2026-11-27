@@ -64,6 +64,10 @@ pub enum Check {
     AccessLog,
     /// A time-sync daemon is running.
     TimeSync,
+    /// auditd runs with the Horcrux rule set loaded.
+    AuditActive,
+    /// AIDE baseline recorded and checked on schedule.
+    IntegrityActive,
 }
 
 pub struct Rule {
@@ -335,15 +339,15 @@ pub static RULES: &[Rule] = &[
         rationale: "Without it there is no record of who used the management API from where.",
         remediation: "Set [access_log] enabled = true in /etc/horcrux/config.toml and restart horcrux-api.",
         reference: "Horcrux" },
-    Rule { id: "svc-auditd", category: "services", title: "The Linux audit daemon is installed",
-        severity: Severity::Low, check: Check::Present(&["auditd"]),
+    Rule { id: "svc-auditd", category: "services", title: "The Linux audit daemon records Horcrux's audit rules",
+        severity: Severity::Low, check: Check::AuditActive,
         rationale: "Kernel-level records of logins, privilege use and changes to system files.",
-        remediation: "emerge sys-process/audit and enable the auditd service on OpenRC (rc-update add auditd default) or systemd (systemctl enable --now auditd).",
+        remediation: "Install sys-process/audit (USE=ids on app-emulation/horcrux), then turn audit on in Security > Settings: Horcrux loads its rule set and enables auditd on OpenRC and systemd.",
         reference: "CIS 6.3.1" },
-    Rule { id: "svc-integrity", category: "services", title: "A file integrity checker is installed",
-        severity: Severity::Low, check: Check::Present(&["aide"]),
+    Rule { id: "svc-integrity", category: "services", title: "File integrity is checked on schedule",
+        severity: Severity::Low, check: Check::IntegrityActive,
         rationale: "Detects changed system binaries and configuration after a compromise.",
-        remediation: "emerge app-forensics/aide, run 'aide --init' once and schedule 'aide --check'.",
+        remediation: "Install app-forensics/aide (USE=ids on app-emulation/horcrux), turn integrity on in Security > Settings and press Initialize on Security > Events; checks then run on schedule.",
         reference: "CIS 6.1.1" },
     Rule { id: "svc-legacy-servers", category: "services", title: "No clear-text remote login servers are installed",
         severity: Severity::High,
@@ -379,6 +383,10 @@ pub struct Facts {
     pub time_sync: bool,
     /// Programs found by name.
     pub programs: Vec<String>,
+    /// `None` = audit tools not installed; `Some(active)`.
+    pub audit: Option<bool>,
+    /// `None` = AIDE not installed; `Some(active)`.
+    pub integrity: Option<bool>,
 }
 
 pub fn parse_sshd_t(out: &str) -> BTreeMap<String, String> {
@@ -664,6 +672,40 @@ fn evaluate_rule(r: &Rule, s: &HardeningSettings, f: &Facts) -> (RuleStatus, Str
             .into(),
             "chronyd or ntpd running".into(),
         ),
+        Check::AuditActive => match f.audit {
+            None => (
+                Manual,
+                "audit tools not installed".into(),
+                "auditd running with the Horcrux rules".into(),
+            ),
+            Some(true) => (
+                Pass,
+                "auditd running, Horcrux rules loaded".into(),
+                "auditd running with the Horcrux rules".into(),
+            ),
+            Some(false) => (
+                Fail,
+                "installed, but auditd is not running with the Horcrux rules".into(),
+                "auditd running with the Horcrux rules".into(),
+            ),
+        },
+        Check::IntegrityActive => match f.integrity {
+            None => (
+                Manual,
+                "aide not installed".into(),
+                "baseline recorded and checked on schedule".into(),
+            ),
+            Some(true) => (
+                Pass,
+                "baseline recorded, checks on schedule".into(),
+                "baseline recorded and checked on schedule".into(),
+            ),
+            Some(false) => (
+                Fail,
+                "installed, but integrity checking is off, has no baseline or is overdue".into(),
+                "baseline recorded and checked on schedule".into(),
+            ),
+        },
     }
 }
 
@@ -1198,7 +1240,9 @@ mod tests {
             firewall_tables: Some(0),
             access_log: true,
             time_sync: true,
-            programs: vec!["aide".into()],
+            programs: vec![],
+            audit: Some(false),
+            integrity: Some(true),
         };
         let mut st = AppliedState::default();
         let r = evaluate(&s, &f, &st, "n1", 1);
@@ -1218,6 +1262,15 @@ mod tests {
         assert_eq!(by(&r, "ssh-empty-passwords").status, RuleStatus::Pass);
         assert_eq!(by(&r, "svc-firewall").status, RuleStatus::Fail);
         assert_eq!(by(&r, "svc-integrity").status, RuleStatus::Pass);
+        assert_eq!(by(&r, "svc-auditd").status, RuleStatus::Fail);
+        let f_none = Facts {
+            audit: None,
+            integrity: None,
+            ..f.clone()
+        };
+        let rn = evaluate(&s, &f_none, &st, "n1", 1);
+        assert_eq!(by(&rn, "svc-auditd").status, RuleStatus::Manual);
+        assert_eq!(by(&rn, "svc-integrity").status, RuleStatus::Manual);
         assert!(r.score > 0.0 && r.score < 100.0);
 
         // Dry run changes nothing.
