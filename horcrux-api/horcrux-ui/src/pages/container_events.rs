@@ -69,18 +69,23 @@ pub fn parse_event(line: &str) -> EventRow {
 
 #[component]
 pub fn ContainerEventsPage() -> impl IntoView {
-    let (runtime, set_runtime) = create_signal("podman".to_string());
+    let (runtime, set_runtime, rt_probes) = crate::components::oci_runtime::use_oci_runtime();
+    let (conn_error, set_conn_error) = create_signal(None::<String>);
     let (events, set_events) = create_signal(Vec::<String>::new());
     let (connected, set_connected) = create_signal(false);
 
     let connect = move |_| {
         let rt = runtime.get();
         set_events.set(Vec::new());
+        set_conn_error.set(None);
         spawn_local(async move {
             let ticket = match api::get_container_events_ticket(&rt).await {
                 Ok(t) => t,
                 Err(e) => {
-                    logging::log!("Failed to get events ticket: {}", e.message);
+                    set_conn_error.set(Some(format!(
+                        "Could not connect to the {rt} event stream: {}",
+                        e.message
+                    )));
                     return;
                 }
             };
@@ -88,7 +93,7 @@ pub fn ContainerEventsPage() -> impl IntoView {
             let ws = match WebSocket::new(&url) {
                 Ok(ws) => ws,
                 Err(e) => {
-                    logging::log!("Failed to open events WebSocket: {:?}", e);
+                    set_conn_error.set(Some(format!("Could not open the event stream: {:?}", e)));
                     return;
                 }
             };
@@ -126,15 +131,13 @@ pub fn ContainerEventsPage() -> impl IntoView {
             <div class="page-header">
                 <h1>"Events"</h1>
                 <div class="header-actions">
-                    <select aria-label="Container runtime" on:change=move |ev| set_runtime.set(event_target_value(&ev))>
-                        <option value="podman">"Podman"</option>
-                        <option value="docker">"Docker"</option>
-                    </select>
+                    <crate::components::oci_runtime::OciRuntimeSelect runtime=runtime set_runtime=set_runtime probes=rt_probes/>
                     <button class="btn btn-primary" on:click=connect>"Connect"</button>
                     <span>{move || if connected.get() { "● live" } else { "○ Not connected - choose a runtime and press Connect" }}</span>
                 </div>
             </div>
 
+            {move || conn_error.get().map(|e| view! { <div class="alert alert-error" id="events-error">{e}</div> })}
             <table class="container-table" id="events-table">
                 <thead>
                     <tr>

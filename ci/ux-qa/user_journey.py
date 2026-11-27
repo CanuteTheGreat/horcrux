@@ -508,6 +508,15 @@ def main():
             j.go("/containers")
             j.shot("container-list")
             expect("j5-container", "list-explains-empty", len(j.text()) > 120, "container list is blank")
+            # the Images/Volumes/Networks pages start on a runtime that works here
+            # (they used to open on "Podman isn't installed" next to a working Docker)
+            if works and any(r in works for r in ("podman", "docker")):
+                want = "podman" if "podman" in works else "docker"
+                for path in ("/containers/images", "/containers/volumes", "/containers/networks"):
+                    j.go(path, settle=2.5)
+                    cur = page.eval_on_selector(".oci-runtime-select", "e => e.value") if page.locator(".oci-runtime-select").count() else None
+                    expect("j5-container", f"default-runtime{path.replace('/', '-')}", cur == want,
+                           f"{path} starts on runtime {cur!r} although {want} is the one that works on this node")
 
         # ------------------------------------------------------------------ J6 storage / networks
         for sid, title, routes, add_re in (

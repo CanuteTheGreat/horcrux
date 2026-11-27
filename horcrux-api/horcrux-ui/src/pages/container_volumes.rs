@@ -4,7 +4,9 @@ use leptos::*;
 
 #[component]
 pub fn VolumesPage() -> impl IntoView {
-    let (runtime, set_runtime) = create_signal("podman".to_string());
+    let (runtime, set_runtime, rt_probes) = crate::components::oci_runtime::use_oci_runtime();
+    let (action_error, set_action_error) = create_signal(None::<String>);
+    let (notice, set_notice) = create_signal(None::<String>);
     let (volumes, set_volumes) = create_signal(Vec::<api::ContainerVolumeInfo>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
@@ -13,6 +15,9 @@ pub fn VolumesPage() -> impl IntoView {
 
     let reload = move || {
         let rt = runtime.get();
+        if rt.is_empty() {
+            return;
+        }
         spawn_local(async move {
             set_loading.set(true);
             match api::get_container_volumes(&rt).await {
@@ -42,8 +47,17 @@ pub fn VolumesPage() -> impl IntoView {
             return;
         }
         spawn_local(async move {
-            if let Err(e) = api::create_volume(&name, &rt).await {
-                logging::log!("Error creating volume: {}", e.message);
+            match api::create_volume(&name, &rt).await {
+                Ok(_) => {
+                    set_action_error.set(None);
+                    set_notice.set(Some(format!("Volume {name} created")));
+                    reload();
+                }
+                Err(e) => {
+                    set_notice.set(None);
+                    set_action_error
+                        .set(Some(format!("Could not create the volume: {}", e.message)));
+                }
             }
             set_new_name.set(String::new());
         });
@@ -59,8 +73,17 @@ pub fn VolumesPage() -> impl IntoView {
             .unwrap_or(false)
         {
             spawn_local(async move {
-                if let Err(e) = api::remove_volume(&name, &rt).await {
-                    logging::log!("Error removing volume: {}", e.message);
+                match api::remove_volume(&name, &rt).await {
+                    Ok(_) => {
+                        set_action_error.set(None);
+                        set_notice.set(Some(format!("Volume {name} removed")));
+                        reload();
+                    }
+                    Err(e) => {
+                        set_notice.set(None);
+                        set_action_error
+                            .set(Some(format!("Could not remove the volume: {}", e.message)));
+                    }
                 }
             });
         }
@@ -71,10 +94,7 @@ pub fn VolumesPage() -> impl IntoView {
             <div class="page-header">
                 <h1>"Volumes"</h1>
                 <div class="header-actions">
-                    <select aria-label="Container runtime" on:change=move |ev| set_runtime.set(event_target_value(&ev))>
-                        <option value="podman">"Podman"</option>
-                        <option value="docker">"Docker"</option>
-                    </select>
+                    <crate::components::oci_runtime::OciRuntimeSelect runtime=runtime set_runtime=set_runtime probes=rt_probes/>
                     <input
                         type="text"
                         aria-label="Volume name" placeholder="my-volume"
@@ -85,6 +105,8 @@ pub fn VolumesPage() -> impl IntoView {
                 </div>
             </div>
 
+            {move || action_error.get().map(|e| view! { <div class="alert alert-error" id="oci-action-error">{e}</div> })}
+            {move || notice.get().map(|n| view! { <div class="alert alert-info" id="oci-action-notice">{n}</div> })}
             {move || {
                 if loading.get() {
                     view! { <p class="loading">"Loading volumes..."</p> }.into_view()

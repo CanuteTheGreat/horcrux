@@ -251,14 +251,16 @@ pub fn ContainerList() -> impl IntoView {
                                                     {saved_state.clone().map(|s| view! {
                                                         <span class="badge badge-info saved-badge" title=s.mechanism.clone()>{crate::pages::saved_label(&s)}</span>
                                                     })}
-                                                    {blocker.map(|b| view! { <small class="save-blocker" title=b.clone()>" ⚠ state can't be saved: "{b.clone()}</small> })}
+                                                    {blocker.map(|b| view! { <small class="save-blocker" title=b.clone()>" ⚠ Save state unavailable"</small> })}
                                                 </td>
                                                 <td>
                                                     {container.created_at.as_deref().map(crate::utils::format_rfc3339).unwrap_or_else(|| "N/A".to_string())}
                                                 </td>
                                                 <td class="actions">
                                                     <button
-                                                        class="btn btn-sm btn-success"
+                                                        class="btn btn-sm btn-success ct-start"
+                                                        disabled=running
+                                                        title=if running { "Already running" } else { "" }
                                                         on:click=move |_| start_container(container_id_start.clone())
                                                     >{if saved_state.is_some() { "Start (resume)" } else { "Start" }}</button>
                                                     {saved_state.is_some().then(|| view! {
@@ -274,14 +276,20 @@ pub fn ContainerList() -> impl IntoView {
                                                             on:click=move |_| state_action("Save state of", cid_save.clone())>"Save state"</button>
                                                     })}
                                                     <button
-                                                        class="btn btn-sm btn-warning"
+                                                        class="btn btn-sm btn-warning ct-stop"
+                                                        disabled=!running
+                                                        title=if running { "" } else { "Not running" }
                                                         on:click=move |_| stop_container(container_id_stop.clone())
                                                     >"Stop"</button>
                                                     {(container.runtime == "lxc").then(|| view! {
                                                         <a class="btn btn-sm btn-primary lxc-manage" href=format!("/containers/{}/lxc", container.id)>"Manage"</a>
                                                     })}
                                                     <a class="btn btn-sm" href=format!("/containers/{}/logs?runtime={}", container.id, container.runtime)>"Logs"</a>
-                                                    <a class="btn btn-sm" href=format!("/containers/{}/exec?runtime={}", container.id, container.runtime)>"Terminal"</a>
+                                                    {if running {
+                                                        view! { <a class="btn btn-sm ct-terminal" href=format!("/containers/{}/exec?runtime={}", container.id, container.runtime)>"Terminal"</a> }.into_view()
+                                                    } else {
+                                                        view! { <button class="btn btn-sm ct-terminal" disabled=true title="Start the container to open a terminal in it">"Terminal"</button> }.into_view()
+                                                    }}
                                                     <a class="btn btn-sm container-firewall" href=format!("/containers/{}/firewall", container.id)>"Firewall"</a>
                                                     {matches!(container.runtime.as_str(), "lxc" | "lxd" | "incus").then(|| view! {
                                                         <a class="btn btn-sm container-console" href=format!("/containers/{}/console?runtime={}", container.id, container.runtime)>"Console"</a>

@@ -4,7 +4,7 @@ use leptos::*;
 
 #[component]
 pub fn StacksPage() -> impl IntoView {
-    let (runtime, set_runtime) = create_signal("podman".to_string());
+    let (runtime, set_runtime, rt_probes) = crate::components::oci_runtime::use_oci_runtime();
     let (stacks, set_stacks) = create_signal(Vec::<api::StackSummary>::new());
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
@@ -185,10 +185,7 @@ pub fn StacksPage() -> impl IntoView {
 
             <div class="form-section">
                 <div class="form-group"><label for="stack-runtime">"Container runtime"</label>
-                <select id="stack-runtime" on:change=move |ev| set_runtime.set(event_target_value(&ev))>
-                    <option value="podman">"Podman"</option>
-                    <option value="docker">"Docker"</option>
-                </select></div>
+                <crate::components::oci_runtime::OciRuntimeSelect id="stack-runtime" runtime=runtime set_runtime=set_runtime probes=rt_probes/></div>
                 <div class="form-group"><label for="stack-name">"Stack name"</label>
                 <input
                     type="text"
