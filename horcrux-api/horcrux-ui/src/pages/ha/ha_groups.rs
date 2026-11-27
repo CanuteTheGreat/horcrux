@@ -258,6 +258,12 @@ pub fn HaGroupsPage() -> impl IntoView {
             } else {
                 view! {
                     <div class="ha-groups-grid">
+                        {ha_groups.get().is_empty().then(|| view! {
+                            <div class="empty-state" id="ha-groups-empty">
+                                <h3>"No HA groups yet"</h3>
+                                <p>"An HA group is a set of nodes that protected guests may run on, in priority order. Use Create to add the first one."</p>
+                            </div>
+                        })}
                         {ha_groups.get().into_iter().map(|group| {
                             let group_clone = group.clone();
                             let group_clone2 = group.clone();

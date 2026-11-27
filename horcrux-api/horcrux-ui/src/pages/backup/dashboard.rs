@@ -255,6 +255,7 @@ pub fn BackupDashboard() -> impl IntoView {
                     <div class="form-group">
                         <label for="backup-target">"VM / container"</label>
                         <select id="backup-target" on:change=move |ev| set_target.set(event_target_value(&ev))>
+                            {move || guests.get().is_empty().then(|| view! { <option value="" disabled=true selected=true>"No VMs or containers yet - create one first"</option> })}
                             {move || guests.get().into_iter().map(|g| {
                                 let selected = g.id == target.get();
                                 view! { <option value=g.id.clone() selected=selected>{g.label}</option> }

@@ -135,6 +135,7 @@ pub fn RetentionPoliciesPage() -> impl IntoView {
                 <div class="form-group">
                     <label for="prune-target">"Guest"</label>
                     <select id="prune-target" on:change=move |ev| { set_target.set(event_target_value(&ev)); set_decisions.set(None); }>
+                        {move || guests.get().is_empty().then(|| view! { <option value="" disabled=true selected=true>"No VMs or containers yet - create one first"</option> })}
                         {move || guests.get().into_iter().map(|g| {
                             let sel = g.id == target.get();
                             view! { <option value=g.id.clone() selected=sel>{g.label}</option> }
