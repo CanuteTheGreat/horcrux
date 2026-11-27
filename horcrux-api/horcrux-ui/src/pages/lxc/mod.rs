@@ -247,6 +247,13 @@ pub fn LxcContainerPage() -> impl IntoView {
         async move {
             match api::get_container_config(&cid).await {
                 Ok(c) => set_status.set(c.status.to_string()),
+                Err(e) if e.status == 404 => {
+                    set_status.set("missing".into());
+                    set_error.set(Some(format!(
+                        "There is no container \"{cid}\" on this node. It may have been deleted."
+                    )));
+                    return;
+                }
                 Err(e) => set_error.set(Some(e.message)),
             }
             match api::get_lxc_config(&cid).await {
@@ -374,12 +381,12 @@ pub fn LxcContainerPage() -> impl IntoView {
                 <h1>"LXC container " {id}</h1>
                 <div class="header-actions">
                     <span id="lxc-status" class=move || format!("status-{}", status.get())>{move || status.get()}</span>
-                    <button id="lxc-start" class="btn btn-sm btn-success" disabled=working on:click=move |_| lifecycle("start")>"Start"</button>
-                    <button id="lxc-shutdown" class="btn btn-sm btn-warning" disabled=working on:click=move |_| lifecycle("shutdown")>"Shutdown"</button>
-                    <button id="lxc-stop" class="btn btn-sm btn-danger" disabled=working on:click=move |_| lifecycle("stop")>"Stop"</button>
-                    <button id="lxc-reboot" class="btn btn-sm" disabled=working on:click=move |_| lifecycle("reboot")>"Reboot"</button>
-                    <button id="lxc-pause" class="btn btn-sm" disabled=working on:click=move |_| lifecycle("pause")>"Freeze"</button>
-                    <button id="lxc-resume" class="btn btn-sm" disabled=working on:click=move |_| lifecycle("resume")>"Thaw"</button>
+                    <button id="lxc-start" class="btn btn-sm btn-success" disabled=move || { let st = status.get(); working.get() || st == "missing" || st == "running" || st == "paused" } on:click=move |_| lifecycle("start")>"Start"</button>
+                    <button id="lxc-shutdown" class="btn btn-sm btn-warning" disabled=move || { let st = status.get(); working.get() || st == "missing" || st == "stopped" } on:click=move |_| lifecycle("shutdown")>"Shutdown"</button>
+                    <button id="lxc-stop" class="btn btn-sm btn-danger" disabled=move || { let st = status.get(); working.get() || st == "missing" || st == "stopped" } on:click=move |_| lifecycle("stop")>"Stop"</button>
+                    <button id="lxc-reboot" class="btn btn-sm" disabled=move || { let st = status.get(); working.get() || st == "missing" || st == "stopped" || st == "paused" } on:click=move |_| lifecycle("reboot")>"Reboot"</button>
+                    <button id="lxc-pause" class="btn btn-sm" disabled=move || { let st = status.get(); working.get() || st == "missing" || st == "stopped" || st == "paused" } on:click=move |_| lifecycle("pause")>"Freeze"</button>
+                    <button id="lxc-resume" class="btn btn-sm" disabled=move || { let st = status.get(); working.get() || st == "missing" || st != "paused" && st != "unknown" } on:click=move |_| lifecycle("resume")>"Thaw"</button>
                     <a class="btn btn-sm" href=move || format!("/containers/{}/exec?runtime=lxc", id())>"Console"</a>
                     <a class="btn btn-sm" href=move || format!("/containers/{}/logs?runtime=lxc", id())>"Boot log"</a>
                     <a class="btn btn-sm" href="/containers">"Back"</a>

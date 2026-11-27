@@ -202,19 +202,20 @@ pub async fn download_object(bucket: &str, key: &str) -> Result<(), ApiError> {
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
     if !resp.ok() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(ApiError {
-            message: super::error_text(status, &text),
-        });
+        return Err(super::ApiError::from_response(status, &text));
     }
     let bytes = resp.binary().await.map_err(|e| ApiError {
         message: e.to_string(),
+        ..Default::default()
     })?;
     let err = |e: wasm_bindgen::JsValue| ApiError {
         message: format!("{:?}", e),
+        ..Default::default()
     };
     let parts = js_sys::Array::new();
     parts.push(&js_sys::Uint8Array::from(bytes.as_slice()));
@@ -224,6 +225,7 @@ pub async fn download_object(bucket: &str, key: &str) -> Result<(), ApiError> {
         .and_then(|w| w.document())
         .ok_or_else(|| ApiError {
             message: "no document".into(),
+            ..Default::default()
         })?;
     let a: web_sys::HtmlAnchorElement =
         doc.create_element("a")
@@ -231,6 +233,7 @@ pub async fn download_object(bucket: &str, key: &str) -> Result<(), ApiError> {
             .dyn_into()
             .map_err(|_| ApiError {
                 message: "anchor".into(),
+                ..Default::default()
             })?;
     a.set_href(&url);
     a.set_download(key.rsplit('/').next().unwrap_or("object"));
@@ -253,15 +256,14 @@ pub async fn upload_object(bucket: &str, key: &str, body: &web_sys::Blob) -> Res
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
     if resp.ok() {
         Ok(())
     } else {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        Err(ApiError {
-            message: super::error_text(status, &text),
-        })
+        Err(ApiError::from_response(status, &text))
     }
 }
 pub async fn users() -> Result<Vec<S3User>, ApiError> {

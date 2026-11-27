@@ -69,6 +69,7 @@ fn js_err(e: JsValue) -> ApiError {
         .unwrap_or_else(|| "security key operation failed".into());
     ApiError {
         message: format!("Security key: {}", msg),
+        ..Default::default()
     }
 }
 
@@ -84,6 +85,7 @@ pub async fn create(options: &serde_json::Value) -> Result<serde_json::Value, Ap
         .map_err(js_err)?;
     serde_json::from_str(&out.as_string().unwrap_or_default()).map_err(|e| ApiError {
         message: e.to_string(),
+        ..Default::default()
     })
 }
 
@@ -92,5 +94,6 @@ pub async fn get(options: &serde_json::Value) -> Result<serde_json::Value, ApiEr
     let out = hx_webauthn_get(options.to_string()).await.map_err(js_err)?;
     serde_json::from_str(&out.as_string().unwrap_or_default()).map_err(|e| ApiError {
         message: e.to_string(),
+        ..Default::default()
     })
 }

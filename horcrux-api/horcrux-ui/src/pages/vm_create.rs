@@ -174,6 +174,7 @@ pub fn VmCreate() -> impl IntoView {
                             "VM {} created, but importing its disk failed: {}",
                             vm.id, e.message
                         ),
+                        ..Default::default()
                     }),
                 other => other,
             };

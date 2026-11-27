@@ -693,8 +693,8 @@ def main():
         # ... and Delete on its base is refused with the reason shown.
         page.goto(f"{BASE}/vms")
         vm_row_action(page, REP_VM, "button", "Delete")
-        expect(page.locator("#vm-notice")).to_contain_text("linked clone", timeout=30000)
-        expect(page.locator("#vm-notice")).to_contain_text(cid)
+        expect(page.locator("#vm-action-error")).to_contain_text("linked clone", timeout=30000)
+        expect(page.locator("#vm-action-error")).to_contain_text(cid)
         assert api_get(f"/api/vms/{REP_VM}", token())["id"] == REP_VM
         assert os.path.isfile(rep_disk), "base disk deleted under a linked clone"
 

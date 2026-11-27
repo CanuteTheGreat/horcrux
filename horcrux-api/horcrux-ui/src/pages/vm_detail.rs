@@ -19,6 +19,9 @@ pub fn VmDetailPage() -> impl IntoView {
     let (inv, set_inv) = create_signal(None::<InvResource>);
     let (tags_text, set_tags_text) = create_signal(String::new());
     let (error, set_error) = create_signal(None::<String>);
+    // The VM id in the URL doesn't exist (deleted, mistyped link): show that,
+    // not the settings forms of a VM that isn't there.
+    let (missing, set_missing) = create_signal(false);
     let (notice, set_notice) = create_signal(None::<String>);
     let (power, set_power) = create_signal(None::<api::GuestPolicyView>);
     let stop_sel = create_rw_signal(String::new());
@@ -34,9 +37,16 @@ pub fn VmDetailPage() -> impl IntoView {
                 Ok(v) => {
                     crate::titles::set_subject(&v.name);
                     set_vm.set(Some(v));
+                    set_missing.set(false);
                     set_error.set(None);
                 }
-                Err(e) => set_error.set(Some(e.message)),
+                Err(e) if e.status == 404 => {
+                    set_vm.set(None);
+                    set_missing.set(true);
+                    set_error.set(None);
+                    return;
+                }
+                Err(e) => set_error.set(Some(format!("Could not load the VM: {}", e.message))),
             }
             if let Ok(p) = api::guest_power_policy("vm", &vid).await {
                 stop_sel.set(p.overrides.stop_action.clone().unwrap_or_default());
@@ -125,17 +135,19 @@ pub fn VmDetailPage() -> impl IntoView {
     view! {
         <div class="vm-detail">
             <div class="page-header"><h1>{move || vm.get().map(|v| format!("{} ({})", v.name, v.id)).unwrap_or_else(id)}</h1></div>
-            <nav class="tabs" id="vm-tabs">
-                <A href=move || format!("/vms/{}", id()) class="tab tab-active">"Summary"</A>
-                <A href=move || format!("/vms/{}/hardware", id()) class="tab">"Hardware"</A>
-                <A href=move || format!("/vms/{}/console", id()) class="tab">"Console"</A>
-                <A href=move || format!("/vms/{}/remote-play", id()) class="tab">"Remote Play"</A>
-                <A href=move || format!("/snapshots?vm={}", id()) class="tab">"Snapshots"</A>
-                <A href="/network/firewall-objects" class="tab">"Firewall"</A>
-                <A href="/security/vulnerabilities" class="tab">"Security"</A>
-            </nav>
+            <crate::components::VmTabs vm_id=Signal::derive(id) active="Summary"/>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="vmd-notice">{n}</div> })}
-            {move || error.get().map(|e| view! { <div class="alert alert-error" id="vmd-error">{e}</div> })}
+            {move || error.get().map(|e| view! { <div class="alert alert-error" id="vmd-error">{e}
+                <button type="button" class="btn btn-secondary btn-sm" on:click=move |_| load()>"Retry"</button></div> })}
+            <Show when=move || missing.get() fallback=|| ()>
+                <div class="empty-state" id="vmd-missing">
+                    <p>{move || format!("There is no VM \"{}\" on this node. It may have been deleted or moved.", id())}</p>
+                    <A href="/vms" class="btn btn-primary">"Show all VMs"</A>
+                </div>
+            </Show>
+            <Show when=move || vm.get().is_some() fallback=|| ()>
+            <crate::components::VmPowerBar vm_id=Signal::derive(id) vm=Signal::derive(move || vm.get())
+                on_change=Callback::new(move |v: VmConfig| set_vm.set(Some(v)))/>
             {move || vm.get().map(|v| view! {
                 <table class="vm-table" id="vmd-summary">
                     <tr><th>"State"</th><td class="vmd-status">{format!("{:?}", v.status)}</td></tr>
@@ -163,7 +175,12 @@ pub fn VmDetailPage() -> impl IntoView {
                     <option value="off">"Guest hibernate: off"</option>
                 </select>
                 <button id="vmd-hibernate-now" class="btn btn-secondary" on:click=hibernate_now
-                    title="Ask the guest to hibernate now; start the VM to resume">"Hibernate now"</button>
+                    disabled=move || !vm.get().map(|v| v.status == horcrux_common::VmStatus::Running).unwrap_or(false)
+                    title=move || if vm.get().map(|v| v.status == horcrux_common::VmStatus::Running).unwrap_or(false) {
+                        "Ask the guest to hibernate now; start the VM to resume"
+                    } else {
+                        "Only a running VM can hibernate"
+                    }>"Hibernate now"</button>
                 <a class="btn btn-secondary" href="/system/power">"Host power settings"</a>
             </div>
             {move || power.get().map(|p| {
@@ -194,6 +211,7 @@ pub fn VmDetailPage() -> impl IntoView {
                     on:input=move |ev| set_tags_text.set(event_target_value(&ev))/>
                 <button id="vmd-tags-save" class="btn btn-primary" on:click=save_tags>"Save tags"</button>
             </div>
+            </Show>
         </div>
     }
 }

@@ -91,9 +91,58 @@ pub mod authed {
 async fn http_error(response: reqwasm::http::Response) -> ApiError {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    ApiError {
-        message: error_text(status, &body),
+    ApiError::from_response(status, &body)
+}
+
+/// What a person reads when a request fails: the server's own `message` (and
+/// `details`), or a plain sentence for the status. Never the `HTTP nnn:`
+/// prefix, an error-code constant or a raw JSON/HTML body (owner finding: the
+/// console pane printed `{"status":422,"error":"VALIDATION_ERROR",...}`).
+pub fn friendly_text(status: u16, body: &str) -> String {
+    let v = serde_json::from_str::<serde_json::Value>(body).ok();
+    let field = |k: &str| {
+        v.as_ref()
+            .and_then(|v| v.get(k))
+            .and_then(|m| m.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    // `error` is usually a code (VALIDATION_ERROR, forbidden): only use it
+    // when it reads like a sentence.
+    let msg = field("message").or_else(|| field("error").filter(|e| e.contains(' ')));
+    let text = match (msg, field("details")) {
+        (Some(m), Some(d)) if m != d => format!("{} ({})", m.trim_end_matches('.'), d),
+        (Some(m), _) => m,
+        (None, Some(d)) => d,
+        (None, None) => {
+            let b = body.trim();
+            // a short plain-text answer (e.g. axum's own rejection text) is
+            // readable; JSON, HTML or a long dump is not
+            let markup = b.starts_with('<') || b.starts_with('{') || b.starts_with('[');
+            if v.is_none() && !b.is_empty() && b.len() <= 200 && !markup {
+                b.to_string()
+            } else {
+                String::new()
+            }
+        }
+    };
+    if !text.is_empty() {
+        return text;
     }
+    match status {
+        400 | 422 => "The server did not accept the request.",
+        401 => "Your session has ended. Sign in again.",
+        403 => "You don't have permission to do this.",
+        404 => "It no longer exists. Refresh the page.",
+        409 => "That conflicts with the current state. Refresh and try again.",
+        413 => "That is too large for the server.",
+        424 => "This node is missing something this page needs.",
+        429 => "Too many requests. Wait a moment and try again.",
+        502..=504 => "The server did not answer in time. Try again.",
+        500..=599 => "The server hit an error. System > Logs has the details.",
+        _ => "The request failed.",
+    }
+    .to_string()
 }
 
 /// User-facing text for a failed request: the API's `message`, plus its
@@ -167,11 +216,13 @@ pub async fn fetch_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> 
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
 
     if response.ok() {
         let text = response.text().await.map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
         decode_body(&text)
     } else {
@@ -203,11 +254,13 @@ pub async fn post_json<T: DeserializeOwned, B: Serialize>(
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
 
     if response.ok() {
         let text = response.text().await.map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
         decode_body(&text)
     } else {
@@ -229,11 +282,13 @@ pub async fn put_json<T: DeserializeOwned, B: Serialize>(
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
 
     if response.ok() {
         let text = response.text().await.map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
         decode_body(&text)
     } else {
@@ -249,6 +304,7 @@ pub fn decode_body<T: DeserializeOwned>(text: &str) -> Result<T, ApiError> {
     let text = if text.trim().is_empty() { "null" } else { text };
     serde_json::from_str(text).map_err(|e| ApiError {
         message: e.to_string(),
+        ..Default::default()
     })
 }
 
@@ -261,6 +317,7 @@ pub async fn delete_json(path: &str) -> Result<(), ApiError> {
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
 
     if response.ok() {
@@ -279,6 +336,7 @@ pub async fn post_empty(path: &str) -> Result<(), ApiError> {
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
 
     if response.ok() {
@@ -301,6 +359,7 @@ pub async fn post_json_no_response<B: Serialize>(path: &str, body: &B) -> Result
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
 
     if response.ok() {
@@ -319,28 +378,45 @@ pub async fn fetch_text(path: &str) -> Result<String, ApiError> {
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
 
     if response.ok() {
         response.text().await.map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })
     } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
+        Err(ApiError::from_response(response.status(), ""))
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ApiError {
+    /// User-facing text (see `friendly_text`): safe to show as-is.
     pub message: String,
+    /// HTTP status when the server answered (0 = no answer / local error).
+    #[serde(default)]
+    pub status: u16,
+    /// Machine-readable `error_text` form (`HTTP 424 [reason]: ...`), kept for
+    /// `unavailable()` / `is_forbidden()`.
+    #[serde(default)]
+    pub raw: String,
 }
 
 impl ApiError {
+    /// The error for a non-2xx answer.
+    pub fn from_response(status: u16, body: &str) -> Self {
+        ApiError {
+            message: friendly_text(status, body),
+            status,
+            raw: error_text(status, body),
+        }
+    }
+
     /// `Some` when the server answered 424 `NOT_AVAILABLE` (see `Unavailable`).
     pub fn unavailable(&self) -> Option<Unavailable> {
-        parse_unavailable(&self.message)
+        parse_unavailable(&self.raw).or_else(|| parse_unavailable(&self.message))
     }
 }
 
@@ -356,7 +432,10 @@ impl ApiError {
     /// The server refused for lack of a privilege (HTTP 403): the panel or
     /// page should say "no permission", not "could not reach the backend".
     pub fn is_forbidden(&self) -> bool {
-        self.message == "HTTP 403" || self.message.starts_with("HTTP 403:")
+        self.status == 403
+            || [&self.raw, &self.message]
+                .iter()
+                .any(|m| m.as_str() == "HTTP 403" || m.starts_with("HTTP 403:"))
     }
 }
 
@@ -375,6 +454,7 @@ pub async fn create_vm(config: VmConfig) -> Result<VmConfig, ApiError> {
 pub async fn create_vm_from_image(config: VmConfig, image: &str) -> Result<VmConfig, ApiError> {
     let mut body = serde_json::to_value(&config).map_err(|e| ApiError {
         message: e.to_string(),
+        ..Default::default()
     })?;
     body["image"] = serde_json::Value::String(image.to_string());
     post_json("/vms", &body).await
@@ -652,18 +732,13 @@ pub async fn set_node_caps(name: &str, caps: Option<&NodeCaps>) -> Result<(), Ap
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
     if response.ok() {
         Ok(())
     } else {
         let body = response.text().await.unwrap_or_default();
-        Err(ApiError {
-            message: if body.is_empty() {
-                format!("HTTP {}", response.status())
-            } else {
-                format!("HTTP {}: {}", response.status(), body)
-            },
-        })
+        Err(ApiError::from_response(response.status(), &body))
     }
 }
 
@@ -885,19 +960,14 @@ pub async fn set_node_priority(name: &str, priority: u32) -> Result<(), ApiError
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
 
     if response.ok() {
         Ok(())
     } else {
         let body = response.text().await.unwrap_or_default();
-        Err(ApiError {
-            message: if body.is_empty() {
-                format!("HTTP {}", response.status())
-            } else {
-                format!("HTTP {}: {}", response.status(), body)
-            },
-        })
+        Err(ApiError::from_response(response.status(), &body))
     }
 }
 
@@ -2234,11 +2304,13 @@ fn login_outcome(v: serde_json::Value) -> Result<LoginOutcome, ApiError> {
     if v["tfa_required"].as_bool().unwrap_or(false) {
         let ch: TfaChallenge = serde_json::from_value(v).map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
         return Ok(LoginOutcome::SecondFactor(ch));
     }
     let r: LoginResponse = serde_json::from_value(v).map_err(|e| ApiError {
         message: e.to_string(),
+        ..Default::default()
     })?;
     set_auth_token(&r.ticket);
     Ok(LoginOutcome::LoggedIn(r))
@@ -4032,6 +4104,7 @@ pub async fn update_ha_group(group: HaGroup) -> Result<HaGroup, ApiError> {
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
     if response.ok() {
         Ok(group)
@@ -5815,6 +5888,46 @@ mod tests {
     }
 
     #[test]
+    fn user_facing_error_text_never_shows_http_codes_or_json() {
+        // the owner's console finding: a 422 body must read as its message
+        let body = r#"{"status":422,"error":"VALIDATION_ERROR","message":"VM is not running (no console state); start it first","timestamp":"2026-11-27T00:00:00Z"}"#;
+        let e = ApiError::from_response(422, body);
+        assert_eq!(
+            e.message,
+            "VM is not running (no console state); start it first"
+        );
+        assert_eq!(e.status, 422);
+        assert!(e.raw.starts_with("HTTP 422"));
+        for (status, body) in [
+            (422, body),
+            (404, ""),
+            (500, r#"{"status":500,"error":"INTERNAL_ERROR"}"#),
+            (502, "<html><body>Bad Gateway</body></html>"),
+            (403, r#"{"error":"forbidden"}"#),
+            (409, "[1,2]"),
+        ] {
+            let m = ApiError::from_response(status, body).message;
+            assert!(!m.contains("HTTP"), "{status}: {m}");
+            assert!(!m.contains('{') && !m.contains('<'), "{status}: {m}");
+            assert!(!m.contains("_ERROR") && !m.is_empty(), "{status}: {m}");
+        }
+        // details are kept, readable; 424 still parses as an empty state
+        let n = r#"{"status":424,"error":"NOT_AVAILABLE","message":"Docker isn't installed on this node.","details":"Install app-containers/docker.","reason":"docker-missing"}"#;
+        let e = ApiError::from_response(424, n);
+        assert_eq!(
+            e.message,
+            "Docker isn't installed on this node (Install app-containers/docker.)"
+        );
+        assert_eq!(e.unavailable().expect("424").reason, "docker-missing");
+        assert!(ApiError::from_response(403, "").is_forbidden());
+        // a short plain-text rejection is shown as written
+        assert_eq!(
+            friendly_text(400, "Missing field `name`"),
+            "Missing field `name`"
+        );
+    }
+
+    #[test]
     fn transport_errors_are_told_apart_from_server_errors() {
         assert!(is_transport_error("TypeError: Failed to fetch"));
         assert!(is_transport_error(
@@ -5829,13 +5942,19 @@ mod tests {
     fn a_424_not_available_answer_becomes_an_unavailable_state() {
         let body = r#"{"status":424,"error":"NOT_AVAILABLE","message":"Docker isn't installed on this node.","details":"Install app-containers/docker.","reason":"docker-missing"}"#;
         let text = error_text(424, body);
-        let u = ApiError { message: text }.unavailable().expect("parsed");
+        let u = ApiError {
+            message: text,
+            ..Default::default()
+        }
+        .unavailable()
+        .expect("parsed");
         assert_eq!(u.reason, "docker-missing");
         assert_eq!(u.what, "Docker isn't installed on this node.");
         assert_eq!(u.todo, "Install app-containers/docker.");
         // a plain 500 is still an error, not an empty state
         let e = ApiError {
             message: error_text(500, r#"{"message":"boom"}"#),
+            ..Default::default()
         };
         assert!(e.unavailable().is_none());
     }
@@ -5857,10 +5976,12 @@ mod tests {
         let body = r#"{"error":"forbidden","message":"Permission check failed: Sys.Audit on /","required_privilege":"Sys.Audit","path":"/"}"#;
         let e = ApiError {
             message: error_text(403, body),
+            ..Default::default()
         };
         assert!(e.is_forbidden(), "{}", e.message);
         assert!(ApiError {
-            message: error_text(403, "")
+            message: error_text(403, ""),
+            ..Default::default()
         }
         .is_forbidden());
         for other in [
@@ -5868,7 +5989,11 @@ mod tests {
             error_text(500, body),
             "HTTP 4030".into(),
         ] {
-            assert!(!ApiError { message: other }.is_forbidden());
+            assert!(!ApiError {
+                message: other,
+                ..Default::default()
+            }
+            .is_forbidden());
         }
     }
 
@@ -6796,6 +6921,24 @@ pub async fn reset_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
     .await
 }
 
+/// Freeze a running VM's vCPUs (status "paused").
+pub async fn pause_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/pause", urlencoding::encode(vm_id)),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
+/// Continue a paused VM.
+pub async fn resume_vm(vm_id: &str) -> Result<VmConfig, ApiError> {
+    post_json(
+        &format!("/vms/{}/resume", urlencoding::encode(vm_id)),
+        &serde_json::json!({}),
+    )
+    .await
+}
+
 pub async fn list_isos() -> Result<Vec<IsoFile>, ApiError> {
     fetch_json("/storage/isos").await
 }
@@ -6837,10 +6980,12 @@ pub async fn upload_iso(
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
     if response.ok() {
         let text = response.text().await.map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
         decode_body(&text)
     } else {
@@ -6919,10 +7064,12 @@ pub async fn upload_pool_content(
         .await
         .map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
     if response.ok() {
         let text = response.text().await.map_err(|e| ApiError {
             message: e.to_string(),
+            ..Default::default()
         })?;
         decode_body(&text)
     } else {

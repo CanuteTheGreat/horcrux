@@ -73,6 +73,24 @@ pub fn StorageManagement() -> impl IntoView {
 
     // Delete storage pool
     let delete_pool = move |pool_id: String| {
+        // Removing a pool used to run on the first click, with no question.
+        let name = pools
+            .get_untracked()
+            .iter()
+            .find(|p| p.id == pool_id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| pool_id.clone());
+        let ok = web_sys::window()
+            .and_then(|w| {
+                w.confirm_with_message(&format!(
+                    "Remove storage pool {name} from Horcrux? VM disks, ISOs or backups on it can no longer be used from Horcrux."
+                ))
+                .ok()
+            })
+            .unwrap_or(false);
+        if !ok {
+            return;
+        }
         spawn_local(async move {
             let url = format!("/api/storage/pools/{}", pool_id);
             match delete_json(&url).await {

@@ -5,12 +5,18 @@ use leptos::*;
 pub fn Alerts() -> impl IntoView {
     let (alerts, set_alerts) = create_signal(Vec::<api::ActiveAlert>::new());
     let (loading, set_loading) = create_signal(true);
+    // A failed load used to read "No active alerts": say it failed instead.
+    let (error, set_error) = create_signal(None::<String>);
 
     create_effect(move |_| {
         spawn_local(async move {
             set_loading.set(true);
-            if let Ok(alert_list) = api::get_active_alerts().await {
-                set_alerts.set(alert_list);
+            match api::get_active_alerts().await {
+                Ok(alert_list) => {
+                    set_alerts.set(alert_list);
+                    set_error.set(None);
+                }
+                Err(e) => set_error.set(Some(format!("Could not load the alerts: {}", e.message))),
             }
             set_loading.set(false);
         });
@@ -23,6 +29,8 @@ pub fn Alerts() -> impl IntoView {
             {move || {
                 if loading.get() {
                     view! { <p class="loading">"Loading alerts..."</p> }.into_view()
+                } else if let Some(e) = error.get() {
+                    view! { <div class="alert alert-error" id="alerts-error" role="alert">{e}</div> }.into_view()
                 } else {
                     let alert_list = alerts.get();
                     if alert_list.is_empty() {

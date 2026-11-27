@@ -71,7 +71,7 @@ pub fn LicensesPage() -> impl IntoView {
         set_error.set(None);
         let fetched = match reqwasm::http::Request::get(LICENSES_PATH).send().await {
             Ok(r) if r.ok() => r.text().await.map_err(|e| e.to_string()),
-            Ok(r) => Err(format!("HTTP {}", r.status())),
+            Ok(r) => Err(crate::api::friendly_text(r.status(), "")),
             Err(e) => Err(e.to_string()),
         };
         match fetched {

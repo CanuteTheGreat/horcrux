@@ -834,7 +834,7 @@ pub fn NetworkManagement() -> impl IntoView {
                                     }).collect_view()}
                                 </select>
                                 {move || attach_candidates.get().is_empty().then(|| view! {
-                                    <p class="form-hint">"No running container. Start one on the Containers page first."</p>
+                                    <p class="form-hint">"No running container to attach. " <a href="/containers">"Start one on the Containers page"</a></p>
                                 })}
                             </div>
                             <div class="form-group">

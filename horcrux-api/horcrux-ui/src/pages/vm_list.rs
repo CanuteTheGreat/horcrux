@@ -49,6 +49,9 @@ pub fn VmList() -> impl IntoView {
     let (loading, set_loading) = create_signal(true);
     let (error, set_error) = create_signal(None::<String>);
     let (notice, set_notice) = create_signal(None::<String>);
+    // A failed action is an error, kept until the next action (it used to be a
+    // blue info banner reading "Failed: HTTP 409: ...").
+    let (action_error, set_action_error) = create_signal(None::<String>);
     // Saved states (Hyper-V-style "Save state"), by VM id.
     let (saved, set_saved) =
         create_signal(std::collections::HashMap::<String, api::SavedState>::new());
@@ -93,8 +96,14 @@ pub fn VmList() -> impl IntoView {
 
     let report = move |what: String, r: Result<(), api::ApiError>| {
         match r {
-            Ok(()) => set_notice.set(Some(what)),
-            Err(e) => set_notice.set(Some(format!("Failed: {}", e.message))),
+            Ok(()) => {
+                set_action_error.set(None);
+                set_notice.set(Some(what));
+            }
+            Err(e) => {
+                set_notice.set(None);
+                set_action_error.set(Some(format!("Could not do that: {}", e.message)));
+            }
         }
         reload();
     };
@@ -103,6 +112,14 @@ pub fn VmList() -> impl IntoView {
         spawn_local(async move {
             let r = api::start_vm(&vm_id).await;
             report(format!("VM {} started", vm_id), r);
+        });
+    };
+
+    // A paused VM continues; "Start" on it was the only offer before.
+    let resume_paused = move |vm_id: String| {
+        spawn_local(async move {
+            let r = api::resume_vm(&vm_id).await.map(|_| ());
+            report(format!("VM {} resumed", vm_id), r);
         });
     };
 
@@ -200,8 +217,11 @@ pub fn VmList() -> impl IntoView {
     let delete_vm = move |vm_id: String| {
         if web_sys::window()
             .and_then(|w| {
-                w.confirm_with_message(&format!("Delete VM {}?", vm_id))
-                    .ok()
+                w.confirm_with_message(&format!(
+                    "Delete VM {} and all of its disks? This cannot be undone.",
+                    vm_id
+                ))
+                .ok()
             })
             .unwrap_or(false)
         {
@@ -286,6 +306,7 @@ pub fn VmList() -> impl IntoView {
             </div>
             <crate::pages::UnmanagedLibvirtBanner/>
             {move || notice.get().map(|n| view! { <div class="alert alert-info" id="vm-notice">{n}</div> })}
+            {move || action_error.get().map(|e| view! { <div class="alert alert-error" id="vm-action-error" role="alert">{e}</div> })}
 
             <div class="toolbar">
                 <div class="toolbar-start">
@@ -365,6 +386,7 @@ pub fn VmList() -> impl IntoView {
                                         // rebooted or stopped, a running one cannot be started again.
                                         let is_running = vm.status == horcrux_common::VmStatus::Running;
                                         let is_stopped = vm.status == horcrux_common::VmStatus::Stopped;
+                                        let is_paused = vm.status == horcrux_common::VmStatus::Paused;
                                         let vm_for_clone = vm.clone();
                                         let status_class = match vm.status {
                                             horcrux_common::VmStatus::Running => "status-running",
@@ -394,8 +416,8 @@ pub fn VmList() -> impl IntoView {
                                                     <button
                                                         class="btn btn-sm btn-success vm-start"
                                                         disabled=is_running
-                                                        on:click=move |_| start_vm(vm_id_start.clone())
-                                                    >{if saved_state.is_some() { "Start (resume)" } else { "Start" }}</button>
+                                                        on:click=move |_| if is_paused { resume_paused(vm_id_start.clone()) } else { start_vm(vm_id_start.clone()) }
+                                                    >{if is_paused { "Resume" } else if saved_state.is_some() { "Start (resume)" } else { "Start" }}</button>
                                                     <button
                                                         class="btn btn-sm btn-warning vm-stop"
                                                         disabled=is_stopped
@@ -437,7 +459,9 @@ pub fn VmList() -> impl IntoView {
                                                         >"Clone"</button>
                                                         <hr/>
                                                         <button
-                                                            class="btn btn-sm btn-danger"
+                                                            class="btn btn-sm btn-danger vm-delete"
+                                                            disabled=!is_stopped
+                                                            title=if is_stopped { "Delete the VM and its disks" } else { "Stop the VM before deleting it" }
                                                             on:click=move |_| delete_vm(vm_id_delete.clone())
                                                         >"Delete"</button>
                                                     </ui::RowMenu>

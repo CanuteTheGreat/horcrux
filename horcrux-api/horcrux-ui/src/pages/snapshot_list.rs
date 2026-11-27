@@ -49,6 +49,13 @@ pub fn SnapshotList() -> impl IntoView {
     let (notice, set_notice) = create_signal(None::<String>);
     let (refresh, set_refresh) = create_signal(0u32);
     let (snap_vm, set_snap_vm) = create_signal(String::new());
+    let snap_vm_running = move || {
+        let id = snap_vm.get();
+        vms.with(|v| {
+            v.iter()
+                .any(|vm| vm.id == id && vm.status == horcrux_common::VmStatus::Running)
+        })
+    };
     let (snap_name, set_snap_name) = create_signal(String::new());
     let (snap_desc, set_snap_desc) = create_signal(String::new());
     let (snap_memory, set_snap_memory) = create_signal(false);
@@ -179,7 +186,7 @@ pub fn SnapshotList() -> impl IntoView {
         }
         let desc = snap_desc.get();
         let desc = (!desc.trim().is_empty()).then_some(desc);
-        let memory = snap_memory.get();
+        let memory = snap_memory.get() && snap_vm_running();
         set_creating.set(true);
         spawn_local(async move {
             match api::create_snapshot(&vm_id, &name, desc, memory).await {
@@ -350,9 +357,13 @@ pub fn SnapshotList() -> impl IntoView {
                                     </div>
                                     <div class="form-group">
                                         <label>
-                                            <input id="snap-memory" type="checkbox" prop:checked=snap_memory
+                                            // Only a running VM has memory to save: for a stopped one the
+                                            // box used to be clickable and was silently ignored.
+                                            <input id="snap-memory" type="checkbox"
+                                                prop:checked=move || snap_memory.get() && snap_vm_running()
+                                                disabled=move || !snap_vm_running()
                                                 on:change=move |ev| set_snap_memory.set(event_target_checked(&ev))/>
-                                            " Include memory (running VMs only)"
+                                            {move || if snap_vm_running() { " Include memory (RAM state)" } else { " Include memory (only for a running VM)" }}
                                         </label>
                                     </div>
                                     <div class="form-actions">
