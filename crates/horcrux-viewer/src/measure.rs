@@ -218,9 +218,19 @@ mod tests {
             .skip(1)
             .all(|x| x.changed == 0 || x.changed == 64 * 64));
         assert!(s.iter().skip(1).any(|x| x.changed == 64 * 64));
-        assert!(s
+        // Every frame of this run carries a measured publish-to-seen time.
+        // The upper bound is only a sanity check (a wrong clock or unit gives
+        // seconds to hours): this test runs beside other test binaries on a
+        // shared CI runner, where either thread can be descheduled for tens of
+        // milliseconds, so it must not assert real latency (the latency runs
+        // do that on an idle host).
+        let measured = |v: f64| v > 0.0 && v < 1_000_000.0;
+        let bad: Vec<f64> = s
             .iter()
-            .all(|x| x.publish_to_seen_us > 0.0 && x.publish_to_seen_us < 50_000.0));
+            .map(|x| x.publish_to_seen_us)
+            .filter(|v| !measured(*v))
+            .collect();
+        assert!(bad.is_empty(), "publish_to_seen_us out of range: {bad:?}");
         std::fs::remove_file(p).ok();
     }
 }
