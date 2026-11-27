@@ -177,6 +177,10 @@ def main():
     step("system log")
     if os.path.exists("/var/log/syslog"):
         os.remove("/var/log/syslog")  # the viewer prefers it over messages; this test feeds messages
+    # a privileged sibling shares the CI host's kernel ring buffer: this test feeds messages only
+    kst = expect(200, "GET", "/system/logs/settings")
+    kst["kmsg_path"] = ""
+    expect(200, "PUT", "/system/logs/settings", kst)
     with open("/var/log/messages", "w") as f:
         f.write("Oct  2 07:01:09 gw sshd[411]: Failed password for root\n")
         f.write("Oct  2 07:01:10 gw cron[12]: job started\n")
