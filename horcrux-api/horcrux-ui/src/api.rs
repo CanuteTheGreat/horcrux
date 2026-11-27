@@ -8026,6 +8026,15 @@ pub use horcrux_common::security::{
     ScanRequest, ScanResult, ScanStatus, ScanSummary, ScanTarget, ScanTargetKind, SecurityOverview,
     SecuritySettings, Severity, SeverityCounts,
 };
+pub use horcrux_common::security::{HostAdvisory, HostAffectedPackage, HostCveReport};
+
+pub async fn get_host_cve() -> Result<HostCveReport, ApiError> {
+    fetch_json("/security/host").await
+}
+
+pub async fn check_host_cve() -> Result<HostCveReport, ApiError> {
+    post_json("/security/host/check", &serde_json::json!({})).await
+}
 
 pub async fn get_security_overview() -> Result<SecurityOverview, ApiError> {
     fetch_json("/security/overview").await

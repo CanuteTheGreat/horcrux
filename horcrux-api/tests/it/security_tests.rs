@@ -244,3 +244,83 @@ async fn scans_and_hardening_work_end_to_end() {
     let (s, _) = a.get(&format!("/security/scans/{id}")).await;
     assert_eq!(s, 404);
 }
+
+const HOST_GLSA: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<glsa id="209901-01">
+  <title>Demo: remote code execution</title>
+  <synopsis>Demo issue.</synopsis>
+  <product type="ebuild">demo</product>
+  <announced>2099-01-01</announced>
+  <affected>
+    <package name="dev-libs/demo" auto="yes" arch="*">
+      <unaffected range="ge">2.0</unaffected>
+      <vulnerable range="lt">2.0</vulnerable>
+    </package>
+  </affected>
+  <impact type="high"><p>x</p></impact>
+  <references><uri link="https://example.invalid/c">CVE-2099-0100</uri></references>
+</glsa>"#;
+
+#[tokio::test]
+async fn host_advisories_are_matched_on_a_fake_gentoo_root() {
+    let dir = scratch("security-host-cve");
+    let root = dir.join("sysroot");
+    write(
+        &root.join("var/db/repos/gentoo/metadata/glsa/glsa-209901-01.xml"),
+        HOST_GLSA,
+        0o644,
+    );
+    write(
+        &root.join("var/db/pkg/dev-libs/demo-1.5-r1/SLOT"),
+        "0\n",
+        0o644,
+    );
+    write(&root.join("var/db/pkg/sys-apps/other-3/SLOT"), "0\n", 0o644);
+
+    let mut srv = Server::new(&dir).env("HORCRUX_SYSROOT", root.to_str().unwrap());
+    srv.start();
+    srv.wait_healthy().await;
+    let a = srv.api().await;
+
+    let (s, mut set) = a.get("/security/settings").await;
+    assert_eq!(s, 200, "{set}");
+    assert_eq!(set["host_cve"]["enabled"], true);
+    assert_eq!(set["host_cve"]["schedule_hours"], 24);
+    assert!(set["host_cve"]["update_command"]
+        .as_str()
+        .unwrap()
+        .contains("--with-bdeps=y @world"));
+
+    let (s, r) = a.post("/security/host/check", json!({})).await;
+    assert_eq!(s, 200, "{r}");
+    assert_eq!(r["supported"], true, "{r}");
+    assert_eq!(r["installed_packages"], 2);
+    assert_eq!(r["advisories"].as_array().unwrap().len(), 1, "{r}");
+    let adv = &r["advisories"][0];
+    assert_eq!(adv["id"], "209901-01");
+    assert_eq!(adv["severity"], "high");
+    assert_eq!(adv["cves"][0], "CVE-2099-0100");
+    assert_eq!(adv["packages"][0]["package"], "dev-libs/demo");
+    assert_eq!(adv["packages"][0]["installed"], "1.5-r1");
+    assert_eq!(adv["packages"][0]["fixed"][0], ">=2.0");
+
+    // Ignoring the advisory removes it from the list and counts it.
+    set["host_cve"]["ignore"] = json!(["209901-01"]);
+    let (s, v) = a.put("/security/settings", set.clone()).await;
+    assert_eq!(s, 200, "{v}");
+    let (s, r) = a.post("/security/host/check", json!({})).await;
+    assert_eq!(s, 200, "{r}");
+    assert_eq!(r["advisories"].as_array().unwrap().len(), 0, "{r}");
+    assert_eq!(r["ignored"], 1);
+
+    // Invalid settings are refused with the reason.
+    set["host_cve"]["glsa_dir"] = json!("relative/path");
+    let (s, v) = a.put("/security/settings", set).await;
+    assert_eq!(s, 400, "{v}");
+    assert!(v.to_string().contains("host_cve.glsa_dir"), "{v}");
+
+    // GET serves the cached report.
+    let (s, r) = a.get("/security/host").await;
+    assert_eq!(s, 200, "{r}");
+    assert_eq!(r["ignored"], 1);
+}

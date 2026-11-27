@@ -15,6 +15,20 @@ Security (System menu > Security, or `/security`) has four pages:
 
 Design and the comparison with other platforms: [design/security-suite.md](design/security-suite.md).
 
+## Host vulnerabilities (Gentoo)
+
+The Overview page lists the packages installed on this node that a published Gentoo security
+advisory (GLSA) names as vulnerable: advisory, severity, CVE ids, installed version, the version
+that fixes it, and the update command. Horcrux reads the advisories from the synced Gentoo tree
+(`/var/db/repos/gentoo/metadata/glsa`) and compares them with `/var/db/pkg`, with the same
+rules as `glsa-check -t all`. It never changes anything; update with
+
+    emerge --update --changed-use --newuse --deep --with-bdeps=y @world
+
+or from System > Packages. Re-check with **Check now**; otherwise it runs every 24 hours, and a
+new advisory that affects the node sends a `security` notification. Advisories you accept can be
+listed under `host_cve.ignore`. A node without Portage shows that on the card instead of a list.
+
 ## Vulnerability scanning
 
 Horcrux runs a free scanner as a separate program:
@@ -130,6 +144,14 @@ security:
 | `hardening.sysctl_file` | `/etc/sysctl.d/60-horcrux-hardening.conf` | the managed drop-in |
 | `hardening.schedule_hours` | `24` | hours between scheduled checks; 0 = on demand only |
 | `hardening.notify_on_regression` | `true` | notify when a rule starts failing |
+| `host_cve.enabled` | `true` | host advisory check on |
+| `host_cve.glsa_dir` | `/var/db/repos/gentoo/metadata/glsa` | directory of GLSA XML files |
+| `host_cve.vdb_dir` | `/var/db/pkg` | installed-package database |
+| `host_cve.arch` | empty | architecture such as `amd64`; empty = detected |
+| `host_cve.ignore` | `[]` | advisory ids not reported |
+| `host_cve.update_command` | `emerge --update --changed-use --newuse --deep --with-bdeps=y @world` | shown as the way to fix |
+| `host_cve.schedule_hours` | `24` | hours between scheduled checks; 0 = on demand only |
+| `host_cve.notify_on_new` | `true` | notify when a new advisory affects the node |
 
 ## API
 
@@ -142,6 +164,7 @@ security:
 | `POST /api/security/scans` `{kind, target}` | start a scan (202; 424 `scanner-missing` / `scanning-disabled`) | Sys.Modify |
 | `POST /api/security/scans/all` | scan every target (202) | Sys.Modify |
 | `GET /api/security/scans/:id`, `DELETE` | one scan with its findings / remove it (409 while running) | Sys.Audit / Sys.Modify |
+| `GET /api/security/host`, `POST /api/security/host/check` | host advisory exposure (cached) / re-check now | Sys.Audit / Sys.Modify |
 | `GET /api/security/hardening` | check the baseline now | Sys.Audit |
 | `GET /api/security/hardening/report?format=html\|text\|json` | report download | Sys.Audit |
 | `POST /api/security/hardening/apply` `{rules?, dry_run?}` | apply the named (or every failing automatic) rule | Sys.Modify |

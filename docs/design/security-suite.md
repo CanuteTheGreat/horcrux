@@ -120,13 +120,37 @@ caps. VM rows appear in Security > Vulnerabilities; the VM detail page shows a
 Security tab/badge. The guest SBOM format is verified against real Grype
 (reports real deb CVEs with fix versions from a hand-built CycloneDX SBOM).
 
+## Phase 2: Host CVE exposure (shipped)
+
+Security > Overview has a **Host vulnerabilities** card: which installed packages of the node
+are named by a published Gentoo security advisory (GLSA), the advisory id, severity, CVE ids,
+the versions that fix it, the update command and a link to System > Packages.
+
+- Source: the GLSA XML files of the synced Gentoo tree (`host_cve.glsa_dir`, default
+  `/var/db/repos/gentoo/metadata/glsa`) against the installed-package database
+  (`host_cve.vdb_dir`, `/var/db/pkg`). It applies the rules of `glsa-check -t all` (Portage
+  `glsa.py`): an installed package is affected when it matches a `<vulnerable>` range and no
+  `<unaffected>` range; `slot` narrows both, the `r*` ranges compare only the revision of one
+  version, `arch` limits an entry. It is done in-process (version order per PMS), so it needs
+  no Python and no privileges; tests use a fake root (`HORCRUX_SYSROOT`).
+- ctg-vulnwatch (the owner's fleet tool) reads the same GLSA feed and uses the same matching
+  idea; its code is not shipped in the product (it is private tooling), the two stay
+  consistent because both follow `glsa.py`. The `own-vulnwatch-*` jobs own the fleet side.
+- Schedule `host_cve.schedule_hours` (24); a new advisory affecting the node sends a `security`
+  notification (`host_cve.notify_on_new`). The ids already seen are kept in
+  `<data_dir>/security/host-cve-seen.json`, so a restart does not notify again and the first
+  check only records them. Non-Gentoo nodes (no `/var/db/pkg`) show why the card is empty.
+- Nothing is changed on the host. `host_cve.update_command` is displayed
+  (`emerge --update --changed-use --newuse --deep --with-bdeps=y @world`), never run.
+- API `GET /api/security/host`, `POST /api/security/host/check`.
+
 ## Later phases (one job each)
 
 | Phase | Item | Notes |
 |---|---|---|
 | 2 | Scanner packaging in images | current Grype as `app-containers/grype-bin` in the Horcrux overlay (::gentoo has an old ~amd64 0.86), binhost tier, server + GNOME images, `horcrux-bin` optional dependency, DB mirror docs for air-gapped nodes |
 | 2 | VM guest scanning | **shipped**: see "Phase 2: VM guest scanning" below |
-| 2 | Host CVE exposure | Gentoo GLSA (`glsa-check`) + package versions matched against the feed ctg-vulnwatch uses; shown on the Security overview, notification on new affecting advisories, ties into Packages > updates |
+| 2 | Host CVE exposure | **shipped**: see "Phase 2: Host CVE exposure" below |
 | 2 | Host IDS / integrity | auditd with a Horcrux rule set (logins, privilege use, /etc changes, horcrux binaries), AIDE database init + scheduled check, findings in Security > Events and as notifications; OpenRC + systemd units |
 | 2 | Pentest VM template library | Kali, Parrot, Pentoo as first-class templates (download + checksum/signature check, cloud-init or answer files where the distro supports it, sensible hardware defaults, isolated network by default) |
 | 3 | Security dashboard + events | one page joining access log (hx-api-access-log), audit log, failed logins, baseline drift and scan results; alerting through hx-notification-matchers |

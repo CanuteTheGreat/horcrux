@@ -10,9 +10,12 @@
 //! * `GET  /api/security/hardening`                 evaluate the baseline now
 //! * `GET  /api/security/hardening/report?format=text|html|json` download
 //! * `POST /api/security/hardening/apply|revert`    {rules?, dry_run?}
+//! * `GET  /api/security/host`                      host exposure to Gentoo advisories (GLSA)
+//! * `POST /api/security/host/check`                re-check now
 //!
 //! Reads need Sys.Audit, changes Sys.Modify (privileges.rs area `security`).
 pub mod hardening;
+pub mod host_cve;
 pub mod vmscan;
 pub mod vulnscan;
 
@@ -27,9 +30,9 @@ use axum::{
     Json, Router,
 };
 use horcrux_common::security::{
-    HardeningApplyRequest, HardeningApplyResult, HardeningReport, RuleStatus, ScanRequest,
-    ScanResult, ScanStatus, ScanSummary, ScanTarget, ScanTargetKind, SecurityOverview,
-    SecuritySettings, SeverityCounts,
+    HardeningApplyRequest, HardeningApplyResult, HardeningReport, HostAdvisory, HostCveReport,
+    RuleStatus, ScanRequest, ScanResult, ScanStatus, ScanSummary, ScanTarget, ScanTargetKind,
+    SecurityOverview, SecuritySettings, SeverityCounts,
 };
 use serde::Deserialize;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -52,6 +55,70 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/security/hardening/report", get(hardening_report))
         .route("/api/security/hardening/apply", post(hardening_apply))
         .route("/api/security/hardening/revert", post(hardening_revert))
+        .route("/api/security/host", get(host_get))
+        .route("/api/security/host/check", post(host_check))
+}
+
+// ------------------------------------------------------------ host exposure
+
+fn host_cache() -> &'static Mutex<Option<HostCveReport>> {
+    static C: OnceLock<Mutex<Option<HostCveReport>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(None))
+}
+
+/// Advisory ids already reported on this node (so a restart does not
+/// notify again); first run only records them.
+fn host_seen_path() -> std::path::PathBuf {
+    data_dir().join("security").join("host-cve-seen.json")
+}
+
+fn load_seen() -> Option<Vec<String>> {
+    serde_json::from_slice(&std::fs::read(host_seen_path()).ok()?).ok()
+}
+
+fn save_seen(ids: &[String]) {
+    let p = host_seen_path();
+    if let Some(d) = p.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    if let Ok(b) = serde_json::to_vec(ids) {
+        let _ = std::fs::write(p, b);
+    }
+}
+
+/// Evaluate the host's exposure now and cache it.
+pub async fn host_check_now(state: &AppState) -> HostCveReport {
+    let s = load_settings(state).await.host_cve;
+    let node = node_name();
+    let r = if s.enabled {
+        let (s2, n2) = (s.clone(), node.clone());
+        tokio::task::spawn_blocking(move || host_cve::evaluate(&s2, &n2))
+            .await
+            .unwrap_or_default()
+    } else {
+        HostCveReport {
+            node,
+            checked_at: chrono::Utc::now().timestamp(),
+            reason: "The host vulnerability check is turned off (host_cve.enabled).".into(),
+            update_command: s.update_command.clone(),
+            ..Default::default()
+        }
+    };
+    if let Ok(mut c) = host_cache().lock() {
+        *c = Some(r.clone());
+    }
+    r
+}
+
+async fn host_get(State(state): State<Arc<AppState>>) -> Json<HostCveReport> {
+    if let Some(r) = host_cache().lock().ok().and_then(|g| g.clone()) {
+        return Json(r);
+    }
+    Json(host_check_now(&state).await)
+}
+
+async fn host_check(State(state): State<Arc<AppState>>) -> Json<HostCveReport> {
+    Json(host_check_now(&state).await)
 }
 
 // ------------------------------------------------------------ settings
@@ -753,6 +820,7 @@ pub fn spawn_scheduler(state: Arc<AppState>) {
         tokio::time::sleep(Duration::from_secs(120)).await;
         let mut last_check: Option<i64> = None;
         let mut previous_fail: Option<Vec<String>> = None;
+        let mut last_host: Option<i64> = None;
         loop {
             let s = load_settings(&state).await;
             let now = chrono::Utc::now().timestamp();
@@ -775,6 +843,60 @@ pub fn spawn_scheduler(state: Arc<AppState>) {
                     if due && !busy {
                         let _ = queue(&state, t.kind, &t.name, "scheduler").await;
                     }
+                }
+            }
+            let hc = &s.host_cve;
+            if hc.enabled
+                && hc.schedule_hours > 0
+                && last_host.is_none_or(|l| now - l >= hc.schedule_hours as i64 * 3600)
+            {
+                let r = host_check_now(&state).await;
+                last_host = Some(now);
+                if r.supported {
+                    let ids: Vec<String> = r.advisories.iter().map(|a| a.id.clone()).collect();
+                    if let Some(seen) = load_seen() {
+                        let new: Vec<&HostAdvisory> = r
+                            .advisories
+                            .iter()
+                            .filter(|a| !seen.contains(&a.id))
+                            .collect();
+                        if hc.notify_on_new && !new.is_empty() {
+                            let worst = if new.iter().any(|a| a.severity == "high") {
+                                "critical"
+                            } else {
+                                "warning"
+                            };
+                            notify(
+                                &state,
+                                worst,
+                                format!(
+                                    "{} new security advisor{} affect{} {}",
+                                    new.len(),
+                                    if new.len() == 1 { "y" } else { "ies" },
+                                    if new.len() == 1 { "s" } else { "" },
+                                    r.node
+                                ),
+                                format!(
+                                    "{}. Update with: {}. Details: Security > Overview.",
+                                    new.iter()
+                                        .map(|a| format!(
+                                            "{} ({})",
+                                            a.id,
+                                            a.packages
+                                                .iter()
+                                                .map(|p| p.package.as_str())
+                                                .collect::<Vec<_>>()
+                                                .join(", ")
+                                        ))
+                                        .collect::<Vec<_>>()
+                                        .join("; "),
+                                    r.update_command
+                                ),
+                            )
+                            .await;
+                        }
+                    }
+                    save_seen(&ids);
                 }
             }
             let h = &s.hardening;

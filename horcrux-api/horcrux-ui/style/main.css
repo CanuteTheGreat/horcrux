@@ -1408,3 +1408,9 @@ td .actions { flex-wrap: nowrap; }
 .review dt { font-weight: 600; }
 .review dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .review { grid-template-columns: 1fr; } .path-list li { white-space: normal; } }
+
+/* Security > Overview: host advisories (stacked rows read well on a phone) */
+.host-advisories { list-style: none; margin: .5rem 0 1rem; padding: 0; }
+.host-advisory { padding: .6rem 0; border-top: 1px solid var(--border, rgba(128,128,128,.25)); overflow-wrap: anywhere; }
+.host-advisory:first-child { border-top: 0; }
+.host-advisory-pkgs { margin: .25rem 0; font-family: var(--mono, ui-monospace, monospace); font-size: .85rem; }

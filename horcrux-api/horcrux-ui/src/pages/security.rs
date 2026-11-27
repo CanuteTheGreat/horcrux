@@ -176,12 +176,111 @@ pub fn SecurityOverviewPage() -> impl IntoView {
                                 <div class="dash-meta">{format!("{} failing, {} need a manual fix", o.hardening_failed, o.hardening_manual)}</div>
                             </A>
                         </div>
+                        <HostCveCard/>
                         <div class="card">
                             <h2>"Scanner"</h2>
                             <p>{if o.scanner_available { format!("{} {} is installed.", o.scanner, o.scanner_version) } else { format!("{} is not installed.", o.scanner) }}
                                " Scanning is " {if o.scanning_enabled { "enabled" } else { "turned off" }} " on this node. "
                                {(o.running_scans > 0).then(|| format!("{} scan(s) running.", o.running_scans))}</p>
                         </div>
+                    }.into_view()
+                }
+            }}
+        </div>
+    }
+}
+
+/// Host vulnerabilities: the host's own installed packages against Gentoo
+/// security advisories. Loads on its own so the overview never waits for it.
+#[component]
+fn HostCveCard() -> impl IntoView {
+    let (rep, set_rep) = create_signal(None::<HostCveReport>);
+    let (err, set_err) = create_signal(None::<String>);
+    let (busy, set_busy) = create_signal(false);
+    let load = create_action(move |_: &()| async move {
+        match get_host_cve().await {
+            Ok(r) => {
+                set_err.set(None);
+                set_rep.set(Some(r))
+            }
+            Err(e) => set_err.set(Some(format!("Could not load the host check: {e}"))),
+        }
+    });
+    load.dispatch(());
+    let recheck = create_action(move |_: &()| async move {
+        set_busy.set(true);
+        match check_host_cve().await {
+            Ok(r) => {
+                set_err.set(None);
+                set_rep.set(Some(r))
+            }
+            Err(e) => set_err.set(Some(format!("Check failed: {e}"))),
+        }
+        set_busy.set(false);
+    });
+    view! {
+        <div class="card host-cve-card" id="host-vulnerabilities">
+            <div class="page-header">
+                <h2>"Host vulnerabilities"</h2>
+                <div class="header-actions">
+                    <button class="btn btn-secondary" disabled=move || busy.get() on:click=move |_| recheck.dispatch(())>
+                        {move || if busy.get() { "Checking..." } else { "Check now" }}
+                    </button>
+                </div>
+            </div>
+            {move || err.get().map(|m| view! { <div class="alert alert-error">{m}</div> })}
+            {move || match rep.get() {
+                None => view! { <div class="loading">"Loading..."</div> }.into_view(),
+                Some(r) if !r.supported => view! {
+                    <p class="help-text">{r.reason.clone()} " "
+                        <A href="/security/settings">"Host check settings"</A></p>
+                }.into_view(),
+                Some(r) => {
+                    let n = r.advisories.len();
+                    let cmd = r.update_command.clone();
+                    view! {
+                        <p class="dash-meta">
+                            {format!("{} installed packages checked against {} Gentoo security advisories ({}), {}. ",
+                                r.installed_packages, r.advisories_checked, r.arch, when(Some(r.checked_at)))}
+                            {(r.ignored > 0).then(|| format!("{} ignored in Settings.", r.ignored))}
+                        </p>
+                        {if n == 0 {
+                            view! { <p class="alert alert-success">"No installed package is affected by a published advisory."</p> }.into_view()
+                        } else {
+                            view! {
+                                <p class="alert alert-warning">
+                                    {format!("{} advisor{} affect{} {} installed package{}.", n,
+                                        if n == 1 { "y" } else { "ies" }, if n == 1 { "s" } else { "" },
+                                        r.affected_packages, if r.affected_packages == 1 { "" } else { "s" })}
+                                </p>
+                                <ul class="host-advisories">
+                                {r.advisories.iter().map(|a| {
+                                    let url = a.url.clone();
+                                    let id = a.id.clone();
+                                    let sev = a.severity.clone();
+                                    let title = a.title.clone();
+                                    let cves = if a.cves.is_empty() { "no CVE ids listed".to_string() } else { a.cves.join(", ") };
+                                    let pk: Vec<String> = a.packages.iter().map(|p| format!(
+                                        "{} {} (fixed in {})", p.package, p.installed,
+                                        if p.fixed.is_empty() { "no fixed version published".to_string() } else { p.fixed.join(", ") })).collect();
+                                    view! {
+                                        <li class="host-advisory">
+                                            <div>
+                                                <a href=url target="_blank" rel="noopener noreferrer"><strong>{id}</strong></a>
+                                                " "
+                                                <span class=format!("sev-badge sev-{}", sev)>{sev.clone()}</span>
+                                                " " {title}
+                                            </div>
+                                            <div class="host-advisory-pkgs">{pk.into_iter().map(|n| view! { <div>{n}</div> }).collect_view()}</div>
+                                            <div class="dash-meta">{cves}</div>
+                                        </li>
+                                    }
+                                }).collect_view()}
+                                </ul>
+                                <p>"Update with "<code>{cmd}</code>" (Horcrux never runs it for you), or open "
+                                    <A href="/system/packages">"System > Packages"</A>"."</p>
+                            }.into_view()
+                        }}
                     }.into_view()
                 }
             }}
@@ -787,6 +886,7 @@ pub fn SecuritySettingsPage() -> impl IntoView {
             {move || s.get().map(|cur| {
                 let v = cur.vuln_scan.clone();
                 let h = cur.hardening.clone();
+                let hc = cur.host_cve.clone();
                 view! {
                     <form class="card settings-form" on:submit=move |e| { e.prevent_default(); if let Some(x) = s.get_untracked() { save.dispatch(x) } }>
                         <h2>"Vulnerability scanning"</h2>
@@ -899,6 +999,51 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                             <input id="sec-h-file" type="text" prop:value=h.sysctl_file.clone()
                                 on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.hardening.sysctl_file = c.clone())) }/>
                             <small class="form-help">"Read at boot by OpenRC's sysctl service and systemd-sysctl."</small>
+                        </div>
+                        <h2>"Host vulnerabilities (Gentoo advisories)"</h2>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-c-en"><input id="sec-c-en" type="checkbox" prop:checked=hc.enabled
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.host_cve.enabled = c)) }/>" Check this host against security advisories"</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-c-sched">"Check every (hours)"</label>
+                                <input id="sec-c-sched" type="number" min="0" prop:value=hc.schedule_hours.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.host_cve.schedule_hours = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-c-notify"><input id="sec-c-notify" type="checkbox" prop:checked=hc.notify_on_new
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.host_cve.notify_on_new = c)) }/>" Notify about a new advisory"</label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-c-glsa">"Advisory directory"</label>
+                                <input id="sec-c-glsa" type="text" prop:value=hc.glsa_dir.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.host_cve.glsa_dir = c.clone())) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-c-vdb">"Installed-package database"</label>
+                                <input id="sec-c-vdb" type="text" prop:value=hc.vdb_dir.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.host_cve.vdb_dir = c.clone())) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-c-arch">"Architecture"</label>
+                                <input id="sec-c-arch" type="text" placeholder="detected" prop:value=hc.arch.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.host_cve.arch = c.trim().to_string())) }/>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-c-ign">"Ignored advisories"</label>
+                            <input id="sec-c-ign" type="text" placeholder="advisory ids, comma separated" prop:value=hc.ignore.join(", ")
+                                on:change=move |e| { let c: Vec<String> = event_target_value(&e).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(); upd(Box::new(move |x| x.host_cve.ignore = c.clone())) }/>
+                            <small class="form-help">"Advisories you accept or that do not apply (for example 202401-01)."</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-c-cmd">"Update command shown"</label>
+                            <input id="sec-c-cmd" type="text" prop:value=hc.update_command.clone()
+                                on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.host_cve.update_command = c.clone())) }/>
+                            <small class="form-help">"Only displayed; Horcrux never runs it."</small>
                         </div>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary" disabled=move || save.pending().get()>"Save"</button>

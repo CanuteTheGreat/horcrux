@@ -470,13 +470,135 @@ impl HardeningSettings {
 pub struct SecuritySettings {
     pub vuln_scan: VulnScanSettings,
     pub hardening: HardeningSettings,
+    pub host_cve: HostCveSettings,
 }
 
 impl SecuritySettings {
     pub fn validate(&self) -> Result<(), String> {
         self.vuln_scan.validate()?;
-        self.hardening.validate()
+        self.hardening.validate()?;
+        self.host_cve.validate()
     }
+}
+
+/// Host vulnerability exposure settings: the host's own installed packages
+/// matched against Gentoo security advisories (GLSA).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct HostCveSettings {
+    /// Host exposure check on/off (API and schedule).
+    pub enabled: bool,
+    /// Directory of GLSA XML files (the synced Gentoo tree).
+    pub glsa_dir: String,
+    /// Installed-package database (Portage `/var/db/pkg`).
+    pub vdb_dir: String,
+    /// CPU architecture in Gentoo naming (amd64, arm64, ...) used to filter
+    /// advisories; empty = detect from the running node.
+    pub arch: String,
+    /// Advisory ids that are not reported (accepted risk or not applicable).
+    pub ignore: Vec<String>,
+    /// Command shown as the way to apply fixes (never run by Horcrux).
+    pub update_command: String,
+    /// Hours between scheduled checks; 0 = only on demand.
+    pub schedule_hours: u32,
+    /// A scheduled check that finds a new affecting advisory sends a
+    /// `security` notification.
+    pub notify_on_new: bool,
+}
+
+/// The Gentoo form of a full update, shown on the card.
+pub const HOST_UPDATE_COMMAND: &str =
+    "emerge --update --changed-use --newuse --deep --with-bdeps=y @world";
+
+impl Default for HostCveSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            glsa_dir: "/var/db/repos/gentoo/metadata/glsa".into(),
+            vdb_dir: "/var/db/pkg".into(),
+            arch: String::new(),
+            ignore: Vec::new(),
+            update_command: HOST_UPDATE_COMMAND.into(),
+            schedule_hours: 24,
+            notify_on_new: true,
+        }
+    }
+}
+
+impl HostCveSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        for (k, v) in [("glsa_dir", &self.glsa_dir), ("vdb_dir", &self.vdb_dir)] {
+            if !v.starts_with('/') || v.contains("..") || v.contains(char::is_whitespace) {
+                return Err(format!("host_cve.{k}: an absolute path without '..'"));
+            }
+        }
+        if self.schedule_hours > 24 * 90 {
+            return Err("host_cve.schedule_hours: 0 (off) to 2160".into());
+        }
+        if self.arch.len() > 16 || self.arch.contains(char::is_whitespace) {
+            return Err("host_cve.arch: one architecture name such as amd64".into());
+        }
+        if self.update_command.len() > 200 || self.update_command.contains(['\n', '\r']) {
+            return Err("host_cve.update_command: one short line".into());
+        }
+        for id in &self.ignore {
+            if id.is_empty() || id.len() > 32 || id.contains(char::is_whitespace) {
+                return Err("host_cve.ignore: advisory ids such as 202401-01".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One installed package that a GLSA says is vulnerable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostAffectedPackage {
+    /// `category/name`.
+    pub package: String,
+    pub installed: String,
+    #[serde(default)]
+    pub slot: String,
+    /// Versions that fix it, e.g. `>=3.0.14`, `3.0.13 (3.0 branch)`.
+    pub fixed: Vec<String>,
+}
+
+/// One advisory that affects this host.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostAdvisory {
+    /// GLSA id, `YYYYMM-NN`.
+    pub id: String,
+    pub title: String,
+    /// `critical`..`low` from the GLSA's own impact (`high` -> high, ...).
+    pub severity: String,
+    pub synopsis: String,
+    /// CVE ids and other reference ids from the advisory.
+    pub cves: Vec<String>,
+    pub url: String,
+    pub packages: Vec<HostAffectedPackage>,
+}
+
+/// `GET /api/security/host`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct HostCveReport {
+    pub node: String,
+    pub checked_at: i64,
+    /// This node is a Portage system with a readable GLSA set.
+    pub supported: bool,
+    /// Why not (shown instead of the list).
+    #[serde(default)]
+    pub reason: String,
+    pub arch: String,
+    pub installed_packages: u32,
+    pub advisories_checked: u32,
+    pub advisories: Vec<HostAdvisory>,
+    /// Distinct affected packages.
+    pub affected_packages: u32,
+    /// Advisories hidden by `host_cve.ignore`.
+    pub ignored: u32,
+    /// Newest advisory date or id seen in the set (staleness hint).
+    #[serde(default)]
+    pub newest_advisory: String,
+    pub update_command: String,
 }
 
 /// Result of one hardening rule.
