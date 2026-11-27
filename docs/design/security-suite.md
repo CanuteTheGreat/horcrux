@@ -20,7 +20,7 @@ works the same on OpenRC and systemd, and degrades to a clear "not installed, he
 | Host hardening baseline + report | none (docs only) | Security Configuration and Hardening Guide, compliance through Aria Operations packs | SCMA: STIG baseline checked hourly and self-healed | Secured-core, OSConfig security baseline with drift control | **Horcrux baseline (phase 1)**: CIS-derived, hypervisor-safe, apply/revert, scheduled re-check with regression alerts, HTML/text/JSON report |
 | Image / guest vulnerability scanning | none | none built in (Carbon Black / third-party) | none built in | Defender for Cloud (paid, cloud) | **phase 1: container images (Podman, Docker) and container root file systems (LXC, Incus); phase 2: VMs (stopped: read-only disk mount; running: guest-agent package inventory as an SBOM)** |
 | Host CVE exposure | none (apt is the tool) | Lifecycle Manager patch baselines | LCM | Windows Update / Azure Update Manager | phase 2: Gentoo GLSA + ctg-vulnwatch-style feed matching for the host |
-| Host IDS / integrity | none | none built in | none built in | Defender for Endpoint (paid) | phase 2: auditd rules + AIDE, phase 3: Falco-class container runtime detection |
+| Host IDS / integrity | none | none built in | none built in | Defender for Endpoint (paid) | **phase 2 (hx-sec-ids-integrity)**: Horcrux audit rule set + AIDE baseline/check, findings in Security > Events and notifications; phase 3: Falco-class container runtime detection |
 | Guest secrets for provisioning | cloud-init passwords stored in the config | guest customization specs | cloud-init | unattend files | phase 3: secrets store references in cloud-init/unattend, never in the VM config |
 | Pentest VM templates | none | none | none | none | phase 2: Kali, Parrot, Pentoo as first-class templates |
 | Guest introspection | none | NSX Guest Introspection (deprecated) | none | none | phase 4 research (optional, off by default) |
@@ -120,6 +120,55 @@ caps. VM rows appear in Security > Vulnerabilities; the VM detail page shows a
 Security tab/badge. The guest SBOM format is verified against real Grype
 (reports real deb CVEs with fix versions from a hand-built CycloneDX SBOM).
 
+## Phase 2: host intrusion detection and file integrity
+
+- Code: `horcrux-api/src/api/security/ids.rs` (rule set rendering, `ausearch --format raw`
+  parsing, AIDE config and JSON report, event store, query) and `ids_api.rs` (routes,
+  scheduler, applying the audit settings); settings `audit`, `integrity`, `events` in
+  `SecuritySettings` (API, UI, declarative `security:`).
+- Audit: the rule set is product content rendered from `audit` settings into a
+  `/etc/audit/rules.d/50-horcrux.rules` drop-in (augenrules merges it at boot on OpenRC
+  and systemd), loaded at once with `auditctl -R`. Every rule carries a `hx-<kind>` key
+  (identity, sshd, horcrux, binaries, sudo, modules, time, watch); turning audit off deletes
+  only rules with those keys (`auditctl -D -k`), never other tools' rules, and the file.
+  Watches are written only for paths that exist (auditctl refuses a watch whose parent is
+  missing). `auditd` itself comes from sys-process/audit with its own OpenRC script and
+  systemd unit; Horcrux enables and starts it through its init abstraction
+  (`audit.manage_service`). Logins, failed authentications, sudo commands and account
+  changes come from PAM/shadow records (USER_LOGIN, USER_AUTH failed, USER_CMD, ADD_USER, ...)
+  and need no rule. `audit.immutable` (`-e 2`) is off by default: it protects the rules from
+  root but makes turning them off need a reboot, so Horcrux refuses the change with a 409
+  while the kernel says `enabled 2`.
+- Collection: every `audit.collect_secs` (60) `ausearch --checkpoint ... --start
+  checkpoint --format raw` at nice 10 and idle IO. ausearch re-reports the checkpointed
+  event and a lost checkpoint (rotation, exit 10-12) replays the logs, so events are kept
+  only when newer than a stored watermark (time, serial); turning audit on sets the
+  watermark to now, so a node's older history is not imported.
+- Integrity: AIDE configuration rendered into `<db_dir>/aide.conf` (`/usr /etc /boot`
+  by default, VM disk, container and data directories excluded; paths are escaped to
+  regexes anchored with `(/|$)`), JSON report (`report_format=json` must come before
+  `report_url`, AIDE 0.18+), uncompressed database (AIDE may be built without zlib).
+  Initialize = `aide --init` + rotate, Check = `aide --check` (exit 1-7 = differences,
+  14+ = error), Accept current files = `aide --update` + rotate. One run at a time, nice 19
+  and idle IO, hard timeout. A check records a summary event plus up to
+  `integrity.max_file_events` per-file events (binaries, /boot, PAM, sudoers, sshd = high;
+  other /etc = medium).
+- Events: JSON lines in `<data_dir>/security/events.jsonl`, pruned to `events.keep`;
+  Security > Events filters by source, kind, severity, user, time and text, links each
+  user to their events and to the API audit log (`/audit?user=`). Notifications go out as
+  event `security` (audit: one per collection run for `audit.notify_kinds`; integrity: one
+  per check with differences).
+- Hardening: `svc-auditd` passes when auditd runs with the Horcrux rules loaded,
+  `svc-integrity` when integrity is on, a baseline exists and the last check is within
+  twice the schedule (Manual when the tool is not installed, Fail when installed but off).
+- Packaging: USE `ids` on app-emulation/horcrux pulls sys-process/audit and
+  app-forensics/aide.
+- Tests: unit tests (rule rendering incl. missing paths and merged /usr, raw audit parsing
+  incl. hex values, multi-key records, PAM records, watermark, AIDE config and report,
+  event store and query, settings validation), `tests/it/security_tests.rs`
+  `ids_and_integrity_work_end_to_end` (real binary with stand-in tools), and
+  `horcrux-api/tests/security_ids_e2e.sh` (real auditd + AIDE in a throwaway VM).
+
 ## Later phases (one job each)
 
 | Phase | Item | Notes |
@@ -127,7 +176,7 @@ Security tab/badge. The guest SBOM format is verified against real Grype
 | 2 | Scanner packaging in images | current Grype as `app-containers/grype-bin` in the Horcrux overlay (::gentoo has an old ~amd64 0.86), binhost tier, server + GNOME images, `horcrux-bin` optional dependency, DB mirror docs for air-gapped nodes |
 | 2 | VM guest scanning | **shipped**: see "Phase 2: VM guest scanning" below |
 | 2 | Host CVE exposure | Gentoo GLSA (`glsa-check`) + package versions matched against the feed ctg-vulnwatch uses; shown on the Security overview, notification on new affecting advisories, ties into Packages > updates |
-| 2 | Host IDS / integrity | auditd with a Horcrux rule set (logins, privilege use, /etc changes, horcrux binaries), AIDE database init + scheduled check, findings in Security > Events and as notifications; OpenRC + systemd units |
+| 2 | Host IDS / integrity | **done** (see "Phase 2: host intrusion detection and file integrity" below) |
 | 2 | Pentest VM template library | Kali, Parrot, Pentoo as first-class templates (download + checksum/signature check, cloud-init or answer files where the distro supports it, sensible hardware defaults, isolated network by default) |
 | 3 | Security dashboard + events | one page joining access log (hx-api-access-log), audit log, failed logins, baseline drift and scan results; alerting through hx-notification-matchers |
 | 3 | Guest provisioning secrets | cloud-init/unattend passwords and keys referenced from an encrypted secrets store, never stored in VM config or exports; rotation |

@@ -244,3 +244,210 @@ async fn scans_and_hardening_work_end_to_end() {
     let (s, _) = a.get(&format!("/security/scans/{id}")).await;
     assert_eq!(s, 404);
 }
+
+async fn wait_idle(a: &Api) -> serde_json::Value {
+    for _ in 0..100 {
+        let (_, st) = a.get("/security/ids").await;
+        if st["integrity_running"].is_null() {
+            return st;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("integrity run did not finish");
+}
+
+/// A 202-accepted integrity run is asynchronous: wait for it to be idle AND
+/// for the difference count to reach `want` (the status is read a moment
+/// after `running` clears).
+async fn wait_diff(a: &Api, want: i64) -> serde_json::Value {
+    for _ in 0..100 {
+        let st = wait_idle(a).await;
+        if st["integrity_last_differences"].as_i64() == Some(want) {
+            return st;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let st = wait_idle(a).await;
+    panic!("integrity_last_differences never reached {want}: {st}");
+}
+
+const AIDE_JSON: &str = r#"{"outline":"AIDE found differences between database and filesystem!!",
+ "number_of_entries":{"total":120,"added":0,"removed":0,"changed":1},
+ "changed":{"/usr/bin/horcrux-api":"f > ... ....H      "},
+ "details":{"/usr/bin/horcrux-api":{"size":{"old":10,"new":11},"sha256":{"old":"AAAA","new":"BBBB"}}}}"#;
+
+const AUDIT_RAW: &str = r#"type=SYSCALL msg=audit(4102444800.123:901): arch=c000003e syscall=257 success=yes exit=3 auid=0 uid=0 exe="/usr/bin/vim" key="hx-identity"
+type=PATH msg=audit(4102444800.123:901): item=1 name="/etc/passwd" inode=3 nametype=NORMAL
+type=USER_AUTH msg=audit(4102444801.000:902): pid=301 uid=0 auid=4294967295 msg='op=PAM:authentication acct="mallory" exe="/usr/sbin/sshd" addr=192.0.2.9 res=failed'
+"#;
+
+/// Intrusion detection and file integrity through stand-in audit and AIDE
+/// programs (the real tools run in tests/security_ids_e2e.sh): settings,
+/// the rule file, event collection and dedupe, AIDE init/check/accept,
+/// the events API filters and the hardening rules.
+#[tokio::test]
+async fn ids_and_integrity_work_end_to_end() {
+    let dir = scratch("security-ids");
+    let root = dir.join("sysroot");
+    write(
+        &root.join("etc/passwd"),
+        "root:x:0:0::/root:/bin/sh\n",
+        0o644,
+    );
+    write(&root.join("etc/shadow"), "root:*:1::::::\n", 0o640);
+    std::fs::create_dir_all(root.join("etc/horcrux")).unwrap();
+    std::fs::create_dir_all(root.join("etc/audit/rules.d")).unwrap();
+    let bin = dir.join("bin");
+    let loaded = dir.join("auditctl-loaded.rules");
+    let raw = dir.join("audit.raw");
+    write(&raw, AUDIT_RAW, 0o644);
+    write(
+        &bin.join("auditctl"),
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n -s) echo 'enabled 1';;\n -D) : > {l}.d;;\n -R) cp \"$2\" {l};;\n -l) cat {l} 2>/dev/null | grep '^-[wa]';;\nesac\nexit 0\n",
+            l = loaded.display()
+        ),
+        0o755,
+    );
+    write(
+        &bin.join("ausearch"),
+        &format!("#!/bin/sh\ncat {}\n", raw.display()),
+        0o755,
+    );
+    let json = dir.join("aide.json");
+    write(&json, AIDE_JSON, 0o644);
+    let aide = dir.join("fake-aide");
+    write(
+        &aide,
+        &format!(
+            "#!/bin/sh\n[ \"$1\" = --version ] && {{ echo 'AIDE 0.19.1'; exit 0; }}\nconf=${{1#--config=}}\nd=$(dirname \"$conf\")\ncase \"$2\" in\n --init|--update) echo x > \"$d/aide.db.new\"; echo '{{}}'; exit 0;;\n --check) cat {}; exit 4;;\n --version) echo 'AIDE 0.19.1'; exit 0;;\nesac\n",
+            json.display()
+        ),
+        0o755,
+    );
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut srv = Server::new(&dir)
+        .env("HORCRUX_SYSROOT", root.to_str().unwrap())
+        .env("PATH", &path);
+    srv.start();
+    srv.wait_healthy().await;
+    let a = srv.api().await;
+
+    let (s, mut set) = a.get("/security/settings").await;
+    assert_eq!(s, 200, "{set}");
+    assert_eq!(set["audit"]["enabled"], false);
+    assert_eq!(set["integrity"]["paths"], json!(["/usr", "/etc", "/boot"]));
+
+    // Integrity off: 424 with the reason.
+    let (s, v) = a.post("/security/integrity/init", json!({})).await;
+    assert_eq!(s, 424, "{v}");
+    assert!(v.to_string().contains("integrity-disabled"), "{v}");
+
+    // Audit on: the rule file lands under the (fake) root and is loaded.
+    set["audit"]["enabled"] = json!(true);
+    set["audit"]["manage_service"] = json!(false);
+    set["integrity"]["enabled"] = json!(true);
+    set["integrity"]["aide_path"] = json!("/nonexistent/aide");
+    let (s, v) = a.put("/security/settings", set.clone()).await;
+    assert_eq!(s, 200, "{v}");
+    let rules = std::fs::read_to_string(root.join("etc/audit/rules.d/50-horcrux.rules")).unwrap();
+    assert!(
+        rules.contains("-w /etc/passwd -p wa -k hx-identity"),
+        "{rules}"
+    );
+    assert!(
+        rules.contains("-w /etc/horcrux -p wa -k hx-horcrux"),
+        "{rules}"
+    );
+    assert!(
+        !rules.contains("sshd_config"),
+        "missing paths are skipped: {rules}"
+    );
+    assert!(std::fs::read_to_string(&loaded)
+        .unwrap()
+        .contains("hx-identity"));
+
+    // AIDE missing: 424.
+    let (s, v) = a.post("/security/integrity/init", json!({})).await;
+    assert_eq!(s, 424, "{v}");
+    assert!(v.to_string().contains("aide-missing"), "{v}");
+
+    // Collect: the watermark was set to "now" when audit was turned on, so
+    // only the (future-dated) stand-in events come in, and only once.
+    let (s, v) = a.post("/security/audit/collect", json!({})).await;
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["added"], 2, "{v}");
+    let (_, v) = a.post("/security/audit/collect", json!({})).await;
+    assert_eq!(v["added"], 0, "no duplicates: {v}");
+    let (s, p) = a.get("/security/events?source=audit").await;
+    assert_eq!(s, 200, "{p}");
+    assert_eq!(p["total"], 2, "{p}");
+    assert_eq!(p["events"][0]["kind"], "auth");
+    assert_eq!(p["events"][0]["user"], "mallory");
+    assert_eq!(p["events"][0]["addr"], "192.0.2.9");
+    assert_eq!(p["events"][1]["path"], "/etc/passwd");
+    assert_eq!(p["events"][1]["user"], "root");
+    let (_, p) = a.get("/security/events?severity=high").await;
+    assert_eq!(p["total"], 1, "{p}");
+    let (_, p) = a.get("/security/events?q=mallory").await;
+    assert_eq!(p["total"], 1, "{p}");
+
+    // AIDE: init, check (one changed binary), accept.
+    set["integrity"]["aide_path"] = json!(aide.to_str().unwrap());
+    let (s, v) = a.put("/security/settings", set.clone()).await;
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = a.post("/security/integrity/check", json!({})).await;
+    assert_eq!(s, 409, "check before init: {v}");
+    let (s, v) = a.post("/security/integrity/init", json!({})).await;
+    assert_eq!(s, 202, "{v}");
+    let st = wait_idle(&a).await;
+    assert_eq!(st["integrity_initialized"], true, "{st}");
+    assert!(st["integrity_error"].is_null(), "{st}");
+    assert_eq!(st["aide_version"], "0.19.1", "{st}");
+    let (s, _) = a.post("/security/integrity/check", json!({})).await;
+    assert_eq!(s, 202);
+    let _ = wait_diff(&a, 1).await;
+    let (_, p) = a
+        .get("/security/events?source=integrity&kind=changed")
+        .await;
+    assert_eq!(p["total"], 1, "{p}");
+    assert_eq!(p["events"][0]["path"], "/usr/bin/horcrux-api");
+    assert_eq!(p["events"][0]["severity"], "high");
+    assert!(
+        p["events"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("size: 10 -> 11"),
+        "{p}"
+    );
+    let (s, _) = a.post("/security/integrity/accept", json!({})).await;
+    assert_eq!(s, 202);
+    let st = wait_idle(&a).await;
+    assert_eq!(st["integrity_last_differences"], 0, "{st}");
+    assert!(st["audit_rules_loaded"].as_u64().unwrap() > 0, "{st}");
+
+    // Hardening: integrity active now passes.
+    let (_, r) = a.get("/security/hardening").await;
+    let rule = r["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == "svc-integrity")
+        .unwrap()
+        .clone();
+    assert_eq!(rule["status"], "pass", "{rule}");
+
+    // Audit off: our rules and the file are removed.
+    set["audit"]["enabled"] = json!(false);
+    let (s, v) = a.put("/security/settings", set.clone()).await;
+    assert_eq!(s, 200, "{v}");
+    assert!(!root.join("etc/audit/rules.d/50-horcrux.rules").exists());
+    let mut bad = set.clone();
+    bad["integrity"]["paths"] = json!(["relative"]);
+    let (s, _) = a.put("/security/settings", bad).await;
+    assert_eq!(s, 400);
+}

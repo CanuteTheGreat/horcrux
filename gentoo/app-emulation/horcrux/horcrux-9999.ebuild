@@ -32,6 +32,8 @@ SLOT="0"
 # Build options: cli, monitoring, systemd, webui (default)
 # Runtime tooling: security (installs the vulnerability scanner Security >
 #   Vulnerabilities uses; the scanning code itself is always built)
+# Runtime tooling: ids (installs the Linux audit tools and AIDE that Security >
+#   Events uses for intrusion detection and file integrity; code always built)
 # NAS protocols: smb, nfs-server, afp, webdav, ftp
 # NAS auth: ldap (client), ldap-server, kerberos, ad (Active Directory)
 # NAS services: timemachine, s3-gateway, iscsi-target, rsync-server
@@ -42,7 +44,7 @@ IUSE="
 	ldap-server kerberos ad
 	timemachine s3-gateway iscsi-target rsync-server
 	nas-zfs nas-btrfs nas-mdraid nas-lvm
-	security
+	ids security
 "
 
 # At least one virtualization backend or container runtime must be enabled
@@ -144,6 +146,10 @@ RDEPEND="
 	nas? ( sys-apps/acl )
 
 	security? ( app-containers/grype )
+	ids? (
+		sys-process/audit
+		app-forensics/aide
+	)
 "
 
 # Build dependencies
