@@ -153,6 +153,14 @@ default `config_dir`). `/etc/multipath.conf` is never edited, and a file at
 | `fc_multipath` | `true` | register the WWIDs of LUNs behind online FC target ports on each apply (multipath maps for FC) |
 | `fc_rescan_mode` | `scan` | default of `POST /api/san/fc/rescan`: `scan` or `lip` |
 
+Before multipathd is (re)started, each node loads the kernel modules
+dm-multipath needs (`dm_multipath`, `dm_round_robin`, `dm_service_time`,
+`scsi_dh_alua`) and lists them in a Horcrux-owned modules-load.d file
+(`modules_load_path`, default `/etc/modules-load.d/horcrux-san.conf`, read at
+boot by OpenRC's `modules` service and by systemd-modules-load). A daemon
+that died (OpenRC "crashed", systemd "failed") is restarted. iSCSI discovery
+starts `iscsid` through the init system first.
+
 ### Shared LVM
 
 ```json

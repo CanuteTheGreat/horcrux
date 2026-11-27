@@ -61,6 +61,7 @@ check "target-created" '[ "$(echo "$r" | jq_ "d[\"status\"]")" = 201 ]' "$r"
 rep=$(api POST /san/apply)
 echo "$rep" | head -c 2000; echo
 check "drop-in-written" 'head -1 /etc/multipath/conf.d/horcrux.conf | grep -q "Managed by Horcrux"'
+check "multipath-modules-listed-for-boot" 'grep -qx dm_multipath /etc/modules-load.d/horcrux-san.conf && lsmod | grep -q "^dm_multipath"' "$(cat /etc/modules-load.d/horcrux-san.conf 2>&1)"
 check "4-iscsi-sessions" '[ "$(iscsiadm -m session 2>/dev/null | grep -c "$IQN")" = 4 ]' "$(iscsiadm -m session 2>&1)"
 p=$(api GET /san/paths)
 check "first-apply-maps-every-path" '[ "$(echo "$p" | jq_ "[(l[\"active_paths\"], len(l[\"paths\"])) for l in d[\"body\"][\"luns\"]]")" = "[(4, 4)]" ]' "$p"
@@ -219,7 +220,6 @@ check "image-consistent" 'qemu-img check -U -f qcow2 $V >/dev/null 2>&1' "$(qemu
 api POST /storage/pools/$CID/volumes/chainvol/snapshots '{"name":"s3"}' >/dev/null
 r=$(api DELETE /storage/pools/$CID/volumes/chainvol)
 check "volume-delete-removes-chain" '[ -z "$(lvs --noheadings -o lv_name vg_hxsan 2>/dev/null | grep chainvol)" ]' "$r $(lvs vg_hxsan 2>&1)"
-r=$(api GET /storage/pools/$PID/volumes/x/snapshots)
 echo "== a VM disk on the volume-chain pool is a qcow2 image on its LV"
 r=$(api POST /vms "{\"id\":\"203\",\"name\":\"chain-vm\",\"hypervisor\":\"qemu\",\"architecture\":\"x86_64\",\"cpus\":1,\"memory\":128,\"disk_size\":1,\"status\":\"stopped\",\"display\":{\"protocol\":\"none\"},\"hardware\":{},\"disks\":[{\"path\":\"\",\"size_gb\":1,\"disk_type\":\"virtio\",\"storage\":\"$CID\"}]}")
 check "chain-vm-disk-is-qcow2" '[ "$(api GET /vms/203 | jq_ "d[\"body\"][\"disks\"][0][\"format\"]")" = qcow2 ] && qemu-img info -U --output=json /dev/vg_hxsan/vm-203-disk-0 | grep -q "\"format\": \"qcow2\""' "$r"
@@ -230,6 +230,7 @@ api POST /vms/203/stop '{"force": true}' >/dev/null
 for i in $(seq 1 60); do pgrep -f "[f]ile=/dev/vg_hxsan/vm-203-disk-0" >/dev/null || break; sleep 1; done
 r=$(api DELETE /vms/203)
 check "chain-vm-delete-removes-the-lv" '[ "$(api GET /vms/203 | jq_ "d[\"status\"]")" = 404 ] && ! has_lv vm-203-disk-0' "$r $(lvs -a vg_hxsan 2>&1)"
+r=$(api GET /storage/pools/$PID/volumes/x/snapshots)
 check "snapshots-on-other-pool-400-or-404" 'case "$(echo "$r" | jq_ "d[\"status\"]")" in 400|404) true;; *) false;; esac' "$r"
 
 echo "== missing tool answers 424, not 500"

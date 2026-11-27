@@ -108,6 +108,46 @@ pub fn write_dropin(path: &Path, content: &str) -> Result<WriteOutcome, String> 
     Ok(WriteOutcome::Written)
 }
 
+/// Kernel modules dm-multipath needs. Debian's multipathd unit modprobes
+/// them itself; Gentoo's OpenRC script does not, and multipathd then dies
+/// with "DM multipath kernel driver not loaded" (found on an installed
+/// node in the SAN vmtest).
+pub const KERNEL_MODULES: [&str; 4] = [
+    "dm_multipath",
+    "dm_round_robin",
+    "dm_service_time",
+    "scsi_dh_alua",
+];
+
+/// The modules-load.d file listing [`KERNEL_MODULES`] (owned by Horcrux).
+pub fn render_modules_load() -> String {
+    let mut o = String::from(HEADER);
+    o.push_str("\n# kernel modules for dm-multipath (Storage > SAN)\n");
+    for m in KERNEL_MODULES {
+        o.push_str(m);
+        o.push('\n');
+    }
+    o
+}
+
+/// Load [`KERNEL_MODULES`] now (built-in ones are fine) and list them in
+/// `path` for every boot. Returns what was done.
+pub async fn ensure_kernel_modules(path: &Path, timeout: Duration) -> Result<Vec<String>, String> {
+    let mut done = Vec::new();
+    let mut args = vec!["-a"];
+    args.extend(KERNEL_MODULES);
+    let r = super::iscsi::run("modprobe", &args, timeout).await?;
+    if !r.ok {
+        // a module this kernel lacks (e.g. built in under another name):
+        // multipathd reports what it really misses
+        done.push(format!("modprobe: {}", r.stderr.trim()));
+    }
+    if let WriteOutcome::Written = write_dropin(path, &render_modules_load())? {
+        done.push(format!("wrote {}", path.display()));
+    }
+    Ok(done)
+}
+
 /// Remove our drop-in (multipath turned off).
 pub fn remove_dropin(path: &Path) -> Result<bool, String> {
     match std::fs::read_to_string(path) {
@@ -332,6 +372,21 @@ pub async fn maps(timeout: Duration) -> Result<Vec<Map>, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn modules_load_file_lists_the_multipath_modules_under_our_header() {
+        let t = render_modules_load();
+        assert!(t.starts_with(HEADER));
+        let mods: Vec<&str> = t
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+            .collect();
+        assert_eq!(mods, KERNEL_MODULES.to_vec());
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("m.conf");
+        assert!(matches!(write_dropin(&p, &t), Ok(WriteOutcome::Written)));
+        assert!(matches!(write_dropin(&p, &t), Ok(WriteOutcome::Unchanged)));
+    }
+
     use super::*;
     use crate::san::{FindMultipaths, NoPathRetry, PathGrouping};
 

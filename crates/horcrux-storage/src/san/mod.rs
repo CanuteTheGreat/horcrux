@@ -492,12 +492,22 @@ pub struct MultipathSettings {
     /// to the fabric).
     #[serde(default)]
     pub fc_rescan_mode: fc::FcRescanMode,
+    /// Kernel modules the SAN needs (dm-multipath and its path selectors,
+    /// ALUA handler): loaded before multipathd starts and listed in this
+    /// Horcrux-owned modules-load.d file so every boot has them (read by
+    /// OpenRC's `modules` service and systemd-modules-load alike).
+    /// Default `/etc/modules-load.d/horcrux-san.conf`.
+    #[serde(default = "default_modules_load_path")]
+    pub modules_load_path: String,
     #[serde(default)]
     pub rev: u64,
 }
 
 fn default_config_path() -> String {
     "/etc/multipath/conf.d/horcrux.conf".into()
+}
+fn default_modules_load_path() -> String {
+    "/etc/modules-load.d/horcrux-san.conf".into()
 }
 fn default_polling() -> u32 {
     5

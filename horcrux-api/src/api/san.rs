@@ -455,11 +455,18 @@ async fn ensure_service(name: &str, rep: &mut ApplyReport) {
             Err(e) => rep.errors.push(format!("enable {name}: {e}")),
         }
     }
-    if !matches!(b.state(name).await, Ok(crate::init::ServiceState::Active)) {
-        match b.start(name).await {
+    match b.state(name).await {
+        Ok(crate::init::ServiceState::Active) => {}
+        // a daemon that died (OpenRC "crashed", systemd "failed") is
+        // restarted: OpenRC refuses `start` on a crashed service
+        Ok(crate::init::ServiceState::Failed) => match b.restart(name).await {
+            Ok(()) => rep.actions.push(format!("restarted {name} (it had died)")),
+            Err(e) => rep.errors.push(format!("restart {name}: {e}")),
+        },
+        _ => match b.start(name).await {
             Ok(()) => rep.actions.push(format!("started {name}")),
             Err(e) => rep.errors.push(format!("start {name}: {e}")),
-        }
+        },
     }
 }
 
@@ -603,6 +610,15 @@ async fn apply_multipath(
     if let Err(e) = tools::Need::Multipath.check(tools) {
         missing(rep, e);
         return;
+    }
+    match multipath::ensure_kernel_modules(
+        std::path::Path::new(&cfg.modules_load_path),
+        TOOL_TIMEOUT,
+    )
+    .await
+    {
+        Ok(done) => rep.actions.extend(done),
+        Err(e) => rep.errors.push(e),
     }
     let path = std::path::Path::new(&cfg.config_path);
     match multipath::write_dropin(path, &multipath::render(cfg)) {
