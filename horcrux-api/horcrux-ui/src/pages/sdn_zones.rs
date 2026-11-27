@@ -151,6 +151,9 @@ pub fn SdnZonesPage() -> impl IntoView {
         });
     };
     let del_zone = move |id: String| {
+        if !crate::pages::backup::common::confirm(&format!("Delete zone {id}?")) {
+            return;
+        }
         spawn_local(async move {
             match sdn::delete_zone(&id).await {
                 Ok(()) => ok(format!("Zone {id} deleted")),
@@ -160,6 +163,9 @@ pub fn SdnZonesPage() -> impl IntoView {
         });
     };
     let del_vnet = move |id: String| {
+        if !crate::pages::backup::common::confirm(&format!("Delete VNet {id}? Its bridge is removed from this node; guests on it lose that network.")) {
+            return;
+        }
         spawn_local(async move {
             match sdn::delete_vnet(&id).await {
                 Ok(()) => ok(format!("VNet {id} deleted (bridge removed)")),
@@ -169,6 +175,9 @@ pub fn SdnZonesPage() -> impl IntoView {
         });
     };
     let del_subnet = move |id: String| {
+        if !crate::pages::backup::common::confirm(&format!("Delete subnet {id}?")) {
+            return;
+        }
         spawn_local(async move {
             match sdn::delete_subnet(&id).await {
                 Ok(()) => ok(format!("Subnet {id} deleted")),
@@ -219,7 +228,29 @@ pub fn SdnZonesPage() -> impl IntoView {
 
     view! {
         <div class="sdn-zones">
-            <div class="page-header"><h1>"SDN: Zones, VNets, Subnets, IPAM"</h1></div>
+            <div class="page-header"><h1>"SDN: Zones, VNets, Subnets, IPAM"</h1>
+                <div class="header-actions">
+                    <button id="sdn-apply" class="btn btn-primary" title="Re-apply every zone, VNet and subnet to this node and show the result per item"
+                        on:click=move |_| {
+                            spawn_local(async move {
+                                match sdn::apply_all().await {
+                                    Ok(list) => {
+                                        let bad: Vec<String> = list.iter().filter(|r| !r.ok)
+                                            .map(|r| format!("{}: {}", r.target, r.error.clone().unwrap_or_default())).collect();
+                                        if bad.is_empty() {
+                                            ok(format!("Applied {} item(s) to this node", list.len()));
+                                        } else {
+                                            set_notice.set(None);
+                                            set_error.set(Some(format!("Applied with {} problem(s): {}", bad.len(), bad.join("; "))));
+                                        }
+                                    }
+                                    Err(e) => fail(e),
+                                }
+                                reload();
+                            });
+                        }>"Apply configuration"</button>
+                </div>
+            </div>
             <p class="form-help">
                 "A zone says how a VNet reaches the wire (simple: isolated bridge, VLAN: a tagged sub-interface of an uplink, VXLAN: a tunnel to the zone's peer nodes). Each VNet becomes a Linux bridge on this node that VM and container network cards attach to; a subnet puts the gateway address on it and can masquerade (SNAT) traffic out. Configuration is per node and is re-applied when Horcrux starts."
             </p>

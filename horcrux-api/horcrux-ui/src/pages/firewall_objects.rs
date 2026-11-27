@@ -200,6 +200,9 @@ pub fn FirewallObjectsPage() -> impl IntoView {
                             }>"Add"</button>
                             <button class="btn btn-sm btn-danger ipset-delete" on:click=move |_| {
                                 let n = del_name.clone();
+                                if !crate::pages::backup::common::confirm(&format!("Delete IP set {n}? Rules that use +{n} stop matching.")) {
+                                    return;
+                                }
                                 spawn_local(async move {
                                     let r = api::delete_fw_ipset(&n).await.map(|_| format!("IP set {n} deleted")).map_err(|e| e.message);
                                     report(r);
@@ -226,6 +229,9 @@ pub fn FirewallObjectsPage() -> impl IntoView {
                         view! { <tr class="alias-row"><td>{a.name.clone()}</td><td><code>{a.cidr.clone()}</code></td>
                             <td><button class="btn btn-sm btn-danger alias-delete" on:click=move |_| {
                                 let n = n.clone();
+                                if !crate::pages::backup::common::confirm(&format!("Delete alias {n}?")) {
+                                    return;
+                                }
                                 spawn_local(async move {
                                     let r = api::delete_fw_alias(&n).await.map(|_| format!("Alias {n} deleted")).map_err(|e| e.message);
                                     report(r);

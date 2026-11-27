@@ -143,6 +143,9 @@ pub fn NetworkManagement() -> impl IntoView {
 
     // Delete firewall rule
     let delete_rule = move |rule_id: String| {
+        if !crate::pages::backup::common::confirm("Delete this firewall rule?") {
+            return;
+        }
         spawn_local(async move {
             let url = format!("/api/firewall/rules/{}", rule_id);
             match delete_json(&url).await {
@@ -230,6 +233,9 @@ pub fn NetworkManagement() -> impl IntoView {
 
     // Delete SDN CNI network
     let delete_cni_network = move |name: String| {
+        if !crate::pages::backup::common::confirm(&format!("Delete CNI network {name}?")) {
+            return;
+        }
         spawn_local(async move {
             let url = format!("/api/cni/networks/{}", name);
             match delete_json(&url).await {
@@ -376,6 +382,9 @@ pub fn NetworkManagement() -> impl IntoView {
 
     // Delete SDN network policy
     let delete_policy = move |id: String| {
+        if !crate::pages::backup::common::confirm("Delete this network policy?") {
+            return;
+        }
         spawn_local(async move {
             let url = format!("/api/network-policies/{}", id);
             match delete_json(&url).await {

@@ -139,6 +139,20 @@ pub async fn release_ip(subnet: &str, ip: &str) -> Result<(), ApiError> {
     ))
     .await
 }
+/// One result of `POST /api/sdn/apply`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct ApplyResult {
+    pub target: String,
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Re-apply the whole SDN configuration on this node.
+pub async fn apply_all() -> Result<Vec<ApplyResult>, ApiError> {
+    post_json("/sdn/apply", &serde_json::json!({})).await
+}
+
 pub async fn sdn_status() -> Result<Vec<VNetStatus>, ApiError> {
     fetch_json("/sdn/status").await
 }
