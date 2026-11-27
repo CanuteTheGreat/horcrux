@@ -30,6 +30,48 @@ pub enum ConsoleType {
     Serial,
 }
 
+/// True when the page may open a live console (iframe / websocket) for a VM in
+/// `status`. A VM that is not running has no console state, so connecting would
+/// only spin on "Connecting..." and surface the API's error.
+pub fn console_connects(status: &horcrux_common::VmStatus) -> bool {
+    *status == horcrux_common::VmStatus::Running
+}
+
+/// Turn whatever a console request returned (raw JSON error body, `HTTP 422: ...`)
+/// into one friendly sentence. Never echoes JSON.
+pub fn friendly_console_error(raw: &str) -> String {
+    // Pull the human `message` out of a JSON error body (possibly behind an
+    // "HTTP 422: " prefix); anything JSON-shaped that has none is generic.
+    let trimmed = raw.trim();
+    let body = trimmed.find('{').map(|i| &trimmed[i..]).unwrap_or(trimmed);
+    let msg = match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(v) => v
+            .get("message")
+            .or_else(|| v.get("error"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        Err(_) => {
+            // plain text, minus a leading "HTTP nnn" status
+            let t = trimmed.strip_prefix("HTTP ").unwrap_or(trimmed);
+            let t = t.trim_start_matches(|c: char| c.is_ascii_digit());
+            t.trim_start_matches(':').trim().to_string()
+        }
+    };
+    let lower = msg.to_lowercase();
+    if lower.contains("not running") || lower.contains("no console state") {
+        "This VM is not running. Start it to get a live console.".to_string()
+    } else if msg.is_empty() || msg.contains('{') {
+        "The console is not available right now. Try again in a moment.".to_string()
+    } else {
+        format!(
+            "The console could not be opened: {}",
+            msg.trim_end_matches('.')
+        )
+    }
+}
+
 /// `GET /api/console/:vm/hxc/status` (the fields the page needs).
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 struct HxcStatus {
@@ -82,8 +124,39 @@ pub fn VmConsole() -> impl IntoView {
         });
     };
 
+    // Bumped to re-read the VM (after Start).
+    let (reload, set_reload) = create_signal(0u32);
+    let (start_note, set_start_note) = create_signal(None::<String>);
+    let start_vm = move |_| {
+        let id = vm_id();
+        set_start_note.set(Some("Starting...".to_string()));
+        spawn_local(async move {
+            match api::start_vm(&urlencoding::encode(&id)).await {
+                Ok(()) => {
+                    set_start_note.set(None);
+                    set_reload.update(|n| *n += 1);
+                    set_timeout(
+                        move || set_reload.update(|n| *n += 1),
+                        std::time::Duration::from_secs(2),
+                    );
+                }
+                Err(e) => set_start_note.set(Some(format!(
+                    "Could not start the VM: {}",
+                    friendly_console_error(&e.message)
+                ))),
+            }
+        });
+    };
+    // Only a running VM has a console to connect to.
+    let connects = move || {
+        vm.get()
+            .map(|v| console_connects(&v.status))
+            .unwrap_or(false)
+    };
+
     create_effect(move |_| {
         let id = vm_id();
+        reload.get();
         if id.is_empty() {
             return;
         }
@@ -287,7 +360,7 @@ pub fn VmConsole() -> impl IntoView {
                             "Open in the desktop app"
                         </a>
                     })}
-                    {move || (console_type.get() == ConsoleType::Vnc && !instance_vm()).then(|| view! {
+                    {move || (console_type.get() == ConsoleType::Vnc && !instance_vm() && connects()).then(|| view! {
                         <button id="console-cad" class="btn btn-secondary" title="Send Ctrl+Alt+Del" on:click=send_cad>
                             "Ctrl+Alt+Del"
                         </button>
@@ -325,9 +398,13 @@ pub fn VmConsole() -> impl IntoView {
             {move || vm.get().and_then(|v| {
                 let qemu = v.hypervisor == horcrux_common::VmHypervisor::Qemu;
                 (v.status != horcrux_common::VmStatus::Running).then(|| view! {
-                    <div class="error-banner">
-                        "This VM is " {v.status.to_string()}
-                        " - start it to get a live console."
+                    <div class="console-stopped" id="console-stopped">
+                        <p>
+                            "This VM is " {v.status.to_string()}
+                            " - start it to get a live console."
+                        </p>
+                        <button id="console-start" class="btn btn-primary" on:click=start_vm>"Start"</button>
+                        {move || start_note.get().map(|n| view! { <p id="console-start-note">{n}</p> })}
                     </div>
                     {qemu.then(|| view! {
                     <details class="display-settings" open=true>
@@ -350,6 +427,12 @@ pub fn VmConsole() -> impl IntoView {
                     // hypervisor (an LXD/Incus VM has no VNC to load).
                     if vm.get().is_none() {
                         return view! { <p>"Loading..."</p> }.into_view();
+                    }
+                    // A VM that is not running has no console: no iframe, no
+                    // websocket, no "Connecting...", no API error to echo.
+                    if !connects() {
+                        return view! { <div class="console-placeholder" id="console-placeholder"></div> }
+                            .into_view();
                     }
                     match console_type.get() {
                         ConsoleType::Horcrux => {
@@ -556,7 +639,7 @@ fn SpiceConsole(vm_id: String, #[prop(optional)] instance: bool) -> impl IntoVie
         spawn_local(async move {
             match api::create_spice_console(&id).await {
                 Ok(i) => set_info.set(Some(i)),
-                Err(e) => set_err.set(Some(e.message)),
+                Err(e) => set_err.set(Some(friendly_console_error(&e.message))),
             }
         });
     });
@@ -605,7 +688,7 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
             let info = match api::create_serial_console(&vm).await {
                 Ok(info) => info,
                 Err(e) => {
-                    set_status.set(format!("Failed to open serial console: {}", e));
+                    set_status.set(friendly_console_error(&e.message));
                     return;
                 }
             };
@@ -713,7 +796,46 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::desktop_link_for;
+    use super::{console_connects, desktop_link_for, friendly_console_error};
+    use horcrux_common::VmStatus;
+
+    #[test]
+    fn stopped_vm_never_connects() {
+        for s in [VmStatus::Stopped, VmStatus::Paused, VmStatus::Unknown] {
+            assert!(!console_connects(&s), "{s} must not open a console");
+        }
+    }
+
+    #[test]
+    fn running_vm_still_connects() {
+        assert!(console_connects(&VmStatus::Running));
+    }
+
+    #[test]
+    fn raw_json_error_becomes_a_friendly_sentence() {
+        let raw = r#"{"status":422,"error":"VALIDATION_ERROR","message":"VM is not running (no console state); start it first","timestamp":"2026-11-27T12:00:00Z"}"#;
+        let msg = friendly_console_error(raw);
+        assert!(
+            !msg.contains('{') && !msg.contains("VALIDATION_ERROR") && !msg.contains("timestamp"),
+            "{msg}"
+        );
+        assert!(
+            msg.to_lowercase().contains("not running") || msg.to_lowercase().contains("start"),
+            "{msg}"
+        );
+        // the formatted form the API client produces
+        let msg = friendly_console_error("VM is not running (no console state); start it first");
+        assert!(!msg.contains("no console state"), "{msg}");
+        let msg = friendly_console_error("HTTP 422");
+        assert!(!msg.contains("HTTP 422"), "{msg}");
+    }
+
+    #[test]
+    fn unknown_error_is_never_raw_json() {
+        let msg = friendly_console_error(r#"{"status":500,"error":"X","message":"boom"}"#);
+        assert!(!msg.contains('{'), "{msg}");
+        assert!(msg.contains("boom"), "{msg}");
+    }
 
     #[test]
     fn desktop_app_link() {

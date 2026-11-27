@@ -530,6 +530,33 @@ pub fn get_novnc_html(_ticket_id: &str, ws_url: &str, password: Option<&str>) ->
     )
 }
 
+/// Page the VNC route serves when no console can be opened (a race: the VM
+/// stopped after the UI looked, or its console state is gone). It is loaded in an
+/// iframe, so it must be a small friendly HTML page, never the API's JSON error.
+pub fn console_unavailable_html(message: &str) -> String {
+    let lower = message.to_lowercase();
+    let friendly = if lower.contains("not running") || lower.contains("no console state") {
+        "This VM is not running. Start it to get a live console.".to_string()
+    } else {
+        "The console could not be opened right now. Try again in a moment.".to_string()
+    };
+    format!(
+        r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>Console unavailable</title>
+<style>body{{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font:15px system-ui,sans-serif;background:#111;color:#ccc}}</style></head>
+<body><p id="console-unavailable">{}</p>
+<script>try{{parent.postMessage({{horcruxConsole:"status",state:"unavailable",text:"Console unavailable"}},location.origin)}}catch(e){{}}</script>
+</body></html>"#,
+        html_escape(&friendly)
+    )
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,5 +611,22 @@ mod tests {
         assert!(html.contains("window.location.host + wsTarget"));
         assert!(html.contains("new RFB(screen, wsUrl,"));
         assert!(!html.contains("localhost"));
+    }
+
+    #[test]
+    fn unavailable_page_is_friendly_html_not_json() {
+        let html =
+            console_unavailable_html("VM is not running (no console state); start it first <b>&");
+        assert!(html.contains("<html"), "{html}");
+        assert!(!html.trim_start().starts_with('{'));
+        assert!(!html.contains("VALIDATION_ERROR"));
+        assert!(
+            !html.contains("no console state"),
+            "raw backend text leaked"
+        );
+        assert!(!html.contains("<b>"), "message must be escaped");
+        assert!(html.contains("not running"));
+        // tells the parent page so its toolbar does not spin on Connecting...
+        assert!(html.contains("horcruxConsole") && html.contains("status"));
     }
 }

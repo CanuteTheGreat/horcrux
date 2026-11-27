@@ -3734,14 +3734,35 @@ async fn verify_console_ticket(
 async fn get_novnc_page(
     State(state): State<Arc<AppState>>,
     Path(vm_id): Path<String>,
-) -> Result<axum::response::Html<String>, ApiError> {
-    let info = console_for(&state, &vm_id, ConsoleType::Vnc).await?;
+) -> Result<axum::response::Response, ApiError> {
+    use axum::response::IntoResponse;
+    // This route is loaded in an iframe: a VM that stopped (or has no console
+    // state yet) gets a small friendly page, not the API's JSON error.
+    let info = match console_for(&state, &vm_id, ConsoleType::Vnc).await {
+        Ok(info) => info,
+        Err(
+            ApiError::ValidationError(m)
+            | ApiError::Conflict(m)
+            | ApiError::NotFound(m)
+            | ApiError::BadRequest(m)
+            | ApiError::ServiceUnavailable(m),
+        ) => {
+            let page = console::novnc::console_unavailable_html(&m);
+            return Ok((StatusCode::CONFLICT, axum::response::Html(page)).into_response());
+        }
+        Err(ApiError::Internal(_)) => {
+            let page = console::novnc::console_unavailable_html("");
+            return Ok((StatusCode::CONFLICT, axum::response::Html(page)).into_response());
+        }
+        // 401/403/424 keep their normal API answers.
+        Err(e) => return Err(e),
+    };
     // Path-only WebSocket URL; the noVNC page resolves it against its own
     // origin (ws/wss + host:port). A hardcoded `ws://localhost:8006` broke the
     // console for every browser not running on the API host itself.
     let html =
         console::novnc::get_novnc_html(&info.ticket, &info.ws_path, info.password.as_deref());
-    Ok(axum::response::Html(html))
+    Ok(axum::response::Html(html).into_response())
 }
 
 async fn vnc_websocket_handler(
