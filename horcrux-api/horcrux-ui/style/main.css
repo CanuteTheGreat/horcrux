@@ -1150,6 +1150,7 @@ label.checkbox { display: flex; align-items: center; gap: .5rem; font-weight: no
 .inline-form .btn { flex: 0 0 auto; }
 .form-row .form-group { margin-bottom: 1rem; }
 .form-row > :where(input, select, button, .btn, label) { flex: 0 1 auto; align-self: center; }
+.form-row > :where(input, select) { min-width: 0; max-width: 100%; }
 .form-group .hint, .form-group .form-help { margin-top: .3rem; }
 
 /* tables without a class, .table and the page-specific tables share one look */

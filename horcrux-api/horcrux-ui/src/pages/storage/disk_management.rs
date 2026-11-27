@@ -62,15 +62,15 @@ pub fn DiskManagementPage() -> impl IntoView {
 
                                 <div class="disk-info">
                                     <div class="info-row">
-                                        <span class="label">Model:</span>
+                                        <span class="label">"Model: "</span>
                                         <span class="value">{disk.model.clone()}</span>
                                     </div>
                                     <div class="info-row">
-                                        <span class="label">Type:</span>
+                                        <span class="label">"Type: "</span>
                                         <span class="value">{format!("{} ({})", disk.disk_type.to_uppercase(), disk.interface)}</span>
                                     </div>
                                     <div class="info-row">
-                                        <span class="label">Size:</span>
+                                        <span class="label">"Size: "</span>
                                         <span class="value">{format_bytes(disk.size_bytes)}</span>
                                     </div>
                                     {disk.temperature.map(|temp| view! {
@@ -91,7 +91,7 @@ pub fn DiskManagementPage() -> impl IntoView {
                                         ></div>
                                     </div>
                                     <span class="usage-text">
-                                        {format_bytes(disk.used_bytes)} / {format_bytes(disk.size_bytes)} used
+                                        {format!("{} / {} used", format_bytes(disk.used_bytes), format_bytes(disk.size_bytes))}
                                     </span>
                                 </div>
 
@@ -100,12 +100,11 @@ pub fn DiskManagementPage() -> impl IntoView {
                                     <div class="partitions-list">
                                         {disk.partitions.iter().map(|part| view! {
                                             <div class="partition-item">
-                                                <span class="partition-name">{part.name.clone()}</span>
-                                                <span class="partition-fs">{part.filesystem.clone()}</span>
-                                                <span class="partition-size">{format_bytes(part.size_bytes)}</span>
-                                                {part.mount_point.as_ref().map(|mp| view! {
-                                                    <span class="partition-mount">{mp.clone()}</span>
-                                                })}
+                                                {format!("{}  ·  {}  ·  {}{}",
+                                                    part.name,
+                                                    if part.filesystem.is_empty() { "no filesystem" } else { part.filesystem.as_str() },
+                                                    format_bytes(part.size_bytes),
+                                                    part.mount_point.as_ref().map(|mp| format!("  ·  {mp}")).unwrap_or_default())}
                                             </div>
                                         }).collect::<Vec<_>>()}
                                     </div>

@@ -56,3 +56,4 @@ fails when a row names no check or a check file that does not exist. `pending:<b
   vision review of the screenshots against `ci/ux-qa/ux-checklist.md`. Fixable findings are fixed with a test; judgement
   calls go in the daily summary.
 - **When the owner reports something:** the product-qa lane adds the check for the class, adds a row here, and links the commit.
+| 36 | 2026-11-26 | (found by the UX lane) Disks page text ran together (`sda1511.00 GB/etc/resolv.conf`, `GBused`); Import OVF and Create VM were wider than a phone | unstyled spans with whitespace dropped by `view!`; inline `min-width:32em` input and non-shrinking selects in `.form-row` (the stylesheet hides body overflow, so the crawl missed it) | `ci/ux-qa/test_ux_qa.py` (test_form_row_controls_shrink_and_no_fixed_min_width_inputs, test_disk_page_text_has_separators) + crawl warn `overflow-element` |

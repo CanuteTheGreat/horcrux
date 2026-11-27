@@ -189,8 +189,18 @@ FACTS_JS = r"""() => {
     const sameRow = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 4;
     if (sameRow && b.left >= a.right - 1 && b.left - a.right < 4) jammedLabels.push('"' + l.innerText.trim().slice(0, 30) + '" touches ' + desc(c));
   }
+  // the shared stylesheet hides body overflow, so scrollWidth stays at the viewport: measure elements that stick out instead
+  const wideEls = [];
+  for (const e of document.querySelectorAll('main *')) {
+    if (!vis(e)) continue;
+    const r = e.getBoundingClientRect();
+    if (r.right <= window.innerWidth + 1 || r.width === 0) continue;
+    let p = e.parentElement, inScroller = false;
+    while (p && p !== document.body) { if (/(auto|scroll|hidden)/.test(getComputedStyle(p).overflowX)) { inScroller = true; break; } p = p.parentElement; }
+    if (!inScroller && getComputedStyle(e).position !== 'fixed') wideEls.push(desc(e) + ' ends at ' + Math.round(r.right) + 'px of ' + window.innerWidth);
+  }
   const root = document.documentElement;
-  return {
+  return { wideEls: wideEls.slice(0, 3),
     bareControls: bareControls.slice(0, 4), bareTables: bareTables.slice(0, 3), jammedLabels: jammedLabels.slice(0, 4), placeholderOnly: placeholderOnly.slice(0, 4), truncPlaceholder: truncPlaceholder.slice(0, 4),
     textLen: text.trim().length, text: text.slice(0, 60000), ownText: ownText.slice(0, 60000), title: document.title,
     overflowX: root.scrollWidth - root.clientWidth, overlays: overlays.slice(0, 4), unlinked: unlinked.slice(0, 6), zeroRed, navProblems, empty: empty.slice(0, 3),
@@ -371,6 +381,8 @@ def main():
                         m = rx.search(f["text"])
                         if m:
                             add("internal-name", "fail", route, vp, scheme, f"internal name '{m.group(0)}' visible")
+                    for w in f.get("wideEls", []):
+                        add("overflow-element", "warn", route, vp, scheme, w)
                     if f["overflowX"] > 1:
                         add("overflow", "fail", route, vp, scheme, f"scrolls sideways by {f['overflowX']}px")
                     for o in f["overlays"]:

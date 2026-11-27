@@ -201,6 +201,24 @@ class UnstyledControls(unittest.TestCase):
                             seen.add(m.group(1))
         return sorted(seen)
 
+    def test_form_row_controls_shrink_and_no_fixed_min_width_inputs(self):
+        """2026-11-26 (UX lane): Import OVF and Create VM were wider than a 390 px phone (an inline `min-width:32em` input, selects with long
+        option text in a flex row) and the page hid it. Flex-row controls must be allowed to shrink, and no page may pin a bare em/px min-width."""
+        import re, glob
+        css = open(self.CSS).read()
+        self.assertRegex(css, r"\.form-row > :where\(input, select\)\s*\{[^}]*min-width:\s*0")
+        pages = os.path.join(os.path.dirname(self.CSS), "..", "src", "pages")
+        for f in glob.glob(pages + "/**/*.rs", recursive=True):
+            for m in re.finditer(r'style="[^"]*min-width:\s*(\d+(?:\.\d+)?(?:em|rem|px))', open(f).read()):
+                self.fail(f"{f}: fixed min-width {m.group(1)} overflows phones; use min-width:min(<size>,100%)")
+
+    def test_disk_page_text_has_separators(self):
+        """2026-11-26 (UX lane): the Disks page rendered `sda1511.00 GB/etc/resolv.conf` and `GBused` (unstyled spans, whitespace dropped by view!)."""
+        src = open(os.path.join(os.path.dirname(self.CSS), "..", "src", "pages", "storage", "disk_management.rs")).read()
+        self.assertNotIn('<span class="label">Model:</span>', src)
+        self.assertNotIn('<span class="partition-name">', src)
+        self.assertNotIn("{format_bytes(disk.used_bytes)} / {format_bytes(disk.size_bytes)} used", src)
+
     def test_phone_rule_covers_every_table_without_a_class_list(self):
         """2026-11-22 (lab real-browser journey): 9 pages scrolled the whole page sideways at 390 px. The phone rule named .data-table, then
         .vm-table, and the tasks page (.table) still overflowed: the rule must match a bare `table`, so no class can be missed. Pure python."""
