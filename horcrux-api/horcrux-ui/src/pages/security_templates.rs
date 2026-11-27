@@ -285,7 +285,7 @@ fn template_card(
         view! {
             <p class="help-text">
                 <span class="sev-badge sev-none">"image ready"</span>" "
-                {format!("{} · downloaded {}", r.verified, r.completed_at)}
+                {format!("{} · downloaded {}", r.verified, r.completed_at.chars().take(16).collect::<String>().replace('T', " "))}
             </p>
         }
     });
@@ -442,7 +442,7 @@ fn create_form_view(
             </div>
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary" disabled=move || submit.pending().get()>
-                    {move || if submit.pending().get() { "Creating (copying the disk)..." } else { "Create VM" }}
+                    {move || if submit.pending().get() { "Creating (copying the disk)..." } else { "Create" }}
                 </button>
                 <button type="button" class="btn btn-secondary" on:click=move |_| open.set(None)>"Cancel"</button>
             </div>

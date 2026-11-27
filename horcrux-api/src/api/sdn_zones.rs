@@ -92,6 +92,11 @@ pub struct VNet {
     /// the bridge filters VLANs so guests can carry their own tags
     #[serde(default)]
     pub vlan_aware: bool,
+    /// The host takes no part in this network: the bridge gets no IPv6
+    /// (not even a link-local address), so guests can't reach the host's
+    /// own services through it. Used by the pentest lab.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host_isolated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -418,6 +423,16 @@ async fn apply_vnet(z: &Zone, v: &VNet, subnets: &[Subnet]) -> Result<(), String
             a.extend(["vlan_filtering", "1"]);
         }
         run("ip", &a).await?;
+    }
+    if v.host_isolated {
+        // No kernel-assigned link-local address: nothing of the host listens
+        // on this bridge. (No IPv6 stack = nothing to switch off.)
+        let f = format!("/proc/sys/net/ipv6/conf/{br}/disable_ipv6");
+        match std::fs::write(&f, "1") {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("isolating {br} from the host ({f}): {e}")),
+        }
     }
     if let Some(m) = z.mtu {
         ip(&["link", "set", "dev", br, "mtu", &m.to_string()]).await?;
@@ -1114,6 +1129,7 @@ mod tests {
             alias: None,
             tag,
             vlan_aware: false,
+            host_isolated: false,
         };
         assert!(validate_vnet(&v("web", None), &zone("simple")).is_ok());
         assert!(validate_vnet(&v("web", None), &zone("vlan")).is_err());
@@ -1250,6 +1266,7 @@ mod tests {
             alias: None,
             tag: Some(100),
             vlan_aware: false,
+            host_isolated: false,
         };
         assert_eq!(carrier_name(&zone("vlan"), &v).as_deref(), Some("webv100"));
         assert_eq!(carrier_name(&zone("vxlan"), &v).as_deref(), Some("vx100"));

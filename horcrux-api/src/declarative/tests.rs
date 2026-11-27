@@ -248,6 +248,7 @@ fn immutable_network_and_pool_changes_are_blocked_not_silently_dropped() {
         alias: None,
         tag: Some(5),
         vlan_aware: false,
+        host_isolated: false,
     });
     let p = plan(&s, &live, false);
     assert!(
@@ -423,4 +424,32 @@ fn security_settings_are_planned_validated_and_exported() {
         serde_yaml::from_str("version: 1\nsecurity: {vuln_scan: {schedule_hours: 0}}\n").unwrap();
     assert_eq!(y.security.unwrap().vuln_scan.schedule_hours, 0);
     assert!(export(&live).security.is_some());
+}
+
+#[test]
+fn a_vm_can_name_a_pentest_template() {
+    let s = parse(
+        "version: 1\nvms:\n  - name: lab-kali\n    template: kali\n    network: lan\n  - name: small\n    template: kali\n    memory: 2048\n    cpus: 1\n    power: stopped\n",
+    )
+    .unwrap();
+    let vms = s.vms.unwrap();
+    let kali = crate::api::security::pentest::find_template("kali").unwrap();
+    // memory/cpus absent: the template's
+    assert_eq!(vms[0].memory, kali.hardware.memory_mb);
+    assert_eq!(vms[0].cpus, kali.hardware.cpus);
+    assert_eq!(vms[0].network.as_deref(), Some("lan"));
+    // explicit values win, also cpus: 1
+    assert_eq!((vms[1].memory, vms[1].cpus), (2048, 1));
+    // a plain VM still defaults to one cpu
+    let p = parse("version: 1\nvms:\n  - name: plain\n    memory: 512\n").unwrap();
+    assert_eq!(p.vms.unwrap()[0].cpus, 1);
+    // unknown template and a network without a template are refused
+    assert!(parse("version: 1\nvms:\n  - name: a\n    template: nope\n")
+        .unwrap_err()
+        .contains("unknown pentest template"));
+    assert!(
+        parse("version: 1\nvms:\n  - name: a\n    memory: 512\n    network: lan\n")
+            .unwrap_err()
+            .contains("only used with template")
+    );
 }
