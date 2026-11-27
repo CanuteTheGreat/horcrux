@@ -1209,9 +1209,19 @@ pub async fn create_snapshot(
 
 /// Restore a snapshot
 pub async fn restore_snapshot(vm_id: &str, snapshot_id: &str) -> Result<(), ApiError> {
+    restore_snapshot_with(vm_id, snapshot_id, false).await
+}
+
+/// Restore a snapshot; `restore_memory`: a RAM snapshot of a stopped VM
+/// starts the VM and resumes it where the snapshot was taken.
+pub async fn restore_snapshot_with(
+    vm_id: &str,
+    snapshot_id: &str,
+    restore_memory: bool,
+) -> Result<(), ApiError> {
     post_json_no_response(
         &format!("/vms/{}/snapshots/{}/restore", vm_id, snapshot_id),
-        &serde_json::json!({}),
+        &serde_json::json!({ "restore_memory": restore_memory }),
     )
     .await
 }

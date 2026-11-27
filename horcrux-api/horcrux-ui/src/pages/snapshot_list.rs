@@ -71,6 +71,14 @@ pub fn SnapshotList() -> impl IntoView {
     let (notice, set_notice) = create_signal(None::<String>);
     let (refresh, set_refresh) = create_signal(0u32);
     let (snap_vm, set_snap_vm) = create_signal(String::new());
+    // Only a running VM has memory to save.
+    let snap_vm_running = move || {
+        let id = snap_vm.get();
+        vms.with(|v| {
+            v.iter()
+                .any(|vm| vm.id == id && vm.status == horcrux_common::VmStatus::Running)
+        })
+    };
     let (snap_name, set_snap_name) = create_signal(String::new());
     let (snap_desc, set_snap_desc) = create_signal(String::new());
     let (snap_memory, set_snap_memory) = create_signal(false);
@@ -145,13 +153,23 @@ pub fn SnapshotList() -> impl IntoView {
     };
 
     // Messages name the snapshot and its VM (users never see snapshot ids).
-    let restore_snapshot = move |vm_id: String, snapshot_id: String, name: String| {
+    let restore_snapshot = move |vm_id: String, snapshot_id: String, name: String, ram: bool| {
         let vm = vm_name(&vm_id);
-        if confirm(&restore_question(&vm, &name)) {
+        let running = vms.with(|v| {
+            v.iter()
+                .any(|x| x.id == vm_id && x.status == horcrux_common::VmStatus::Running)
+        });
+        let mut q = restore_question(&vm, &name);
+        if ram && !running {
+            q.push_str(" The snapshot holds the VM's memory: the VM is started and resumes where the snapshot was taken.");
+        } else if !ram && running {
+            q.push_str(" This snapshot has no memory state: shut the VM down first.");
+        }
+        if confirm(&q) {
             set_notice.set(None);
             set_error.set(None);
             spawn_local(async move {
-                match api::restore_snapshot(&vm_id, &snapshot_id).await {
+                match api::restore_snapshot_with(&vm_id, &snapshot_id, ram).await {
                     Ok(_) => set_notice.set(Some(format!("{vm} rolled back to snapshot {name}"))),
                     Err(e) => set_error.set(Some(format!(
                         "Rolling {vm} back to {name} failed: {}",
@@ -208,7 +226,7 @@ pub fn SnapshotList() -> impl IntoView {
         }
         let desc = snap_desc.get();
         let desc = (!desc.trim().is_empty()).then_some(desc);
-        let memory = snap_memory.get();
+        let memory = snap_memory.get() && snap_vm_running();
         set_creating.set(true);
         spawn_local(async move {
             match api::create_snapshot(&vm_id, &name, desc, memory).await {
@@ -315,6 +333,7 @@ pub fn SnapshotList() -> impl IntoView {
                                 {list.clone().into_iter().map(|snapshot| {
                                     let parent = parent_label(&list, &snapshot);
                                     let name_restore = snapshot.name.clone();
+                                    let ram_restore = snapshot.memory_included;
                                     let name_delete = snapshot.name.clone();
                                     let vm_id_restore = snapshot.vm_id.clone();
                                     let snapshot_id_restore = snapshot.id.clone();
@@ -344,7 +363,7 @@ pub fn SnapshotList() -> impl IntoView {
                                                 <button
                                                     class="btn btn-sm btn-primary"
                                                     title="Roll the VM back to this snapshot"
-                                                    on:click=move |_| restore_snapshot(vm_id_restore.clone(), snapshot_id_restore.clone(), name_restore.clone())
+                                                    on:click=move |_| restore_snapshot(vm_id_restore.clone(), snapshot_id_restore.clone(), name_restore.clone(), ram_restore)
                                                 >"Restore"</button>
                                                 <button
                                                     class="btn btn-sm btn-danger"
@@ -390,9 +409,12 @@ pub fn SnapshotList() -> impl IntoView {
                                     </div>
                                     <div class="form-group">
                                         <label>
-                                            <input id="snap-memory" type="checkbox" prop:checked=snap_memory
+                                            // For a stopped VM the box used to be clickable and was silently ignored.
+                                            <input id="snap-memory" type="checkbox"
+                                                prop:checked=move || snap_memory.get() && snap_vm_running()
+                                                disabled=move || !snap_vm_running()
                                                 on:change=move |ev| set_snap_memory.set(event_target_checked(&ev))/>
-                                            " Include memory (running VMs only)"
+                                            {move || if snap_vm_running() { " Include memory (RAM state)" } else { " Include memory (only for a running VM)" }}
                                         </label>
                                     </div>
                                     <div class="form-actions">

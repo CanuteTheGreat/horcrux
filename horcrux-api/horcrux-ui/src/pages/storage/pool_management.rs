@@ -15,6 +15,85 @@ struct AddStoragePoolReq {
     path: String,
 }
 
+/// Pool types the Add dialog offers: (API type, label, Some(reason) when the
+/// type can't be added from here yet). CIFS, GlusterFS and S3 used to be
+/// offered with one "Path" field and were accepted, but Horcrux doesn't keep
+/// them mounted, so the new pool could hold nothing.
+pub const POOL_TYPES: [(&str, &str, Option<&str>); 11] = [
+    ("Directory", "Directory", None),
+    ("Zfs", "ZFS", None),
+    ("Lvm", "LVM", None),
+    ("Ceph", "Ceph RBD", None),
+    ("Nfs", "NFS", None),
+    ("Iscsi", "iSCSI", None),
+    ("CephFs", "CephFS (mounted)", None),
+    ("BtrFs", "BtrFS", None),
+    ("Cifs", "CIFS / SMB", Some("not yet: Horcrux doesn't keep SMB shares mounted; mount it on the host and add it as a Directory")),
+    ("GlusterFs", "GlusterFS", Some("not yet: Horcrux doesn't keep GlusterFS volumes mounted; mount it on the host and add it as a Directory")),
+    ("S3", "S3", Some("not VM storage: S3 holds backups")),
+];
+
+/// The two inputs the Add dialog shows for a pool type: (label, placeholder)
+/// of the first, and of the second when the type needs one.
+pub fn pool_fields(
+    kind: &str,
+) -> (
+    (&'static str, &'static str),
+    Option<(&'static str, &'static str)>,
+) {
+    match kind {
+        "Zfs" => (("ZFS pool or dataset", "tank/vms"), None),
+        "Lvm" => (("Volume group", "vg0"), None),
+        "Ceph" => (("Ceph pool", "rbd"), None),
+        "Nfs" => (
+            ("NFS server", "nas.example.lan"),
+            Some(("Export", "/export/vms")),
+        ),
+        "Iscsi" => (
+            ("Portal (host:port)", "10.0.0.5:3260"),
+            Some(("Target IQN", "iqn.2024-01.lan.example:vms")),
+        ),
+        "CephFs" => (("Mounted CephFS directory", "/mnt/cephfs/vms"), None),
+        "BtrFs" => (("Btrfs directory", "/mnt/btrfs/vms"), None),
+        _ => (("Directory", "/var/lib/horcrux/images"), None),
+    }
+}
+
+/// The API's `path` for a pool from the dialog's inputs.
+pub fn compose_pool_path(kind: &str, a: &str, b: &str) -> Result<String, String> {
+    let (a, b) = (a.trim(), b.trim());
+    let ((label_a, _), second) = pool_fields(kind);
+    if a.is_empty() {
+        return Err(format!("{label_a} is required"));
+    }
+    if let Some((label_b, _)) = second {
+        if b.is_empty() {
+            return Err(format!("{label_b} is required"));
+        }
+    }
+    match kind {
+        "Nfs" => Ok(format!("{a}:/{}", b.trim_start_matches('/'))),
+        "Iscsi" => Ok(format!("iscsi://{a}/{b}")),
+        "Directory" | "CephFs" | "BtrFs" if !a.starts_with('/') => Err(format!(
+            "{label_a} must be an absolute path (starting with /)"
+        )),
+        _ => Ok(a.to_string()),
+    }
+}
+
+/// A pool path for display: a password in `scheme://user:password@host`
+/// is never shown.
+pub fn display_path(p: &str) -> String {
+    if let Some((scheme, rest)) = p.split_once("://") {
+        if let Some((cred, host)) = rest.split_once('@') {
+            if let Some((user, _)) = cred.split_once(':') {
+                return format!("{scheme}://{user}:***@{host}");
+            }
+        }
+    }
+    p.to_string()
+}
+
 /// Storage Management Page Component
 #[component]
 pub fn StorageManagement() -> impl IntoView {
@@ -28,8 +107,18 @@ pub fn StorageManagement() -> impl IntoView {
     let (show_create_modal, set_show_create_modal) = create_signal(false);
 
     let name_ref: NodeRef<html::Input> = create_node_ref();
-    let type_ref: NodeRef<html::Select> = create_node_ref();
-    let path_ref: NodeRef<html::Input> = create_node_ref();
+    let (new_type, set_new_type) = create_signal("Directory".to_string());
+    let (field_a, set_field_a) = create_signal(String::new());
+    let (field_b, set_field_b) = create_signal(String::new());
+    let (dialog_error, set_dialog_error) = create_signal(None::<String>);
+    let (creating, set_creating) = create_signal(false);
+    let open_create = move || {
+        set_new_type.set("Directory".to_string());
+        set_field_a.set(String::new());
+        set_field_b.set(String::new());
+        set_dialog_error.set(None);
+        set_show_create_modal.set(true);
+    };
 
     // Fetch storage pools on mount
     create_effect(move |_| {
@@ -73,6 +162,24 @@ pub fn StorageManagement() -> impl IntoView {
 
     // Delete storage pool
     let delete_pool = move |pool_id: String| {
+        // Removing a pool used to run on the first click, with no question.
+        let name = pools
+            .get_untracked()
+            .iter()
+            .find(|p| p.id == pool_id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| pool_id.clone());
+        let ok = web_sys::window()
+            .and_then(|w| {
+                w.confirm_with_message(&format!(
+                    "Remove storage pool {name} from Horcrux? Its files stay on disk, but VM disks, ISOs and backups on it can no longer be used from Horcrux."
+                ))
+                .ok()
+            })
+            .unwrap_or(false);
+        if !ok {
+            return;
+        }
         spawn_local(async move {
             let url = format!("/api/storage/pools/{}", pool_id);
             match delete_json(&url).await {
@@ -92,20 +199,25 @@ pub fn StorageManagement() -> impl IntoView {
     // its "Create" submit never called the API at all, so a Horcrux admin
     // could never actually create a storage pool through the UI)
     let create_pool = move |_| {
-        let name = name_ref.get().map(|el| el.value()).unwrap_or_default();
-        if name.is_empty() {
-            set_error.set(Some("Pool ID is required".to_string()));
-            return;
-        }
-        let storage_type = type_ref
+        let name = name_ref
             .get()
             .map(|el| el.value())
-            .unwrap_or_else(|| "Directory".to_string());
-        let path = path_ref.get().map(|el| el.value()).unwrap_or_default();
-        if path.is_empty() {
-            set_error.set(Some("Path / Pool name is required".to_string()));
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            set_dialog_error.set(Some("Pool ID is required".to_string()));
             return;
         }
+        let storage_type = new_type.get();
+        let path = match compose_pool_path(&storage_type, &field_a.get(), &field_b.get()) {
+            Ok(p) => p,
+            Err(e) => {
+                set_dialog_error.set(Some(e));
+                return;
+            }
+        };
+        set_creating.set(true);
 
         let req = AddStoragePoolReq {
             name,
@@ -121,10 +233,10 @@ pub fn StorageManagement() -> impl IntoView {
                         set_pools.set(data);
                     }
                 }
-                Err(e) => {
-                    set_error.set(Some(format!("Create pool failed: {}", e.message)));
-                }
+                // Shown in the dialog (the page's banner is behind it).
+                Err(e) => set_dialog_error.set(Some(e.message)),
             }
+            set_creating.set(false);
         });
     };
 
@@ -132,7 +244,7 @@ pub fn StorageManagement() -> impl IntoView {
         <div class="page storage-management">
             <header class="page-header">
                 <h2>"Storage Pools"</h2>
-                <button class="btn btn-primary" on:click=move |_| set_show_create_modal.set(true)>
+                <button class="btn btn-primary" on:click=move |_| open_create()>
                     "+ Create Pool"
                 </button>
             </header>
@@ -237,7 +349,7 @@ pub fn StorageManagement() -> impl IntoView {
                                         {pool.path.clone().map(|p| view! {
                                             <div class="detail-row">
                                                 <span class="label">"Path:"</span>
-                                                <code>{p}</code>
+                                                <code>{display_path(&p)}</code>
                                             </div>
                                         })}
                                         <div class="detail-row">
@@ -275,7 +387,7 @@ pub fn StorageManagement() -> impl IntoView {
                         <div class="icon">"💾"</div>
                         <h3>"No Storage Pools"</h3>
                         <p>"Create a storage pool to store VM images and container data."</p>
-                        <button class="btn btn-primary" on:click=move |_| set_show_create_modal.set(true)>
+                        <button class="btn btn-primary" on:click=move |_| open_create()>
                             "Create Pool"
                         </button>
                     </div>
@@ -295,37 +407,43 @@ pub fn StorageManagement() -> impl IntoView {
                             </button>
                         </div>
                         <div class="modal-body">
+                            {move || dialog_error.get().map(|e| view! { <div class="alert alert-error" id="pool-create-error">{e}</div> })}
                             <div class="form-group">
-                                <label>"Pool ID"</label>
-                                <input node_ref=name_ref type="text" class="form-control" placeholder="local-zfs"/>
+                                <label for="pool-create-id">"Pool ID"</label>
+                                <input id="pool-create-id" node_ref=name_ref type="text" class="form-control" placeholder="local-zfs"/>
                             </div>
                             <div class="form-group">
-                                <label>"Type"</label>
-                                <select node_ref=type_ref class="form-control">
-                                    <option value="Directory">"Directory"</option>
-                                    <option value="Zfs">"ZFS"</option>
-                                    <option value="Lvm">"LVM"</option>
-                                    <option value="Ceph">"Ceph RBD"</option>
-                                    <option value="Nfs">"NFS"</option>
-                                    <option value="Iscsi">"iSCSI"</option>
-                                    <option value="CephFs">"CephFS (mounted)"</option>
-                                    <option value="Cifs">"CIFS / SMB"</option>
-                                    <option value="GlusterFs">"GlusterFS"</option>
-                                    <option value="BtrFs">"BtrFS"</option>
-                                    <option value="S3">"S3 (backups)"</option>
+                                <label for="pool-create-type">"Type"</label>
+                                <select id="pool-create-type" class="form-control" on:change=move |ev| {
+                                    set_new_type.set(event_target_value(&ev));
+                                    set_dialog_error.set(None);
+                                }>
+                                    {POOL_TYPES.iter().map(|(v, label, why)| {
+                                        let text = match why { Some(w) => format!("{label} ({w})"), None => label.to_string() };
+                                        view! { <option value=*v disabled=why.is_some() selected=move || new_type.get() == *v>{text}</option> }
+                                    }).collect_view()}
                                 </select>
                             </div>
                             <div class="form-group">
-                                <label>"Path / Pool Name"</label>
-                                <input node_ref=path_ref type="text" class="form-control" placeholder="/var/lib/horcrux/images"/>
+                                <label for="pool-create-a">{move || pool_fields(&new_type.get()).0.0}</label>
+                                <input id="pool-create-a" type="text" class="form-control"
+                                    placeholder=move || pool_fields(&new_type.get()).0.1
+                                    prop:value=field_a on:input=move |ev| set_field_a.set(event_target_value(&ev))/>
                             </div>
+                            {move || pool_fields(&new_type.get()).1.map(|(label, ph)| view! {
+                                <div class="form-group">
+                                    <label for="pool-create-b">{label}</label>
+                                    <input id="pool-create-b" type="text" class="form-control" placeholder=ph
+                                        prop:value=field_b on:input=move |ev| set_field_b.set(event_target_value(&ev))/>
+                                </div>
+                            })}
                         </div>
                         <div class="modal-footer">
                             <button class="btn btn-secondary" on:click=move |_| set_show_create_modal.set(false)>
                                 "Cancel"
                             </button>
-                            <button class="btn btn-primary" on:click=create_pool>
-                                "Create"
+                            <button id="pool-create-submit" class="btn btn-primary" on:click=create_pool disabled=creating>
+                                {move || if creating.get() { "Creating..." } else { "Create" }}
                             </button>
                         </div>
                     </div>
@@ -498,5 +616,56 @@ fn PoolVolumes(pool_id: String) -> impl IntoView {
                 <button type="submit" class="btn btn-sm btn-primary pool-volume-create-btn">"Create volume"</button>
             </form>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pool_paths_are_composed_per_type() {
+        assert_eq!(
+            compose_pool_path("Nfs", "nas", "/export/vms").unwrap(),
+            "nas:/export/vms"
+        );
+        assert_eq!(
+            compose_pool_path("Nfs", "nas", "export").unwrap(),
+            "nas:/export"
+        );
+        assert!(compose_pool_path("Nfs", "nas", "")
+            .unwrap_err()
+            .contains("Export"));
+        assert_eq!(
+            compose_pool_path("Iscsi", "10.0.0.5:3260", "iqn.x:y").unwrap(),
+            "iscsi://10.0.0.5:3260/iqn.x:y"
+        );
+        assert_eq!(
+            compose_pool_path("Zfs", " tank/vms ", "").unwrap(),
+            "tank/vms"
+        );
+        assert!(compose_pool_path("Directory", "relative/dir", "").is_err());
+        assert_eq!(
+            compose_pool_path("Directory", "/srv/vm", "").unwrap(),
+            "/srv/vm"
+        );
+        assert!(compose_pool_path("Directory", " ", "").is_err());
+    }
+
+    #[test]
+    fn unusable_types_are_offered_with_a_reason_and_passwords_never_shown() {
+        for (t, _, why) in POOL_TYPES {
+            if matches!(t, "Cifs" | "GlusterFs" | "S3") {
+                assert!(why.is_some(), "{t}");
+            } else {
+                assert!(why.is_none(), "{t}");
+            }
+        }
+        assert_eq!(
+            display_path("cifs://bob:s3cret@srv/share"),
+            "cifs://bob:***@srv/share"
+        );
+        assert_eq!(display_path("cifs://srv/share"), "cifs://srv/share");
+        assert_eq!(display_path("/var/lib/x"), "/var/lib/x");
     }
 }

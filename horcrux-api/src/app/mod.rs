@@ -2273,6 +2273,28 @@ async fn restore_vm_snapshot(
     let snapshot_manager = state.snapshot_manager.read().await;
     snapshot_of_vm(&snapshot_manager, &vm_id, &snapshot_id)?;
 
+    // A snapshot with saved RAM of a STOPPED VM: like Proxmox, the rollback
+    // brings the VM back exactly where the snapshot was taken (running).
+    // `loadvm` needs a running QEMU, so the VM is started on its disks
+    // first, then the RAM state is loaded. Without restore_memory (or for
+    // a disk-only snapshot) a stopped VM gets its disks rolled back only.
+    let with_ram = snapshot_manager
+        .get_snapshot(&snapshot_id)
+        .is_some_and(|s| s.vm_state == vm::snapshot::VmSnapshotState::Running);
+    if req.restore_memory.unwrap_or(false)
+        && with_ram
+        && !vm::qemu::QemuManager::process_running(&vm_id)
+    {
+        drop(snapshot_manager);
+        state.vm_manager.start_vm(&vm_id).await?;
+        let snapshot_manager = state.snapshot_manager.read().await;
+        snapshot_manager
+            .restore_snapshot(&snapshot_id, true)
+            .await
+            .map_err(ApiError::from)?;
+        return Ok(StatusCode::OK);
+    }
+
     snapshot_manager
         .restore_snapshot(&snapshot_id, req.restore_memory.unwrap_or(false))
         .await
