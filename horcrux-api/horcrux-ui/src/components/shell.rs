@@ -49,6 +49,12 @@ pub fn GlobalSearch() -> impl IntoView {
     }
 }
 
+/// The shell sits outside SessionGate, so it mounts on /login and on a first visit without a token:
+/// its API polls must wait for a session (each answered 401 and logged console errors).
+fn signed_in() -> bool {
+    api::get_auth_token().is_some()
+}
+
 /// Header buttons: Create VM / CT and live counts of running tasks and active alerts (each a link to
 /// the filtered list). Counts refresh every 10 s; a count the user's role can't read is not shown.
 #[component]
@@ -56,6 +62,9 @@ pub fn HeaderActions() -> impl IntoView {
     let (running, set_running) = create_signal(None::<usize>);
     let (alerts, set_alerts) = create_signal(None::<usize>);
     let load = move || {
+        if !signed_in() {
+            return;
+        }
         spawn_local(async move {
             match api::list_tasks("running").await {
                 Ok(t) => set_running.set(Some(t.len())),
@@ -67,7 +76,12 @@ pub fn HeaderActions() -> impl IntoView {
             }
         });
     };
-    load();
+    // Re-run on every route change: the first run after sign-in happens when the router leaves /login.
+    let pathname = use_location().pathname;
+    create_effect(move |_| {
+        let _ = pathname.get();
+        load();
+    });
     if let Ok(h) = set_interval_with_handle(load, Duration::from_secs(10)) {
         on_cleanup(move || h.clear());
     }
@@ -128,6 +142,9 @@ pub fn ResourceTree() -> impl IntoView {
     let (denied, set_denied) = create_signal(false);
     let (pools, set_pools) = create_signal(Vec::<api::StoragePoolInfo>::new());
     let load = move || {
+        if !signed_in() {
+            return;
+        }
         spawn_local(async move {
             match api::get_resource_tree().await {
                 Ok(t) => set_tree.set(Some(t)),
@@ -139,7 +156,11 @@ pub fn ResourceTree() -> impl IntoView {
             }
         });
     };
-    load();
+    let pathname = use_location().pathname;
+    create_effect(move |_| {
+        let _ = pathname.get();
+        load();
+    });
     if let Ok(h) = set_interval_with_handle(load, Duration::from_secs(15)) {
         on_cleanup(move || h.clear());
     }

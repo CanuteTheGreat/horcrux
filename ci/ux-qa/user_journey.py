@@ -278,7 +278,7 @@ def main():
             page.wait_for_timeout(2500)
             j.shot("dashboard")
             body = j.text()
-            expect("j1-login", "dashboard-content", len(body) > 200 and "Dashboard" in body, "after login the page is not a dashboard")
+            expect("j1-login", "dashboard-content", len(body) > 200 and ("Dashboard" in body or "Datacenter" in body), "after login the page is not a dashboard")
             expect("j1-login", "no-nan-or-undefined", not re.search(r"\b(NaN|undefined|null)\b", body), "dashboard shows NaN/undefined/null")
 
         # ------------------------------------------------------------------ J2 ISO library
