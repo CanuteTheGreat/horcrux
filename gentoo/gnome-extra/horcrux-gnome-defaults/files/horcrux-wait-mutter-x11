@@ -10,12 +10,34 @@ have() { busctl --user status org.gnome.Mutter.X11 >/dev/null 2>&1; }
 wake() {
 	d=${DISPLAY#:}; d=${d%%.*}
 	[ -n "$d" ] && [ -S "/tmp/.X11-unix/X$d" ] || return 0
-	python3 - "/tmp/.X11-unix/X$d" <<'PY' 2>/dev/null || true
-import socket, sys
-s = socket.socket(socket.AF_UNIX)
-s.settimeout(2)
+	python3 - "/tmp/.X11-unix/X$d" "$d" "${XAUTHORITY:-$HOME/.Xauthority}" <<'PY' 2>/dev/null || true
+# A bare connect() starts Xwayland but mutter only finishes creating its X11 display (and takes org.gnome.Mutter.X11) once a client
+# completes the X11 handshake, so do a real connection setup with the session's cookie and read the server's answer.
+import socket, struct, sys
+path, num, xauth = sys.argv[1:4]
+name, data = b"", b""
 try:
-    s.connect(sys.argv[1])
+    raw = open(xauth, "rb").read()
+    i = 0
+    while i + 2 <= len(raw):
+        i += 2
+        parts = []
+        for _ in range(4):
+            (n,) = struct.unpack(">H", raw[i:i + 2])
+            parts.append(raw[i + 2:i + 2 + n])
+            i += 2 + n
+        if parts[1] in (b"", num.encode()):
+            name, data = parts[2], parts[3]
+            break
+except Exception:
+    pass
+pad = lambda b: b + b"\0" * (-len(b) % 4)
+s = socket.socket(socket.AF_UNIX)
+s.settimeout(3)
+try:
+    s.connect(path)
+    s.sendall(b"B\0" + struct.pack(">HHHH", 11, 0, len(name), len(data)) + b"\0\0" + pad(name) + pad(data))
+    s.recv(8)
 finally:
     s.close()
 PY

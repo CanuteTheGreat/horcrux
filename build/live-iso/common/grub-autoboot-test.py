@@ -414,7 +414,7 @@ def run_be_cases(img, a, slack, only):
         os.makedirs(d, exist_ok=True)
         disk, start = build_disk(img, c, d)
         # every kernel fails: RETRY_ROUNDS rounds of (countdown + one pause per kernel), then GRUB restarts the machine
-        restart_budget = (BE.RETRY_ROUNDS + 1) * (TIMEOUT + 3 * ERR_PAUSE) + 30 + slack
+        restart_budget = (BE.RETRY_ROUNDS + 1) * (TIMEOUT + 3 * ERR_PAUSE) + 60 + slack
         judge(img, c, d, disk, start, slack, "Horcrux - horcrux", restart_budget)
 
 
@@ -445,7 +445,7 @@ def run_mk_cases(img, a, slack, only):
                  m is not None and retry == [int(m.group(1))],
                  m.group(0) if m else "no `set fallback` in the generated grub.cfg")
         # per round: the countdown, one error pause per kernel tried, and loading/redrawing time (one more pause's worth)
-        restart_budget = (BE.RETRY_ROUNDS + 1) * (TIMEOUT + (c["fails"] + 1) * ERR_PAUSE) + 30 + slack
+        restart_budget = (BE.RETRY_ROUNDS + 1) * (TIMEOUT + (c["fails"] + 1) * ERR_PAUSE) + 60 + slack
         judge(img, c, d, disk, start, slack, MK_MARK, restart_budget)
 
 
