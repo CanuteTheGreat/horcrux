@@ -7256,6 +7256,35 @@ pub async fn delete_vlan(name: &str) -> Result<(), ApiError> {
     delete_json(&format!("/network/vlans/{}", urlencoding::encode(name))).await
 }
 
+/// A Horcrux-managed Linux bond (`/api/network/bonds`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct ManagedBond {
+    pub name: String,
+    #[serde(default)]
+    pub mode: String,
+    pub slaves: Vec<String>,
+    #[serde(default)]
+    pub miimon: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmit_hash_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+pub async fn list_bonds() -> Result<Vec<ManagedBond>, ApiError> {
+    fetch_json("/network/bonds").await
+}
+
+pub async fn create_bond(b: &ManagedBond) -> Result<ManagedBond, ApiError> {
+    post_json("/network/bonds", b).await
+}
+
+pub async fn delete_bond(name: &str) -> Result<(), ApiError> {
+    delete_json(&format!("/network/bonds/{}", urlencoding::encode(name))).await
+}
+
 pub async fn create_bridge(b: &NewBridge) -> Result<NewBridge, ApiError> {
     post_json("/network/bridges", b).await
 }

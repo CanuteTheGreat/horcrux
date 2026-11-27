@@ -81,7 +81,24 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     // Re-create managed bridges after a host reboot.
     let store = ConfigStore::new(&state.database);
     tokio::spawn(async move {
-        // VLAN interfaces first: a bridge may use one as its port.
+        // Bonds first (a VLAN or bridge may sit on one), then VLAN
+        // interfaces (a bridge may use one as its port), then bridges.
+        match store.load_values::<ManagedBond>(BOND_KIND).await {
+            Ok(list) => {
+                for b in list {
+                    if !std::path::Path::new("/sys/class/net")
+                        .join(&b.name)
+                        .exists()
+                    {
+                        match apply_bond(&b).await {
+                            Ok(()) => tracing::info!("Re-created bond {}", b.name),
+                            Err(e) => tracing::warn!("Could not re-create bond {}: {e}", b.name),
+                        }
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("Could not load managed bonds: {e}"),
+        }
         match store.load_values::<ManagedVlan>(VLAN_KIND).await {
             Ok(list) => {
                 for v in list {
@@ -121,6 +138,253 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/network/interfaces", get(list_interfaces))
         .route("/api/network/vlans", get(list_vlans).post(create_vlan))
         .route("/api/network/vlans/:name", delete(remove_vlan))
+        .route("/api/network/bonds", get(list_bonds).post(create_bond))
+        .route("/api/network/bonds/:name", delete(remove_bond))
+}
+
+const BOND_KIND: &str = "host_bond";
+
+/// Bond modes the kernel bonding driver accepts (Proxmox offers the same).
+pub const BOND_MODES: [&str; 7] = [
+    "balance-rr",
+    "active-backup",
+    "balance-xor",
+    "broadcast",
+    "802.3ad",
+    "balance-tlb",
+    "balance-alb",
+];
+
+/// A Linux bond Horcrux creates (and re-creates at startup), Proxmox
+/// "Linux Bond": several NICs as one link, e.g. as the port of a bridge.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ManagedBond {
+    pub name: String,
+    /// One of [`BOND_MODES`]; default active-backup (works with any switch).
+    #[serde(default = "default_bond_mode")]
+    pub mode: String,
+    /// Member NICs (no address, not in a bridge or another bond).
+    pub slaves: Vec<String>,
+    /// Link monitoring interval in ms (default 100).
+    #[serde(default = "default_miimon")]
+    pub miimon: u32,
+    /// balance-xor / 802.3ad hash: layer2, layer2+3, layer3+4, encap2+3, encap3+4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmit_hash_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+fn default_bond_mode() -> String {
+    "active-backup".into()
+}
+fn default_miimon() -> u32 {
+    100
+}
+
+pub fn validate_bond(b: &mut ManagedBond) -> Result<(), String> {
+    b.name = b.name.trim().to_string();
+    b.mode = b.mode.trim().to_string();
+    b.slaves = b
+        .slaves
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    b.address = b
+        .address
+        .take()
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty());
+    if !horcrux_common::valid_ifname(&b.name) {
+        return Err(format!(
+            "{:?} is not a valid interface name (1-15 of a-z 0-9 - _ .)",
+            b.name
+        ));
+    }
+    if !BOND_MODES.contains(&b.mode.as_str()) {
+        return Err(format!(
+            "bond mode {:?} is not one of {}",
+            b.mode,
+            BOND_MODES.join(", ")
+        ));
+    }
+    if b.slaves.is_empty() {
+        return Err("a bond needs at least one member interface".into());
+    }
+    for s in &b.slaves {
+        if !horcrux_common::valid_ifname(s) || s == &b.name {
+            return Err(format!("invalid member interface {s:?}"));
+        }
+    }
+    let mut seen = BTreeSet::new();
+    if !b.slaves.iter().all(|s| seen.insert(s.clone())) {
+        return Err("a member interface is listed twice".into());
+    }
+    if !(1..=10_000).contains(&b.miimon) {
+        return Err("miimon must be 1-10000 ms".into());
+    }
+    if let Some(h) = &b.xmit_hash_policy {
+        if !["layer2", "layer2+3", "layer3+4", "encap2+3", "encap3+4"].contains(&h.as_str()) {
+            return Err(format!("unknown transmit hash policy {h:?}"));
+        }
+    }
+    if let Some(a) = &b.address {
+        if !valid_cidr(a) {
+            return Err(format!(
+                "address {a:?} must be an IP with a prefix length, e.g. 10.30.0.1/24"
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn apply_bond(b: &ManagedBond) -> Result<(), String> {
+    let miimon = b.miimon.to_string();
+    let mut args = vec![
+        "link", "add", "name", &b.name, "type", "bond", "mode", &b.mode, "miimon", &miimon,
+    ];
+    if let Some(h) = &b.xmit_hash_policy {
+        args.extend(["xmit_hash_policy", h.as_str()]);
+    }
+    run("ip", &args).await?;
+    let r: Result<(), String> = async {
+        for s in &b.slaves {
+            // a NIC must be down to be enslaved
+            run("ip", &["link", "set", s, "down"]).await?;
+            run("ip", &["link", "set", s, "master", &b.name]).await?;
+            run("ip", &["link", "set", s, "up"]).await?;
+        }
+        if let Some(a) = &b.address {
+            run("ip", &["addr", "add", a, "dev", &b.name]).await?;
+        }
+        run("ip", &["link", "set", &b.name, "up"]).await
+    }
+    .await;
+    if r.is_err() {
+        for s in &b.slaves {
+            let _ = run("ip", &["link", "set", s, "nomaster"]).await;
+        }
+        let _ = run("ip", &["link", "del", &b.name]).await;
+    }
+    r
+}
+
+async fn list_bonds(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<ManagedBond>>, ApiError> {
+    Ok(Json(
+        ConfigStore::new(&state.database)
+            .load_values::<ManagedBond>(BOND_KIND)
+            .await?,
+    ))
+}
+
+async fn create_bond(
+    State(state): State<Arc<AppState>>,
+    Json(mut b): Json<ManagedBond>,
+) -> Result<(StatusCode, Json<ManagedBond>), ApiError> {
+    validate_bond(&mut b).map_err(ApiError::BadRequest)?;
+    let net = std::path::Path::new("/sys/class/net");
+    if net.join(&b.name).exists() {
+        return Err(ApiError::Conflict(format!(
+            "an interface called {} already exists",
+            b.name
+        )));
+    }
+    for s in &b.slaves {
+        if !net.join(s).exists() {
+            return Err(ApiError::BadRequest(format!(
+                "interface {s} does not exist"
+            )));
+        }
+        let addrs = addresses(s).await;
+        if !addrs.is_empty() {
+            return Err(ApiError::BadRequest(format!(
+                "{s} carries the host address {}: bonding it would cut the host's network. \
+                 Use interfaces without an address.",
+                addrs.join(", ")
+            )));
+        }
+        if net.join(s).join("master").exists() {
+            return Err(ApiError::BadRequest(format!(
+                "{s} is already a port of a bridge or bond"
+            )));
+        }
+    }
+    apply_bond(&b).await.map_err(ApiError::Internal)?;
+    if let Err(e) = ConfigStore::new(&state.database)
+        .put(BOND_KIND, &b.name, &b)
+        .await
+    {
+        for s in &b.slaves {
+            let _ = run("ip", &["link", "set", s, "nomaster"]).await;
+        }
+        let _ = run("ip", &["link", "del", &b.name]).await;
+        return Err(e.into());
+    }
+    tracing::info!(
+        "Created bond {} ({}: {})",
+        b.name,
+        b.mode,
+        b.slaves.join(", ")
+    );
+    Ok((StatusCode::CREATED, Json(b)))
+}
+
+async fn remove_bond(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let store = ConfigStore::new(&state.database);
+    let managed = store.load_values::<ManagedBond>(BOND_KIND).await?;
+    let Some(b) = managed.into_iter().find(|m| m.name == name) else {
+        return Err(
+            if std::path::Path::new("/sys/class/net").join(&name).exists() {
+                ApiError::Conflict(format!(
+                    "{name} was not created by Horcrux (it belongs to the host's network \
+                     configuration), so it is not removed here"
+                ))
+            } else {
+                ApiError::NotFound(format!("bond {name} not found"))
+            },
+        );
+    };
+    let bridges = store.load_values::<ManagedBridge>(KIND).await?;
+    if let Some(br) = bridges.iter().find(|br| br.ports.contains(&name)) {
+        return Err(ApiError::Conflict(format!(
+            "{name} is a port of bridge {}: remove it from the bridge first",
+            br.name
+        )));
+    }
+    let vlans = store.load_values::<ManagedVlan>(VLAN_KIND).await?;
+    if let Some(v) = vlans.iter().find(|v| v.parent == name) {
+        return Err(ApiError::Conflict(format!(
+            "VLAN interface {} runs on {name}: delete it first",
+            v.name
+        )));
+    }
+    if std::path::Path::new("/sys/class/net")
+        .join(&name)
+        .join("master")
+        .exists()
+    {
+        return Err(ApiError::Conflict(format!(
+            "{name} is a port of a bridge: remove it from there first"
+        )));
+    }
+    if std::path::Path::new("/sys/class/net").join(&name).exists() {
+        for s in &b.slaves {
+            let _ = run("ip", &["link", "set", s, "nomaster"]).await;
+        }
+        run("ip", &["link", "del", &name])
+            .await
+            .map_err(ApiError::Internal)?;
+    }
+    store.delete(BOND_KIND, &name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 const VLAN_KIND: &str = "host_vlan";
@@ -860,6 +1124,40 @@ mod tests {
             port_vlans: BTreeMap::new(),
             comment: None,
         }
+    }
+
+    #[test]
+    fn bond_definitions_are_checked() {
+        let ok = || ManagedBond {
+            name: "bond0".into(),
+            mode: default_bond_mode(),
+            slaves: vec![" eno1 ".into(), "eno2".into(), "".into()],
+            miimon: default_miimon(),
+            xmit_hash_policy: None,
+            address: None,
+            comment: None,
+        };
+        let mut b = ok();
+        validate_bond(&mut b).unwrap();
+        assert_eq!(b.slaves, vec!["eno1", "eno2"]);
+        let mut x = ok();
+        x.mode = "round-robin".into();
+        assert!(validate_bond(&mut x).unwrap_err().contains("not one of"));
+        let mut x = ok();
+        x.slaves = vec![];
+        assert!(validate_bond(&mut x).is_err());
+        let mut x = ok();
+        x.slaves = vec!["eno1".into(), "eno1".into()];
+        assert!(validate_bond(&mut x).unwrap_err().contains("twice"));
+        let mut x = ok();
+        x.xmit_hash_policy = Some("layer5".into());
+        assert!(validate_bond(&mut x).is_err());
+        let mut x = ok();
+        x.mode = "802.3ad".into();
+        x.xmit_hash_policy = Some("layer3+4".into());
+        validate_bond(&mut x).unwrap();
+        let j: ManagedBond = serde_json::from_str(r#"{"name":"bond1","slaves":["eth1"]}"#).unwrap();
+        assert_eq!((j.mode.as_str(), j.miimon), ("active-backup", 100));
     }
 
     #[test]

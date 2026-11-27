@@ -1,8 +1,9 @@
 //! Infrastructure > Host Bridges (`/network/bridges`): the Linux bridges VM
 //! network cards attach to; create and delete Horcrux-managed ones.
 use crate::api::{
-    create_bridge, create_vlan, delete_bridge, delete_vlan, list_bridges, list_host_interfaces,
-    list_vlans, set_bridge_trunk_vlans, BridgeInfo, HostInterface, ManagedVlan, NewBridge,
+    create_bond, create_bridge, create_vlan, delete_bond, delete_bridge, delete_vlan, list_bonds,
+    list_bridges, list_host_interfaces, list_vlans, set_bridge_trunk_vlans, BridgeInfo,
+    HostInterface, ManagedBond, ManagedVlan, NewBridge,
 };
 use leptos::*;
 
@@ -11,6 +12,11 @@ pub fn HostBridgesPage() -> impl IntoView {
     let (bridges, set_bridges) = create_signal(Vec::<BridgeInfo>::new());
     let (ifaces, set_ifaces) = create_signal(Vec::<HostInterface>::new());
     let (vlans, set_vlans) = create_signal(Vec::<ManagedVlan>::new());
+    let (bonds, set_bonds) = create_signal(Vec::<ManagedBond>::new());
+    let bond_name = create_rw_signal(String::new());
+    let bond_mode = create_rw_signal("active-backup".to_string());
+    let bond_slaves = create_rw_signal(String::new());
+    let bond_addr = create_rw_signal(String::new());
     let vlan_parent = create_rw_signal(String::new());
     let vlan_id = create_rw_signal(String::new());
     let vlan_name = create_rw_signal(String::new());
@@ -35,6 +41,9 @@ pub fn HostBridgesPage() -> impl IntoView {
             }
             if let Ok(l) = list_vlans().await {
                 set_vlans.set(l);
+            }
+            if let Ok(l) = list_bonds().await {
+                set_bonds.set(l);
             }
         });
     };
@@ -117,6 +126,57 @@ pub fn HostBridgesPage() -> impl IntoView {
                     vlan_name.set(String::new());
                     vlan_addr.set(String::new());
                 }
+                Err(e) => set_error.set(Some(e.message)),
+            }
+            reload();
+        });
+    };
+
+    let create_bond_ev = move |ev: ev::SubmitEvent| {
+        ev.prevent_default();
+        let b = ManagedBond {
+            name: bond_name.get().trim().to_string(),
+            mode: bond_mode.get(),
+            slaves: split_list(&bond_slaves.get()),
+            miimon: 100,
+            xmit_hash_policy: None,
+            address: Some(bond_addr.get().trim().to_string()).filter(|a| !a.is_empty()),
+            comment: None,
+        };
+        spawn_local(async move {
+            match create_bond(&b).await {
+                Ok(b) => {
+                    set_notice.set(Some(format!(
+                        "Bond {} created ({})",
+                        b.name,
+                        b.slaves.join(", ")
+                    )));
+                    set_error.set(None);
+                    bond_name.set(String::new());
+                    bond_slaves.set(String::new());
+                    bond_addr.set(String::new());
+                }
+                Err(e) => set_error.set(Some(e.message)),
+            }
+            reload();
+        });
+    };
+
+    let remove_bond = move |n: String| {
+        if !web_sys::window()
+            .and_then(|w| {
+                w.confirm_with_message(&format!(
+                    "Delete bond {n}? Its member interfaces are released."
+                ))
+                .ok()
+            })
+            .unwrap_or(false)
+        {
+            return;
+        }
+        spawn_local(async move {
+            match delete_bond(&n).await {
+                Ok(()) => set_notice.set(Some(format!("Bond {n} deleted"))),
                 Err(e) => set_error.set(Some(e.message)),
             }
             reload();
@@ -260,6 +320,28 @@ pub fn HostBridgesPage() -> impl IntoView {
             </table>
 
             <h2>"Network interfaces"</h2>
+            <form id="bond-create-form" class="form-row fields" on:submit=create_bond_ev>
+                <div class="form-group"><label for="bond-name">"Bond name"</label><input id="bond-name" type="text" required maxlength="15" placeholder="bond0"
+                    prop:value=bond_name on:input=move |ev| bond_name.set(event_target_value(&ev))/></div>
+                <div class="form-group"><label for="bond-mode">"Mode"</label>
+                    <select id="bond-mode" prop:value=bond_mode on:change=move |ev| bond_mode.set(event_target_value(&ev))>
+                        {BOND_MODES.iter().map(|(v, l)| view! { <option value=*v selected=move || bond_mode.get() == *v>{*l}</option> }).collect_view()}
+                    </select></div>
+                <div class="form-group"><label for="bond-slaves">"Members"</label><input id="bond-slaves" type="text" required placeholder="eno1, eno2"
+                    prop:value=bond_slaves on:input=move |ev| bond_slaves.set(event_target_value(&ev))/>
+                    <div class="bridge-port-picks">
+                        {move || ifaces.get().into_iter().filter(|i| i.bridge_port_ok && i.kind == "physical").map(|i| {
+                            let n = i.name.clone();
+                            let n2 = n.clone();
+                            let on = move || split_list(&bond_slaves.get()).contains(&n2);
+                            view! { <button type="button" class="btn btn-sm bond-slave-pick" class:btn-primary=on
+                                on:click=move |_| bond_slaves.set(toggle_port(&bond_slaves.get(), &n))>{i.name.clone()}</button> }
+                        }).collect_view()}
+                    </div></div>
+                <div class="form-group"><label for="bond-address">"Host address (optional)"</label><input id="bond-address" type="text" placeholder="10.30.0.1/24"
+                    prop:value=bond_addr on:input=move |ev| bond_addr.set(event_target_value(&ev))/></div>
+                <button id="bond-create" type="submit" class="btn btn-primary">"Create bond"</button>
+            </form>
             <form id="vlan-create-form" class="form-row fields" on:submit=create_vlan_ev>
                 <div class="form-group"><label for="vlan-parent">"VLAN on"</label>
                     <select id="vlan-parent" required prop:value=vlan_parent on:change=move |ev| vlan_parent.set(event_target_value(&ev))>
@@ -290,8 +372,11 @@ pub fn HostBridgesPage() -> impl IntoView {
                             view! { <tr><td colspan="10" class="no-data">"Loading interfaces..."</td></tr> }.into_view()
                         } else {
                             let managed: Vec<String> = vlans.get().into_iter().map(|v| v.name).collect();
+                            let managed_bonds: Vec<String> = bonds.get().into_iter().map(|b| b.name).collect();
                             list.into_iter().map(|i| {
                                 let is_managed = managed.contains(&i.name);
+                                let is_bond = managed_bonds.contains(&i.name);
+                                let bond_del = i.name.clone();
                                 let del_name = i.name.clone();
                                 let state = iface_state(&i);
                                 let state_cls = if i.state == "up" && i.carrier { "status-running" } else if i.state == "down" { "status-stopped" } else { "status-unknown" };
@@ -310,6 +395,8 @@ pub fn HostBridgesPage() -> impl IntoView {
                                         </td>
                                         <td>{is_managed.then(|| view! {
                                             <button class="btn btn-sm btn-danger vlan-delete" on:click=move |_| remove_vlan(del_name.clone())>"Delete"</button>
+                                        })}{is_bond.then(|| view! {
+                                            <button class="btn btn-sm btn-danger bond-delete" on:click=move |_| remove_bond(bond_del.clone())>"Delete"</button>
                                         })}</td>
                                     </tr>
                                 }
@@ -321,6 +408,17 @@ pub fn HostBridgesPage() -> impl IntoView {
         </div>
     }
 }
+
+/// Bond modes (value, label) in the order Proxmox lists them.
+const BOND_MODES: [(&str, &str); 7] = [
+    ("balance-rr", "balance-rr (round robin)"),
+    ("active-backup", "active-backup (any switch)"),
+    ("balance-xor", "balance-xor"),
+    ("broadcast", "broadcast"),
+    ("802.3ad", "802.3ad (LACP, switch support needed)"),
+    ("balance-tlb", "balance-tlb"),
+    ("balance-alb", "balance-alb"),
+];
 
 /// Add `port` to the comma separated `list`, or remove it if present.
 fn toggle_port(list: &str, port: &str) -> String {

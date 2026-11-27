@@ -484,6 +484,12 @@ Authorization: Bearer <token>
   bridges and tunnels (kind, state, carrier, MAC, MTU, speed, master, VLAN
   parent/tag, addresses) and whether each can be a bridge port (with the
   reason when not). Guest tap/veth ports only with `all=1`.
+- `GET|POST /api/network/bonds`, `DELETE /api/network/bonds/:name`: Horcrux-managed
+  Linux bonds `{"name": "bond0", "mode": "active-backup", "slaves": ["eno1","eno2"],
+  "miimon": 100, "xmit_hash_policy": "layer3+4", "address": "10.30.0.1/24"}`
+  (modes balance-rr, active-backup, balance-xor, broadcast, 802.3ad, balance-tlb,
+  balance-alb; members must carry no address and be in no bridge/bond), re-created
+  at startup before VLANs and bridges. Delete is refused while a bridge or VLAN uses it.
 - `GET|POST /api/network/vlans`, `DELETE /api/network/vlans/:name`: Horcrux-managed
   802.1Q VLAN interfaces `{"parent": "eno1", "id": 20, "name": "eno1.20",
   "address": "10.20.0.1/24"}` (name defaults to `<parent>.<id>`, address optional),
