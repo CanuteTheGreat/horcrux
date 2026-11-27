@@ -5,7 +5,6 @@
 //! http(s) URL.
 use crate::api::{self, ovf};
 use leptos::*;
-use leptos_router::A;
 
 fn gib(b: Option<u64>) -> String {
     b.map(|b| format!("{:.1} GiB", b as f64 / (1u64 << 30) as f64))
@@ -135,8 +134,7 @@ pub fn VmImportOvfPage() -> impl IntoView {
             {move || done.get().map(|d| view! {
                 <div class="alert alert-success" id="ovf-done">
                     {format!("Imported as VM {} ({} disk(s)). ", d.vm.id, d.vm.disks.len())}
-                    <A href=format!("/vms/{}/hardware", d.vm.id)>"Open its hardware"</A>
-                    " - start it from the VM list."
+                    <crate::components::vm_power::NewVmActions vm=d.vm.clone()/>
                 </div>
             })}
         </div>

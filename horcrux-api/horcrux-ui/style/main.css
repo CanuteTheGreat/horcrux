@@ -1414,3 +1414,9 @@ td .actions { flex-wrap: nowrap; }
 .host-advisory { padding: .6rem 0; border-top: 1px solid var(--border, rgba(128,128,128,.25)); overflow-wrap: anywhere; }
 .host-advisory:first-child { border-top: 0; }
 .host-advisory-pkgs { margin: .25rem 0; font-family: var(--mono, ui-monospace, monospace); font-size: .85rem; }
+
+/* VM power controls (components/vm_power.rs): one compact group, not spread over the row */
+.vm-power-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.5rem 0 0.75rem; }
+.vm-power-bar .vm-power-state { margin-right: 0.5rem; font-size: 0.95rem; }
+.vm-power-bar + .alert { margin-top: 0.25rem; }
+.new-vm-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }

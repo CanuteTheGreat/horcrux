@@ -115,7 +115,7 @@ pub fn error_text(status: u16, body: &str) -> String {
         (Some(m), Some(d)) if m != d => format!("{}: {}", m, d),
         (Some(m), _) => m,
         (None, Some(d)) => d,
-        (None, None) if v.is_none() => body.trim().to_string(),
+        (None, None) if v.is_none() => body.trim().chars().take(300).collect(),
         (None, None) => String::new(),
     };
     // 424 NOT_AVAILABLE: this node lacks something (Docker, a log source, ...).
@@ -123,19 +123,63 @@ pub fn error_text(status: u16, body: &str) -> String {
     // (`ApiError::unavailable`); `message` is what is missing, `details` what to do.
     if status == 424 {
         if let (Some(reason), Some(msg)) = (field("reason"), field("message")) {
+            // "<what is missing>\n<what to do>\n(424 <reason>)": readable as it is,
+            // and `parse_unavailable` gets the parts back.
             return format!(
-                "HTTP 424 [{}]: {}\n{}",
-                reason,
+                "{}\n{}\n(424 {})",
                 msg,
-                field("details").unwrap_or_default()
+                field("details").unwrap_or_default(),
+                reason
             );
         }
     }
-    if detail.is_empty() {
-        format!("HTTP {}", status)
+    // What the user reads: the server's reason first, the status code only as a
+    // short "(404)" suffix (Proxmox style), never "HTTP 404:" or a raw JSON/HTML body.
+    let detail = if looks_raw(&detail) {
+        String::new()
     } else {
-        format!("HTTP {}: {}", status, detail)
+        detail
+    };
+    if detail.is_empty() {
+        format!("{} ({})", status_phrase(status), status)
+    } else {
+        format!("{} ({})", detail, status)
     }
+}
+
+/// A response body that is markup or JSON (a proxy error page, an object
+/// without `message`): never shown to the user as the error text.
+fn looks_raw(s: &str) -> bool {
+    let t = s.trim_start();
+    t.starts_with('<') || t.starts_with('{') || t.starts_with('[')
+}
+
+/// Plain words for a status code when the server gave no reason.
+pub fn status_phrase(status: u16) -> &'static str {
+    match status {
+        400 => "The request was not accepted",
+        401 => "Your session has ended; log in again",
+        403 => "You don't have permission to do this",
+        404 => "Not found (it may have been removed)",
+        405 | 501 => "This node does not support that action",
+        408 | 504 => "The server took too long to answer; try again",
+        409 => "That conflicts with the current state; reload and try again",
+        413 => "That upload is too large",
+        422 => "The request was refused",
+        429 => "Too many requests; wait a moment and try again",
+        502 | 503 => "The server is not reachable right now; try again",
+        s if s >= 500 => "The server hit an internal error",
+        _ => "The request failed",
+    }
+}
+
+/// The status code `error_text` put at the end of a message ("... (403)").
+pub fn status_of(message: &str) -> Option<u16> {
+    let inner = message.trim_end().strip_suffix(')')?;
+    let (_, code) = inner.rsplit_once('(')?;
+    // "(404)", or "(424 docker-missing)" for a node that lacks something
+    let n: u16 = code.split(' ').next()?.parse().ok()?;
+    (100..600).contains(&n).then_some(n)
 }
 
 /// A 424 `NOT_AVAILABLE` answer: the node lacks something the page needs.
@@ -148,8 +192,11 @@ pub struct Unavailable {
 
 /// Parse the text `error_text` builds for a 424 answer.
 pub fn parse_unavailable(text: &str) -> Option<Unavailable> {
-    let rest = text.strip_prefix("HTTP 424 [")?;
-    let (reason, rest) = rest.split_once("]: ")?;
+    let (rest, tail) = text.trim_end().rsplit_once("\n(424 ")?;
+    let reason = tail.strip_suffix(')')?;
+    if reason.is_empty() || reason.contains(char::is_whitespace) {
+        return None;
+    }
     let (what, todo) = rest.split_once('\n').unwrap_or((rest, ""));
     Some(Unavailable {
         reason: reason.to_string(),
@@ -326,9 +373,7 @@ pub async fn fetch_text(path: &str) -> Result<String, ApiError> {
             message: e.to_string(),
         })
     } else {
-        Err(ApiError {
-            message: format!("HTTP {}", response.status()),
-        })
+        Err(http_error(response).await)
     }
 }
 
@@ -356,7 +401,7 @@ impl ApiError {
     /// The server refused for lack of a privilege (HTTP 403): the panel or
     /// page should say "no permission", not "could not reach the backend".
     pub fn is_forbidden(&self) -> bool {
-        self.message == "HTTP 403" || self.message.starts_with("HTTP 403:")
+        status_of(&self.message) == Some(403)
     }
 }
 
@@ -656,14 +701,7 @@ pub async fn set_node_caps(name: &str, caps: Option<&NodeCaps>) -> Result<(), Ap
     if response.ok() {
         Ok(())
     } else {
-        let body = response.text().await.unwrap_or_default();
-        Err(ApiError {
-            message: if body.is_empty() {
-                format!("HTTP {}", response.status())
-            } else {
-                format!("HTTP {}: {}", response.status(), body)
-            },
-        })
+        Err(http_error(response).await)
     }
 }
 
@@ -890,14 +928,7 @@ pub async fn set_node_priority(name: &str, priority: u32) -> Result<(), ApiError
     if response.ok() {
         Ok(())
     } else {
-        let body = response.text().await.unwrap_or_default();
-        Err(ApiError {
-            message: if body.is_empty() {
-                format!("HTTP {}", response.status())
-            } else {
-                format!("HTTP {}: {}", response.status(), body)
-            },
-        })
+        Err(http_error(response).await)
     }
 }
 
@@ -5846,10 +5877,42 @@ mod tests {
         let body = r#"{"status":500,"error":"INTERNAL_ERROR","message":"An internal server error occurred","details":"nftables: permission denied"}"#;
         assert_eq!(
             error_text(500, body),
-            "HTTP 500: An internal server error occurred: nftables: permission denied"
+            "An internal server error occurred: nftables: permission denied (500)"
         );
-        assert_eq!(error_text(404, ""), "HTTP 404");
-        assert_eq!(error_text(502, "bad gateway"), "HTTP 502: bad gateway");
+        assert_eq!(
+            error_text(404, ""),
+            "Not found (it may have been removed) (404)"
+        );
+        assert_eq!(error_text(502, "bad gateway"), "bad gateway (502)");
+    }
+
+    #[test]
+    fn error_text_never_shows_raw_bodies_or_http_prefixes() {
+        // the console's 422 for a stopped VM: the reason, not the JSON object
+        let body = r#"{"status":422,"error":"VALIDATION_ERROR","message":"VM is not running (no console state); start it first","timestamp":"2026-11-27T12:00:00Z"}"#;
+        assert_eq!(
+            error_text(422, body),
+            "VM is not running (no console state); start it first (422)"
+        );
+        // JSON without a message, an HTML proxy page, a JSON array: the status phrase only
+        for raw in [
+            r#"{"status":500}"#,
+            "<html><body>502 Bad Gateway</body></html>",
+            "[1,2]",
+        ] {
+            let t = error_text(502, raw);
+            assert_eq!(
+                t, "The server is not reachable right now; try again (502)",
+                "{raw}"
+            );
+        }
+        for code in [400u16, 401, 403, 404, 409, 422, 500, 503] {
+            let t = error_text(code, "");
+            assert!(!t.contains("HTTP"), "{t}");
+            assert!(!t.contains('{'), "{t}");
+            assert_eq!(status_of(&t), Some(code), "{t}");
+        }
+        assert_eq!(status_of("Disk (vda) failed"), None);
     }
 
     #[test]
@@ -5867,7 +5930,7 @@ mod tests {
         for other in [
             error_text(401, ""),
             error_text(500, body),
-            "HTTP 4030".into(),
+            "Quota (4030)".into(),
         ] {
             assert!(!ApiError { message: other }.is_forbidden());
         }

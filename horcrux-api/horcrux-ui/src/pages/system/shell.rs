@@ -32,7 +32,11 @@ pub fn NodeShellPage() -> impl IntoView {
             let ws = match WebSocket::new(&api::resolve_ws_url(&ticket.ws_path)) {
                 Ok(ws) => ws,
                 Err(e) => {
-                    set_output.set(format!("[cannot open the WebSocket: {:?}]\n", e));
+                    let _ = e;
+                    set_output.set(
+                        "[cannot open the shell connection; check that this page is served over HTTPS and reload]\n"
+                            .to_string(),
+                    );
                     return;
                 }
             };

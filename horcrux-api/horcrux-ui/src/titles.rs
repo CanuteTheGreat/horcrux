@@ -80,6 +80,7 @@ fn exact(path: &str) -> Option<&'static str> {
         "/system/about" => "About",
         "/system/licenses" => "Open-source licenses",
         "/system/certificates" => "Certificates",
+        "/system/console" => "Horcrux Console",
         "/audit" => "Audit Log",
         "/security" => "Security",
         "/security/vulnerabilities" => "Vulnerabilities",
@@ -197,8 +198,10 @@ pub fn title_for(path: &str, subject: Option<&str>) -> String {
                     format!("{leaf} · {cl}")
                 }
             }
-            _ => last(path, "")
-                .filter(|s| !s.is_empty())
+            // the not-found page names itself through the subject
+            _ => subject
+                .map(str::to_string)
+                .or_else(|| last(path, "").filter(|s| !s.is_empty()))
                 .unwrap_or_else(|| "Not found".into()),
         }
     };
@@ -211,6 +214,10 @@ mod tests {
 
     #[test]
     fn titles_are_per_page() {
+        assert_eq!(
+            title_for("/no/such/page", Some("Page not found")),
+            "Page not found · Horcrux"
+        );
         assert_eq!(title_for("/vms", None), "VMs · Horcrux");
         assert_eq!(title_for("/", None), "Dashboard · Horcrux");
         assert_eq!(
@@ -244,9 +251,14 @@ mod tests {
         let mut seen = std::collections::HashMap::new();
         for part in lib.split("<Route path=\"").skip(1) {
             let path = part.split('"').next().unwrap();
-            if path.contains(':') {
+            if path.contains(':') || path.contains('*') {
                 continue;
             }
+            // a real name, not the last path segment ("console") as a stand-in
+            assert!(
+                exact(path).is_some(),
+                "{path} has no entry in titles::exact"
+            );
             let t = title_for(path, None);
             assert!(!t.starts_with("Not found"), "{path} has no title");
             if let Some(prev) = seen.insert(t.clone(), path.to_string()) {

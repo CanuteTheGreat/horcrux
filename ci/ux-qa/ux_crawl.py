@@ -289,7 +289,9 @@ def main():
     forbidden = [re.compile(p, re.I) for p in cfg["forbidden_names"]]
     pfail = [re.compile(p, re.I) for p in cfg["private_fail"]]
     pwarn = [re.compile(p, re.I) for p in cfg["private_warn"]]
-    bad_text = re.compile(r"\bundefined\b|\bNaN\b|\[object Object\]|missing field|panicked at|Traceback \(most|RUST_BACKTRACE|\{\{|\}\}|\{\w+(\.\w+)+\([^)]*\)\}|\.(clone|len|to_string|to_uppercase)\(\)|\.get\(\)\s*(\|\||&&|[<>!=]=)", re.I)
+    bad_text = re.compile(r"\bundefined\b|\bNaN\b|\[object Object\]|missing field|panicked at|Traceback \(most|RUST_BACKTRACE|\{\{|\}\}|\{\w+(\.\w+)+\([^)]*\)\}|\.(clone|len|to_string|to_uppercase)\(\)|\.get\(\)\s*(\|\||&&|[<>!=]=)"
+                          # raw protocol / backend errors: "HTTP 422: ...", a JSON error object
+                          r"|\bHTTP [45]\d\d\b|\{\s*\"(status|error|message|timestamp)\"\s*:", re.I)
     # A bare "404" is a number too (a 404 GB disk, 404 MiB free on the runner), so only the
     # error-shaped forms count: "HTTP 404", "404 Not Found", "Error 404", a lone "404" line.
     notfound = re.compile(
@@ -407,6 +409,13 @@ def main():
                             page.screenshot(path=os.path.join(d, slug(route) + ".png"), full_page=True, timeout=20000)
                         except Exception as e:  # noqa: BLE001
                             add("screenshot", "warn", route, vp, scheme, str(e)[:120])
+                if si == 0 and wi == 0:
+                    # An address no page lives at must say so and offer a way on, not render blank.
+                    page.goto(base + "/__no_such_page__", wait_until="load")
+                    settle(page)
+                    f = page.evaluate(FACTS_JS)
+                    if f["textLen"] < 20 or "/__no_such_page__" not in f["text"]:
+                        add("dead-end-404", "fail", "/__no_such_page__", vp, scheme, "an unknown address shows an empty page with no way on")
                 ctx.close()
         browser.close()
     for t, rs in duplicate_titles(pages).items():

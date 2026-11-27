@@ -1,5 +1,7 @@
 //! Reusable components.
+pub mod not_found;
 mod unavailable;
+pub mod vm_power;
 pub use unavailable::UnavailableState;
 pub mod focus;
 mod iso_add;

@@ -75,9 +75,11 @@ pub fn PoolsPage() -> impl IntoView {
                     } else if resp.status() == 424 {
                         set_unavailable.set(unavailable_of(resp).await);
                     } else {
+                        let status = resp.status();
+                        let body = resp.text().await.unwrap_or_default();
                         set_error.set(Some(format!(
-                            "Failed to load pools (HTTP {})",
-                            resp.status()
+                            "Failed to load pools: {}",
+                            crate::api::error_text(status, &body)
                         )));
                     }
                 }

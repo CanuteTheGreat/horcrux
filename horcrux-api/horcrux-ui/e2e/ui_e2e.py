@@ -243,7 +243,15 @@ def main():
         # The ONE dialog handler of this page (accepts confirm/prompt). Never add page.once("dialog", ...)
         # next to it: both would accept the same dialog and Playwright raises "Dialog.accept: Cannot
         # accept dialog which is already handled".
-        page.on("dialog", lambda d: d.accept(d.default_value) if d.type == "prompt" else d.accept())
+        # A delete prompt asks for the VM ID (like Proxmox): answer it the way a user does.
+        def answer_dialog(d):
+            if d.type == "prompt":
+                m = re.search(r"Type the VM ID \((.+?)\) to confirm", d.message)
+                d.accept(m.group(1) if m else d.default_value)
+            else:
+                d.accept()
+
+        page.on("dialog", answer_dialog)
 
         # ---- login ---------------------------------------------------------
         page.goto(f"{BASE}/login")
@@ -844,6 +852,7 @@ def main():
         page.locator(f"tr[data-vm-id='{vid}']").get_by_role("button", name="Stop").click()
         expect(page.locator(f"tr[data-vm-id='{vid}']")).to_contain_text("stopped", timeout=60000)
 
+        vm_power_checks(page, vid)
         s3_gateway_checks(page)
         monitoring_dashboard_checks(page)
         users_edit_checks(page)
@@ -1372,6 +1381,36 @@ def ceph_placement_checks(page):
     for w in plan["warnings"]:
         expect(page.locator("#ceph-placement-warnings")).to_contain_text(w)
     print("UI E2E: Ceph page placement panel matches /api/ceph/placement passed")
+
+
+def vm_power_checks(page, vid):
+    """The VM's own page has Proxmox-style power controls that really work (Start, then Stop after its
+    confirmation), a deleted/mistyped VM and an unknown address say so with a way on, and no error text
+    shows "HTTP 4xx" or a raw JSON object. `vid` is stopped on entry and on exit."""
+    page.goto(f"{BASE}/vms/{vid}")
+    bar = page.locator("#vm-power-bar")
+    expect(bar).to_be_visible(timeout=30000)
+    expect(page.locator("#vm-power-state")).to_contain_text("stopped", timeout=30000)
+    expect(page.locator("#vm-power-stop")).to_be_disabled()
+    expect(page.locator("#vm-power-shutdown")).to_be_disabled()
+    page.locator("#vm-power-start").click()
+    expect(page.locator("#vm-power-notice")).to_contain_text("is running", timeout=90000)
+    expect(page.locator("#vm-power-state")).to_contain_text("running", timeout=30000)
+    expect(page.locator("#vm-power-start")).to_be_disabled()
+    page.locator("#vm-power-stop").click()  # confirm accepted by the page's dialog handler
+    expect(page.locator("#vm-power-notice")).to_contain_text("is stopped", timeout=90000)
+    expect(page.locator("#vm-power-state")).to_contain_text("stopped", timeout=30000)
+
+    page.goto(f"{BASE}/vms/no-such-vm-e2e")
+    expect(page.locator("#vmd-missing")).to_contain_text("VM not found", timeout=30000)
+    expect(page.locator("#vmd-missing a[href='/vms']")).to_be_visible()
+    body = page.locator("body").inner_text()
+    assert "HTTP 404" not in body and '{"' not in body, body[:400]
+
+    page.goto(f"{BASE}/no/such/page")
+    expect(page.locator("#page-not-found")).to_contain_text("/no/such/page", timeout=30000)
+    expect(page.locator("#page-not-found a[href='/']")).to_be_visible()
+    print("UI E2E: VM power bar, VM not found, unknown page passed")
 
 
 def vm_hardware_checks(page, vid):

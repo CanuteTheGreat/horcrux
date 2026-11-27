@@ -346,6 +346,8 @@ pub fn App() -> impl IntoView {
                     <Route path="/nas/directory" view=|| view! { <Gated feature="ldap|ldap-server|kerberos|ad"><NasDirectoryPage/></Gated> }/>
                     <Route path="/nas/iscsi" view=|| view! { <Gated feature="iscsi-target"><NasIscsiPage/></Gated> }/>
                     <Route path="/nas/s3" view=|| view! { <Gated feature="s3-gateway"><NasS3Page/></Gated> }/>
+                    // Anything else: say so and offer a way on (it used to be a blank page).
+                    <Route path="/*any" view=crate::components::not_found::NotFound/>
                 </Routes>
                 </SessionGate>
             </main>

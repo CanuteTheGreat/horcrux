@@ -1,4 +1,5 @@
 use crate::api;
+use crate::components::vm_power::{self, PowerAction};
 use horcrux_common::VmConfig;
 use leptos::*;
 use leptos_router::*;
@@ -75,6 +76,7 @@ pub fn VmList() -> impl IntoView {
     };
 
     let start_vm = move |vm_id: String| {
+        set_notice.set(Some(format!("Starting VM {}...", vm_id)));
         spawn_local(async move {
             let r = api::start_vm(&vm_id).await;
             report(format!("VM {} started", vm_id), r);
@@ -83,6 +85,11 @@ pub fn VmList() -> impl IntoView {
 
     // Clean shutdown (ACPI power button), reboot.
     let shutdown_vm = move |vm_id: String| {
+        if !vm_power::ask(
+            &vm_power::confirm_text(PowerAction::Shutdown, &vm_id).unwrap_or_default(),
+        ) {
+            return;
+        }
         set_notice.set(Some(format!("Shutting down VM {}...", vm_id)));
         spawn_local(async move {
             let r = api::shutdown_vm(&vm_id, 60, false).await.map(|_| ());
@@ -90,6 +97,10 @@ pub fn VmList() -> impl IntoView {
         });
     };
     let reboot_vm = move |vm_id: String| {
+        if !vm_power::ask(&vm_power::confirm_text(PowerAction::Reboot, &vm_id).unwrap_or_default())
+        {
+            return;
+        }
         set_notice.set(Some(format!("Rebooting VM {}...", vm_id)));
         spawn_local(async move {
             let r = api::reboot_vm(&vm_id).await.map(|_| ());
@@ -122,6 +133,10 @@ pub fn VmList() -> impl IntoView {
     };
 
     let stop_vm = move |vm_id: String| {
+        if !vm_power::ask(&vm_power::confirm_text(PowerAction::Stop, &vm_id).unwrap_or_default()) {
+            return;
+        }
+        set_notice.set(Some(format!("Stopping VM {}...", vm_id)));
         spawn_local(async move {
             let r = api::stop_vm(&vm_id).await;
             report(format!("VM {} stopped", vm_id), r);
@@ -172,14 +187,13 @@ pub fn VmList() -> impl IntoView {
         });
     };
 
+    // Like Proxmox: deleting is permanent, so the user types the VM's id.
     let delete_vm = move |vm_id: String| {
-        if web_sys::window()
-            .and_then(|w| {
-                w.confirm_with_message(&format!("Delete VM {}?", vm_id))
-                    .ok()
-            })
-            .unwrap_or(false)
-        {
+        let running = vms
+            .get_untracked()
+            .iter()
+            .any(|v| v.id == vm_id && v.status == horcrux_common::VmStatus::Running);
+        if vm_power::confirm_delete(&vm_id, running) {
             spawn_local(async move {
                 let r = api::delete_vm(&vm_id).await;
                 report(format!("VM {} deleted", vm_id), r);

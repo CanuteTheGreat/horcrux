@@ -171,7 +171,7 @@ pub fn VmImportEsxiPage() -> impl IntoView {
             {move || done.get().map(|d| view! {
                 <div class="alert alert-success" id="esxi-done">
                     {format!("Imported as VM {} ({} disk(s)). ", d.vm.id, d.vm.disks.len())}
-                    <A href=format!("/vms/{}/hardware", d.vm.id)>"Open its hardware"</A>
+                    <crate::components::vm_power::NewVmActions vm=d.vm.clone()/>
                 </div>
             })}
         </div>

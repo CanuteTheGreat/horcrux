@@ -19,6 +19,8 @@ pub fn VmDetailPage() -> impl IntoView {
     let (inv, set_inv) = create_signal(None::<InvResource>);
     let (tags_text, set_tags_text) = create_signal(String::new());
     let (error, set_error) = create_signal(None::<String>);
+    // The VM doesn't exist (deleted, mistyped link): say so, no forms for it.
+    let (missing, set_missing) = create_signal(false);
     let (notice, set_notice) = create_signal(None::<String>);
     let (power, set_power) = create_signal(None::<api::GuestPolicyView>);
     let stop_sel = create_rw_signal(String::new());
@@ -35,6 +37,12 @@ pub fn VmDetailPage() -> impl IntoView {
                     crate::titles::set_subject(&v.name);
                     set_vm.set(Some(v));
                     set_error.set(None);
+                    set_missing.set(false);
+                }
+                Err(e) if api::status_of(&e.message) == Some(404) => {
+                    set_vm.set(None);
+                    set_missing.set(true);
+                    return;
                 }
                 Err(e) => set_error.set(Some(e.message)),
             }
@@ -123,8 +131,19 @@ pub fn VmDetailPage() -> impl IntoView {
     };
 
     view! {
+        <Show when=move || !missing.get() fallback=move || view! {
+            <div class="vm-detail" id="vmd-missing">
+                <div class="page-header"><h1>"VM not found"</h1></div>
+                <p class="form-help">{move || format!("There is no VM with the ID {} on this node. It may have been deleted or moved to another node.", id())}</p>
+                <div class="form-row">
+                    <A href="/vms" class="btn btn-primary">"Back to the VM list"</A>
+                    <A href="/vms/create" class="btn">"Create VM"</A>
+                </div>
+            </div>
+        }>
         <div class="vm-detail">
             <div class="page-header"><h1>{move || vm.get().map(|v| format!("{} ({})", v.name, v.id)).unwrap_or_else(id)}</h1></div>
+            <crate::components::vm_power::VmPowerBar vm=Signal::derive(move || vm.get()) on_changed=Callback::new(move |_| load())/>
             <nav class="tabs" id="vm-tabs">
                 <A href=move || format!("/vms/{}", id()) class="tab tab-active">"Summary"</A>
                 <A href=move || format!("/vms/{}/hardware", id()) class="tab">"Hardware"</A>
@@ -138,7 +157,7 @@ pub fn VmDetailPage() -> impl IntoView {
             {move || error.get().map(|e| view! { <div class="alert alert-error" id="vmd-error">{e}</div> })}
             {move || vm.get().map(|v| view! {
                 <table class="vm-table" id="vmd-summary">
-                    <tr><th>"State"</th><td class="vmd-status">{format!("{:?}", v.status)}</td></tr>
+                    <tr><th>"State"</th><td class="vmd-status">{v.status.to_string()}</td></tr>
                     <tr><th>"CPUs"</th><td>{v.cpus}</td></tr>
                     <tr><th>"Memory"</th><td>{format!("{} MB", v.memory)}</td></tr>
                     <tr><th>"Disks"</th><td>{v.disks.len()}</td></tr>
@@ -195,5 +214,6 @@ pub fn VmDetailPage() -> impl IntoView {
                 <button id="vmd-tags-save" class="btn btn-primary" on:click=save_tags>"Save tags"</button>
             </div>
         </div>
+        </Show>
     }
 }
