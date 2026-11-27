@@ -212,6 +212,16 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .await?;
 
+    // Routing v2 (replaces the first matcher table; see horcrux_common::notify).
+    // The default matcher sends every event to every channel, so behaviour is
+    // unchanged until the user edits the routing.
+    run_migration(
+        pool,
+        "030_notification_routing",
+        MIGRATION_030_NOTIFICATION_ROUTING,
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -1239,6 +1249,21 @@ CREATE TABLE auth_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+"#;
+
+const MIGRATION_030_NOTIFICATION_ROUTING: &str = r#"
+DROP TABLE IF EXISTS notification_matchers;
+CREATE TABLE notification_matchers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    definition TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+INSERT INTO notification_matchers (id, name, definition, position, created_at)
+VALUES ('default', 'default',
+ '{"name":"default","description":"Alerts, backup results and test messages go to every enabled channel (what notifications did before routing existed)","enabled":true,"mode":"all","invert":false,"children":[{"type":"event_type","kinds":["alert","backup","test"]}],"targets":[],"all_channels":true}',
+ 0, '1970-01-01T00:00:00+00:00');
 "#;
 
 const MIGRATION_029_CREATE_NOTIFICATION_MATCHERS: &str = r#"

@@ -651,10 +651,23 @@ impl AlertManager {
 
     /// Send notifications for an alert (also used for backup job results)
     pub async fn send_notifications(&self, alert: &Alert) {
+        self.send_notifications_as(alert, None).await;
+    }
+
+    /// Like [`send_notifications`], but route `event` (e.g. a backup result)
+    /// instead of the event derived from the alert.
+    pub async fn send_notifications_as(
+        &self,
+        alert: &Alert,
+        event: Option<horcrux_common::notify::Event>,
+    ) {
         if let Some(store) = self.channel_store.get() {
-            store
-                .dispatch(&crate::notification_channels::Message::from_alert(alert))
-                .await;
+            let mut msg = crate::notification_channels::Message::from_alert(alert);
+            if let Some(ev) = event {
+                msg = crate::notification_channels::Message::from_event(&ev);
+                msg.alert = Some(alert.clone());
+            }
+            store.dispatch(&msg).await;
         }
         let channels = self.notification_channels.read().await;
 

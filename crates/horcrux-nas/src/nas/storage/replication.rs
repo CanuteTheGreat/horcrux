@@ -582,6 +582,16 @@ impl ReplicationManager {
                         history.remove(0);
                     }
 
+                    horcrux_common::notify::emit(
+                        horcrux_common::notify::Event::new(
+                            horcrux_common::notify::EventKind::Replication,
+                            horcrux_common::notify::Severity::Info,
+                            format!("Replication '{}' finished", task.base.name),
+                        )
+                        .subtype("replication_ok")
+                        .field("task", task.base.name.clone())
+                        .field("bytes", entry.bytes_transferred.to_string()),
+                    );
                     return Ok(entry);
                 }
                 Err(e) => {
@@ -638,6 +648,16 @@ impl ReplicationManager {
             }
         }
 
+        horcrux_common::notify::emit(
+            horcrux_common::notify::Event::new(
+                horcrux_common::notify::EventKind::Replication,
+                horcrux_common::notify::Severity::Error,
+                format!("Replication '{}' failed", task.base.name),
+            )
+            .subtype("replication_failed")
+            .body(last_error.clone().unwrap_or_default())
+            .field("task", task.base.name.clone()),
+        );
         Err(Error::Internal(format!(
             "Replication failed after {} retries: {}",
             task.max_retries,

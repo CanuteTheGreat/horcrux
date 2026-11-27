@@ -152,7 +152,32 @@ async fn job_finished(state: Arc<AppState>, job: BackupJob, report: JobRunReport
         acknowledged_by: None,
     };
     // Legacy alert channels and the Monitoring > Notifications channels.
-    state.alert_manager.send_notifications(&alert).await;
+    let mut event = horcrux_common::notify::Event::new(
+        horcrux_common::notify::EventKind::Backup,
+        if report.ok {
+            horcrux_common::notify::Severity::Info
+        } else {
+            horcrux_common::notify::Severity::Error
+        },
+        if report.ok {
+            format!("Backup job {} finished", job.id)
+        } else {
+            format!("Backup job {} failed", job.id)
+        },
+    )
+    .subtype(if report.ok {
+        "backup_ok"
+    } else {
+        "backup_failed"
+    })
+    .body(alert.message.clone())
+    .field("job_id", job.id.clone())
+    .field("targets", job.targets.join(","));
+    event.guest_id = job.targets.first().cloned();
+    state
+        .alert_manager
+        .send_notifications_as(&alert, Some(event))
+        .await;
 }
 
 #[derive(Deserialize)]

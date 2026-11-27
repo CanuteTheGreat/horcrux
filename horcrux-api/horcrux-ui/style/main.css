@@ -1414,3 +1414,24 @@ td .actions { flex-wrap: nowrap; }
 .host-advisory { padding: .6rem 0; border-top: 1px solid var(--border, rgba(128,128,128,.25)); overflow-wrap: anywhere; }
 .host-advisory:first-child { border-top: 0; }
 .host-advisory-pkgs { margin: .25rem 0; font-family: var(--mono, ui-monospace, monospace); font-size: .85rem; }
+/* Notification routing: matcher tree editor */
+.routing-section .mt-hint { color: var(--text-muted, #666); font-size: 0.9em; margin: 0.25rem 0 0.75rem; }
+.mt-editor, .mt-test { border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin: 1rem 0; background: var(--surface); }
+.mt-root-head, .mt-group-head { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; margin-bottom: 0.5rem; }
+.mt-list { list-style: none; margin: 0; padding: 0.25rem 0 0.25rem 0.75rem; min-height: 2rem; }
+.mt-node { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-start; border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; margin: 0.4rem 0; background: var(--surface); cursor: grab; }
+.mt-node.mt-group { border-left: 4px solid var(--primary); }
+.mt-node.mt-over, .mt-over { outline: 2px dashed var(--primary); outline-offset: 2px; }
+.mt-handle { font-size: 0.75em; padding: 0.15rem 0.4rem; border: 1px solid var(--border); border-radius: 3px; color: var(--text-muted, #666); user-select: none; }
+.mt-body { flex: 1 1 24rem; min-width: 0; }
+.mt-kind { font-weight: 600; margin-right: 0.5rem; }
+.mt-fields, .mt-set { display: inline-flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; align-items: center; }
+.mt-check { display: inline-flex; gap: 0.25rem; align-items: center; }
+.mt-empty { color: var(--text-muted, #666); font-style: italic; padding: 0.5rem; }
+.mt-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.mt-test-form { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.mt-trace { list-style: none; padding-left: 1rem; }
+.mt-hit { color: var(--success, #1a7f37); font-weight: 600; }
+.mt-miss { color: var(--text-muted, #666); }
+.mt-targets { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+@media (max-width: 700px) { .mt-body { flex-basis: 100%; } }
