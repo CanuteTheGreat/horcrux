@@ -557,6 +557,19 @@ async fn local_graph(
             "status": status_word(&st), "href": "/containers",
             "meta": {"runtime": format!("{:?}", ct.runtime).to_ascii_lowercase(), "memory": format!("{} MB", ct.memory)}}));
     }
+    // a kind this node has none of gets no empty box (and no edge to it)
+    let used: BTreeSet<String> = nodes
+        .iter()
+        .filter_map(|n| n["group"].as_str().map(str::to_string))
+        .collect();
+    let groups: Vec<Value> = groups
+        .into_iter()
+        .filter(|g| used.contains(g["id"].as_str().unwrap_or("")))
+        .collect();
+    edges.retain(|e| {
+        !e["to"].as_str().unwrap_or("").starts_with("g:")
+            || used.contains(e["to"].as_str().unwrap_or(""))
+    });
     json!({
         "schema": "infra-map/v1",
         "source": {"product": "horcrux", "name": host, "generated_at": chrono::Utc::now().timestamp()},

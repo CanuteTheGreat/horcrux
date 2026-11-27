@@ -199,7 +199,8 @@
           d = 'M' + ax + ' ' + ay + ' C' + ax + ' ' + (ay + 40) + ' ' + bx + ' ' + (by - 40) + ' ' + bx + ' ' + by;
         } else {
           var lr = a.x <= b.x; ax = lr ? a.x + a.w : a.x; bx = lr ? b.x : b.x + b.w; ay = a.y + a.h / 2; by = b.y + b.h / 2;
-          if (a.x === b.x) { ax = a.x + a.w; bx = b.x + b.w; d = 'M' + ax + ' ' + ay + ' C' + (ax + 30) + ' ' + ay + ' ' + (bx + 30) + ' ' + by + ' ' + bx + ' ' + by; }
+          if (a.x === b.x && Math.abs(a.y - b.y) <= ROWH + 1) { var t2 = a.y < b.y ? a : b, b2 = a.y < b.y ? b : a; d = 'M' + (t2.x + t2.w / 2) + ' ' + (t2.y + t2.h) + ' L' + (b2.x + b2.w / 2) + ' ' + b2.y; }
+          else if (a.x === b.x) { ax = a.x + a.w; bx = b.x + b.w; d = 'M' + ax + ' ' + ay + ' C' + (ax + 30) + ' ' + ay + ' ' + (bx + 30) + ' ' + by + ' ' + bx + ' ' + by; }
           else d = 'M' + ax + ' ' + ay + ' C' + (ax + (lr ? 40 : -40)) + ' ' + ay + ' ' + (bx + (lr ? -40 : 40)) + ' ' + by + ' ' + bx + ' ' + by;
         }
         var p = el('path', { d: d, 'stroke-dasharray': e.kind === 'same' ? '5 4' : null, stroke: e.kind === 'same' ? C.accent : null }, eg);
