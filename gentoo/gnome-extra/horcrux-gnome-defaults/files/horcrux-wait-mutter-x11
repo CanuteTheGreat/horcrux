@@ -5,7 +5,7 @@
 # login) gsd-xsettings logs "Failed to get current UI scaling factor: ... Name org.gnome.Mutter.X11 does not exist" and X11 apps stay
 # unscaled (Xft.dpi 96, scale factor 1) for the whole session. So: wake Xwayland (a connect to the X socket starts it), then wait
 # (bounded) for the name. Never fails the unit: after the timeout gsd-xsettings starts as before.
-timeout=${HX_WAIT_MUTTER_X11_SECS:-40}
+timeout=${HX_WAIT_MUTTER_X11_SECS:-150}
 have() { busctl --user status org.gnome.Mutter.X11 >/dev/null 2>&1; }
 wake() {
 	d=${DISPLAY#:}; d=${d%%.*}
@@ -46,7 +46,7 @@ have && exit 0
 i=0
 while [ "$i" -lt "$timeout" ]; do
 	[ $((i % 5)) -eq 0 ] && wake
-	have && exit 0
+	if have; then echo "horcrux-wait-mutter-x11: org.gnome.Mutter.X11 owned after ${i}s" >&2; exit 0; fi
 	sleep 1
 	i=$((i + 1))
 done
