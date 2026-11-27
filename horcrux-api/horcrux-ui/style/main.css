@@ -1370,3 +1370,17 @@ td .actions { flex-wrap: nowrap; }
 }
 .hardening-table td { vertical-align: top; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+/* Security > Events */
+.security-page .checkbox-row { display: flex; flex-wrap: wrap; gap: .25rem 1rem; }
+.security-page .checkbox-row label { display: inline-flex; align-items: center; margin: 0; font-weight: normal; }
+.security-page .ids-card .actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
+.security-page .pagination { display: flex; gap: .5rem; align-items: center; justify-content: flex-end; margin-top: .75rem; }
+.events-table td { vertical-align: top; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+    /* Phone: one card per event, labels from data-label, no sideways scrolling. */
+    .security-page table.events-table, .events-table tbody, .events-table tr, .events-table td { display: block; width: 100%; }
+    .events-table thead { display: none; }
+    .events-table tr { border-bottom: 1px solid var(--border); padding: .5rem 0; }
+    .events-table td { border: 0; padding: .15rem .25rem; }
+    .events-table td[data-label="Time"], .events-table td[data-label="Severity"], .events-table td[data-label="Source"] { display: inline-block; width: auto; }
+}

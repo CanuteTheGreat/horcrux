@@ -106,6 +106,7 @@ fn SecurityTabs(active: &'static str) -> impl IntoView {
             {tab("/security", "overview", "Overview")}
             {tab("/security/vulnerabilities", "vulns", "Vulnerabilities")}
             {tab("/security/hardening", "hardening", "Hardening")}
+            {tab("/security/events", "events", "Events")}
             {tab("/security/settings", "settings", "Settings")}
         </nav>
     }
@@ -117,7 +118,11 @@ fn SecurityTabs(active: &'static str) -> impl IntoView {
 pub fn SecurityOverviewPage() -> impl IntoView {
     let (ov, set_ov) = create_signal(None::<SecurityOverview>);
     let (err, set_err) = create_signal(None::<String>);
+    let (ids, set_ids) = create_signal(None::<IdsStatus>);
     let load = create_action(move |_: &()| async move {
+        if let Ok(i) = get_ids_status().await {
+            set_ids.set(Some(i));
+        }
         match get_security_overview().await {
             Ok(o) => {
                 set_err.set(None);
@@ -175,6 +180,15 @@ pub fn SecurityOverviewPage() -> impl IntoView {
                                 <div class="stat-value">{format!("{:.0}%", o.hardening_score)}</div>
                                 <div class="dash-meta">{format!("{} failing, {} need a manual fix", o.hardening_failed, o.hardening_manual)}</div>
                             </A>
+                            {move || ids.get().map(|i| view! {
+                                <A href="/security/events?since=24h" class={if i.events_24h > 0 { "stat-card stat-link warning" } else { "stat-card stat-link" }}>
+                                    <span class="stat-label">"Security events (24 h)"</span>
+                                    <div class="stat-value">{i.events_24h}</div>
+                                    <div class="dash-meta">{format!("audit {}, integrity {}",
+                                        if i.audit_enabled { "on" } else { "off" },
+                                        if i.integrity_enabled { "on" } else { "off" })}</div>
+                                </A>
+                            })}
                         </div>
                         <div class="card">
                             <h2>"Scanner"</h2>
@@ -787,6 +801,8 @@ pub fn SecuritySettingsPage() -> impl IntoView {
             {move || s.get().map(|cur| {
                 let v = cur.vuln_scan.clone();
                 let h = cur.hardening.clone();
+                let a = cur.audit.clone();
+                let i = cur.integrity.clone();
                 view! {
                     <form class="card settings-form" on:submit=move |e| { e.prevent_default(); if let Some(x) = s.get_untracked() { save.dispatch(x) } }>
                         <h2>"Vulnerability scanning"</h2>
@@ -900,12 +916,443 @@ pub fn SecuritySettingsPage() -> impl IntoView {
                                 on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.hardening.sysctl_file = c.clone())) }/>
                             <small class="form-help">"Read at boot by OpenRC's sysctl service and systemd-sysctl."</small>
                         </div>
+                        <h2>"Intrusion detection (Linux audit)"</h2>
+                        <p class="help-text">"Loads Horcrux's audit rules (logins, sudo/su, changes to accounts, sudoers, sshd_config, /etc/horcrux and the Horcrux programs, kernel modules, clock changes), enables auditd on OpenRC or systemd and shows the records on Security > Events."</p>
+                        <div class="form-group">
+                            <label for="sec-a-enabled"><input id="sec-a-enabled" type="checkbox" prop:checked=a.enabled
+                                on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.audit.enabled = c)) }/>" Audit on for this node"</label>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-a-mod"><input id="sec-a-mod" type="checkbox" prop:checked=a.watch_modules
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.audit.watch_modules = c)) }/>" Record kernel module loads"</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-a-time"><input id="sec-a-time" type="checkbox" prop:checked=a.watch_time
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.audit.watch_time = c)) }/>" Record clock changes"</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-a-svc"><input id="sec-a-svc" type="checkbox" prop:checked=a.manage_service
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.audit.manage_service = c)) }/>" Enable and start auditd"</label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-a-extra">"Also watch"</label>
+                            <input id="sec-a-extra" type="text" placeholder="absolute paths, comma separated" prop:value=a.extra_watch.join(", ")
+                                on:change=move |e| { let c: Vec<String> = event_target_value(&e).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(); upd(Box::new(move |x| x.audit.extra_watch = c.clone())) }/>
+                            <small class="form-help">"Writes and permission changes to these files or directories are recorded (kind 'watch')."</small>
+                        </div>
+                        <div class="form-group">
+                            <span class="form-label">"Notify for"</span>
+                            <div class="checkbox-row">
+                                {AUDIT_KINDS.iter().map(|k| {
+                                    let k = *k;
+                                    let on = a.notify_kinds.iter().any(|x| x == k);
+                                    let id = format!("sec-a-n-{k}");
+                                    view! {
+                                        <label for=id.clone()><input id=id type="checkbox" prop:checked=on
+                                            on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| {
+                                                x.audit.notify_kinds.retain(|y| y != k);
+                                                if c { x.audit.notify_kinds.push(k.to_string()) }
+                                            })) }/>{format!(" {k} ")}</label>
+                                    }
+                                }).collect_view()}
+                            </div>
+                            <small class="form-help">"Matching events send a 'security' notification (one per collection run)."</small>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-a-every">"Collect every (s)"</label>
+                                <input id="sec-a-every" type="number" min="10" prop:value=a.collect_secs.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.audit.collect_secs = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-a-backlog">"Kernel backlog"</label>
+                                <input id="sec-a-backlog" type="number" min="64" prop:value=a.backlog.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.audit.backlog = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-a-file">"Rule file"</label>
+                                <input id="sec-a-file" type="text" prop:value=a.rules_file.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.audit.rules_file = c.clone())) }/>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-a-imm"><input id="sec-a-imm" type="checkbox" prop:checked=a.immutable
+                                on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.audit.immutable = c)) }/>" Lock the rules until the next boot"</label>
+                            <small class="form-help">"An intruder with root cannot turn the rules off, but neither can you without a reboot."</small>
+                        </div>
+                        <h2>"File integrity (AIDE)"</h2>
+                        <p class="help-text">"Records a hash and the owner/mode of every file below the listed directories, then reports what was added, removed or changed. Press Initialize on Security > Events once after turning it on."</p>
+                        <div class="form-group">
+                            <label for="sec-i-enabled"><input id="sec-i-enabled" type="checkbox" prop:checked=i.enabled
+                                on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.integrity.enabled = c)) }/>" Integrity checks on for this node"</label>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-i-paths">"Directories"</label>
+                            <input id="sec-i-paths" type="text" prop:value=i.paths.join(", ")
+                                on:change=move |e| { let c: Vec<String> = event_target_value(&e).split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(); upd(Box::new(move |x| x.integrity.paths = c.clone())) }/>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-i-excl">"Left out"</label>
+                            <textarea id="sec-i-excl" rows="3" prop:value=i.exclude.join(", ")
+                                on:change=move |e| { let c: Vec<String> = event_target_value(&e).split([',', '\n']).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(); upd(Box::new(move |x| x.integrity.exclude = c.clone())) }></textarea>
+                            <small class="form-help">"VM disks, container and data directories change all the time and are left out by default."</small>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-i-sched">"Check every (hours)"</label>
+                                <input id="sec-i-sched" type="number" min="0" prop:value=i.schedule_hours.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.integrity.schedule_hours = c)) }/>
+                                <small class="form-help">"0 = only when you press Check now."</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-i-nice">"CPU niceness (0-19)"</label>
+                                <input id="sec-i-nice" type="number" min="0" max="19" prop:value=i.nice.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)).min(255) as u8; upd(Box::new(move |x| x.integrity.nice = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-i-timeout">"Time limit (s)"</label>
+                                <input id="sec-i-timeout" type="number" min="60" prop:value=i.timeout_secs.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.integrity.timeout_secs = c)) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-i-max">"File events per check"</label>
+                                <input id="sec-i-max" type="number" min="0" prop:value=i.max_file_events.to_string()
+                                    on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.integrity.max_file_events = c)) }/>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sec-i-aide">"AIDE program"</label>
+                                <input id="sec-i-aide" type="text" placeholder="looked up in PATH" prop:value=i.aide_path.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.integrity.aide_path = c.clone())) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-i-db">"Database directory"</label>
+                                <input id="sec-i-db" type="text" placeholder="<data dir>/security/aide" prop:value=i.db_dir.clone()
+                                    on:change=move |e| { let c = event_target_value(&e); upd(Box::new(move |x| x.integrity.db_dir = c.clone())) }/>
+                            </div>
+                            <div class="form-group">
+                                <label for="sec-i-notify"><input id="sec-i-notify" type="checkbox" prop:checked=i.notify
+                                    on:change=move |e| { let c = event_target_checked(&e); upd(Box::new(move |x| x.integrity.notify = c)) }/>" Notify when a check finds differences"</label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="sec-ev-keep">"Security events kept"</label>
+                            <input id="sec-ev-keep" type="number" min="100" prop:value=cur.events.keep.to_string()
+                                on:change=move |e| { let c = num(event_target_value(&e)); upd(Box::new(move |x| x.events.keep = c)) }/>
+                        </div>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary" disabled=move || save.pending().get()>"Save"</button>
                         </div>
                     </form>
                 }
             })}
+        </div>
+    }
+}
+
+// ------------------------------------------------------------ events (audit + integrity)
+
+/// `24h` / `7d` / `30d` -> unix seconds `since`.
+fn since_secs(v: &str) -> Option<i64> {
+    let now = (js_sys::Date::now() / 1000.0) as i64;
+    match v {
+        "24h" => Some(now - 86_400),
+        "7d" => Some(now - 7 * 86_400),
+        "30d" => Some(now - 30 * 86_400),
+        _ => v.parse().ok(),
+    }
+}
+
+fn enc(s: &str) -> String {
+    js_sys::encode_uri_component(s)
+        .as_string()
+        .unwrap_or_default()
+}
+
+#[component]
+pub fn SecurityEventsPage() -> impl IntoView {
+    let query = use_query_map();
+    let qp = move |k: &'static str| query.with(|q| q.get(k).cloned().unwrap_or_default());
+    let (page, set_page) = create_signal(None::<SecurityEventPage>);
+    let (ids, set_ids) = create_signal(None::<IdsStatus>);
+    let (err, set_err) = create_signal(None::<String>);
+    let (ok, set_ok) = create_signal(None::<String>);
+    let (unavailable, set_unavailable) = create_signal(None::<Unavailable>);
+    let (search, set_search) = create_signal(qp("q"));
+    let offset = create_rw_signal(0usize);
+    const PAGE: usize = 50;
+    let seq = store_value(0u32);
+    let api_query = move || {
+        let mut parts = Vec::new();
+        for k in ["source", "kind", "severity", "user"] {
+            let v = qp(k);
+            if !v.is_empty() {
+                parts.push(format!("{k}={}", enc(&v)));
+            }
+        }
+        if let Some(s) = since_secs(&qp("since")) {
+            parts.push(format!("since={s}"));
+        }
+        let q = search.get_untracked();
+        if !q.trim().is_empty() {
+            parts.push(format!("q={}", enc(q.trim())));
+        }
+        parts.push(format!("limit={PAGE}&offset={}", offset.get_untracked()));
+        parts.join("&")
+    };
+    let load = create_action(move |_: &()| async move {
+        seq.update_value(|n| *n += 1);
+        let mine = seq.get_value();
+        let q = api_query();
+        let st = get_ids_status().await;
+        let ev = list_security_events(&q).await;
+        if mine != seq.get_value() {
+            return; // a newer load answered first
+        }
+        if let Ok(s) = st {
+            set_ids.set(Some(s));
+        }
+        match ev {
+            Ok(p) => {
+                set_err.set(None);
+                set_page.set(Some(p))
+            }
+            Err(e) => set_err.set(Some(format!("Could not load events: {e}"))),
+        }
+    });
+    // Reload when the URL filters change.
+    create_effect(move |_| {
+        query.track();
+        offset.set(0);
+        load.dispatch(());
+    });
+    let running =
+        create_memo(move |_| ids.with(|i| i.as_ref().and_then(|i| i.integrity_running.clone())));
+    let poll = set_interval_with_handle(
+        move || {
+            if running.get_untracked().is_some() {
+                load.dispatch(());
+            }
+        },
+        std::time::Duration::from_secs(4),
+    )
+    .ok();
+    on_cleanup(move || {
+        if let Some(p) = poll {
+            p.clear();
+        }
+    });
+    let act = create_action(move |what: &&'static str| {
+        let what = *what;
+        async move {
+            set_err.set(None);
+            set_ok.set(None);
+            let r = if what == "collect" {
+                audit_collect_now()
+                    .await
+                    .map(|v| format!("{} new audit event(s).", v["added"].as_u64().unwrap_or(0)))
+            } else {
+                integrity_action(what).await.map(|_| match what {
+                    "init" => "Recording the integrity baseline. This reads every file once and runs at low priority.".to_string(),
+                    "accept" => "Accepting the current files as the new baseline.".to_string(),
+                    _ => "Integrity check started.".to_string(),
+                })
+            };
+            match r {
+                Ok(m) => {
+                    set_unavailable.set(None);
+                    set_ok.set(Some(m))
+                }
+                Err(e) => match e.unavailable() {
+                    Some(u) => set_unavailable.set(Some(u)),
+                    None => set_err.set(Some(format!("{e}"))),
+                },
+            }
+            load.dispatch(());
+        }
+    });
+    // Filter links keep the other filters.
+    let link = move |key: &'static str, val: &'static str| {
+        query.with(|q| {
+            let mut parts: Vec<String> = Vec::new();
+            for k in ["source", "kind", "severity", "user", "since", "q"] {
+                if k == key {
+                    continue;
+                }
+                if let Some(v) = q.get(k).filter(|v| !v.is_empty()) {
+                    parts.push(format!("{k}={}", enc(v)));
+                }
+            }
+            if !val.is_empty() {
+                parts.push(format!("{key}={val}"));
+            }
+            if parts.is_empty() {
+                "/security/events".to_string()
+            } else {
+                format!("/security/events?{}", parts.join("&"))
+            }
+        })
+    };
+    let filter = move |key: &'static str, val: &'static str, label: &'static str| {
+        let href = link(key, val);
+        let on = Signal::derive(move || qp(key) == val);
+        view! { <NavLink href=href class=Signal::derive(move || if on.get() { "filter-link active".to_string() } else { "filter-link".to_string() }) active=on>{label}</NavLink> }
+    };
+    view! {
+        <div class="security-page">
+            <div class="page-header">
+                <h1>"Security events"</h1>
+                <div class="header-actions">
+                    <button class="btn btn-secondary" on:click=move |_| load.dispatch(())>"Refresh"</button>
+                </div>
+            </div>
+            <SecurityTabs active="events"/>
+            <p class="help-text">"Intrusion detection (Linux audit: logins, sudo, changes to accounts and system files, kernel modules, clock) and file integrity (AIDE) findings on this node. Who did what through the Horcrux API is in the "<A href="/audit">"audit log"</A>"."</p>
+            {move || err.get().map(|m| view! { <div class="alert alert-error">{m}</div> })}
+            {move || ok.get().map(|m| view! { <div class="alert alert-success">{m}</div> })}
+            {move || unavailable.get().map(|u| view! {
+                <crate::components::UnavailableState info=u on_retry=Callback::new(move |_| { set_unavailable.set(None); load.dispatch(()) })/>
+            })}
+            {move || ids.get().map(|i| {
+                let audit_line = if !i.audit_installed {
+                    "The audit tools are not installed (sys-process/audit).".to_string()
+                } else if !i.audit_enabled {
+                    "Off. Turn it on in Settings.".to_string()
+                } else {
+                    format!("{} Horcrux rules loaded, auditd {}, last collected {}.",
+                        i.audit_rules_loaded,
+                        if i.auditd_running { "running" } else { "NOT running" },
+                        when(i.audit_last_collect))
+                };
+                let integ_line = if !i.aide_installed {
+                    "AIDE is not installed (app-forensics/aide).".to_string()
+                } else if !i.integrity_enabled {
+                    "Off. Turn it on in Settings.".to_string()
+                } else if let Some(r) = &i.integrity_running {
+                    format!("{r} running...")
+                } else if !i.integrity_initialized {
+                    "No baseline yet: press Initialize.".to_string()
+                } else {
+                    format!("Baseline from {}, last check {}{}.",
+                        when(i.integrity_initialized_at),
+                        when(i.integrity_last_check),
+                        i.integrity_last_differences.map(|n| format!(" ({n} differences)")).unwrap_or_default())
+                };
+                let busy = i.integrity_running.is_some();
+                let can_i = i.aide_installed && i.integrity_enabled && !busy;
+                let inited = i.integrity_initialized;
+                let can_a = i.audit_installed && i.audit_enabled;
+                view! {
+                    <div class="stats-grid">
+                        <div class="card ids-card">
+                            <h2>"Intrusion detection"</h2>
+                            <p>{audit_line}</p>
+                            {i.audit_error.clone().map(|e| view! { <p class="text-danger">{e}</p> })}
+                            <div class="actions">
+                                <button class="btn btn-secondary btn-sm" disabled=!can_a on:click=move |_| act.dispatch("collect")>"Collect now"</button>
+                                <A href="/security/settings" class="btn btn-secondary btn-sm">"Settings"</A>
+                            </div>
+                        </div>
+                        <div class="card ids-card">
+                            <h2>"File integrity"</h2>
+                            <p>{integ_line}</p>
+                            {i.integrity_error.clone().map(|e| view! { <p class="text-danger">{e}</p> })}
+                            <div class="actions">
+                                <button class="btn btn-primary btn-sm" disabled=!can_i
+                                    on:click=move |_| if !inited || ask("Record a new baseline? Differences found until now are no longer reported.") { act.dispatch("init") }>"Initialize"</button>
+                                <button class="btn btn-secondary btn-sm" disabled=!(can_i && inited) on:click=move |_| act.dispatch("check")>"Check now"</button>
+                                <button class="btn btn-secondary btn-sm" disabled=!(can_i && inited)
+                                    on:click=move |_| if ask("Accept every current file as expected (for example after updates)?") { act.dispatch("accept") }>"Accept current files"</button>
+                            </div>
+                        </div>
+                    </div>
+                }
+            })}
+            <div class="toolbar">
+                <div class="filter-links">
+                    {filter("source", "", "All sources")}
+                    {filter("source", "audit", "Audit")}
+                    {filter("source", "integrity", "Integrity")}
+                </div>
+                <div class="filter-links">
+                    {filter("severity", "", "Any severity")}
+                    {filter("severity", "high", "High or worse")}
+                    {filter("severity", "medium", "Medium or worse")}
+                </div>
+                <div class="filter-links">
+                    {filter("since", "", "Any time")}
+                    {filter("since", "24h", "24 h")}
+                    {filter("since", "7d", "7 days")}
+                </div>
+                <label class="sr-only" for="sec-ev-search">"Search events"</label>
+                <input id="sec-ev-search" type="search" placeholder="Search events" aria-label="Search events"
+                    prop:value=search on:change=move |e| { set_search.set(event_target_value(&e)); offset.set(0); load.dispatch(()) }/>
+            </div>
+            {move || (!qp("kind").is_empty() || !qp("user").is_empty()).then(|| view! {
+                <p class="help-text">{format!("Showing kind '{}' user '{}'. ", qp("kind"), qp("user"))}<A href=link("kind", "")>"Any kind"</A>" · "<A href=link("user", "")>"Any user"</A></p>
+            })}
+            {move || match page.get() {
+                None => view! { <div class="loading">"Loading..."</div> }.into_view(),
+                Some(p) if p.total == 0 => {
+                    let filtered = ["source", "kind", "severity", "user", "since", "q"].iter().any(|k| !qp(k).is_empty()) || !search.get_untracked().is_empty();
+                    if filtered {
+                        view! { <div class="empty-state">"No event matches these filters. "<A href="/security/events">"Show all"</A></div> }.into_view()
+                    } else {
+                        view! { <div class="empty-state">"No security events yet. Turn on audit and file integrity in "<A href="/security/settings">"Settings"</A>", then press Initialize above."</div> }.into_view()
+                    }
+                }
+                Some(p) => {
+                    let total = p.total;
+                    let off = offset.get_untracked();
+                    view! {
+                        <div class="table-container">
+                        <table class="data-table events-table">
+                            <thead><tr><th>"Time"</th><th>"Severity"</th><th>"Source"</th><th>"Event"</th><th>"User"</th></tr></thead>
+                            <tbody>
+                                {p.events.into_iter().map(|e| {
+                                    let sev = e.severity.unwrap_or(Severity::Unknown);
+                                    let src = e.source.map(|s| s.as_str()).unwrap_or("");
+                                    let kind_href = format!("/security/events?source={src}&kind={}", enc(&e.kind));
+                                    let user = e.user.clone();
+                                    view! {
+                                        <tr>
+                                            <td class="nowrap" data-label="Time">{when(Some(e.at))}</td>
+                                            <td data-label="Severity"><SevBadge sev=sev/></td>
+                                            <td data-label="Source"><A href=kind_href>{format!("{src} · {}", e.kind)}</A></td>
+                                            <td data-label="Event">
+                                                <div>{e.summary.clone()}</div>
+                                                {(!e.path.is_empty() && !e.summary.contains(&e.path)).then(|| view! { <div class="mono">{e.path.clone()}</div> })}
+                                                {(!e.detail.is_empty()).then(|| view! { <div class="dash-meta mono">{e.detail.clone()}</div> })}
+                                            </td>
+                                            <td data-label="User">
+                                                {if user.is_empty() || user == "unset" {
+                                                    view! { <span class="dash-meta">"-"</span> }.into_view()
+                                                } else {
+                                                    let ev_href = format!("/security/events?user={}", enc(&user));
+                                                    let audit_href = format!("/audit?user={}", enc(&user));
+                                                    view! {
+                                                        <A href=ev_href>{user}</A>
+                                                        <div><A href=audit_href class="dash-meta">"API audit log"</A></div>
+                                                    }.into_view()
+                                                }}
+                                            </td>
+                                        </tr>
+                                    }
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                        </div>
+                        <div class="pagination">
+                            <span>{format!("{}-{} of {total}", off + 1, (off + PAGE).min(total))}</span>
+                            <button class="btn btn-secondary btn-sm" disabled=off == 0 on:click=move |_| { offset.set(off.saturating_sub(PAGE)); load.dispatch(()) }>"Newer"</button>
+                            <button class="btn btn-secondary btn-sm" disabled=off + PAGE >= total on:click=move |_| { offset.set(off + PAGE); load.dispatch(()) }>"Older"</button>
+                        </div>
+                    }.into_view()
+                }
+            }}
         </div>
     }
 }

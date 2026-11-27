@@ -38,8 +38,12 @@ pub fn AuditLogPage() -> impl IntoView {
     let (error, set_error) = create_signal(None::<String>);
     let (suspects, set_suspects) = create_signal(Vec::<String>::new());
     let view_mode = create_rw_signal("all".to_string());
-    let search = create_rw_signal(String::new());
-    let user = create_rw_signal(String::new());
+    // `?user=` / `?q=` pre-filter (links from Security > Events and elsewhere).
+    let url_q = leptos_router::use_query_map();
+    let search =
+        create_rw_signal(url_q.with_untracked(|q| q.get("q").cloned().unwrap_or_default()));
+    let user =
+        create_rw_signal(url_q.with_untracked(|q| q.get("user").cloned().unwrap_or_default()));
     let event_type = create_rw_signal(String::new());
     let severity = create_rw_signal(String::new());
     let result = create_rw_signal(String::new());
