@@ -1,5 +1,16 @@
 {
  "_comment": "Known failing journey checks; a NEW failure fails CI. Each value says what is wrong and who owns it. Remove an entry when its check passes (the run prints 'baseline entry no longer fails').",
  "journey:j3-create-vm:fresh-host-no-bridge": "owner finding 16: a fresh install has no bridge so a VM with a NIC fails at Create (400); form should create one or default to NAT.",
- "journey:j8-settings:dashboard-mentions-updates": "owner finding 18: nothing tells the admin the node has pending/never-installed updates; needs a dashboard update status card."
+ "journey:j8-settings:dashboard-mentions-updates": "owner finding 18: nothing tells the admin the node has pending/never-installed updates; needs a dashboard update status card.",
+ "journey:j9-object-states:js-console-errors": "owner finding 37, tracker A1-A3 (job horcrux-console-stopped-fix, branch fix/console-stopped-state): the stopped-VM console opens the noVNC socket ('Connection closed (code: 1006)'); remove when it passes.",
+ "journey:j9-object-states:stopped-vm-console-has-start": "owner finding 37, tracker A1-A3 (job horcrux-console-stopped-fix): stopped-VM console has no Start button; remove when it passes.",
+ "journey:j9-object-states:stopped-vm-summary-has-start": "owner finding 37, tracker A8/A4 (laneA): VM Summary has no power actions; remove when it passes.",
+ "journey:j9-object-states:stopped-vm-summary-no-impossible-actions": "owner finding 37, tracker A8/A4 (laneA): 'Hibernate now' is enabled for a stopped VM; remove when it passes.",
+ "journey:j9-object-states:stopped-vm-hardware-has-start": "owner finding 37, tracker A8 (laneA): VM Hardware page has no Start for a stopped VM; remove when it passes.",
+ "journey:j9-object-states:missing-vm-summary-explained": "owner finding 37, tracker A7 (laneA): /vms/<missing> renders the VM forms, no not-found state; remove when it passes.",
+ "journey:j9-object-states:missing-vm-summary-no-raw-error": "owner finding 37, tracker A7 (laneA): /vms/<missing> shows 'HTTP 404: ...'; remove when it passes.",
+ "journey:j9-object-states:missing-vm-hardware-settles": "owner finding 37, tracker A12 (laneA): /vms/<missing>/hardware device panels stay on 'Loading...'; remove when it passes.",
+ "journey:j9-object-states:missing-vm-hardware-no-raw-error": "owner finding 37, tracker A12 (laneA): /vms/<missing>/hardware shows 'HTTP 404: ...'; remove when it passes.",
+ "journey:j9-object-states:missing-ct-console-explained": "owner finding 37, tracker C11 (laneC): console of a missing container gives no explanation; remove when it passes.",
+ "journey:j9-object-states:missing-ct-console-no-raw-error": "owner finding 37, tracker C11 (laneC): container console prints '[error] HTTP 422: ...'; remove when it passes."
 }

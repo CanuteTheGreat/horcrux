@@ -15,6 +15,8 @@ expects), this walks the product like a new user and asserts what a person would
   J6 storage / networks     pools, bridges, DHCP pages: content, and a way to add one
   J7 backups / snapshots    the VM can be snapshotted from the UI; backup pages explain themselves
   J8 settings / updates     users, certificates, configuration, package updates are reachable and not empty
+  J9 object states          per-object pages for a stopped VM and for missing VMs/containers: the control the text
+                            asks for is there (Start), no impossible action, no spinner left, no raw API error, a way back
 
 Every step takes a screenshot (--shots DIR/NN-name.png), records JS console errors (any = failure) and asserts the
 OUTCOME, not the click. Findings are ids `journey:<step>:<check>`; known/tracked ones live in
@@ -589,6 +591,71 @@ def main():
                 j.go("/snapshots", settle=2.5)
                 expect("j7-backup-snapshots", "snapshots-default-all-vms", page.locator("tr[data-snapshot-name='journey-snap']").count() > 0,
                        "opening /snapshots shows no snapshot until a VM is picked")
+
+        # ------------------------------------------------------------------ J9 objects in every state
+        # Owner finding 37 (and 36): a stopped VM's console said "start it first" with no Start, spun "Connecting..."
+        # forever and printed the raw 422 JSON. Page-level crawls never saw it: the page only breaks for an object in
+        # a given state. Here each per-object page is opened for a STOPPED VM and for objects that do NOT exist. Each
+        # must offer the control its own text asks for (a Start button), offer no action the state cannot take, settle
+        # (no spinner left after 6 s), never show raw API error text, and for a missing object say so with a way back.
+        # The checks are semantic (button names, page text), not tied to one implementation's element ids.
+        with step(j, "j9-object-states", "per-object pages for stopped and missing VMs/containers") as _:
+            # check ids built below (listed so docs/qa/owner-findings.md can name them):
+            # "stopped-vm-summary-has-start" "stopped-vm-hardware-has-start" "stopped-vm-console-has-start"
+            # "stopped-vm-summary-no-impossible-actions" "stopped-vm-hardware-no-impossible-actions"
+            # "missing-vm-summary-explained" "missing-vm-hardware-explained" "missing-ct-console-explained"
+            raw_err = re.compile(r'\bHTTP\s?[45]\d\d\b|\{\s*"(status|error|message)"\s*:|\b(VALIDATION_ERROR|INTERNAL_ERROR|NOT_AVAILABLE|BAD_REQUEST)\b')
+            spinner = re.compile(r"\b(Connecting|Loading)(\.\.\.|\u2026)")
+            not_found = re.compile(r"\b(not found|no such|does not exist|doesn't exist|there is no|no longer exists|may have been deleted)\b", re.I)
+
+            def settled(check_id, path):
+                page.wait_for_timeout(6000)
+                t = j.text()
+                # the console's noVNC page is an iframe: the raw 422 JSON was printed inside it
+                for fr in page.frames[1:]:
+                    try:
+                        t += "\n" + fr.inner_text("body", timeout=2000)
+                    except Exception:  # noqa: BLE001  (a frame that is navigating or blank)
+                        pass
+                m = raw_err.search(t)
+                expect("j9-object-states", f"{check_id}-no-raw-error", not m, f"{path} shows a raw API error: {t[max(0, m.start() - 40):m.end() + 80] if m else ''}")
+                s = spinner.search(t)
+                expect("j9-object-states", f"{check_id}-settles", not s, f"{path} still shows '{s.group(0) if s else ''}' after 6 s")
+                return t
+
+            def enabled_buttons(rx):
+                main = page.locator("main") if page.locator("main").count() else page.locator("body")
+                b = main.get_by_role("button", name=re.compile(rx))
+                return [b.nth(i) for i in range(b.count()) if b.nth(i).is_visible() and b.nth(i).is_enabled()]
+
+            stopped_vm = next((v for v in (api("GET", "/api/vms")[1] or []) if str(v.get("status", "")).lower() == "stopped"), None)
+            if not stopped_vm:
+                code, stopped_vm = api("POST", "/api/vms", {"id": "journey-stopped", "name": "journey-stopped", "hypervisor": "qemu",
+                                                            "architecture": "x86_64", "cpus": 1, "memory": 128, "disk_size": 1, "status": "stopped"})
+                stopped_vm = stopped_vm if code in (200, 201) else None
+            if expect("j9-object-states", "have-stopped-vm", stopped_vm, "no stopped VM to test with"):
+                vid = stopped_vm["id"]
+                for sub, name in (("", "summary"), ("/hardware", "hardware"), ("/console", "console")):
+                    j.go(f"/vms/{vid}{sub}", settle=2)
+                    settled(f"stopped-vm-{name}", f"/vms/{vid}{sub}")
+                    j.shot(f"stopped-vm-{name}")
+                    expect("j9-object-states", f"stopped-vm-{name}-has-start", enabled_buttons(r"^\s*Start\b"),
+                           f"/vms/{vid}{sub}: the page of a stopped VM has no enabled Start button")
+                    if sub != "/console":
+                        live = [b.inner_text().strip() for b in enabled_buttons(r"^\s*(Shutdown|Reboot|Reset|Pause|Hibernate)")]
+                        expect("j9-object-states", f"stopped-vm-{name}-no-impossible-actions", not live,
+                               f"/vms/{vid}{sub} offers {live} for a stopped VM")
+            for path, name in (("/vms/journey-no-such-vm", "missing-vm-summary"),
+                               ("/vms/journey-no-such-vm/hardware", "missing-vm-hardware"),
+                               ("/containers/journey-no-such-ct/console", "missing-ct-console")):
+                j.go(path, settle=2)
+                t = settled(name, path)
+                j.shot(name)
+                back = page.locator("main a[href='/vms'], main a[href='/containers'], main a[href='/']")
+                expect("j9-object-states", f"{name}-explained", not_found.search(t) and back.count() > 0,
+                       f"{path}: an object that does not exist gets no 'not found' explanation with a link back")
+            # the 404s for the made-up objects are the point of the test, not page errors
+            _console[:] = [c for c in _console if "no-such" not in c]
 
         # ------------------------------------------------------------------ J8 settings / updates
         with step(j, "j8-settings", "settings, users, updates") as _:
