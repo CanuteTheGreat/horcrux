@@ -35,6 +35,24 @@ pub fn ContainerSystemConsolePage() -> impl IntoView {
     view! { <ContainerConsole mode=ContainerWsMode::Console/> }
 }
 
+/// What the page knows about the container before it connects.
+#[derive(Debug, Clone, PartialEq)]
+enum CtState {
+    Loading,
+    /// No such container on this node.
+    Missing,
+    /// Exists but is not running (status as the API reports it).
+    NotRunning(String),
+    Running,
+    /// The list could not be read (e.g. a runtime is missing): just try.
+    Unknown,
+}
+
+/// A terminal or console needs a running container; logs work either way.
+fn needs_running(mode: ContainerWsMode) -> bool {
+    mode != ContainerWsMode::Logs
+}
+
 #[component]
 fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
     let params = leptos_router::use_params_map();
@@ -64,6 +82,37 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
     let (connected, set_connected) = create_signal(false);
     let (input_line, set_input_line) = create_signal(String::new());
     let (ws_handle, set_ws_handle) = create_signal(None::<WebSocket>);
+    let (ct_state, set_ct_state) = create_signal(CtState::Loading);
+    let (error, set_error) = create_signal(None::<String>);
+    let (starting, set_starting) = create_signal(false);
+
+    // Look the container up first: a stopped container's console used to try
+    // to connect anyway and print the raw refusal, with no way to start it.
+    let lookup = move || {
+        let id = container_id();
+        spawn_local(async move {
+            match api::get_containers().await {
+                Ok(list) => match list
+                    .into_iter()
+                    .find(|c| c.id == id || c.vmid == id || c.name == id)
+                {
+                    Some(c) => {
+                        if query.get_untracked().get("runtime").is_none() && !c.runtime.is_empty() {
+                            set_runtime.set(c.runtime.to_lowercase());
+                        }
+                        set_ct_state.set(if c.status.eq_ignore_ascii_case("running") {
+                            CtState::Running
+                        } else {
+                            CtState::NotRunning(c.status)
+                        });
+                    }
+                    None => set_ct_state.set(CtState::Missing),
+                },
+                Err(_) => set_ct_state.set(CtState::Unknown),
+            }
+        });
+    };
+    lookup();
 
     let connect = move |_: ()| {
         let id = container_id();
@@ -83,10 +132,13 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
                 ContainerWsMode::Console => api::get_container_console_ticket(&id, &rt).await,
             };
             let ticket = match ticket {
-                Ok(t) => t,
+                Ok(t) => {
+                    set_error.set(None);
+                    t
+                }
                 Err(e) => {
                     logging::log!("Failed to get ws ticket: {}", e.message);
-                    set_output.set(format!("[error] {}\n", e.message));
+                    set_error.set(Some(format!("Could not connect: {}", e.message)));
                     return;
                 }
             };
@@ -96,6 +148,7 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
                 Ok(ws) => ws,
                 Err(e) => {
                     logging::log!("Failed to open container WebSocket: {:?}", e);
+                    set_error.set(Some("Could not open the connection to the server.".into()));
                     return;
                 }
             };
@@ -164,11 +217,56 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
     if mode == ContainerWsMode::Console {
         create_effect(move |_| {
             let _ = runtime.get();
-            if !container_id().is_empty() {
+            let st = ct_state.get();
+            if !container_id().is_empty() && matches!(st, CtState::Running | CtState::Unknown) {
                 connect(());
             }
         });
     }
+
+    let can_connect = move || {
+        !needs_running(mode) || !matches!(ct_state.get(), CtState::NotRunning(_) | CtState::Loading)
+    };
+
+    // Start from here, then connect once it runs (no trip back to the list).
+    let start = move |_| {
+        let id = container_id();
+        set_starting.set(true);
+        set_error.set(None);
+        spawn_local(async move {
+            if let Err(e) = api::start_container(&id).await {
+                set_error.set(Some(format!(
+                    "Could not start the container: {}",
+                    e.message
+                )));
+                set_starting.set(false);
+                return;
+            }
+            for _ in 0..30 {
+                if let Ok(list) = api::get_containers().await {
+                    if let Some(c) = list
+                        .iter()
+                        .find(|c| c.id == id || c.vmid == id || c.name == id)
+                    {
+                        if c.status.eq_ignore_ascii_case("running") {
+                            set_ct_state.set(CtState::Running);
+                            set_starting.set(false);
+                            if mode == ContainerWsMode::Exec {
+                                connect(());
+                            }
+                            return;
+                        }
+                    }
+                }
+                gloo_timers::future::TimeoutFuture::new(1000).await;
+            }
+            set_starting.set(false);
+            set_error.set(Some(
+                "The container did not reach the running state in 30 s.".into(),
+            ));
+            lookup();
+        });
+    };
 
     view! {
         <div class="container-list">
@@ -196,7 +294,7 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
                             view! {}.into_view()
                         }
                     }}
-                    <button id="console-connect" class="btn btn-primary" on:click=move |_| connect(())>
+                    <button id="console-connect" class="btn btn-primary" disabled=move || !can_connect() on:click=move |_| connect(())>
                         {move || if connected.get() { "Reconnect" } else { "Connect" }}
                     </button>
                     <span
@@ -208,6 +306,24 @@ fn ContainerConsole(mode: ContainerWsMode) -> impl IntoView {
                 </div>
             </div>
 
+            {move || error.get().map(|e| view! { <div class="alert alert-error" id="console-error" role="alert">{e}</div> })}
+            {move || match ct_state.get() {
+                CtState::Missing => view! {
+                    <div class="empty-state" id="console-missing">
+                        <p>{format!("There is no container \"{}\" on this node.", container_id())}</p>
+                        <a href="/containers" class="btn btn-primary">"Show all containers"</a>
+                    </div>
+                }.into_view(),
+                CtState::NotRunning(st) if needs_running(mode) => view! {
+                    <div class="empty-state" id="console-stopped">
+                        <p>{format!("This container is {st}. Start it to open the {}.", if mode == ContainerWsMode::Exec { "terminal" } else { "console" })}</p>
+                        <button id="console-start" class="btn btn-primary" disabled=starting on:click=start>
+                            {move || if starting.get() { "Starting..." } else { "Start container" }}
+                        </button>
+                    </div>
+                }.into_view(),
+                _ => view! {}.into_view(),
+            }}
             <pre id="console-output" class="console-output">
                 {move || output.get()}
             </pre>
