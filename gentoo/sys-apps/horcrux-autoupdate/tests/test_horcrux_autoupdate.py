@@ -417,6 +417,33 @@ class Scheduling(Base):
         self.assertEqual(self.m.cmd_run(None, False), 0)
         self.assertEqual(self.m.read_status()["result"], "disabled")
 
+    def test_hold_file_defers_scheduled_run_only(self):
+        self.m.write_status({"result": "ok", "started": 1})
+        self.m.other_emerge_running = lambda: False
+        self.m.on_battery = lambda: False
+        hold = os.path.join(os.path.dirname(self.m.CONF), "hold")
+        self.m.HOLD_FILES = [hold]
+        for body in ("", str(time.time() + 600)):
+            with open(hold, "w") as f:
+                f.write(body)
+            self.assertEqual(self.m.cmd_run(None, True), 0)
+            self.assertEqual(self.calls, [])                       # waited: no emerge, the interval is not reset
+            self.assertEqual(self.m.read_status()["started"], 1)
+        with open(hold, "w") as f:
+            f.write(str(time.time() - 5))                          # an expired lease hold no longer holds
+        self.assertIsNone(self.m.hold_reason())
+        self.m.cmd_run(None, True)
+        self.assertTrue(self.calls)
+
+    def test_hold_does_not_stop_a_manual_run(self):
+        hold = os.path.join(os.path.dirname(self.m.CONF), "hold")
+        open(hold, "w").close()
+        self.m.HOLD_FILES = [hold]
+        self.m.other_emerge_running = lambda: False
+        self.m.on_battery = lambda: False
+        self.m.cmd_run(None, False)
+        self.assertTrue(self.calls)
+
     def test_lock_excludes_a_second_run(self):
         fd = self.m.take_lock(self.m.LOCK)
         try:
