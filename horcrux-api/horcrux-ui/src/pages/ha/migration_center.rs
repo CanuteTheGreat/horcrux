@@ -988,6 +988,9 @@ fn normalize_container(c: &mut Container, local: &str) {
     if c.node.is_empty() || c.node == "local" {
         c.node = local.to_string();
     }
+    if c.maxmem == 0 && c.memory > 0 {
+        c.maxmem = c.memory * 1024 * 1024;
+    }
 }
 
 #[cfg(test)]

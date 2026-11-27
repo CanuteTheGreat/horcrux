@@ -922,6 +922,9 @@ pub struct Container {
     pub cpus: u32,
     #[serde(default)]
     pub maxmem: u64,
+    /// Memory limit in MB as the API reports it (0 = no limit).
+    #[serde(default)]
+    pub memory: u64,
     pub created_at: Option<String>,
 }
 
