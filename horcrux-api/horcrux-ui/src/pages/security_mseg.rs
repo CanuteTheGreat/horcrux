@@ -125,7 +125,7 @@ fn peer_rows(
                     <div class="form-row peer-row">
                         <div class="form-group">
                             <label for=format!("mseg-{id}-g{i}")>"Group"</label>
-                            <input id=format!("mseg-{id}-g{i}") type="text" placeholder="+ipset, alias or 10.0.0.0/24"
+                            <input id=format!("mseg-{id}-g{i}") type="text" placeholder="+ipset, alias, CIDR"
                                 prop:value=p.group.clone()
                                 on:change=move |e| { let c = event_target_value(&e); set(Box::new(move |x| { let l = if inbound { &mut x.allow_from } else { &mut x.allow_to }; if let Some(r) = l.get_mut(i) { r.group = c.clone() } })) }/>
                         </div>
@@ -375,7 +375,16 @@ pub fn MicrosegGuestPage() -> impl IntoView {
             <div class="card">
                 <h2>"Rules and hit counters"</h2>
                 {move || if hits.get().is_empty() {
-                    view! { <p class="help-text">"Nothing installed yet. Save a profile to see its rules count packets here."</p> }.into_view()
+                    view! {
+                        <div class="empty-state">
+                            <p class="help-text">"Nothing installed yet: the rules of a saved profile show up here and count the packets they match."</p>
+                            <button type="button" class="btn btn-secondary btn-sm" on:click=move |_| {
+                                if let Some(el) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("mseg-tpl")) {
+                                    let _ = wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(el).map(|e| e.focus());
+                                }
+                            }>"Pick a template"</button>
+                        </div>
+                    }.into_view()
                 } else {
                     view! {
                         <div class="table-container"><table class="data-table">
