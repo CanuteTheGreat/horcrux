@@ -44,7 +44,6 @@ use pages::{
 #[component]
 fn SessionGate(children: ChildrenFn) -> impl IntoView {
     let location = use_location();
-    let navigate = use_navigate();
     let (server_session, set_server_session) = create_signal(false);
     let allowed = create_memo(move |_| {
         location.pathname.get() == "/login"
@@ -55,11 +54,13 @@ fn SessionGate(children: ChildrenFn) -> impl IntoView {
         if allowed.get() {
             return;
         }
-        let navigate = navigate.clone();
         spawn_local(async move {
             match api::get_me().await {
                 Ok(_) => set_server_session.set(true),
-                Err(_) => navigate("/login", Default::default()),
+                // A full page load, not the router's navigate: called from this task the
+                // router navigation was silently dropped and the page stayed blank. `next`
+                // brings the user back to the page they asked for after signing in.
+                Err(_) => api::go_to_login(),
             }
         });
     });
@@ -217,6 +218,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/ha/failover" view=|| view! { <Gated feature="cluster"><HaFailoverPage/></Gated> }/>
                     <Route path="/ha/maintenance" view=|| view! { <Gated feature="cluster"><MaintenancePage/></Gated> }/>
                     <Route path="/ha/groups" view=|| view! { <Gated feature="cluster"><HaGroupsPage/></Gated> }/>
+                    <Route path="/ha/resources" view=|| view! { <Gated feature="cluster"><crate::pages::HaResourcesPage/></Gated> }/>
                     <Route path="/ha/migration" view=|| view! { <Gated feature="cluster"><MigrationCenterPage/></Gated> }/>
                     <Route path="/monitoring/alerts" view=AlertCenterPage/>
                     <Route path="/monitoring/notifications" view=NotificationsPage/>
@@ -235,6 +237,8 @@ pub fn App() -> impl IntoView {
                     <Route path="/nas/directory" view=|| view! { <Gated feature="ldap|ldap-server|kerberos|ad"><NasDirectoryPage/></Gated> }/>
                     <Route path="/nas/iscsi" view=|| view! { <Gated feature="iscsi-target"><NasIscsiPage/></Gated> }/>
                     <Route path="/nas/s3" view=|| view! { <Gated feature="s3-gateway"><NasS3Page/></Gated> }/>
+                    // Unknown address: say so and offer a way on (used to render an empty page).
+                    <Route path="/*any" view=crate::pages::not_found::NotFoundPage/>
                 </Routes>
                 </SessionGate>
             </main>

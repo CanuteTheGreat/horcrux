@@ -67,8 +67,14 @@ pub fn HaDashboard() -> impl IntoView {
     });
 
     // Auto-refresh every 30 seconds
-    use leptos::set_interval;
-    set_interval(load_dashboard_data, std::time::Duration::from_secs(30));
+    // (cleared when the page is left: it used to keep polling forever, one more timer per visit)
+    let interval =
+        set_interval_with_handle(load_dashboard_data, std::time::Duration::from_secs(30)).ok();
+    on_cleanup(move || {
+        if let Some(h) = interval {
+            h.clear();
+        }
+    });
 
     let get_node_status_color = move |status: &str| match status.to_lowercase().as_str() {
         "online" => "bg-green-100 text-green-800",
@@ -193,7 +199,7 @@ pub fn HaDashboard() -> impl IntoView {
                             </div>
 
                             // HA Resources
-                            <div class="bg-white rounded-lg shadow p-6">
+                            <a href="/ha/resources" id="ha-stat-resources" class="bg-white rounded-lg shadow p-6 block stat-link">
                                 <div class="flex items-center">
                                     <div class="flex-shrink-0">
                                         <i class="fas fa-shield-alt text-2xl text-green-500"></i>
@@ -209,7 +215,7 @@ pub fn HaDashboard() -> impl IntoView {
                                         </p>
                                     </div>
                                 </div>
-                            </div>
+                            </a>
 
                             // HA Groups
                             <div class="bg-white rounded-lg shadow p-6">
@@ -375,8 +381,8 @@ pub fn HaDashboard() -> impl IntoView {
                                     <div class="p-6 border-b border-gray-200">
                                         <div class="flex items-center justify-between">
                                             <h2 class="text-lg font-semibold">HA Protected Resources</h2>
-                                            <a href="/ha/groups" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
-                                                Manage HA Groups ->
+                                            <a href="/ha/resources" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                                                "Manage HA resources ->"
                                             </a>
                                         </div>
                                     </div>
@@ -457,12 +463,12 @@ pub fn HaDashboard() -> impl IntoView {
                                         </div>
                                     </a>
 
-                                    <a href="/ha/groups" class="block p-6 border border-gray-200 rounded-lg hover:shadow-md transition-shadow">
+                                    <a href="/ha/resources" class="block p-6 border border-gray-200 rounded-lg hover:shadow-md transition-shadow">
                                         <div class="flex items-center">
                                             <i class="fas fa-shield-alt text-2xl text-green-500 mr-4"></i>
                                             <div>
                                                 <h3 class="font-medium text-gray-900">"Configure HA"</h3>
-                                                <p class="text-sm text-gray-600">"Set up HA groups and protection policies"</p>
+                                                <p class="text-sm text-gray-600">"Choose which guests HA protects, and their groups"</p>
                                             </div>
                                         </div>
                                     </a>

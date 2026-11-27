@@ -1175,7 +1175,10 @@ fn cluster_routes() -> Router<Arc<AppState>> {
         // HA (High Availability) endpoints
         .route("/api/ha/resources", get(list_ha_resources))
         .route("/api/ha/resources", post(add_ha_resource))
-        .route("/api/ha/resources/:vm_id", delete(remove_ha_resource))
+        .route(
+            "/api/ha/resources/:vm_id",
+            delete(remove_ha_resource).put(update_ha_resource),
+        )
         .route("/api/ha/status", get(get_ha_status))
         .route("/api/ha/groups", post(create_ha_group))
         .route("/api/ha/groups", get(list_ha_groups))
@@ -5469,8 +5472,14 @@ struct HaResourceResponse {
     vm_id: String,
     vm_name: String,
     group: String,
+    /// Kept for older clients: the same number as `max_restart`.
     priority: u32,
     state: String,
+    max_restart: u32,
+    max_relocate: u32,
+    current_node: Option<String>,
+    restart_count: u32,
+    relocate_count: u32,
 }
 
 #[cfg(feature = "cluster")]
@@ -5492,8 +5501,13 @@ async fn list_ha_resources(State(state): State<Arc<AppState>>) -> Json<Vec<HaRes
             vm_id: r.vm_id.to_string(),
             vm_name,
             group: r.group.clone(),
-            priority: r.max_restart, // Using max_restart as priority for now
+            priority: r.max_restart,
             state: format!("{:?}", r.state),
+            max_restart: r.max_restart,
+            max_relocate: r.max_relocate,
+            current_node: r.current_node.clone(),
+            restart_count: r.restart_count,
+            relocate_count: r.relocate_count,
         });
     }
 
@@ -5504,8 +5518,77 @@ async fn list_ha_resources(State(state): State<Arc<AppState>>) -> Json<Vec<HaRes
 #[derive(serde::Deserialize)]
 struct AddHaResourceRequest {
     vm_id: String,
+    /// Empty = any node of the cluster.
+    #[serde(default)]
     group: String,
-    priority: u32,
+    /// Older clients sent the restart limit as `priority`.
+    #[serde(default)]
+    priority: Option<u32>,
+    #[serde(default)]
+    max_restart: Option<u32>,
+    #[serde(default)]
+    max_relocate: Option<u32>,
+    /// Requested state: `started` (default) or `stopped`.
+    #[serde(default)]
+    state: Option<String>,
+}
+
+#[cfg(feature = "cluster")]
+fn requested_ha_state(s: Option<&str>) -> Result<ha::HaState, ApiError> {
+    match s.unwrap_or("started").to_ascii_lowercase().as_str() {
+        "started" | "" => Ok(ha::HaState::Started),
+        "stopped" => Ok(ha::HaState::Stopped),
+        "disabled" => Ok(ha::HaState::Disabled),
+        other => Err(ApiError::ValidationError(format!(
+            "unknown requested state '{other}' (started, stopped or disabled)"
+        ))),
+    }
+}
+
+#[cfg(feature = "cluster")]
+#[derive(serde::Deserialize)]
+struct UpdateHaResourceRequest {
+    #[serde(default)]
+    group: String,
+    max_restart: u32,
+    max_relocate: u32,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+#[cfg(feature = "cluster")]
+async fn update_ha_resource(
+    State(state): State<Arc<AppState>>,
+    Path(vm_id): Path<String>,
+    Json(req): Json<UpdateHaResourceRequest>,
+) -> Result<StatusCode, ApiError> {
+    if req.max_restart > 10 || req.max_relocate > 10 {
+        return Err(ApiError::ValidationError(
+            "max restart and max relocate are 0-10".into(),
+        ));
+    }
+    let Some(current) = state.ha_manager.get_resource(&vm_id).await else {
+        return Err(ApiError::NotFound(format!(
+            "VM {} is not managed by HA",
+            vm_id
+        )));
+    };
+    state
+        .ha_manager
+        .update_resource_settings(&vm_id, &req.group, req.max_restart, req.max_relocate)
+        .await
+        .map_err(ApiError::from)?;
+    if req.state.is_some() {
+        let wanted = requested_ha_state(req.state.as_deref())?;
+        if wanted != current.state {
+            state
+                .ha_manager
+                .update_resource_state(&vm_id, wanted, None)
+                .await
+                .map_err(ApiError::from)?;
+        }
+    }
+    Ok(StatusCode::OK)
 }
 
 #[cfg(feature = "cluster")]
@@ -5523,12 +5606,14 @@ async fn add_ha_resource(
         )));
     }
     let vm_id_for_ha = req.vm_id.clone();
+    let wanted = requested_ha_state(req.state.as_deref())?;
     let config = ha::HaConfig {
         vm_id: req.vm_id,
         group: req.group,
-        max_restart: req.priority.min(10), // Use priority as max_restart, cap at 10
-        max_relocate: 3,                   // Default max relocations
-        state: ha::HaState::Started,
+        // Proxmox defaults: restart once on the same node, relocate once.
+        max_restart: req.max_restart.or(req.priority).unwrap_or(1).min(10),
+        max_relocate: req.max_relocate.unwrap_or(1).min(10),
+        state: wanted.clone(),
         architecture: Default::default(),
         required_passthrough_devices: Default::default(),
     };
@@ -5539,7 +5624,7 @@ async fn add_ha_resource(
     let local = state.cluster_manager.get_local_node_name().await?;
     state
         .ha_manager
-        .update_resource_state(&vm_id_for_ha, ha::HaState::Started, Some(local))
+        .update_resource_state(&vm_id_for_ha, wanted, Some(local))
         .await?;
     if !state.ha_manager.is_enabled().await {
         state.ha_manager.enable().await;
@@ -5721,7 +5806,10 @@ async fn assign_ha_group_resource(
         Json(AddHaResourceRequest {
             vm_id: req.resource_id,
             group: name,
-            priority: req.priority,
+            priority: Some(req.priority),
+            max_restart: None,
+            max_relocate: None,
+            state: None,
         }),
     )
     .await

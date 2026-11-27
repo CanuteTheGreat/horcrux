@@ -2918,6 +2918,34 @@ async fn test_high_availability() {
         .unwrap();
     assert!(status["total_resources"].as_u64().unwrap() >= 1, "{status}");
 
+    // 2b. Edit (HA > Resources > Edit): any node (no group), limits, requested state.
+    let r = client
+        .put(format!("{}/ha/resources/{}", API_BASE, vm))
+        .json(&json!({"group": "", "max_restart": 2, "max_relocate": 3, "state": "stopped"}))
+        .send()
+        .await;
+    let _ = expect_2xx(r, "edit HA resource").await;
+    let resources: Vec<serde_json::Value> = client
+        .get(format!("{}/ha/resources", API_BASE))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mine = resources.iter().find(|r| r["vm_id"] == vm).unwrap();
+    assert_eq!(mine["group"], "", "{mine}");
+    assert_eq!(mine["max_restart"], 2, "{mine}");
+    assert_eq!(mine["max_relocate"], 3, "{mine}");
+    assert_eq!(mine["state"], "Stopped", "{mine}");
+    let r = client
+        .put(format!("{}/ha/resources/{}", API_BASE, vm))
+        .json(&json!({"group": "no-such-group", "max_restart": 1, "max_relocate": 1}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "edit to a group that doesn't exist");
+
     // 3. Remove, then removing again is a 404.
     let r = client
         .delete(format!("{}/ha/resources/{}", API_BASE, vm))

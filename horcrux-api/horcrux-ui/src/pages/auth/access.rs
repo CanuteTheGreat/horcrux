@@ -225,6 +225,22 @@ fn realm_template(t: &str) -> String {
 }
 
 /// Authentication realms (PAM, LDAP, Active Directory, OpenID Connect).
+/// Row of a built-in realm: (name, type, what it is).
+pub fn builtin_row(name: &str) -> (String, String, String) {
+    match name {
+        "pam" => (
+            "pam".into(),
+            "Linux PAM (built in)".into(),
+            "System accounts of this node; the default login realm. Rights come from system groups (horcrux-admin, wheel) and the grants on the Permissions page.".into(),
+        ),
+        _ => (
+            name.into(),
+            "Horcrux users (legacy, built in)".into(),
+            "Accounts stored by older Horcrux versions; move them to system accounts.".into(),
+        ),
+    }
+}
+
 #[component]
 pub fn RealmsPage() -> impl IntoView {
     let (realms, set_realms) = create_signal(Vec::<Realm>::new());
@@ -239,11 +255,29 @@ pub fn RealmsPage() -> impl IntoView {
     let (test_user, set_test_user) = create_signal(String::new());
     let (test_pw, set_test_pw) = create_signal(String::new());
 
+    // Built-in realms (not stored, not deletable): pam is the system-account login every
+    // install has; `local` (legacy Horcrux-only accounts) only while it still has accounts.
+    let (builtin, set_builtin) = create_signal(vec![builtin_row("pam")]);
     let reload = move || {
         spawn_local(async move {
             match api::get_realms().await {
                 Ok(r) => set_realms.set(r),
                 Err(e) => set_error.set(Some(e.message)),
+            }
+            if let Ok(v) = api::fetch_json::<serde_json::Value>("/auth/realms").await {
+                let rows: Vec<_> = v["realms"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|r| r["name"].as_str())
+                            .filter(|n| matches!(*n, "pam" | "local"))
+                            .map(builtin_row)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !rows.is_empty() {
+                    set_builtin.set(rows);
+                }
             }
         });
     };
@@ -292,7 +326,16 @@ pub fn RealmsPage() -> impl IntoView {
             <table class="table" id="realms-table">
                 <thead><tr><th>"Realm"</th><th>"Type"</th><th>"Enabled"</th><th>"2FA required"</th><th>"Default group"</th><th></th></tr></thead>
                 <tbody>
-                    <tr><td>"local"</td><td>"Horcrux users"</td><td>"yes"</td><td>"-"</td><td>"-"</td><td></td></tr>
+                    {move || builtin.get().into_iter().map(|(name, kind, note)| view! {
+                        <tr class="realm-builtin" data-realm=name.clone()>
+                            <td>{name.clone()}</td>
+                            <td>{kind}</td>
+                            <td>"yes"</td>
+                            <td>"per user (Account Security)"</td>
+                            <td>"-"</td>
+                            <td class="muted">{note}</td>
+                        </tr>
+                    }).collect_view()}
                     {move || realms.get().into_iter().map(|r| {
                         let (n1, n2, n3) = (r.name.clone(), r.name.clone(), r.name.clone());
                         let toggled = Realm { enabled: !r.enabled, ..r.clone() };

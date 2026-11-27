@@ -125,6 +125,7 @@ fn exact(path: &str) -> Option<&'static str> {
         "/ha/failover" => "Failover & Fencing",
         "/ha/maintenance" => "Maintenance & Rebalance",
         "/ha/groups" => "HA Groups",
+        "/ha/resources" => "HA Resources",
         "/ha/migration" => "Migration Center",
         "/nas" => "NAS",
         "/nas/shares" => "NAS Shares",

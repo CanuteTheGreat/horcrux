@@ -28,6 +28,7 @@ pub mod lxc;
 mod monitoring;
 pub mod nas;
 mod network;
+pub mod not_found;
 mod power;
 mod replication_list;
 mod resource_pools;
@@ -110,8 +111,8 @@ pub use backup::{
 
 // Re-export HA components
 pub use ha::{
-    ClusterManagementPage, HaDashboard, HaFailoverPage, HaGroupsPage, MaintenancePage,
-    MigrationCenterPage,
+    ClusterManagementPage, HaDashboard, HaFailoverPage, HaGroupsPage, HaResourcesPage,
+    MaintenancePage, MigrationCenterPage,
 };
 
 // Re-export monitoring components

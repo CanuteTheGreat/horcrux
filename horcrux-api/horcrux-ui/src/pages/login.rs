@@ -44,16 +44,31 @@ pub fn Login() -> impl IntoView {
     let (use_recovery, set_use_recovery) = create_signal(false);
 
     let navigate = use_navigate();
+    // `?next=/page`: the session ended on that page (see api::session_ended); go back there.
+    let next = use_query_map()
+        .get_untracked()
+        .get("next")
+        .and_then(|n| api::safe_next(n));
+    let session_ended = next.is_some();
 
     // Logged in: full session, or straight to second-factor enrollment.
     let finish = {
         let navigate = navigate.clone();
+        let next = next.clone();
         move |outcome: LoginOutcome| match outcome {
             LoginOutcome::LoggedIn(r) => {
-                if r.tfa_setup_required {
-                    navigate("/auth/mfa?setup=required", Default::default());
+                // A full navigation, not the SPA router: a `navigate()` from this
+                // post-await task was silently dropped when a `?next=` was present and
+                // the page stayed on /login. A load also makes the new shell pick up the
+                // fresh session cleanly.
+                let to = if r.tfa_setup_required {
+                    "/auth/mfa?setup=required".to_string()
                 } else {
-                    navigate("/", Default::default());
+                    next.clone().unwrap_or_else(|| "/".into())
+                };
+                let _ = navigate;
+                if let Some(w) = web_sys::window() {
+                    let _ = w.location().set_href(&to);
                 }
             }
             LoginOutcome::SecondFactor(ch) => {
@@ -261,6 +276,9 @@ pub fn Login() -> impl IntoView {
                 <h1>"Horcrux Login"</h1>
                 <p class="tagline">"Gentoo Virtualization Platform"</p>
 
+                {session_ended.then(|| view! {
+                    <div class="alert alert-info" id="login-session-ended">"Your session ended. Sign in again to continue where you were."</div>
+                })}
                 {move || error.get().map(|msg| view! {
                     <div class="alert alert-error" id="login-error">{msg}</div>
                 })}

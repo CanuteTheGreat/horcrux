@@ -305,6 +305,9 @@ pub fn Sidebar() -> impl IntoView {
             <NavGroup title="Cluster" prefixes=vec!["/ha"]>
                 {item("/ha", "High Availability")}
                 {item("/ha/cluster", "Cluster Nodes")}
+                {item("/ha/resources", "HA Resources")}
+                {item("/ha/groups", "HA Groups")}
+                {item("/ha/failover", "Failover & Fencing")}
                 {item("/ha/maintenance", "Maintenance & Rebalance")}
                 {item("/ha/migration", "Migration Center")}
             </NavGroup>

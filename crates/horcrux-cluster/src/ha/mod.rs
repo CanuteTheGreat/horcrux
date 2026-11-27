@@ -340,12 +340,13 @@ impl HaManager {
         self.groups.read().await.values().cloned().collect()
     }
 
-    /// Add HA resource
+    /// Add HA resource. An empty `group` means "any node of the cluster"
+    /// (Proxmox: a resource without a group may run on every node).
     pub async fn add_resource(&self, config: HaConfig) -> Result<()> {
         // Verify group exists
         {
             let groups = self.groups.read().await;
-            if !groups.contains_key(&config.group) {
+            if !config.group.is_empty() && !groups.contains_key(&config.group) {
                 return Err(horcrux_common::Error::NotFound(format!(
                     "HA group {} does not exist",
                     config.group
@@ -386,6 +387,34 @@ impl HaManager {
         config_store::put_opt(&self.store, kinds::HA_RESOURCE, &config.vm_id, &resource).await?;
         resources.insert(config.vm_id.clone(), resource);
 
+        Ok(())
+    }
+
+    /// Change an HA resource's group and restart/relocate limits (Proxmox:
+    /// HA > Resources > Edit). An empty group means any node.
+    pub async fn update_resource_settings(
+        &self,
+        vm_id: &str,
+        group: &str,
+        max_restart: u32,
+        max_relocate: u32,
+    ) -> Result<()> {
+        if !group.is_empty() && !self.groups.read().await.contains_key(group) {
+            return Err(horcrux_common::Error::NotFound(format!(
+                "HA group {} does not exist",
+                group
+            )));
+        }
+        {
+            let mut resources = self.resources.write().await;
+            let r = resources.get_mut(vm_id).ok_or_else(|| {
+                horcrux_common::Error::NotFound(format!("VM {} not managed by HA", vm_id))
+            })?;
+            r.group = group.to_string();
+            r.max_restart = max_restart;
+            r.max_relocate = max_relocate;
+        }
+        self.sync_resource(vm_id).await;
         Ok(())
     }
 
@@ -625,11 +654,31 @@ impl HaManager {
         online: Option<&[String]>,
     ) -> Result<Option<String>> {
         let usable = |n: &str| online.map(|o| o.iter().any(|x| x == n)).unwrap_or(true);
+        // A resource without a group may run on any node: the online nodes
+        // when the caller knows them, else every node that reported in.
+        let any_node = if resource.group.is_empty() {
+            let mut nodes: Vec<String> = match online {
+                Some(o) => o.to_vec(),
+                None => self.node_resources.read().await.keys().cloned().collect(),
+            };
+            nodes.sort();
+            Some(HaGroup {
+                name: String::new(),
+                nodes,
+                restricted: false,
+                no_failback: true,
+            })
+        } else {
+            None
+        };
         let groups = self.groups.read().await;
 
-        let group = groups.get(&resource.group).ok_or_else(|| {
-            horcrux_common::Error::System(format!("HA group {} not found", resource.group))
-        })?;
+        let group = match any_node.as_ref() {
+            Some(g) => g,
+            None => groups.get(&resource.group).ok_or_else(|| {
+                horcrux_common::Error::System(format!("HA group {} not found", resource.group))
+            })?,
+        };
 
         let node_resources = self.node_resources.read().await;
         let labels = self
@@ -858,7 +907,11 @@ impl HaManager {
                     Ok(None) => (
                         Some(HaState::Error),
                         None,
-                        format!("no online node of group {} can run it", r.group),
+                        if r.group.is_empty() {
+                            "no other online node can run it".to_string()
+                        } else {
+                            format!("no online node of group {} can run it", r.group)
+                        },
                     ),
                     Err(e) => (Some(HaState::Error), None, e.to_string()),
                 }
@@ -1149,6 +1202,59 @@ mod tests {
         let resources = manager.list_resources().await;
         assert_eq!(resources.len(), 1);
         assert_eq!(resources[0].vm_id, "100");
+    }
+
+    #[tokio::test]
+    async fn a_resource_without_a_group_runs_on_any_node_and_can_be_edited() {
+        let manager = HaManager::new();
+        manager.enable().await;
+        manager
+            .add_resource(HaConfig {
+                vm_id: "200".to_string(),
+                group: String::new(),
+                max_restart: 1,
+                max_relocate: 1,
+                state: HaState::Started,
+                architecture: Architecture::X86_64,
+                required_passthrough_devices: Vec::new(),
+            })
+            .await
+            .expect("no group needed");
+        manager
+            .update_resource_state("200", HaState::Started, Some("node1".into()))
+            .await
+            .unwrap();
+        let online = vec!["node1".to_string(), "node2".to_string()];
+        let plan = manager.plan_relocations("node1", &online[1..]).await;
+        assert_eq!(plan.len(), 1, "{plan:?}");
+        assert_eq!(plan[0].target, "node2");
+
+        assert!(manager
+            .update_resource_settings("200", "missing", 2, 2)
+            .await
+            .is_err());
+        manager
+            .add_group(HaGroup {
+                name: "g2".to_string(),
+                nodes: vec!["node2".to_string()],
+                restricted: false,
+                no_failback: false,
+            })
+            .await
+            .unwrap();
+        manager
+            .update_resource_settings("200", "g2", 4, 5)
+            .await
+            .unwrap();
+        let r = manager.get_resource("200").await.unwrap();
+        assert_eq!(
+            (r.group.as_str(), r.max_restart, r.max_relocate),
+            ("g2", 4, 5)
+        );
+        assert!(manager
+            .update_resource_settings("404", "", 1, 1)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

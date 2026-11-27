@@ -47,6 +47,51 @@ pub fn get_auth_token() -> Option<String> {
         .and_then(|storage| storage.get_item(AUTH_TOKEN_KEY).ok().flatten())
 }
 
+/// Where the login page sends the user after a session ended: only a local path
+/// (never `//host` or a full URL), and never back to the login page itself.
+pub fn safe_next(next: &str) -> Option<String> {
+    let n = next.trim();
+    (n.starts_with('/') && !n.starts_with("//") && !n.starts_with("/login") && !n.contains('\\'))
+        .then(|| n.to_string())
+}
+
+/// A protected call answered 401: the session expired or was ended (logout
+/// elsewhere, "Terminate" on Active Sessions, server restart with new keys).
+/// Go to the login page and come back here afterwards, instead of leaving a
+/// page that silently shows nothing. Login/2FA calls handle their own 401.
+fn session_ended(url: &str) {
+    if url.contains("/api/auth/") {
+        return;
+    }
+    let Some(loc) = web_sys::window().map(|w| w.location()) else {
+        return;
+    };
+    let path = loc.pathname().unwrap_or_default();
+    if path == "/login" {
+        return;
+    }
+    clear_auth_token();
+    go_to_login();
+}
+
+/// Load the login page, coming back to the current page after signing in.
+pub fn go_to_login() {
+    let Some(loc) = web_sys::window().map(|w| w.location()) else {
+        return;
+    };
+    let path = loc.pathname().unwrap_or_default();
+    if path == "/login" {
+        return;
+    }
+    let here = format!("{}{}", path, loc.search().unwrap_or_default());
+    let target = if safe_next(&here).is_some() && here != "/" {
+        format!("/login?next={}", urlencoding::encode(&here))
+    } else {
+        "/login".to_string()
+    };
+    let _ = loc.set_href(&target);
+}
+
 /// Clear the stored JWT auth token (on logout).
 pub fn clear_auth_token() {
     if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
@@ -90,6 +135,9 @@ pub mod authed {
 /// message (e.g. a 422 validation reason) so forms can show the user why.
 async fn http_error(response: reqwasm::http::Response) -> ApiError {
     let status = response.status();
+    if status == 401 {
+        session_ended(&response.url());
+    }
     let body = response.text().await.unwrap_or_default();
     ApiError {
         message: error_text(status, &body),
@@ -2518,31 +2566,47 @@ pub struct HaResource {
     pub enabled: bool,
     pub group: String,
     pub current_node: Option<String>,
+    #[serde(default)]
+    pub vm_name: String,
+    #[serde(default)]
+    pub max_restart: u32,
+    #[serde(default)]
+    pub max_relocate: u32,
 }
 
 #[derive(Deserialize)]
 struct HaResourceWire {
     vm_id: String,
     #[serde(default)]
+    vm_name: String,
+    #[serde(default)]
     group: String,
     state: String,
     #[serde(default)]
     current_node: Option<String>,
     #[serde(default)]
-    max_restart: u32,
+    max_restart: Option<u32>,
+    #[serde(default)]
+    priority: Option<u32>,
+    #[serde(default)]
+    max_relocate: u32,
 }
 
 impl From<HaResourceWire> for HaResource {
     fn from(w: HaResourceWire) -> Self {
         let state = w.state.to_lowercase();
+        let max_restart = w.max_restart.or(w.priority).unwrap_or(0);
         Self {
             resource_id: w.vm_id,
             resource_type: "vm".to_string(),
-            priority: w.max_restart,
+            priority: max_restart,
             enabled: state != "disabled",
             state,
             group: w.group,
             current_node: w.current_node,
+            vm_name: w.vm_name,
+            max_restart,
+            max_relocate: w.max_relocate,
         }
     }
 }
@@ -3943,6 +4007,35 @@ pub async fn add_ha_resource(request: CreateHaResourceRequest) -> Result<(), Api
         }),
     )
     .await
+}
+
+/// HA resource settings (HA > Resources: Add / Edit). Empty group = any node.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct HaResourceSettings {
+    pub group: String,
+    pub max_restart: u32,
+    pub max_relocate: u32,
+    /// `started` or `stopped`
+    pub state: String,
+}
+
+pub async fn ha_resource_add(vm_id: &str, s: &HaResourceSettings) -> Result<(), ApiError> {
+    post_json_no_response(
+        "/ha/resources",
+        &serde_json::json!({
+            "vm_id": vm_id,
+            "group": s.group,
+            "max_restart": s.max_restart,
+            "max_relocate": s.max_relocate,
+            "state": s.state,
+        }),
+    )
+    .await
+}
+
+pub async fn ha_resource_update(vm_id: &str, s: &HaResourceSettings) -> Result<(), ApiError> {
+    let _: serde_json::Value = put_json(&format!("/ha/resources/{}", vm_id), s).await?;
+    Ok(())
 }
 
 /// Remove a VM from HA management
@@ -5839,6 +5932,19 @@ mod tests {
             message: error_text(500, r#"{"message":"boom"}"#),
         };
         assert!(e.unavailable().is_none());
+    }
+
+    #[test]
+    fn after_a_session_ends_login_only_returns_to_a_local_page() {
+        assert_eq!(
+            safe_next("/ha/resources?x=1").as_deref(),
+            Some("/ha/resources?x=1")
+        );
+        assert_eq!(safe_next("//evil.example/"), None);
+        assert_eq!(safe_next("https://evil.example/"), None);
+        assert_eq!(safe_next("/login?next=/x"), None);
+        assert_eq!(safe_next("/\\evil"), None);
+        assert_eq!(safe_next(""), None);
     }
 
     #[test]
