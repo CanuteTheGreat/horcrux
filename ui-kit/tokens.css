@@ -1,0 +1,89 @@
+/* errant ui-kit v0.3 - tokens.css
+   Framework-neutral design tokens shared by Horcrux (Leptos) and Patronus (askama templates).
+   CSS custom properties only. Light by default; dark follows the device (prefers-color-scheme) unless
+   <html data-theme="light|dark"> overrides it. Accent presets: <html data-accent="cobalt|garnet|graphite">.
+   Density: <html data-density="compact|comfortable">. No fonts here: a product may opt into a web font
+   by setting --font-sans / --font-mono in its own theme file. Spec: ui-kit/README.md. License GPL-3.0-or-later. */
+/* ---------- tokens (light) ---------- */
+:root {
+    --font-sans: system-ui, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, monospace;
+    --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 15px; --fs-xl: 18px; --fs-2xl: 24px;
+    --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 20px; --s-6: 24px; --s-8: 32px;
+    --r-sm: 3px; --r-md: 5px; --r-lg: 8px;
+    --row-h: 30px; --ctl-h: 30px;
+    --header-h: 44px; --sidebar-w: 232px;
+
+    --c-canvas: #f3f4f6; --c-surface: #ffffff; --c-sunken: #eceef1; --c-raised: #ffffff;
+    --c-border: #d9dde3; --c-border-strong: #bcc3cc;
+    --c-ink: #1a1f25; --c-muted: #5f6873; --c-muted-soft: #8a929c; --c-on-solid: #ffffff;
+    --c-chrome: #1b2027; --c-chrome-ink: #e6e9ed; --c-chrome-muted: #a3acb7; --c-chrome-hover: rgba(255,255,255,.08);
+    --c-accent: #0b6e77; --c-accent-solid: #0b6e77; --c-accent-hover: #095a62; --c-accent-subtle: #e0f1f2;
+    --c-brand: #c08a2e;
+    --c-ok: #1d7a3e; --c-ok-bg: #e5f4ea; --c-ok-solid: #1d7a3e;
+    --c-warn: #8a5200; --c-warn-bg: #fdf3dc; --c-warn-solid: #9a5d00; --c-warn-fill: #f2b632;
+    --c-crit: #b42318; --c-crit-bg: #fdeceb; --c-crit-solid: #b42318;
+    --c-info: #1f5fb0; --c-info-bg: #e7f0fb; --c-info-solid: #1f5fb0;
+    --c-neutral-solid: #5f6873;
+    --c-row-hover: #f6f8fa; --c-focus: #0b6e77;
+    --e-0: none;
+    --e-1: 0 1px 2px rgba(16,24,32,.06), 0 4px 12px rgba(16,24,32,.08);
+    --e-2: 0 8px 28px rgba(16,24,32,.18), 0 2px 6px rgba(16,24,32,.08);
+    --scrim: rgba(15,18,22,.45);
+}
+/* dark: follow the device unless the user picked light; or the user picked dark */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --c-canvas: #0f1216; --c-surface: #161a20; --c-sunken: #12161b; --c-raised: #1c2128;
+        --c-border: #2b323b; --c-border-strong: #3a434e;
+        --c-ink: #e6e9ed; --c-muted: #98a2ad; --c-muted-soft: #6f7883;
+        --c-chrome: #0b0e11; --c-chrome-ink: #e6e9ed; --c-chrome-muted: #98a2ad;
+        --c-accent: #5cc8cf; --c-accent-solid: #137f88; --c-accent-hover: #179099; --c-accent-subtle: #122a2d;
+        --c-brand: #d9a54a;
+        --c-ok: #56c77a; --c-ok-bg: #13261a; --c-ok-solid: #1d7a3e;
+        --c-warn: #f0b545; --c-warn-bg: #2d2412; --c-warn-solid: #9a5d00; --c-warn-fill: #d99a1e;
+        --c-crit: #ff7d73; --c-crit-bg: #2e1715; --c-crit-solid: #b42318;
+        --c-info: #79aefc; --c-info-bg: #14233a; --c-info-solid: #1f5fb0;
+        --c-neutral-solid: #4b545f;
+        --c-row-hover: #1a1f26; --c-focus: #5cc8cf;
+        --e-1: 0 1px 2px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.35);
+        --e-2: 0 10px 32px rgba(0,0,0,.55);
+        --scrim: rgba(0,0,0,.6);
+    }
+}
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --c-canvas: #0f1216; --c-surface: #161a20; --c-sunken: #12161b; --c-raised: #1c2128;
+    --c-border: #2b323b; --c-border-strong: #3a434e;
+    --c-ink: #e6e9ed; --c-muted: #98a2ad; --c-muted-soft: #6f7883;
+    --c-chrome: #0b0e11; --c-chrome-ink: #e6e9ed; --c-chrome-muted: #98a2ad;
+    --c-accent: #5cc8cf; --c-accent-solid: #137f88; --c-accent-hover: #179099; --c-accent-subtle: #122a2d;
+    --c-brand: #d9a54a;
+    --c-ok: #56c77a; --c-ok-bg: #13261a; --c-ok-solid: #1d7a3e;
+    --c-warn: #f0b545; --c-warn-bg: #2d2412; --c-warn-solid: #9a5d00; --c-warn-fill: #d99a1e;
+    --c-crit: #ff7d73; --c-crit-bg: #2e1715; --c-crit-solid: #b42318;
+    --c-info: #79aefc; --c-info-bg: #14233a; --c-info-solid: #1f5fb0;
+    --c-neutral-solid: #4b545f;
+    --c-row-hover: #1a1f26; --c-focus: #5cc8cf;
+    --e-1: 0 1px 2px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.35);
+    --e-2: 0 10px 32px rgba(0,0,0,.55);
+    --scrim: rgba(0,0,0,.6);
+}
+:root[data-theme="light"] { color-scheme: light; }
+
+/* accent presets (user menu > Appearance). Each pair is in ci/ux-qa/check_ui_tokens.py. */
+:root[data-accent="cobalt"] { --c-accent: #1f5fb0; --c-accent-solid: #1f5fb0; --c-accent-hover: #194f93; --c-accent-subtle: #e7f0fb; --c-focus: #1f5fb0; }
+:root[data-accent="garnet"] { --c-accent: #a3243b; --c-accent-solid: #a3243b; --c-accent-hover: #891d31; --c-accent-subtle: #f8e8eb; --c-focus: #a3243b; }
+:root[data-accent="graphite"] { --c-accent: #3b434d; --c-accent-solid: #3b434d; --c-accent-hover: #2b3138; --c-accent-subtle: #e7eaee; --c-focus: #3b434d; }
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"])[data-accent="cobalt"] { --c-accent: #79aefc; --c-accent-solid: #1f5fb0; --c-accent-subtle: #14233a; --c-focus: #79aefc; }
+    :root:not([data-theme="light"])[data-accent="garnet"] { --c-accent: #ff8fa3; --c-accent-solid: #a3243b; --c-accent-subtle: #2e151b; --c-focus: #ff8fa3; }
+    :root:not([data-theme="light"])[data-accent="graphite"] { --c-accent: #c9d0d8; --c-accent-solid: #4b545f; --c-accent-subtle: #222830; --c-focus: #c9d0d8; }
+}
+:root[data-theme="dark"][data-accent="cobalt"] { --c-accent: #79aefc; --c-accent-solid: #1f5fb0; --c-accent-subtle: #14233a; --c-focus: #79aefc; }
+:root[data-theme="dark"][data-accent="garnet"] { --c-accent: #ff8fa3; --c-accent-solid: #a3243b; --c-accent-subtle: #2e151b; --c-focus: #ff8fa3; }
+:root[data-theme="dark"][data-accent="graphite"] { --c-accent: #c9d0d8; --c-accent-solid: #4b545f; --c-accent-subtle: #222830; --c-focus: #c9d0d8; }
+
+:root[data-density="compact"] { --row-h: 24px; --ctl-h: 26px; }
+:root[data-density="comfortable"] { --row-h: 36px; --ctl-h: 34px; }
+

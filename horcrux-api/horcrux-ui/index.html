@@ -6,6 +6,30 @@
     <title>Horcrux</title>
     <link data-trunk rel="rust" data-target-name="horcrux-ui" data-cargo-profile-release="wasm-release" />
     <link data-trunk rel="css" href="style/main.css">
+    <link data-trunk rel="css" href="style/utilities.css">
+    <!-- shared ui-kit (also used by Patronus): tokens + ui- components, then the Horcrux layer -->
+    <link data-trunk rel="css" href="../../ui-kit/tokens.css">
+    <link data-trunk rel="css" href="../../ui-kit/components.css">
+    <link data-trunk rel="css" href="style/ui-system.css">
+    <link data-trunk rel="copy-dir" href="assets/fonts">
+    <!-- fetched before the load event, so a page that renders text after hydrating never aborts a font download -->
+    <link rel="preload" href="/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/fonts/ibm-plex-sans-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/fonts/ibm-plex-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/fonts/ibm-plex-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <!-- Appearance (user menu): theme / accent / density from localStorage, applied before first paint (no flash).
+         No stored theme = follow the device's light/dark setting. -->
+    <script>
+      (function () {
+        try {
+          var d = document.documentElement, s = window.localStorage;
+          var t = s.getItem("hx.theme"), a = s.getItem("hx.accent"), n = s.getItem("hx.density");
+          if (t === "light" || t === "dark") d.setAttribute("data-theme", t);
+          if (a && /^[a-z]+$/.test(a) && a !== "verdigris") d.setAttribute("data-accent", a);
+          if (n === "compact" || n === "comfortable") d.setAttribute("data-density", n);
+        } catch (e) {}
+      })();
+    </script>
     <link data-trunk rel="copy-file" href="assets/favicon.ico">
     <link data-trunk rel="copy-file" href="assets/favicon.png">
     <link data-trunk rel="copy-file" href="assets/apple-touch-icon.png">

@@ -251,7 +251,7 @@ pub fn VmConsole() -> impl IntoView {
                 </h1>
                 <div class="header-actions console-controls">
                     <A href="/vms" class="btn btn-secondary">"Back to VMs"</A>
-                    <select id="console-type" on:change=move |ev| {
+                    <select id="console-type" aria-label="Console type" on:change=move |ev| {
                         match event_target_value(&ev).as_str() {
                             "horcrux" => set_console_type.set(ConsoleType::Horcrux),
                             "serial" => set_console_type.set(ConsoleType::Serial),
@@ -694,6 +694,7 @@ fn SerialConsole(vm_id: String) -> impl IntoView {
                 <input
                     type="text"
                     class="serial-input"
+                    aria-label="Serial console input"
                     style="width:80%"
                     prop:value=move || input.get()
                     on:input=move |ev| set_input.set(event_target_value(&ev))

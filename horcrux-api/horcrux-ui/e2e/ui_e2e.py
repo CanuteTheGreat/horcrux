@@ -43,7 +43,7 @@ import time
 import urllib.error
 import urllib.request
 
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, expect, sync_playwright
 
 BASE = os.environ.get("BASE_URL", "https://localhost:8006")
 # Trust the node's local CA when given (CI), never skip verification silently.
@@ -258,7 +258,7 @@ def main():
 
         # ---- dashboard reads node metrics (was: missing field cpu_usage) ---
         page.goto(f"{BASE}/")
-        cpu = page.locator(".stat-card", has_text="CPU Usage").locator(".stat-value")
+        cpu = page.locator("#stat-cpu .stat-value")
         expect(cpu).to_have_text(re.compile(r"^\d+(\.\d)?%$"), timeout=45000)
         expect(page.get_by_text("Could not reach the backend")).to_have_count(0)
         theme_checks(page)
@@ -670,7 +670,7 @@ def main():
 
         # ---- VM clone from the VM list: dialog, linked mode, base protected
         page.goto(f"{BASE}/vms")
-        page.locator(f"tr[data-vm-id='{REP_VM}']").get_by_role("button", name="Clone").click()
+        vm_row_action(page, REP_VM, "button", "Clone")
         page.fill("#clone-name", REP_CLONE)
         page.select_option("#clone-mode", "linked")
         expect(page.locator("#clone-linked-help")).to_be_visible()
@@ -692,7 +692,7 @@ def main():
             "completed", timeout=30000)
         # ... and Delete on its base is refused with the reason shown.
         page.goto(f"{BASE}/vms")
-        page.locator(f"tr[data-vm-id='{REP_VM}']").get_by_role("button", name="Delete").click()
+        vm_row_action(page, REP_VM, "button", "Delete")
         expect(page.locator("#vm-notice")).to_contain_text("linked clone", timeout=30000)
         expect(page.locator("#vm-notice")).to_contain_text(cid)
         assert api_get(f"/api/vms/{REP_VM}", token())["id"] == REP_VM
@@ -1085,6 +1085,13 @@ def metric_server_checks(page):
     gl.close()
 
 
+def open_import_menu(page):
+    """VMs page: the import links live in the closed "Import" dropdown."""
+    link = page.locator("details.row-more .menu a").first
+    if not link.is_visible():
+        page.locator("details.row-more > summary", has_text="Import").click()
+
+
 def ovf_import_checks(page):
     """VMs > Import OVF / OVA: an OVA (real qemu-img VMDK + descriptor, served
     from a URL like a vendor download) is previewed in the UI (mapped CPU,
@@ -1131,6 +1138,7 @@ def ovf_import_checks(page):
             _req("DELETE", f"/api/vms/{v['id']}", tok)
 
     page.goto(f"{BASE}/vms")
+    open_import_menu(page)
     page.get_by_role("link", name="Import OVF / OVA").click()
     page.wait_for_url(f"{BASE}/vms/import-ovf")
     page.fill("#ovf-source", url)
@@ -1235,6 +1243,7 @@ def esxi_import_checks(page):
             _req("DELETE", f"/api/vms/{v['id']}", tok)
 
     page.goto(f"{BASE}/vms")
+    open_import_menu(page)
     page.get_by_role("link", name="Import from ESXi").click()
     page.wait_for_url(f"{BASE}/vms/import-esxi")
     page.fill("#esxi-host", f"{mirror}:{srv.server_address[1]}")
@@ -1403,7 +1412,7 @@ def vm_hardware_checks(page, vid):
 
     # ---- VM > Hardware: CD-ROM + boot order + CPUs, saved ----------------
     page.goto(f"{BASE}/vms")
-    page.locator(f"tr[data-vm-id='{vid}']").get_by_role("link", name="Hardware").click()
+    vm_row_action(page, vid, "link", "Hardware")
     page.wait_for_url(f"{BASE}/vms/{vid}/hardware")
     expect(page.locator("#vm-cdrom option", has_text="e2e-ui.iso")).to_have_count(1, timeout=30000)
     page.select_option("#vm-cdrom", iso["path"])
@@ -1853,7 +1862,31 @@ def ui_login(page, user, password):
     page.locator("#login-submit").click()
 
 
+def vm_row_action(page, vid, role, name):
+    """Click a secondary action in a VM list row's "More" menu.
+
+    The list renders its rows before the saved-state / save-blocker lookups
+    answer, and that answer re-renders the rows (closing an opened menu), so
+    wait for the row, open the menu and retry the click a few times instead of
+    assuming the first open sticks.
+    """
+    row = page.locator(f"tr[data-vm-id='{vid}']")
+    expect(row).to_be_visible(timeout=60000)
+    target = row.get_by_role(role, name=name, exact=True)
+    for _ in range(6):
+        more = row.locator("details.row-more")
+        if more.count() and not more.first.evaluate("d => d.open"):
+            more.first.locator("summary").click()
+        try:
+            target.click(timeout=5000)
+            return
+        except PlaywrightTimeoutError:
+            continue
+    target.click()
+
+
 def ui_logout(page):
+    page.locator("#user-menu-toggle").click()  # Log out lives in the header's user menu
     page.locator("#logout-button").click()
     page.wait_for_url(f"{BASE}/login")
 
