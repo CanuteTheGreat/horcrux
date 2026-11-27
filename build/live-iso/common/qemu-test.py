@@ -1672,7 +1672,9 @@ class Runner:
         rc, out = self.gsh(vm, "ps -eo comm,args | grep -E '^cage' | head -2; cat /run/live-installer/gui-result 2>/dev/null; ps -eo comm | grep -qx cage && echo CAGE-RUNNING-$((40+2))")
         self.step("gui-running-in-cage-kiosk", "CAGE-RUNNING-42" in (out or ""), (out or "")[-120:].replace("\n", " "))
         # AT-SPI: the accessibility tree must expose the sidebar, the headline widgets and the buttons
-        want = ["Next", "Abort", "High contrast", "Larger text", "Server (default)", "1  Keyboard", "11  Finish"]
+        # the sidebar numbers only the pages that apply: Patronus (wan-lan) gets the extra "bonds/VLAN/PPPoE" page, so Finish is 12 there
+        finish = "12  Finish" if a.project == "patronus" else "11  Finish"
+        want = ["Next", "Abort", "High contrast", "Larger text", "Server (default)", "1  Keyboard", finish]
         n, missing = 0, want
         for _ in range(10):                       # the toolkit registers with the accessibility bus a few seconds after the first frame
             n, missing = self.gnames(vm, *want)
