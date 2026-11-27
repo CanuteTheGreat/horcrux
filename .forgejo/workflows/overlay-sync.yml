@@ -5,6 +5,7 @@ name: Overlay sync
 # (/etc/portage/repos.conf/horcrux.conf, package sys-apps/horcrux-repo-config, auto-sync yes).
 # The overlay repo is a `git subtree split --prefix=gentoo` of main (stable commit ids, so it only ever fast-forwards).
 # Do not edit it by hand (it is only ever fast-forwarded from main). Secret OVERLAY_DEPLOY_KEY = the deploy key of horcrux-overlay (no other access).
+# Runs serialize (concurrency group overlay-sync) and the fetch+push retries up to 3x if the overlay moved in between.
 
 on:
   push:
