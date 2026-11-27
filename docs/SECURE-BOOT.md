@@ -47,8 +47,8 @@ The installer (`liveinst/secureboot.py`) puts the same chain on the ESP (`EFI/BO
 `mmx64.efi`, `grub.cfg` that finds `/boot` by UUID) whenever the image is signed and the machine boots UEFI. The kernel and
 modules it copies are already signed, so the installed system boots with Secure Boot on right away.
 
-For **updates** it creates a **machine key** in `/etc/horcrux/secureboot/` (`machine.key` is readable by root and
-the `portage` group only), and points Portage at it:
+For **updates** it creates a **machine key** in `/etc/secureboot/` (`machine.key` is readable by root and the `portage`
+group only, and kept out of product configuration backups), and points Portage at it:
 
 * `/etc/portage/package.use/zz-secureboot`: `secureboot` on the kernel packages (secureboot.eclass signs each new kernel
   image), `modules-sign` on every out-of-tree module package (linux-mod-r1 signs zfs etc. when they are rebuilt);
@@ -57,7 +57,7 @@ the `portage` group only), and points Portage at it:
 The machine certificate is queued with `mokutil --import`. **At the first reboot after the install MokManager appears once**
 (blue screen, "Perform MOK management"): choose **Enroll MOK**, **Continue**, **Yes**, type the **MOK password** shown on
 the installer's last page, then **Reboot**. Skipping it is safe: the system still boots the project-signed kernel, a kernel
-install prints a warning while the key is not enrolled, and `mokutil --import /etc/horcrux/secureboot/machine.der` queues
+install prints a warning while the key is not enrolled, and `mokutil --import /etc/secureboot/machine.der` queues
 it again. Boot environments keep older kernels as automatic fallbacks.
 
 Multi-disk ZFS installs copy the signed ESP files to every disk (`horcrux-boot-sync`), each pointing at its own `/boot` copy.
