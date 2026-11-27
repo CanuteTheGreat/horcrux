@@ -255,6 +255,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/security/vulnerabilities" view=crate::pages::security::SecurityVulnsPage/>
                     <Route path="/security/vulnerabilities/:id" view=crate::pages::security::SecurityScanPage/>
                     <Route path="/security/hardening" view=crate::pages::security::SecurityHardeningPage/>
+                    <Route path="/security/activity" view=crate::pages::security_activity::SecurityActivityPage/>
                     <Route path="/security/settings" view=crate::pages::security::SecuritySettingsPage/>
                     <Route path="/audit" view=crate::pages::AuditLogPage/>
                     <Route path="/system/logs" view=crate::pages::system::logs::SystemLogsPage/>

@@ -42,6 +42,7 @@ mod rbac_matrix_tests;
 mod replication_api_tests;
 mod resource_pool_tests;
 mod sdn_tests;
+mod security_activity_tests;
 mod security_tests;
 mod storage_content_tests;
 mod storage_volume_tests;

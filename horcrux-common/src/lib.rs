@@ -5,6 +5,7 @@ pub mod console;
 pub mod lxc;
 pub mod remote_play;
 pub mod security;
+pub mod security_activity;
 
 pub use lxc::{
     LxcCatalogEntry, LxcFeatures, LxcMount, LxcNet, LxcOptions, LxcSnapshot, LxcTemplate,
