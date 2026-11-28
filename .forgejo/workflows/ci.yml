@@ -706,6 +706,20 @@ jobs:
           test -n "$contract"
           bash horcrux-api/tests/lxc_e2e.sh test target/debug/horcrux-api "$contract"
 
+      - name: "Proxmox VE import (UEFI VM boots, unprivileged container keeps owners)"
+        # proxmox_import_e2e.py in the LXC sibling of lxc_e2e.sh: builds a
+        # Proxmox-format source (qemu-server/lxc configs next to the volumes:
+        # an OVMF VM with efidisk, cloud-init volume, 2 NICs, disk limits;
+        # an unprivileged container with a shifted subvolume rootfs, bind and
+        # storage mount points, /dev/net/tun and a rate-limited NIC), plans
+        # and imports both through the API, boots the VM from its copied
+        # disk and checks MACs, UUID, limits, UEFI variables and seed bytes,
+        # then starts the container and checks owners, mounts, device,
+        # address and rate limit inside it.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Proxmox VE import"
+          LXC_E2E_PY=proxmox_import_e2e.py bash horcrux-api/tests/lxc_e2e.sh test target/debug/horcrux-api
+
       - name: Incus containers (real nested Incus, in-browser consoles)
         # incus_e2e.sh runs the built API next to a real Incus daemon in a
         # privileged sibling container: an Incus container is created from

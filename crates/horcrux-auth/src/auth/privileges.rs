@@ -779,6 +779,20 @@ mod tests {
                 "{p}"
             );
         }
+        // importers from other hypervisors read host paths / reach other
+        // hosts as the service: node administrators only
+        for p in [
+            "/api/import/proxmox/plan",
+            "/api/import/proxmox",
+            "/api/import/proxmox/status",
+            "/api/import/proxmox/jobs",
+        ] {
+            assert_eq!(
+                priv_of(requirement("POST", p)),
+                (P::SysModify, "/".into()),
+                "{p}"
+            );
+        }
         assert_eq!(
             priv_of(requirement("POST", "/api/console/abc/vnc")),
             (P::VmConsole, "/vms/abc".into())

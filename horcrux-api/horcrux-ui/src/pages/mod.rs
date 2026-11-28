@@ -47,6 +47,7 @@ mod vm_hardware;
 pub mod vm_import_esxi;
 pub mod vm_import_libvirt;
 pub mod vm_import_ovf;
+pub mod vm_import_proxmox;
 mod vm_list;
 pub mod vm_passthrough;
 mod vm_remote_play;
@@ -87,6 +88,7 @@ pub use vm_hardware::VmHardwarePage;
 pub use vm_import_esxi::VmImportEsxiPage;
 pub use vm_import_libvirt::{ImportCleanup, UnmanagedLibvirtBanner, VmImportLibvirtPage};
 pub use vm_import_ovf::VmImportOvfPage;
+pub use vm_import_proxmox::VmImportProxmoxPage;
 pub use vm_list::VmList;
 pub use vm_remote_play::VmRemotePlayPage;
 
