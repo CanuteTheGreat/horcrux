@@ -7951,7 +7951,7 @@ pub async fn stop_task(upid: &str) -> Result<(), ApiError> {
     delete_json(&format!("/tasks/{}", upid)).await
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct RebootRequired {
     #[serde(default)]
     pub required: bool,
