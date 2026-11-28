@@ -30,7 +30,8 @@ pub fn routes() -> Router<Arc<AppState>> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Item {
-    /// `libvirt-domain`, `file` or `dir`.
+    /// `libvirt-domain`, `file`, `dir` or `zfs-dataset` (a received
+    /// zvol/filesystem, removed with `zfs destroy -r`).
     pub kind: String,
     /// File/dir path, or the libvirt domain name.
     pub path: String,
@@ -41,10 +42,14 @@ pub struct Item {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Record {
+    /// The imported guest (a VM id, or a container id with `guest: ct`).
     pub vm_id: String,
-    /// `libvirt`, `ovf`, ...
+    /// `libvirt`, `ovf`, `proxmox`, ...
     pub source: String,
     pub items: Vec<Item>,
+    /// `ct` for an imported container; absent = a VM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest: Option<String>,
 }
 
 fn dir(state: &AppState) -> PathBuf {
@@ -148,6 +153,31 @@ pub fn evaluate(
                 }
                 return p;
             }
+            if it.kind == "zfs-dataset" {
+                let ok_name = !it.path.is_empty()
+                    && it.path.contains('/')
+                    && !it.path.starts_with('/')
+                    && !it.path.contains("..")
+                    && it.path.chars().all(|c| {
+                        c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.' | ':')
+                    });
+                let dev = PathBuf::from(format!("/dev/zvol/{}", it.path));
+                match domain_state(&format!("zfs:{}", it.path)) {
+                    _ if !ok_name => p.reason = Some("dataset name refused".into()),
+                    None => p.reason = Some("already gone".into()),
+                    Some(size) => {
+                        p.bytes = size.trim().parse().unwrap_or(0);
+                        if used.iter().any(|u| u == &dev) {
+                            p.reason = Some("in use by a Horcrux VM: kept".into());
+                        } else if it.requires.as_deref().is_some_and(|r| !copy_present(it, r)) {
+                            p.reason = Some("the Horcrux copy is missing: kept".into());
+                        } else {
+                            p.remove = true;
+                        }
+                    }
+                }
+                return p;
+            }
             let path = PathBuf::from(&it.path);
             if it.kind != "file" && it.kind != "dir" {
                 p.reason = Some("unknown item".into());
@@ -229,25 +259,44 @@ fn verify_tpm_copies(rec: &Record, items: &[Planned]) -> Result<(), ApiError> {
 /// The disk copies a removal depends on: each source disk file about to go is compared
 /// (`qemu-img compare`) with the Horcrux copy it requires. Firmware stores (`.efivars`) are converted
 /// copies and are only checked for existence by `evaluate`.
-fn disk_pairs(rec: &Record, items: &[Planned]) -> Vec<(String, String)> {
+fn disk_pairs(rec: &Record, items: &[Planned]) -> Vec<(String, String, &'static str)> {
     rec.items
         .iter()
         .zip(items)
-        .filter(|(it, p)| it.kind == "file" && p.kind == "file" && p.remove)
-        .filter_map(|(it, _)| it.requires.as_ref().map(|r| (it.path.clone(), r.clone())))
-        .filter(|(_, copy)| !copy.contains(".efivars"))
+        .filter(|(it, p)| {
+            (it.kind == "file" || it.kind == "zfs-dataset") && p.kind == it.kind && p.remove
+        })
+        .filter_map(|(it, _)| {
+            it.requires.as_ref().map(|r| {
+                if it.kind == "zfs-dataset" {
+                    (format!("/dev/zvol/{}", it.path), r.clone(), "raw")
+                } else {
+                    let fmt = if it.path.ends_with(".qcow2") {
+                        "qcow2"
+                    } else if rec.source == "proxmox" {
+                        "raw"
+                    } else {
+                        "qcow2"
+                    };
+                    (it.path.clone(), r.clone(), fmt)
+                }
+            })
+        })
+        // only qcow2 disk copies are compared (firmware stores, TPM state,
+        // cloud-init seeds and container trees are checked by existence)
+        .filter(|(_, copy, _)| copy.ends_with(".qcow2") && !copy.contains(".efivars"))
         .collect()
 }
 
 async fn verify_copies(rec: &Record, items: &[Planned]) -> Result<(), ApiError> {
     verify_tpm_copies(rec, items)?;
-    for (src, copy) in disk_pairs(rec, items) {
+    for (src, copy, fmt) in disk_pairs(rec, items) {
         if !FsPath::new(&copy).is_file() {
             return Err(ApiError::Conflict(format!(
                 "the imported copy {copy} does not exist: the old source {src} is kept"
             )));
         }
-        crate::api::vm_import::qemu_img(&["compare", "-f", "qcow2", "-F", "qcow2", &src, &copy])
+        crate::api::vm_import::qemu_img(&["compare", "-f", fmt, "-F", "qcow2", &src, &copy])
             .await
             .map_err(|e| {
                 ApiError::Conflict(format!(
@@ -256,6 +305,53 @@ async fn verify_copies(rec: &Record, items: &[Planned]) -> Result<(), ApiError> 
             })?;
     }
     Ok(())
+}
+
+/// `used` bytes of a dataset, None when it does not exist.
+async fn zfs_used(ds: &str) -> Option<String> {
+    let o = tokio::process::Command::new("zfs")
+        .args(["list", "-H", "-p", "-o", "used", ds])
+        .output()
+        .await
+        .ok()?;
+    o.status
+        .success()
+        .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// `zfs destroy -r` of a dataset that has no child file systems/volumes
+/// (only its own snapshots go with it).
+async fn zfs_destroy(ds: &str) -> Result<(), String> {
+    let o = tokio::process::Command::new("zfs")
+        .args([
+            "list",
+            "-H",
+            "-o",
+            "name",
+            "-r",
+            "-t",
+            "filesystem,volume",
+            ds,
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    let n = String::from_utf8_lossy(&o.stdout).lines().count();
+    if !o.status.success() || n != 1 {
+        return Err(format!(
+            "{ds} has child datasets: kept (remove them by hand)"
+        ));
+    }
+    let o = tokio::process::Command::new("zfs")
+        .args(["destroy", "-r", ds])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if o.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&o.stderr).trim().to_string())
+    }
 }
 
 async fn domain_state(name: &str) -> Option<String> {
@@ -268,11 +364,22 @@ async fn domain_state(name: &str) -> Option<String> {
 
 async fn plan(state: &AppState, vm_id: &str) -> Result<(Record, Vec<Planned>), ApiError> {
     let rec = read_record(state, vm_id)?;
-    state.vm_manager.get_vm(vm_id).await?;
+    if rec.guest.as_deref() == Some("ct") {
+        state
+            .container_manager
+            .get_container(vm_id)
+            .await
+            .map_err(|_| ApiError::NotFound(format!("container {vm_id} not found")))?;
+    } else {
+        state.vm_manager.get_vm(vm_id).await?;
+    }
     let vms = state.vm_manager.list_vms().await;
     let mut states = std::collections::HashMap::new();
     for it in rec.items.iter().filter(|i| i.kind == "libvirt-domain") {
         states.insert(it.path.clone(), domain_state(&it.path).await);
+    }
+    for it in rec.items.iter().filter(|i| i.kind == "zfs-dataset") {
+        states.insert(format!("zfs:{}", it.path), zfs_used(&it.path).await);
     }
     let items = evaluate(&rec, &vms, &|d| states.get(d).cloned().flatten());
     Ok((rec, items))
@@ -408,6 +515,8 @@ async fn cleanup(
                 other => other.map(|_| ()),
             }
             .map_err(|e| format!("{e:?}"))
+        } else if it.kind == "zfs-dataset" {
+            zfs_destroy(&it.path).await
         } else if it.kind == "dir" {
             std::fs::remove_dir_all(&it.path).map_err(|e| e.to_string())
         } else {
@@ -461,6 +570,7 @@ mod tests {
             vm_id: "a".into(),
             source: "libvirt".into(),
             items,
+            guest: None,
         }
     }
 
@@ -558,8 +668,82 @@ mod tests {
             .collect();
         assert_eq!(
             disk_pairs(&r, &planned),
-            vec![("/v/l/a.qcow2".to_string(), "/h/a.qcow2".to_string())]
+            vec![(
+                "/v/l/a.qcow2".to_string(),
+                "/h/a.qcow2".to_string(),
+                "qcow2"
+            )]
         );
+        // a received zvol is compared as raw against its qcow2 copy
+        let z = Record {
+            vm_id: "a".into(),
+            source: "proxmox".into(),
+            items: vec![
+                item("zfs-dataset", "tank/pve/vm-1-disk-0", Some("/h/a.qcow2")),
+                item("zfs-dataset", "tank/pve/vm-1-disk-1", Some("/h/a.tpm")),
+            ],
+            guest: None,
+        };
+        let planned: Vec<Planned> = z
+            .items
+            .iter()
+            .map(|i| Planned {
+                kind: i.kind.clone(),
+                path: i.path.clone(),
+                bytes: 0,
+                remove: true,
+                reason: None,
+            })
+            .collect();
+        assert_eq!(
+            disk_pairs(&z, &planned),
+            vec![(
+                "/dev/zvol/tank/pve/vm-1-disk-0".to_string(),
+                "/h/a.qcow2".to_string(),
+                "raw"
+            )]
+        );
+    }
+
+    #[test]
+    fn zfs_datasets_go_only_when_present_unused_and_copied() {
+        let d = tempfile::tempdir().unwrap();
+        let copy = d.path().join("a.qcow2");
+        std::fs::write(&copy, b"x").unwrap();
+        let r = Record {
+            vm_id: "a".into(),
+            source: "proxmox".into(),
+            items: vec![
+                item(
+                    "zfs-dataset",
+                    "tank/pve/vm-1-disk-0",
+                    Some(copy.to_str().unwrap()),
+                ),
+                item(
+                    "zfs-dataset",
+                    "tank/pve/vm-1-disk-9",
+                    Some("/nonexistent/copy.qcow2"),
+                ),
+                item("zfs-dataset", "/etc", None),
+                item("zfs-dataset", "tank/gone", None),
+            ],
+            guest: None,
+        };
+        let p = evaluate(&r, &[vm("/dev/zvol/tank/pve/in-use")], &|k| {
+            (k != "zfs:tank/gone").then(|| "4096".to_string())
+        });
+        assert!(p[0].remove && p[0].bytes == 4096, "{p:?}");
+        assert!(!p[1].remove && p[1].reason.as_deref().unwrap().contains("copy is missing"));
+        assert!(!p[2].remove && p[2].reason.as_deref() == Some("dataset name refused"));
+        assert!(!p[3].remove && p[3].reason.as_deref() == Some("already gone"));
+        let busy = Record {
+            items: vec![item("zfs-dataset", "tank/pve/in-use", None)],
+            ..r.clone()
+        };
+        let p = evaluate(&busy, &[vm("/dev/zvol/tank/pve/in-use")], &|_| {
+            Some("1".into())
+        });
+        assert!(!p[0].remove && p[0].reason.as_deref().unwrap().contains("in use"));
     }
 
     #[test]

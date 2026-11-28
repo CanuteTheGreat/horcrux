@@ -75,6 +75,45 @@ pub struct VmDisk {
     /// storage directory. Chosen at create / add-disk time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<String>,
+    /// I/O limits (QEMU block throttling); unset = unlimited.
+    #[serde(default, skip_serializing_if = "DiskThrottle::is_none")]
+    pub throttle: DiskThrottle,
+}
+
+/// Per-disk I/O limits (`VmDisk::throttle`): bytes/s and operations/s,
+/// read and write separately (Proxmox `mbps_rd`/`mbps_wr`/`iops_rd`/`iops_wr`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DiskThrottle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bps_rd: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bps_wr: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iops_rd: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iops_wr: Option<u64>,
+}
+
+impl DiskThrottle {
+    pub fn is_none(&self) -> bool {
+        *self == DiskThrottle::default()
+    }
+
+    /// `throttling.*` options for QEMU's `-drive` (empty when unlimited).
+    pub fn drive_opts(&self) -> String {
+        let mut s = String::new();
+        for (k, v) in [
+            ("bps-read", self.bps_rd),
+            ("bps-write", self.bps_wr),
+            ("iops-read", self.iops_rd),
+            ("iops-write", self.iops_wr),
+        ] {
+            if let Some(v) = v.filter(|v| *v > 0) {
+                s.push_str(&format!(",throttling.{k}={v}"));
+            }
+        }
+        s
+    }
 }
 
 /// Disk buses a VM disk can use (`VmDisk::disk_type`).
@@ -120,6 +159,11 @@ impl VmDisk {
         if self.discard && self.disk_type == "default" {
             return Err(format!(
                 "disk{index}: pick a bus to use discard (the legacy default bus has no options)"
+            ));
+        }
+        if !self.throttle.is_none() && self.disk_type == "default" {
+            return Err(format!(
+                "disk{index}: pick a bus to use I/O limits (the legacy default bus has no options)"
             ));
         }
         Ok(())

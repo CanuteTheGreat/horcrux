@@ -84,6 +84,51 @@ pub struct LxcOptions {
     /// Public keys installed in /root/.ssh/authorized_keys.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ssh_public_keys: Vec<String>,
+    /// Host device nodes made available inside the container at the same
+    /// path (e.g. `/dev/net/tun` for a VPN client), bind-mounted at start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<String>,
+    /// Block I/O limits (cgroup2 `io.max`), each on a host block device
+    /// named by its PATH: the major:minor numbers are looked up at every
+    /// start, so a limit survives a reinstall that renumbers the devices.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub io_limits: Vec<LxcIoLimit>,
+}
+
+/// One cgroup2 `io.max` rule of a container (`LxcOptions::io_limits`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LxcIoLimit {
+    /// Host block device (`/dev/nvme0n1`, `/dev/disk/by-id/...`): the whole
+    /// disk the container's data lives on.
+    pub device: String,
+    /// Read bytes/s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rbps: Option<u64>,
+    /// Write bytes/s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wbps: Option<u64>,
+    /// Read operations/s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub riops: Option<u64>,
+    /// Write operations/s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wiops: Option<u64>,
+}
+
+impl LxcIoLimit {
+    /// The `io.max` value after `MAJ:MIN ` (`rbps=.. wbps=..`).
+    pub fn limits(&self) -> String {
+        [
+            ("rbps", self.rbps),
+            ("wbps", self.wbps),
+            ("riops", self.riops),
+            ("wiops", self.wiops),
+        ]
+        .iter()
+        .filter_map(|(k, v)| v.map(|v| format!("{k}={v}")))
+        .collect::<Vec<_>>()
+        .join(" ")
+    }
 }
 
 impl Default for LxcOptions {
@@ -107,6 +152,8 @@ impl Default for LxcOptions {
             nameserver: None,
             searchdomain: None,
             ssh_public_keys: Vec::new(),
+            devices: Vec::new(),
+            io_limits: Vec::new(),
         }
     }
 }
@@ -160,6 +207,10 @@ pub struct LxcNet {
     pub gateway6: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtu: Option<u32>,
+    /// Bandwidth cap in Mbit/s on the host-side veth, both directions
+    /// (`tc`, applied at start); unset = unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_mbps: Option<u32>,
 }
 
 impl LxcNet {
@@ -243,6 +294,16 @@ impl LxcNet {
                         )
                     }
                 }
+                "rate" | "rate_mbps" => {
+                    n.rate_mbps = if v.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            v.parse()
+                                .map_err(|_| format!("rate '{v}' is not a number (Mbit/s)"))?,
+                        )
+                    }
+                }
                 other => return Err(format!("unknown NIC option '{other}'")),
             }
         }
@@ -279,6 +340,9 @@ impl LxcNet {
         }
         if let Some(v) = n.mtu {
             parts.push(format!("mtu={v}"));
+        }
+        if let Some(v) = n.rate_mbps {
+            parts.push(format!("rate={v}"));
         }
         parts.join(",")
     }
@@ -528,6 +592,35 @@ impl LxcOptions {
                 if !(576..=65535).contains(&m) {
                     return Err(format!("net{i}: MTU must be 576-65535, got {m}"));
                 }
+            }
+            if let Some(r) = n.rate_mbps {
+                if r == 0 || r > 400_000 {
+                    return Err(format!("net{i}: rate must be 1-400000 Mbit/s, got {r}"));
+                }
+            }
+        }
+        let mut devs = std::collections::HashSet::new();
+        for d in &self.devices {
+            if !safe_config_path(d) || !d.starts_with("/dev/") || d.len() <= 5 {
+                return Err(format!(
+                    "device '{d}' must be a /dev/... path without spaces or '..'"
+                ));
+            }
+            if !devs.insert(d.as_str()) {
+                return Err(format!("device '{d}' is listed twice"));
+            }
+        }
+        for (i, l) in self.io_limits.iter().enumerate() {
+            if !safe_config_path(&l.device) || !l.device.starts_with("/dev/") {
+                return Err(format!(
+                    "io limit {i}: device '{}' must be a /dev/... block device path",
+                    l.device
+                ));
+            }
+            if l.limits().is_empty() {
+                return Err(format!(
+                    "io limit {i}: set at least one of rbps, wbps, riops, wiops"
+                ));
             }
         }
         let mut paths = std::collections::HashSet::new();

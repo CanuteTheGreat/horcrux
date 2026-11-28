@@ -716,6 +716,7 @@ fn disk_args(vm: &QemuVm, boot: &BootIndex) -> Vec<String> {
         if d.discard {
             drive.push_str(",discard=unmap");
         }
+        drive.push_str(&d.throttle.drive_opts());
         args.extend(["-drive".into(), drive]);
         if d.iothread {
             args.extend(["-object".into(), format!("iothread,id=io{i}")]);

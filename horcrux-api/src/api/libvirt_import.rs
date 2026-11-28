@@ -1565,6 +1565,7 @@ async fn run_import(
             vm_id: vm.id.clone(),
             source: "libvirt".into(),
             items,
+            guest: None,
         },
     )
     .is_ok();
