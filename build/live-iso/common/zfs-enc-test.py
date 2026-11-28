@@ -388,6 +388,7 @@ class ZRun(qt.Runner):
         open(f"{a.out}/debug-boot1.txt", "w").write(dbg)
         rc, o = self.sh("findmnt -no SOURCE /; findmnt -no FSTYPE /boot; findmnt -no FSTYPE /boot/efi; cat /proc/cmdline")
         self.step("root-on-zfs-boot-environment", "rpool/ROOT/horcrux" in o and "ext4" in o and "vfat" in o, o.replace("\n", " | ")[:200])
+        self.zfsforce_checks()
         rc, o = self.sh("swapon --noheadings --show=NAME,TYPE; echo ---; zfs list -H -t volume; true")
         self.step("no-swap-on-zfs", "zd" not in o.split("---")[0] and "/dev/zvol" not in o, f"swap: {o.split('---')[0].strip() or 'none (zram-init not in image)'}")
         rc, o = self.sh("ls /lib/firmware/brcm 2>/dev/null | grep -ci apple; true")
@@ -458,6 +459,56 @@ class ZRun(qt.Runner):
     VM_DATA = {"/var/lib/horcrux/vms/hxbe-vm.qcow2": "horcrux-vm-disk-written-after-the-pre-upgrade-snapshot",
                "/var/lib/libvirt/hxbe-vm.qcow2": "libvirt-vm-disk-written-after-the-pre-upgrade-snapshot",
                "/home/hxbe-user-data": "user-data-written-after-the-pre-upgrade-snapshot"}
+
+    # --- zfsforce=1 is off on an installed system: the pool is imported by a matching host id, and a pool another host still has imported is REFUSED
+    ZFS_FORCE_PROBE = r"""
+echo CMDLINE=$(cat /proc/cmdline)
+echo CFG_FORCE=$(grep -c zfsforce /boot/grub/grub.cfg)
+echo CONF=$(grep -h '^ZFS_FORCE_IMPORT' /etc/horcrux/be.conf)
+horcrux-be import-policy | sed 's/^/POLICY /'
+echo SYSID=$(od -An -tu4 -N4 /etc/hostid | tr -d ' ')
+echo POOLID=$(zdb -C rpool 2>/dev/null | sed -n 's/^ *hostid: *//p' | head -1)
+echo INITRDID=$(lsinitrd -f etc/hostid /boot/initramfs-$(uname -r).img 2>/dev/null | od -An -tu4 -N4 | tr -d ' ')
+echo STATUS_HOSTID_NOTICE=$(zpool status rpool 2>&1 | grep -ci 'hostid')
+echo DRACUT_MODULE_KNOWS_FORCE=$(grep -rl zfsforce /usr/lib/dracut/modules.d/*zfs*/ 2>/dev/null | wc -l)
+"""
+    # a pool left ACTIVE by another host id (a shared disk, a pool moved between machines): a plain import (what the initramfs does without
+    # zfsforce=1) must fail and say why; only -f takes it over. The image is copied while the pool is imported, so its labels still say "in use".
+    ZFS_FOREIGN_PROBE = r"""
+d=/var/tmp/hxforeign; zpool export -f hxforeign 2>/dev/null; rm -rf $d; mkdir -p $d/a $d/b || exit 1
+cp -p /etc/hostid $d/hostid.save
+restore() { cp -p $d/hostid.save /etc/hostid; }
+printf '\357\276\255\336' > /etc/hostid      # 0xdeadbeef: "another host"
+truncate -s 128M $d/a/v
+zpool create -f -O mountpoint=none hxforeign $d/a/v >$d/create.log 2>&1 || { restore; echo CREATE-FAILED; cat $d/create.log; exit 0; }
+cp --sparse=always $d/a/v $d/b/v
+zpool export -f hxforeign
+restore
+cmp /etc/hostid $d/hostid.save && echo HOSTID-RESTORED
+zpool import -d $d/b 2>&1 | sed 's/^/LIST /'
+zpool import -d $d/b -N hxforeign >$d/plain.log 2>&1; echo PLAIN_RC=$?; sed 's/^/PLAIN /' $d/plain.log
+zpool import -d $d/b -N -f hxforeign >$d/force.log 2>&1; echo FORCE_RC=$?; sed 's/^/FORCE /' $d/force.log
+zpool export -f hxforeign 2>/dev/null; rm -rf $d; echo CLEANED
+"""
+
+    def zfsforce_checks(self):
+        rc, o = self.sh(self.ZFS_FORCE_PROBE, timeout=120)
+        kv = dict(l.split("=", 1) for l in o.splitlines() if re.match(r"^[A-Z_]+=", l))
+        cmd = kv.get("CMDLINE", "")
+        policy = [l for l in o.splitlines() if l.startswith("POLICY ")]
+        ok = ("zfsforce" not in cmd and kv.get("CFG_FORCE") == "0" and kv.get("CONF", "").endswith('"auto"') and policy
+              and all("no force" in l for l in policy if "be-" in l))
+        self.step("boot-entries-do-not-force-the-pool-import", bool(ok), f"cmdline={cmd!r} grub.cfg zfsforce lines={kv.get('CFG_FORCE')} {kv.get('CONF')} :: " + " | ".join(policy)[:300])
+        same = kv.get("SYSID") and kv.get("SYSID") == kv.get("POOLID") == kv.get("INITRDID") and kv.get("SYSID") != "0"
+        self.step("hostid-consistent-system-pool-initramfs", bool(same) and kv.get("STATUS_HOSTID_NOTICE") == "0",
+                  f"/etc/hostid={kv.get('SYSID')} pool={kv.get('POOLID')} initramfs={kv.get('INITRDID')} zpool-status-hostid-notice-lines={kv.get('STATUS_HOSTID_NOTICE')}")
+        self.step("dracut-zfs-module-gates-the-force-on-the-cmdline", kv.get("DRACUT_MODULE_KNOWS_FORCE", "0") not in ("", "0"), f"files naming zfsforce: {kv.get('DRACUT_MODULE_KNOWS_FORCE')}")
+        rc, o = self.sh(self.ZFS_FOREIGN_PROBE, timeout=300)
+        kv = dict(l.split("=", 1) for l in o.splitlines() if re.match(r"^[A-Z_]+=", l))
+        plain = "\n".join(l for l in o.splitlines() if l.startswith(("LIST ", "PLAIN ")))
+        refused = kv.get("PLAIN_RC") not in (None, "0") and re.search(r"(?i)in use|another system|hostid", plain) is not None
+        self.step("foreign-hostid-pool-refused-without-force", bool(refused) and "HOSTID-RESTORED" in o, f"plain import rc={kv.get('PLAIN_RC')} :: " + re.sub(r"\s+", " ", plain)[:300])
+        self.step("foreign-hostid-pool-imports-only-with-force", kv.get("FORCE_RC") == "0" and "CLEANED" in o, f"zpool import -f rc={kv.get('FORCE_RC')}")
 
     def probe_upgrade_and_rollback(self):
         """install probe 1.0, then UPGRADE it to 2.0 through emerge (the Portage bashrc hook must snapshot the boot environment by itself),
