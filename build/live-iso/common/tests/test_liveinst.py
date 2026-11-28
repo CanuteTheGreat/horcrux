@@ -213,7 +213,7 @@ class Answers(unittest.TestCase):
             self.assertIsNone(Z.pool_name_problem(ok), ok)
         for bad in ("", "1pool", "my pool", "a/b", "mirror", "raidz", "raidz3", "draid2", "log", "c0t0", "x" * 65):
             self.assertIsNotNone(Z.pool_name_problem(bad), bad)
-        self.assertIn('POOL="tank"', Z.BE_CONF.format(pool="tank", cmdline="", kglob="*"))
+        self.assertIn('POOL="tank"', Z.BE_CONF.format(pool="tank", cmdline="", kglob="*", force="auto"))
 
     def test_disk_stage_multi_disk_layouts(self):
         st = ST.DiskStage()

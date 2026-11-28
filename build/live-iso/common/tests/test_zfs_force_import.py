@@ -62,7 +62,7 @@ class Plan(unittest.TestCase):
         img = {"/boot/be/horcrux/initramfs.img": 77, "/boot/be/horcrux/kernels/7.2.0/initramfs.img": 99}      # older initramfs: other host id
         self.assertEqual(self.plan({}, 77, img), {"be-horcrux": False, "be-horcrux-k-7.2.0": True})
         self.assertEqual(self.plan({}, 77, {}), {"be-horcrux": True, "be-horcrux-k-7.2.0": True})               # initramfs has no host id
-        self.assertEqual(self.plan({}, None, img), {"be-horcrux": True, "be-horcrux-k-7.2.0": True})            # pool host id unknown
+        self.assertEqual(self.plan({}, 0, img), {"be-horcrux": True, "be-horcrux-k-7.2.0": True})            # pool host id unknown
 
 
 class HostId(unittest.TestCase):

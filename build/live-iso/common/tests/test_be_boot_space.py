@@ -83,6 +83,8 @@ class FakeZfs:
         if cmd[:3] == ["zfs", "list", "-H"] and "-d" in cmd:
             ok.stdout = "rpool/ROOT\nrpool/ROOT/horcrux\n" + "".join(f"rpool/ROOT/{b}\n" for b in self.clones)
             return ok
+        if cmd[0] == "zdb" or cmd[:3] == ["zpool", "list", "-v"]:       # no pool host id known: horcrux-be keeps zfsforce on (ZFS_FORCE_IMPORT=auto)
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="")
         raise AssertionError(cmd)
 
 
