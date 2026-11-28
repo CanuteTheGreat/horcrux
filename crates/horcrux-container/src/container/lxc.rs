@@ -388,6 +388,39 @@ fn apparmor_usable() -> bool {
         && which("apparmor_parser")
 }
 
+/// Whether the installed LXC accepts `lxc.apparmor.*` config keys: liblxc is
+/// linked against libapparmor when LXC was built with AppArmor support.
+/// Unknown (no liblxc found) keeps the keys, the behaviour of a stock distro LXC.
+fn lxc_apparmor_keys() -> bool {
+    if let Ok(v) = std::env::var("HORCRUX_LXC_APPARMOR_KEYS") {
+        return v == "1";
+    }
+    let dirs = [
+        "/usr/lib64",
+        "/usr/lib",
+        "/lib64",
+        "/lib",
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/usr/lib/riscv64-linux-gnu",
+    ];
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let n = e.file_name();
+            let n = n.to_string_lossy();
+            if n.starts_with("liblxc.so") {
+                if let Ok(b) = std::fs::read(e.path()) {
+                    return b.windows(14).any(|w| w == b"libapparmor.so");
+                }
+            }
+        }
+    }
+    true
+}
+
 fn which(bin: &str) -> bool {
     std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
@@ -458,6 +491,7 @@ impl LxcManager {
         HostEnv {
             lxc_share_config: self.share_config.clone(),
             apparmor: apparmor_usable(),
+            lxc_apparmor_keys: lxc_apparmor_keys(),
         }
     }
 
@@ -1790,7 +1824,7 @@ impl LxcManager {
             arch: lxc_config::host_arch().to_string(),
             lxc_path: self.lxc_path.to_string_lossy().to_string(),
             template_dir: self.templates.dir().to_string_lossy().to_string(),
-            apparmor: apparmor_usable(),
+            apparmor: apparmor_usable() && lxc_apparmor_keys(),
             bridges,
         }
     }

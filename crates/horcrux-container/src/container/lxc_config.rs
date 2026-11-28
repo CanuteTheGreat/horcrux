@@ -36,6 +36,12 @@ pub struct HostEnv {
     pub lxc_share_config: PathBuf,
     /// AppArmor is enabled and LXC can generate profiles.
     pub apparmor: bool,
+    /// This LXC build accepts `lxc.apparmor.*` keys at all. An LXC built
+    /// without AppArmor (Gentoo `app-containers/lxc[-apparmor]`, the Horcrux
+    /// default) refuses even `lxc.apparmor.profile = unconfined` ("Built
+    /// without AppArmor support"), so the config fails to parse and the
+    /// container is invisible to lxc-info/lxc-start.
+    pub lxc_apparmor_keys: bool,
 }
 
 /// Everything needed to render one container's config.
@@ -172,12 +178,12 @@ pub fn render_config(i: &ConfigInput) -> String {
         let _ = writeln!(c, "lxc.idmap = u 0 {b} {n}");
         let _ = writeln!(c, "lxc.idmap = g 0 {b} {n}");
     }
-    if i.host.apparmor {
+    if i.host.apparmor && i.host.lxc_apparmor_keys {
         let _ = writeln!(c, "lxc.apparmor.profile = generated");
         if o.features.nesting {
             let _ = writeln!(c, "lxc.apparmor.allow_nesting = 1");
         }
-    } else {
+    } else if i.host.lxc_apparmor_keys {
         let _ = writeln!(c, "lxc.apparmor.profile = unconfined");
     }
     let _ = writeln!(c, "lxc.seccomp.profile = {dir}/seccomp.conf");
@@ -596,6 +602,36 @@ mod tests {
         HostEnv {
             lxc_share_config: PathBuf::from("/nonexistent/lxc/config"),
             apparmor: false,
+            lxc_apparmor_keys: true,
+        }
+    }
+
+    #[test]
+    fn lxc_without_apparmor_support_gets_no_apparmor_keys() {
+        // Gentoo lxc[-apparmor]: any lxc.apparmor.* line makes the whole config
+        // unparsable (the stock Horcrux server image, azkaban QEMU gate).
+        let opts = LxcOptions::default();
+        for apparmor in [false, true] {
+            let h = HostEnv {
+                apparmor,
+                lxc_apparmor_keys: false,
+                ..host()
+            };
+            let managed = render_config(&ConfigInput {
+                id: "ct1",
+                name: "ct1",
+                dir: Path::new("/var/lib/lxc/ct1"),
+                distro: "gentoo",
+                arch: "amd64",
+                memory_mb: 256,
+                cpus: 1,
+                rootfs: RootfsKind::Dir,
+                opts: &opts,
+                guest_net_managed: true,
+                host: &h,
+            });
+            assert!(!managed.contains("lxc.apparmor"), "{managed}");
+            assert!(managed.contains("lxc.seccomp.profile = /var/lib/lxc/ct1/seccomp.conf"));
         }
     }
 
