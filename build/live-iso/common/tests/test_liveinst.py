@@ -64,6 +64,75 @@ class Network(unittest.TestCase):
         self.assertEqual(S.part_path("/dev/mmcblk0", 2), "/dev/mmcblk0p2")
 
 
+class ResolveDisk(unittest.TestCase):
+    """G1: a by-id/glob disk spec resolves to one fixed kernel device, so part_path appends p1/1, not -part1."""
+    def r(self, spec, matches, real, rm):
+        return S.resolve_disk_spec(spec, glob_fn=lambda p: matches, realpath=lambda p: real.get(p, p),
+                                   exists=lambda p: p in real or p == spec, removable=lambda d: rm.get(d, False))
+
+    def test_byid_resolves_to_kernel_device(self):
+        real = {"/dev/disk/by-id/nvme-KINGSTON_X-A00_123": "/dev/nvme0n1"}
+        dev = self.r("/dev/disk/by-id/nvme-KINGSTON_X-A00_123", [], real, {})
+        self.assertEqual(dev, "/dev/nvme0n1")
+        self.assertEqual(S.part_path(dev, 1), "/dev/nvme0n1p1")
+
+    def test_glob_with_one_device_ok(self):
+        real = {"/dev/disk/by-id/nvme-KINGSTON_OM8-A00_50026": "/dev/nvme0n1"}
+        dev = self.r("/dev/disk/by-id/nvme-KINGSTON_OM8-A00_*", list(real), real, {})
+        self.assertEqual(dev, "/dev/nvme0n1")
+
+    def test_removable_match_refused(self):
+        real = {"/dev/disk/by-id/usb-SanDisk_x": "/dev/sdb"}
+        with self.assertRaises(S.InstallError) as e:
+            self.r("/dev/disk/by-id/usb-SanDisk_x", [], real, {"/dev/sdb": True})
+        self.assertIn("removable", str(e.exception))
+
+    def test_no_match_refused(self):
+        with self.assertRaises(S.InstallError):
+            S.resolve_disk_spec("/dev/disk/by-id/nvme-missing", glob_fn=lambda p: [],
+                                realpath=lambda p: p, exists=lambda p: False, removable=lambda d: False)
+
+    def test_ambiguous_glob_refused(self):
+        real = {"/dev/disk/by-id/a": "/dev/sda", "/dev/disk/by-id/b": "/dev/sdb"}
+        with self.assertRaises(S.InstallError) as e:
+            self.r("/dev/disk/by-id/*", list(real), real, {})
+        self.assertIn("ambiguous", str(e.exception))
+
+
+class HostidAndCmdline(unittest.TestCase):
+    """G2/G3: answer-file [disk] hostid and [boot] kernel_cmdline flow into the config."""
+    def cfg(self, text):
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
+            f.write(textwrap.dedent(text))
+        try:
+            return S.config_from_answers(PROFILE, f.name)
+        finally:
+            os.unlink(f.name)
+
+    def test_hostid_and_cmdline_parsed(self):
+        c = self.cfg("""
+            [global]
+            hostname = "a.example.com"
+            [disk]
+            disks = ["/dev/vda"]
+            hostid = "59c06e2f"
+            [boot]
+            kernel_cmdline = "intel_iommu=on iommu=pt"
+        """)
+        self.assertEqual(c["hostid"], "59c06e2f")
+        self.assertEqual(c["kernel_cmdline"], "intel_iommu=on iommu=pt")
+
+    def test_defaults_empty(self):
+        c = self.cfg("""
+            [global]
+            hostname = "a.example.com"
+            [disk]
+            disks = ["/dev/vda"]
+        """)
+        self.assertEqual(c["hostid"], "")
+        self.assertEqual(c["kernel_cmdline"], "")
+
+
 class Answers(unittest.TestCase):
     def cfg(self, text, profile=PROFILE):
         with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:

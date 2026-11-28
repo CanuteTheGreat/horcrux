@@ -134,6 +134,14 @@ Use --autounmask-write to write changes to config files
         self.assertEqual(E.bundle_path("/b", "bundle:repos/x"), "/b/repos/x")
         self.assertIsNone(E.bundle_path("/b", "/etc/x"))
 
+    def test_hostid_and_kernel_cmdline_validated(self):
+        ok = dict(GOOD, machine=dict(GOOD["machine"], hostid="59c06e2f"), boot={"kernel_cmdline": "intel_iommu=on iommu=pt"})
+        self.assertEqual([e for e in E.problems(ok) if "bundle:" not in e], [])
+        bad = dict(GOOD, machine=dict(GOOD["machine"], hostid="xyz"), boot={"kernel_cmdline": "a\nb"})
+        errs = " | ".join(E.problems(bad))
+        self.assertIn("hostid", errs)
+        self.assertIn("kernel_cmdline", errs)
+
 
 class DesiredState(unittest.TestCase):
     def test_atoms_edition_layers_profile_order(self):
@@ -349,6 +357,19 @@ class InstallerSide(unittest.TestCase):
         self.assertNotIn("user_hash", c)                          # no hash in the profile: the installer asks (secrets never from the profile)
         self.assertIn("ssh-ed25519 AAAAC3Nza test", c["ssh_keys"])
         self.assertTrue(MP.to_config(GOOD, {}, "/b", iso="server"))        # a GNOME machine needs the GNOME ISO
+
+    def test_to_config_hostid_and_kernel_cmdline(self):
+        mp = dict(GOOD, machine=dict(GOOD["machine"], hostid="59c06e2f"), boot={"kernel_cmdline": "intel_iommu=on iommu=pt"})
+        c = {"ssh_keys": [], "disks": [], "fs": "xfs"}
+        errs = MP.to_config(mp, c, "/b", iso="gnome")
+        self.assertEqual(errs, [])
+        self.assertEqual(c["hostid"], "59c06e2f")
+        self.assertEqual(c["kernel_cmdline"], "intel_iommu=on iommu=pt")
+
+    def test_to_config_rejects_bad_hostid(self):
+        mp = dict(GOOD, machine=dict(GOOD["machine"], hostid="nothex"))
+        errs = MP.to_config(mp, {"ssh_keys": [], "disks": [], "fs": "xfs"}, "/b", iso="gnome")
+        self.assertTrue(any("hostid" in e for e in errs), errs)
 
     @needs_layers
     def test_installer_stage_writes_bundle_layers_engine_call(self):

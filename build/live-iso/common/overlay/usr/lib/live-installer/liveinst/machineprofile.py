@@ -161,6 +161,20 @@ def to_config(mp, c, bundle, iso=None):
         if m.get(k_in):
             c[k_out] = m[k_in]
     c["install_type"] = "desktop" if edition in DESKTOP_EDITIONS else "server"
+    if m.get("hostid"):
+        from . import zfsroot
+        hp = zfsroot.hostid_problem(m["hostid"])
+        if hp:
+            errs.append(f"machine.{hp}")
+        else:
+            c["hostid"] = str(m["hostid"])      # keep an existing ZFS pool's hostid (e.g. imported `bulk`); written before the pool is created
+    boot = mp.get("boot", {})
+    if boot.get("kernel_cmdline"):
+        kc = str(boot["kernel_cmdline"])
+        if "\n" in kc:
+            errs.append("boot.kernel_cmdline must be a single line")
+        else:
+            c["kernel_cmdline"] = kc             # extra kernel args -> be.conf CMDLINE / GRUB_CMDLINE_LINUX (e.g. intel_iommu=on iommu=pt)
     d = mp.get("disk", {})
     if d.get("disks"):
         c["disks"] = list(d["disks"])

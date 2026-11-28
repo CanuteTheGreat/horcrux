@@ -547,6 +547,7 @@ def _default_config(profile, fs, fs_why):
     return {
         "locale": "en_US.UTF-8", "keymap": "us", "timezone": "UTC",
         "disks": [], "fs": fs, "fs_why": fs_why, "zfs_raid": "single", "zfs_pool": "rpool", "luks_passphrase": "",
+        "hostid": "", "kernel_cmdline": "",   # [disk] hostid (keep a pool's hostid) / [boot] kernel_cmdline (extra kernel args)
         "swap": "auto",              # auto (portable = hibernate swap, server = none) | none | hibernate  (portableswap.py)
         "desktop": {"enable": False, "user": "", "password": "", "password_hash": "", "autologin": False}, "hw": "auto",
         "hostname": profile["default_hostname"],
@@ -641,6 +642,11 @@ def config_from_answers(profile, path):
     c["user_autologin"] = bool(u.get("autologin", False))
     dl = d.get("disks", d.get("disk", "first"))
     c["disks"] = [dl] if isinstance(dl, str) else list(dl)
+    if d.get("hostid"):
+        c["hostid"] = str(d["hostid"])          # keep an existing ZFS pool's hostid (the pool is created under it; initramfs carries it)
+    b = a.get("boot", {})
+    if b.get("kernel_cmdline"):
+        c["kernel_cmdline"] = str(b["kernel_cmdline"])
     n = a.get("network", {})
     for sect in ("mgmt", "wan", "lan"):
         src = n.get("management" if sect == "mgmt" else sect, {})
@@ -800,6 +806,55 @@ def use_problems(profile, c):
 
 def part_path(disk, n):
     return f"{disk}p{n}" if disk[-1].isdigit() else f"{disk}{n}"
+
+
+def resolve_disk_spec(spec, glob_fn=None, realpath=None, exists=None, removable=None):
+    """Map a target-disk spec to exactly one fixed (non-removable) kernel block device.
+
+    `spec` may be a kernel path (/dev/nvme0n1), a /dev/disk/by-*/ symlink (the machine
+    profile selects the root pool by stable id, never 'first'), or a shell glob of either.
+    Returns the canonical kernel device (so part_path appends p1/1, never a by-id '-part1').
+    Raises InstallError on no match, more than one distinct device, or a removable match
+    (the install disk must be fixed, never a USB stick like azkaban's `bulk` pool)."""
+    import glob as _glob
+    glob_fn = glob_fn or _glob.glob
+    realpath = realpath or os.path.realpath
+    exists = exists or os.path.exists
+    if removable is None:
+        removable = _disk_is_removable
+    cands = sorted(set(glob_fn(spec))) if any(ch in spec for ch in "*?[") else [spec]
+    cands = [c for c in cands if exists(c)]
+    if not cands:
+        raise InstallError(f"target disk {spec!r} matches no block device")
+    devs = []
+    for c in cands:
+        dev = realpath(c)
+        if dev not in devs:
+            devs.append(dev)
+    if len(devs) != 1:
+        raise InstallError(f"target disk {spec!r} is ambiguous (matches {', '.join(devs)}): name it unambiguously")
+    dev = devs[0]
+    if removable(dev):
+        raise InstallError(f"target disk {spec!r} resolves to the removable device {dev}: refusing "
+                           "(the install disk must be fixed, not a USB stick)")
+    return dev
+
+
+def _disk_is_removable(dev):
+    """True when `dev` (a kernel block device path) is a removable/USB whole disk, read from sysfs."""
+    name = os.path.basename(os.path.realpath(dev))
+    base = f"/sys/block/{name}"
+    try:
+        if open(f"{base}/removable").read().strip() == "1":
+            return True
+    except OSError:
+        pass
+    # USB-attached disks: the block device's parent chain goes through a usb driver
+    try:
+        link = os.path.realpath(f"{base}/device")
+        return "/usb" in link or "/usb" in os.path.realpath(f"{base}")
+    except OSError:
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -1329,7 +1384,8 @@ class Installer:
         # screen; the profile's kernel_cmdline (backlight, nvidia-drm, ...) goes on the boot-environment kernel line too
         serial_ok = not (self.hw_profile and self.hw_profile.get("defaults", {}).get("keep_serial_console") is False)
         self.cmdline_extra = " ".join(x for x in ((arch.console_args() if serial_ok else ""),
-                                                  " ".join(hwprofile.kernel_cmdline(self.hw_profile, self.hw_model))) if x)
+                                                  " ".join(hwprofile.kernel_cmdline(self.hw_profile, self.hw_model)),
+                                                  str(self.c.get("kernel_cmdline") or "").strip()) if x)
         self.kernel_glob = "*"
         hib = self.zfs() and self.swap_mode == "hibernate"
         if hib:
@@ -1431,6 +1487,7 @@ class Installer:
         extra = arch.console_args() if serial_ok else ""     # a tablet has no UART: its LUKS prompt must be on tty0
         extra = " ".join(x for x in (extra, luksroot.grub_cmdline_stage(self) if self.luks() else "",
                                      " ".join(hwprofile.kernel_cmdline(self.hw_profile, self.hw_model)),
+                                     str(c.get("kernel_cmdline") or "").strip(),
                                      portableswap.kernel_args(self) if not self.luks() else "") if x)
         self.write("/etc/default/grub", "\n".join([
             f'GRUB_DISTRIBUTOR="{p["title"]}"', 'GRUB_TIMEOUT=3', f'GRUB_CMDLINE_LINUX="{extra}"',

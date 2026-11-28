@@ -75,5 +75,36 @@ class Hostid(unittest.TestCase):
             Z.ensure_initramfs_hostid(i)
 
 
+class SetLiveHostid(unittest.TestCase):
+    """G2: a profile/answer-file hostid is written to the live /etc/hostid (zgenhostid -f) before the pool is created."""
+    class SpyInst:
+        def __init__(self):
+            self.ran = []
+
+        def run(self, cmd, **kw):
+            self.ran.append(cmd)
+
+    def test_valid_hostid_calls_zgenhostid_f(self):
+        i = self.SpyInst()
+        Z.set_live_hostid(i, "59c06e2f")
+        self.assertEqual(i.ran, [["zgenhostid", "-f", "0x59c06e2f"]])
+
+    def test_0x_prefix_kept(self):
+        i = self.SpyInst()
+        Z.set_live_hostid(i, "0x59C06E2F")
+        self.assertEqual(i.ran, [["zgenhostid", "-f", "0x59c06e2f"]])
+
+    def test_empty_falls_back_to_generate(self):
+        i = self.SpyInst()
+        Z.set_live_hostid(i, "")
+        self.assertEqual(i.ran, ["test -e /etc/hostid || zgenhostid"])
+
+    def test_bad_hostid_refused(self):
+        with self.assertRaises(system.InstallError):
+            Z.set_live_hostid(self.SpyInst(), "zzzz")
+        self.assertEqual(Z.hostid_problem("59c06e2f"), "")
+        self.assertNotEqual(Z.hostid_problem("123456789"), "")   # 9 digits
+
+
 if __name__ == "__main__":
     unittest.main()

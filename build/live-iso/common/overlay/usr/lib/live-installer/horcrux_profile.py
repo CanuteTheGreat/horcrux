@@ -130,6 +130,11 @@ def problems(mp, bundle=None):
         errs.append("machine.hostname is missing or not a valid host name")
     if m.get("edition", "server") not in EDITIONS:
         errs.append(f"machine.edition must be one of {', '.join(EDITIONS)}")
+    if "hostid" in m and not re.fullmatch(r"(0x)?[0-9a-fA-F]{1,8}", str(m["hostid"])):
+        errs.append("machine.hostid must be up to 8 hexadecimal digits (keep an existing ZFS pool's hostid)")
+    kc = mp.get("boot", {}).get("kernel_cmdline")
+    if kc is not None and (not isinstance(kc, str) or "\n" in kc):
+        errs.append("boot.kernel_cmdline must be a single-line string")
     names = set()
     for u in mp.get("users", []):
         n = u.get("name", "")

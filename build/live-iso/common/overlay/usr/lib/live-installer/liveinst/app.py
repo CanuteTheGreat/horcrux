@@ -649,7 +649,13 @@ def unattended(profile, answers_path, halt=True):
     try:
         c = S.config_from_answers(profile, answers_path)
         apply_machine_profile(profile, c, answers_path, say)
-        c["disks"] = [pick_first_disk() if d == "first" else d for d in c["disks"]]
+        def _resolve_disk(d):
+            if d == "first":
+                return pick_first_disk()
+            if d.startswith("/dev/disk/") or any(ch in d for ch in "*?["):
+                return S.resolve_disk_spec(d)      # by-id / by-path / glob -> one fixed kernel device (G1)
+            return d                                # a plain kernel path (/dev/nvme0n1) is already canonical
+        c["disks"] = [_resolve_disk(d) for d in c["disks"]]
         if None in c["disks"]:
             raise S.InstallError("no suitable internal disk for 'first'")
         nics = S.list_nics()
