@@ -131,7 +131,7 @@ async fn put_ct_tags(
     store_tags(&state, format!("ct:{id}"), b.tags).await
 }
 
-async fn store_tags(
+pub(crate) async fn store_tags(
     state: &AppState,
     key: String,
     tags: Vec<String>,

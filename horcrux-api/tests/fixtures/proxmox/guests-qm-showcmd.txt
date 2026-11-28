@@ -1,0 +1,133 @@
+===== VM 201
+/usr/bin/kvm \
+  -id 201 \
+  -name legacy-router \
+  -no-shutdown \
+  -chardev 'socket,id=qmp,path=/var/run/qemu-server/201.qmp,server=on,wait=off' \
+  -object 'monitor-qmp,chardev=qmp,id=monitor-qmp' \
+  -chardev 'socket,id=qmp-event,path=/var/run/qmeventd.sock,reconnect-ms=5000' \
+  -object 'monitor-qmp,chardev=qmp-event,id=monitor-qmp-event' \
+  -pidfile /var/run/qemu-server/201.pid \
+  -daemonize \
+  -smbios 'type=1,uuid=6513270e-269e-4d37-b2a7-4de452e6b438' \
+  -smp '2,sockets=1,cores=2,maxcpus=2' \
+  -nodefaults \
+  -boot 'menu=on,strict=on,reboot-timeout=1000,splash=/usr/share/qemu-server/bootsplash.jpg' \
+  -vnc 'unix:/var/run/qemu-server/201.vnc,password=on' \
+  -cpu host,+kvm_pv_eoi,+kvm_pv_unhalt \
+  -m 2048 \
+  -object 'iothread,id=iothread-virtioscsi0' \
+  -object '{"id":"throttle-drive-scsi0","limits":{},"qom-type":"throttle-group"}' \
+  -global 'PIIX4_PM.disable_s3=1' \
+  -global 'PIIX4_PM.disable_s4=1' \
+  -device 'pci-bridge,id=pci.1,chassis_nr=1,bus=pci.0,addr=0x1e' \
+  -device 'pci-bridge,id=pci.2,chassis_nr=2,bus=pci.0,addr=0x1f' \
+  -device 'pci-bridge,id=pci.3,chassis_nr=3,bus=pci.0,addr=0x5' \
+  -device 'pci-bridge,id=pci.4,chassis_nr=4,bus=pci.1,addr=0x1c' \
+  -device 'vmgenid,guid=d23f0824-128b-4f33-8c5c-7fd0a6a3a450' \
+  -device 'piix3-usb-uhci,id=uhci,bus=pci.0,addr=0x1.0x2' \
+  -device 'vfio-pci,host=0000:03:00.0,id=hostpci0,bus=pci.0,addr=0x10' \
+  -device 'VGA,id=vga,bus=pci.0,addr=0x2' \
+  -chardev 'socket,path=/var/run/qemu-server/201.qga,server=on,wait=off,id=qga0' \
+  -device 'virtio-serial,id=qga0,bus=pci.0,addr=0x8' \
+  -device 'virtserialport,chardev=qga0,name=org.qemu.guest_agent.0' \
+  -device 'virtio-balloon-pci,id=balloon0,bus=pci.0,addr=0x3,free-page-reporting=on' \
+  -iscsi 'initiator-name=iqn.1993-08.org.debian:01:000000000000' \
+  -device 'ide-cd,bus=ide.1,unit=0,id=ide2,bootindex=101' \
+  -device 'virtio-scsi-pci,id=virtioscsi0,bus=pci.3,addr=0x1,iothread=iothread-virtioscsi0' \
+  -blockdev '{"detect-zeroes":"unmap","discard":"unmap","driver":"throttle","file":{"cache":{"direct":true,"no-flush":false},"detect-zeroes":"unmap","discard":"unmap","driver":"raw","file":{"aio":"io_uring","cache":{"direct":true,"no-flush":false},"detect-zeroes":"unmap","discard":"unmap","driver":"host_device","filename":"/dev/zvol/rpool/data/vm-201-disk-0","node-name":"e265fb8e382d6e2a5f83bddad3640a2","read-only":false},"node-name":"f265fb8e382d6e2a5f83bddad3640a2","read-only":false},"node-name":"drive-scsi0","read-only":false,"throttle-group":"throttle-drive-scsi0"}' \
+  -device 'scsi-hd,bus=virtioscsi0.0,channel=0,scsi-id=0,lun=0,drive=drive-scsi0,id=scsi0,device_id=drive-scsi0,rotation_rate=1,bootindex=100,write-cache=on' \
+  -netdev 'type=tap,id=net0,ifname=tap201i0,script=/usr/libexec/qemu-server/pve-bridge,downscript=/usr/libexec/qemu-server/pve-bridgedown,vhost=on' \
+  -device 'virtio-net-pci,mac=52:54:00:10:20:30,netdev=net0,bus=pci.0,addr=0x12,id=net0,rx_queue_size=1024,tx_queue_size=256,bootindex=102,host_mtu=1500,host_tunnel=off' \
+  -netdev 'type=tap,id=net1,ifname=tap201i1,script=/usr/libexec/qemu-server/pve-bridge,downscript=/usr/libexec/qemu-server/pve-bridgedown,vhost=on' \
+  -device 'virtio-net-pci,mac=52:54:00:11:20:31,netdev=net1,bus=pci.0,addr=0x13,id=net1,rx_queue_size=1024,tx_queue_size=256,host_mtu=1500,host_tunnel=off' \
+  -machine 'hpet=off,type=pc+pve0'
+===== VM 202
+/usr/bin/kvm \
+  -id 202 \
+  -name dns-b \
+  -no-shutdown \
+  -chardev 'socket,id=qmp,path=/var/run/qemu-server/202.qmp,server=on,wait=off' \
+  -object 'monitor-qmp,chardev=qmp,id=monitor-qmp' \
+  -chardev 'socket,id=qmp-event,path=/var/run/qmeventd.sock,reconnect-ms=5000' \
+  -object 'monitor-qmp,chardev=qmp-event,id=monitor-qmp-event' \
+  -pidfile /var/run/qemu-server/202.pid \
+  -daemonize \
+  -smbios 'type=1,uuid=9531985d-5d9d-49f8-9818-e811892f902b' \
+  -object '{"id":"throttle-drive-efidisk0","limits":{},"qom-type":"throttle-group"}' \
+  -blockdev '{"driver":"raw","file":{"driver":"file","filename":"/usr/share/pve-edk2-firmware//OVMF_CODE_4M.secboot.fd"},"node-name":"pflash0","read-only":true}' \
+  -blockdev '{"detect-zeroes":"on","discard":"ignore","driver":"throttle","file":{"cache":{"direct":false,"no-flush":false},"detect-zeroes":"on","discard":"ignore","driver":"raw","file":{"aio":"io_uring","cache":{"direct":false,"no-flush":false},"detect-zeroes":"on","discard":"ignore","driver":"host_device","filename":"/dev/zvol/rpool/data/vm-202-disk-1","node-name":"e11ecfd58277d120ee09aa6a847938e","read-only":false},"node-name":"f11ecfd58277d120ee09aa6a847938e","read-only":false,"size":540672},"node-name":"drive-efidisk0","read-only":false,"throttle-group":"throttle-drive-efidisk0"}' \
+  -smp '2,sockets=1,cores=2,maxcpus=2' \
+  -nodefaults \
+  -boot 'menu=on,strict=on,reboot-timeout=1000,splash=/usr/share/qemu-server/bootsplash.jpg' \
+  -vnc 'unix:/var/run/qemu-server/202.vnc,password=on' \
+  -cpu host,+kvm_pv_eoi,+kvm_pv_unhalt \
+  -m 2048 \
+  -object '{"id":"throttle-drive-ide2","limits":{},"qom-type":"throttle-group"}' \
+  -object 'iothread,id=iothread-virtioscsi0' \
+  -object '{"id":"throttle-drive-scsi0","limits":{"bps-read":104857600,"bps-write":41943040},"qom-type":"throttle-group"}' \
+  -global 'ICH9-LPC.disable_s3=1' \
+  -global 'ICH9-LPC.disable_s4=1' \
+  -readconfig /usr/share/qemu-server/pve-q35-4.0.cfg \
+  -device 'pci-bridge,id=pci.4,chassis_nr=4,bus=pci.1,addr=0x1c' \
+  -device 'vmgenid,guid=36f675cc-81e7-4ef5-a8e2-5d940ed90475' \
+  -device 'usb-tablet,id=tablet,bus=ehci.0,port=1' \
+  -device 'VGA,id=vga,bus=pcie.0,addr=0x1' \
+  -chardev 'socket,path=/var/run/qemu-server/202.qga,server=on,wait=off,id=qga0' \
+  -device 'virtio-serial,id=qga0,bus=pci.0,addr=0x8' \
+  -device 'virtserialport,chardev=qga0,name=org.qemu.guest_agent.0' \
+  -iscsi 'initiator-name=iqn.1993-08.org.debian:01:000000000000' \
+  -blockdev '{"driver":"throttle","file":{"cache":{"direct":false,"no-flush":false},"driver":"raw","file":{"aio":"io_uring","cache":{"direct":false,"no-flush":false},"driver":"host_device","filename":"/dev/zvol/rpool/data/vm-202-cloudinit","node-name":"e59c04f10e1457dd9352d3adccf4784","read-only":true},"node-name":"f59c04f10e1457dd9352d3adccf4784","read-only":true},"node-name":"drive-ide2","read-only":true,"throttle-group":"throttle-drive-ide2"}' \
+  -device 'ide-cd,bus=ide.1,unit=0,drive=drive-ide2,id=ide2' \
+  -device 'virtio-scsi-pci,id=virtioscsi0,bus=pci.3,addr=0x1,iothread=iothread-virtioscsi0' \
+  -blockdev '{"detect-zeroes":"unmap","discard":"unmap","driver":"throttle","file":{"cache":{"direct":true,"no-flush":false},"detect-zeroes":"unmap","discard":"unmap","driver":"raw","file":{"aio":"io_uring","cache":{"direct":true,"no-flush":false},"detect-zeroes":"unmap","discard":"unmap","driver":"host_device","filename":"/dev/zvol/rpool/data/vm-202-disk-0","node-name":"e8c0d9d8a4956afc89adfc3719896bc","read-only":false},"node-name":"f8c0d9d8a4956afc89adfc3719896bc","read-only":false},"node-name":"drive-scsi0","read-only":false,"throttle-group":"throttle-drive-scsi0"}' \
+  -device 'scsi-hd,bus=virtioscsi0.0,channel=0,scsi-id=0,lun=0,drive=drive-scsi0,id=scsi0,device_id=drive-scsi0,rotation_rate=1,bootindex=100,write-cache=on' \
+  -netdev 'type=tap,id=net0,ifname=tap202i0,script=/usr/libexec/qemu-server/pve-bridge,downscript=/usr/libexec/qemu-server/pve-bridgedown,vhost=on' \
+  -device 'virtio-net-pci,mac=52:54:00:12:20:32,netdev=net0,bus=pci.0,addr=0x12,id=net0,rx_queue_size=1024,tx_queue_size=256,host_mtu=1500,host_tunnel=off' \
+  -machine 'pflash0=pflash0,pflash1=drive-efidisk0,hpet=off,type=q35+pve0'
+===== VM 203
+/usr/bin/kvm \
+  -id 203 \
+  -name edge-router \
+  -no-shutdown \
+  -chardev 'socket,id=qmp,path=/var/run/qemu-server/203.qmp,server=on,wait=off' \
+  -object 'monitor-qmp,chardev=qmp,id=monitor-qmp' \
+  -chardev 'socket,id=qmp-event,path=/var/run/qmeventd.sock,reconnect-ms=5000' \
+  -object 'monitor-qmp,chardev=qmp-event,id=monitor-qmp-event' \
+  -pidfile /var/run/qemu-server/203.pid \
+  -daemonize \
+  -smbios 'type=1,uuid=6b0d549b-6f03-475a-9600-a35a099950d8' \
+  -object '{"id":"throttle-drive-efidisk0","limits":{},"qom-type":"throttle-group"}' \
+  -blockdev '{"driver":"raw","file":{"driver":"file","filename":"/usr/share/pve-edk2-firmware//OVMF_CODE_4M.secboot.fd"},"node-name":"pflash0","read-only":true}' \
+  -blockdev '{"detect-zeroes":"on","discard":"ignore","driver":"throttle","file":{"cache":{"direct":false,"no-flush":false},"detect-zeroes":"on","discard":"ignore","driver":"raw","file":{"aio":"io_uring","cache":{"direct":false,"no-flush":false},"detect-zeroes":"on","discard":"ignore","driver":"host_device","filename":"/dev/zvol/rpool/data/vm-203-disk-0","node-name":"e7fb4a386d70a1a247eec06b08f0262","read-only":false},"node-name":"f7fb4a386d70a1a247eec06b08f0262","read-only":false,"size":540672},"node-name":"drive-efidisk0","read-only":false,"throttle-group":"throttle-drive-efidisk0"}' \
+  -smp '2,sockets=1,cores=2,maxcpus=2' \
+  -nodefaults \
+  -boot 'menu=on,strict=on,reboot-timeout=1000,splash=/usr/share/qemu-server/bootsplash.jpg' \
+  -vnc 'unix:/var/run/qemu-server/203.vnc,password=on' \
+  -cpu host,+kvm_pv_eoi,+kvm_pv_unhalt \
+  -m 2048 \
+  -object 'iothread,id=iothread-virtioscsi0' \
+  -object '{"id":"throttle-drive-scsi0","limits":{},"qom-type":"throttle-group"}' \
+  -global 'ICH9-LPC.disable_s3=1' \
+  -global 'ICH9-LPC.disable_s4=1' \
+  -readconfig /usr/share/qemu-server/pve-q35-4.0.cfg \
+  -device 'pci-bridge,id=pci.4,chassis_nr=4,bus=pci.1,addr=0x1c' \
+  -device 'vmgenid,guid=8d116ece-1738-47d9-bd9c-172411e20b8f' \
+  -device 'usb-tablet,id=tablet,bus=ehci.0,port=1' \
+  -device 'vfio-pci,host=0000:03:00.0,id=hostpci0,bus=ich9-pcie-port-1,addr=0x0' \
+  -chardev 'socket,id=serial0,path=/var/run/qemu-server/203.serial0,server=on,wait=off' \
+  -device 'isa-serial,chardev=serial0' \
+  -device 'VGA,id=vga,bus=pcie.0,addr=0x1' \
+  -chardev 'socket,path=/var/run/qemu-server/203.qga,server=on,wait=off,id=qga0' \
+  -device 'virtio-serial,id=qga0,bus=pci.0,addr=0x8' \
+  -device 'virtserialport,chardev=qga0,name=org.qemu.guest_agent.0' \
+  -iscsi 'initiator-name=iqn.1993-08.org.debian:01:000000000000' \
+  -device 'ide-cd,bus=ide.1,unit=0,id=ide2' \
+  -device 'virtio-scsi-pci,id=virtioscsi0,bus=pci.3,addr=0x1,iothread=iothread-virtioscsi0' \
+  -blockdev '{"detect-zeroes":"unmap","discard":"unmap","driver":"throttle","file":{"cache":{"direct":true,"no-flush":false},"detect-zeroes":"unmap","discard":"unmap","driver":"raw","file":{"aio":"io_uring","cache":{"direct":true,"no-flush":false},"detect-zeroes":"unmap","discard":"unmap","driver":"host_device","filename":"/dev/zvol/rpool/data/vm-203-disk-1","node-name":"eced77304ea78e08c6da45c4e746872","read-only":false},"node-name":"fced77304ea78e08c6da45c4e746872","read-only":false},"node-name":"drive-scsi0","read-only":false,"throttle-group":"throttle-drive-scsi0"}' \
+  -device 'scsi-hd,bus=virtioscsi0.0,channel=0,scsi-id=0,lun=0,drive=drive-scsi0,id=scsi0,device_id=drive-scsi0,rotation_rate=1,bootindex=100,write-cache=on' \
+  -netdev 'type=tap,id=net0,ifname=tap203i0,script=/usr/libexec/qemu-server/pve-bridge,downscript=/usr/libexec/qemu-server/pve-bridgedown,vhost=on' \
+  -device 'virtio-net-pci,mac=52:54:00:10:20:30,netdev=net0,bus=pci.0,addr=0x12,id=net0,rx_queue_size=1024,tx_queue_size=256,host_mtu=1500,host_tunnel=off' \
+  -netdev 'type=tap,id=net1,ifname=tap203i1,script=/usr/libexec/qemu-server/pve-bridge,downscript=/usr/libexec/qemu-server/pve-bridgedown,vhost=on' \
+  -device 'virtio-net-pci,mac=52:54:00:11:20:31,netdev=net1,bus=pci.0,addr=0x13,id=net1,rx_queue_size=1024,tx_queue_size=256,host_mtu=1500,host_tunnel=off' \
+  -machine 'pflash0=pflash0,pflash1=drive-efidisk0,hpet=off,type=q35+pve0'
