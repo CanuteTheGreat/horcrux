@@ -171,7 +171,7 @@ pkg_postinst() {
 	if [[ -z ${ROOT} ]] && grep -qx 'sys-fs/zfs-kmod' "${EROOT}"/var/lib/portage/world 2>/dev/null; then
 		elog "OpenZFS 2.4 carries its kernel module in sys-fs/zfs: horcrux-autoupdate retires sys-fs/zfs-kmod on its next run. Updating by hand:"
 		elog "  emerge --deselect sys-fs/zfs-kmod; rm /etc/portage/package.mask/zfs (if it only holds the >=sys-fs/zfs-2.4 pair mask); emerge -uDN @world"
-		elog "Existing pools keep their features: never run 'zpool upgrade' on a pool an older OpenZFS (or GRUB) must still read."
+		elog "Existing pools keep their features: do not upgrade a pool's features while an older OpenZFS (or GRUB) must still read it."
 	fi
 	# eix answers only from its cache: build it once so `eix` works right away (eix's own post-sync hook keeps it current). Only on a booted install
 	# (firstboot done), never during an image build, whose tree is not shipped
