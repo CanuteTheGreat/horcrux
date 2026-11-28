@@ -476,14 +476,15 @@ echo DRACUT_MODULE_KNOWS_FORCE=$(grep -rl zfsforce /usr/lib/dracut/modules.d/*zf
     # zfsforce=1) must fail and say why; only -f takes it over. The image is copied while the pool is imported, so its labels still say "in use".
     ZFS_FOREIGN_PROBE = r"""
 d=/var/tmp/hxforeign; zpool export -f hxforeign 2>/dev/null; rm -rf $d; mkdir -p $d/a $d/b || exit 1
-cp -p /etc/hostid $d/hostid.save
-restore() { cp -p $d/hostid.save /etc/hostid; }
-printf '\357\276\255\336' > /etc/hostid      # 0xdeadbeef: "another host"
-truncate -s 128M $d/a/v
-zpool create -f -O mountpoint=none hxforeign $d/a/v >$d/create.log 2>&1 || { restore; echo CREATE-FAILED; cat $d/create.log; exit 0; }
+cp -p /etc/hostid $d/hostid.save; truncate -s 128M $d/a/v
+P=/sys/module/spl/parameters/spl_hostid; old=$(cat $P 2>/dev/null || echo 0)
+# "another host" for the ONE second the pool is created: 0xdeadbeef in /etc/hostid and in the SPL parameter, whichever this ZFS reads; both restored at once
+printf '\357\276\255\336' > /etc/hostid; echo 3735928559 > $P 2>/dev/null
+zpool create -f -O mountpoint=none hxforeign $d/a/v >$d/create.log 2>&1; crc=$?
+cp -p $d/hostid.save /etc/hostid; echo $old > $P 2>/dev/null
+[ $crc = 0 ] || { echo CREATE-FAILED; cat $d/create.log; exit 0; }
 cp --sparse=always $d/a/v $d/b/v
 zpool export -f hxforeign
-restore
 cmp /etc/hostid $d/hostid.save && echo HOSTID-RESTORED
 zpool import -d $d/b 2>&1 | sed 's/^/LIST /'
 zpool import -d $d/b -N hxforeign >$d/plain.log 2>&1; echo PLAIN_RC=$?; sed 's/^/PLAIN /' $d/plain.log
