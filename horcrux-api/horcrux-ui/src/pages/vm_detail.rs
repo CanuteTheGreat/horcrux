@@ -158,7 +158,7 @@ pub fn VmDetailPage() -> impl IntoView {
             })}
             <h3>"When the host shuts down or restarts"</h3>
             <div class="form-row">
-                <select id="vmd-stop" prop:value=stop_sel
+                <select id="vmd-stop" aria-label="Shutdown method" prop:value=stop_sel
                     on:change=move |ev| stop_sel.set(event_target_value(&ev))>
                     <option value="">{move || format!("Node default ({})", power.get().map(|p| p.effective.stop_action).unwrap_or_default())}</option>
                     <option value="save">"Save state (resume where it was)"</option>
@@ -201,7 +201,7 @@ pub fn VmDetailPage() -> impl IntoView {
             })}
             <h3>"Tags"</h3>
             <div class="form-row">
-                <input id="vmd-tags" type="text" placeholder="prod, web" style="flex: 3" prop:value=tags_text
+                <input id="vmd-tags" aria-label="Tags" type="text" placeholder="prod, web" style="flex: 3" prop:value=tags_text
                     on:input=move |ev| set_tags_text.set(event_target_value(&ev))/>
                 <button id="vmd-tags-save" class="btn btn-primary" on:click=save_tags>"Save tags"</button>
             </div>

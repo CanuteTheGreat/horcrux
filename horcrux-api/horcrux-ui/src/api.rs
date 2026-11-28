@@ -445,9 +445,10 @@ pub async fn stop_vm(vm_id: &str) -> Result<(), ApiError> {
     post_empty(&format!("/vms/{}/stop", vm_id)).await
 }
 
-/// Delete a VM
+/// Delete a VM, and (like Proxmox's "Purge from job configurations") take it out of
+/// every backup job and remove its replication jobs, so none keeps failing on it.
 pub async fn delete_vm(vm_id: &str) -> Result<(), ApiError> {
-    delete_json(&format!("/vms/{}", vm_id)).await
+    delete_json(&format!("/vms/{}?purge=1", vm_id)).await
 }
 
 /// Host metrics shown on the dashboard (flattened view of the API's

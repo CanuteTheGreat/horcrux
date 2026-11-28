@@ -111,7 +111,7 @@ pub fn ask(question: &str) -> bool {
 /// The question asked before deleting VM `id` (its disks go with it).
 pub fn delete_question(id: &str, running: bool) -> String {
     format!(
-        "Delete VM {id} permanently?\n\nIts configuration and disks are removed; this cannot be undone.{}\n\nType the VM ID ({id}) to confirm:",
+        "Delete VM {id} permanently?\n\nIts configuration and disks are removed, and it is taken out of backup and replication jobs; this cannot be undone.{}\n\nType the VM ID ({id}) to confirm:",
         if running {
             " The VM is running: it is powered off first."
         } else {

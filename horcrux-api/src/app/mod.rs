@@ -2027,10 +2027,87 @@ async fn stop_vm(
     Ok(Json(vm))
 }
 
+/// `DELETE /api/vms/:id?purge=1`: like Proxmox's "Purge from job
+/// configurations", also take the VM out of every backup job (a job left
+/// with no targets is removed) and remove its replication jobs, so no job
+/// keeps failing on a VM that no longer exists. Off by default for API
+/// callers; the UI sends it.
+#[derive(serde::Deserialize, Default)]
+struct DeleteVmQuery {
+    #[serde(default, deserialize_with = "deserialize_flag")]
+    purge: bool,
+}
+
+/// `1`/`true`/`yes` (Proxmox sends `purge=1`).
+fn deserialize_flag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    Ok(matches!(
+        s.to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    ))
+}
+
+/// The backup jobs that change when `vm_id` is purged: `(job, Some(new
+/// targets))` to update, `(job, None)` to delete (it had no other target).
+fn backup_job_purge_plan(
+    jobs: &[crate::backup::BackupJob],
+    vm_id: &str,
+) -> Vec<(String, Option<Vec<String>>)> {
+    jobs.iter()
+        .filter(|j| j.targets.iter().any(|t| t == vm_id))
+        .map(|j| {
+            let rest: Vec<String> = j.targets.iter().filter(|t| *t != vm_id).cloned().collect();
+            (j.id.clone(), (!rest.is_empty()).then_some(rest))
+        })
+        .collect()
+}
+
+async fn purge_vm_from_jobs(state: &AppState, vm_id: &str) {
+    match state.backup_manager.list_jobs().await {
+        Ok(jobs) => {
+            for (job_id, targets) in backup_job_purge_plan(&jobs, vm_id) {
+                let r = match targets {
+                    Some(t) => match jobs.iter().find(|j| j.id == job_id) {
+                        Some(j) => {
+                            let mut j = j.clone();
+                            j.targets = t;
+                            state
+                                .backup_manager
+                                .update_job(&job_id, j)
+                                .await
+                                .map(|_| ())
+                        }
+                        None => Ok(()),
+                    },
+                    None => state.backup_manager.delete_job(&job_id).await,
+                };
+                match r {
+                    Ok(()) => tracing::info!("VM {vm_id} purged from backup job {job_id}"),
+                    Err(e) => {
+                        tracing::warn!("VM {vm_id} deleted, backup job {job_id} kept it: {e}")
+                    }
+                }
+            }
+        }
+        Err(e) => tracing::warn!("VM {vm_id} deleted, backup jobs not purged: {e}"),
+    }
+    for job in state.replication_manager.list_jobs().await {
+        if job.source_vm_id == vm_id {
+            match state.replication_manager.delete_job(&job.id).await {
+                Ok(()) => tracing::info!("VM {vm_id}: replication job {} removed", job.id),
+                Err(e) => {
+                    tracing::warn!("VM {vm_id} deleted, replication job {} kept: {e}", job.id)
+                }
+            }
+        }
+    }
+}
+
 async fn delete_vm(
     State(state): State<Arc<AppState>>,
     auth_user: Option<axum::Extension<middleware::auth::AuthUser>>,
     Path(id): Path<String>,
+    q: Option<Query<DeleteVmQuery>>,
 ) -> Result<StatusCode, ApiError> {
     api::protection::ensure_vm_unlocked(&state, &id, "deleting it").await?;
     api::protection::ensure_vm_unprotected(&state, &id).await?;
@@ -2052,6 +2129,9 @@ async fn delete_vm(
         .await
     {
         tracing::warn!("VM {id} deleted, but its firewall rules stayed: {e}");
+    }
+    if q.map(|Query(q)| q.purge).unwrap_or(false) {
+        purge_vm_from_jobs(&state, &id).await;
     }
 
     // Broadcast VM deleted event
@@ -6106,3 +6186,43 @@ use k8s_handlers::{
     scale_statefulset as k8s_scale_statefulset,
     uncordon_node as k8s_uncordon_node,
 };
+
+#[cfg(test)]
+mod delete_purge_tests {
+    use super::*;
+
+    fn job(id: &str, targets: &[&str]) -> crate::backup::BackupJob {
+        serde_json::from_value(
+            serde_json::json!({"id": id, "schedule": "daily", "targets": targets}),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn purge_takes_the_vm_out_of_jobs_and_drops_jobs_left_empty() {
+        let jobs = [
+            job("a", &["vm-1", "vm-2"]),
+            job("b", &["vm-1"]),
+            job("c", &["vm-3"]),
+        ];
+        let plan = backup_job_purge_plan(&jobs, "vm-1");
+        assert_eq!(
+            plan,
+            vec![
+                ("a".to_string(), Some(vec!["vm-2".to_string()])),
+                ("b".to_string(), None),
+            ]
+        );
+        assert!(backup_job_purge_plan(&jobs, "vm-9").is_empty());
+    }
+
+    #[test]
+    fn purge_flag_reads_proxmox_style_values() {
+        let q = |s: &str| {
+            let uri: axum::http::Uri = format!("/api/vms/x?{s}").parse().unwrap();
+            Query::<DeleteVmQuery>::try_from_uri(&uri).unwrap().0.purge
+        };
+        assert!(q("purge=1") && q("purge=true"));
+        assert!(!q("purge=0") && !q(""));
+    }
+}

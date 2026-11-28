@@ -212,7 +212,7 @@ pub fn VmLiveDevices(
                 }).collect_view())}
             </ul>
             <div class="form-row">
-                <select id="usb-host-pick" prop:value=usb_pick on:change=move |ev| usb_pick.set(event_target_value(&ev))>
+                <select id="usb-host-pick" aria-label="Host USB device" prop:value=usb_pick on:change=move |ev| usb_pick.set(event_target_value(&ev))>
                     <option value="">"host USB device..."</option>
                     {move || host_usb.get().into_iter().filter(|d| !d.is_hub).map(|d| view! {
                         <option value=format!("{}:{}", d.vendor_id, d.product_id)>

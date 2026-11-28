@@ -225,6 +225,7 @@ pub fn GuestPowerPage() -> impl IntoView {
             })}
 
             <h2>"Guests"</h2>
+            <div class="table-container">
             <table class="vm-table" id="power-table">
                 <thead><tr>
                     <th>"Guest"</th><th>"Status"</th><th>"Saved state"</th>
@@ -241,6 +242,7 @@ pub fn GuestPowerPage() -> impl IntoView {
                     }}
                 </tbody>
             </table>
+            </div>
         </div>
     }
 }
@@ -381,22 +383,22 @@ fn GuestPowerRow(
                 Some(s) => view! { <span class="badge badge-info saved-badge" title=s.mechanism.clone()>{saved_label(s)}</span> }.into_view(),
                 None => view! { <span>"-"</span> }.into_view(),
             }}</td>
-            <td><select class="power-guest-stop" prop:value=stop on:change=move |ev| stop.set(event_target_value(&ev))>
+            <td><select class="power-guest-stop" aria-label="Shutdown method" prop:value=stop on:change=move |ev| stop.set(event_target_value(&ev))>
                 <option value="">{format!("Node default ({})", stop_label(&eff.stop_action))}</option>
                 <option value="save">"Save state"</option>
                 <option value="shutdown">"Shut down"</option>
                 <option value="poweroff">"Power off"</option>
                 <option value="none">"Do nothing"</option>
             </select></td>
-            <td><select class="power-guest-start" prop:value=start on:change=move |ev| start.set(event_target_value(&ev))>
+            <td><select class="power-guest-start" aria-label="Start at boot" prop:value=start on:change=move |ev| start.set(event_target_value(&ev))>
                 <option value="">{format!("Node default ({})", start_label(&eff.start_action))}</option>
                 <option value="resume_if_running">"Resume if it was running"</option>
                 <option value="always">"Always start"</option>
                 <option value="nothing">"Nothing"</option>
             </select></td>
-            <td><input class="power-guest-delay" type="number" min="0" style="width:5em" placeholder=eff.start_delay_secs.to_string()
+            <td><input class="power-guest-delay" aria-label="Start delay (seconds)" type="number" min="0" style="width:6em" placeholder=eff.start_delay_secs.to_string()
                 prop:value=delay on:input=move |ev| delay.set(event_target_value(&ev))/></td>
-            <td><input class="power-guest-order" type="number" style="width:5em" placeholder=eff.start_order.to_string()
+            <td><input class="power-guest-order" aria-label="Start order" type="number" style="width:6.5em" placeholder=eff.start_order.to_string()
                 prop:value=order on:input=move |ev| order.set(event_target_value(&ev))/></td>
             <td class="actions">
                 <button class="btn btn-sm btn-primary power-apply" on:click=apply>"Apply"</button>
