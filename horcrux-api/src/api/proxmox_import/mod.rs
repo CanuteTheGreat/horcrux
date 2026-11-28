@@ -436,8 +436,11 @@ fn with_diff(
     }
     let mut vm = vm.clone();
     if !p.adopt.is_empty() {
-        let mut dv: Vec<&conf::PlanVol> =
-            p.volumes.iter().filter(|v| v.role == VolRole::Disk).collect();
+        let mut dv: Vec<&conf::PlanVol> = p
+            .volumes
+            .iter()
+            .filter(|v| v.role == VolRole::Disk)
+            .collect();
         dv.sort_by_key(|v| v.index);
         for (d, v) in vm.disks.iter_mut().zip(dv) {
             if let Some(a) = p.adopt.iter().find(|a| a.key == v.key) {
@@ -2120,4 +2123,89 @@ async fn ssh_to_file(src: &Source, cmd: &str, to: &Path) -> Result<(), ApiError>
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod adopt_guard_tests {
+    use super::*;
+
+    fn planned(vmid: u32, text: &str) -> (source::Guest, GuestPlan) {
+        let host = HostCtx {
+            bridges: vec!["vmbr0".into()],
+            pci: [("0000:ad:00.0".to_string(), Some(7))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let resolve = |_: &conf::PveVol| -> Result<Resolved, String> {
+            Ok(Resolved {
+                path: "/dev/zvol/tank/x".into(),
+                kind: VolKind::Block,
+                format: "raw".into(),
+                size: Some(1 << 30),
+            })
+        };
+        let c = conf::parse_conf(text);
+        (
+            source::Guest {
+                vmid,
+                kind: Kind::Vm,
+                conf: text.into(),
+                showcmd: None,
+            },
+            conf::plan_vm(vmid, &c, &resolve, &host),
+        )
+    }
+
+    #[test]
+    fn two_guests_with_one_mac_or_pci_device_never_both_start_at_boot() {
+        let mut v = vec![
+            // the later one by start order loses start-at-boot
+            planned(
+                100,
+                "name: old\nnet0: virtio=AA:01:99:8B:4C:6F,bridge=vmbr0\nonboot: 1\nstartup: order=9\nscsi0: z:vm-100-disk-0,size=1G\n",
+            ),
+            planned(
+                117,
+                "name: router\nnet0: virtio=aa:01:99:8b:4c:6f,bridge=vmbr0\nhostpci0: 0000:ad:00.0\nonboot: 1\nstartup: order=1\nscsi0: z:vm-117-disk-0,size=1G\n",
+            ),
+            // shares only the PCI device, starts at boot
+            planned(
+                118,
+                "name: wifi\nnet0: virtio=bc:24:11:00:00:01,bridge=vmbr0\nhostpci0: ad:00.0\nonboot: 1\nscsi0: z:vm-118-disk-0,size=1G\n",
+            ),
+            // shares the MAC but never starts at boot: untouched
+            planned(
+                119,
+                "name: cold\nnet0: virtio=AA:01:99:8B:4C:6F,bridge=vmbr0\nscsi0: z:vm-119-disk-0,size=1G\n",
+            ),
+        ];
+        guard_shared_identity(&mut v);
+        let p = |id: u32| &v.iter().find(|(g, _)| g.vmid == id).unwrap().1;
+        assert!(
+            p(117).autostart.onboot,
+            "the router (order 1) keeps start at boot"
+        );
+        assert!(!p(100).autostart.onboot);
+        let row = p(100)
+            .rows
+            .iter()
+            .find(|r| r.key == "onboot" && r.horcrux == "not started at boot")
+            .unwrap();
+        assert!(
+            row.note.contains("MAC aa:01:99:8b:4c:6f with guest 117"),
+            "{}",
+            row.note
+        );
+        assert!(!p(118).autostart.onboot);
+        assert!(p(118)
+            .rows
+            .iter()
+            .any(|r| r.key == "onboot" && r.note.contains("PCI device 0000:ad:00.0")));
+        assert!(!p(119).autostart.onboot);
+        assert!(!p(119)
+            .rows
+            .iter()
+            .any(|r| r.key == "onboot" && r.horcrux.contains("not started")));
+    }
 }

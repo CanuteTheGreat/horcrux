@@ -15,6 +15,8 @@ pointing at <pool>/data, and the guest volumes there:
   CT 402  unprivileged container: subvol rootfs with owners shifted by
           100000, a storage mount point subvol, a bind mount, onboot order 2
   VM 403  shares VM 401's MAC and is onboot too: must NOT start at boot
+  VM 404  UEFI guest like 401 but not started at boot: its carried UEFI
+          variables are compared byte for byte (a running OVMF rewrites them)
 Then snapshots <pool>/data, plans (read only, offline), applies with
 start_onboot and checks: disks are clones of the snapshot used as raw zvols,
 the VM boots with the carried UEFI variables and seed (sidecar dir), the CT
@@ -130,6 +132,8 @@ def build_volumes():
     sh("genisoimage -quiet -o /tmp/ci.iso -V cidata -J -r /tmp/ci/user-data /tmp/ci/meta-data && truncate -s 4M /tmp/ci.iso")
     zvol("vm-401-cloudinit", "4M", "/tmp/ci.iso")
     zvol("vm-403-disk-0", "64M", "/tmp/disk0.raw")
+    zvol("vm-404-disk-0", "64M", "/tmp/disk0.raw")
+    zvol("vm-404-disk-1", "1M", "/tmp/efi.raw")
 
     # container: rootfs subvol with Proxmox's local properties and shifted owners
     _, cat = req("GET", "/lxc/templates/catalog?arch=amd64")
@@ -190,6 +194,17 @@ swap: 0
 unprivileged: 1
 """
 
+VM404 = """bios: ovmf
+boot: order=scsi0
+cores: 1
+efidisk0: local-zfs:vm-404-disk-1,efitype=4m,pre-enrolled-keys=0,size=1M
+machine: q35
+memory: 128
+name: adopt-cold
+net0: virtio=BC:24:11:BB:00:44,bridge=vmbr0
+scsi0: local-zfs:vm-404-disk-0,size=64M
+"""
+
 VM403 = f"""bios: seabios
 boot: order=scsi0
 cores: 1
@@ -222,6 +237,7 @@ def build_root():
         (7, 5, 8, "401.conf", VM401),
         (8, 6, 8, "402.conf", CT402),
         (9, 5, 8, "403.conf", VM403),
+        (10, 5, 8, "404.conf", VM404),
     ]
     for i, p, t, n, d in rows:
         db.execute("INSERT INTO tree VALUES (?, ?, 1, 0, 0, ?, ?, ?)", (i, p, t, n, d.encode() if d else None))
@@ -233,7 +249,7 @@ def build_root():
     check(os.listdir(f"{ROOT}/etc/pve") == [], "/etc/pve is empty on disk (pmxcfs is not running)")
 
 
-SOURCES = ["vm-401-disk-0", "vm-401-disk-1", "vm-401-cloudinit", "vm-403-disk-0",
+SOURCES = ["vm-401-disk-0", "vm-401-disk-1", "vm-401-cloudinit", "vm-403-disk-0", "vm-404-disk-0", "vm-404-disk-1",
            "subvol-402-disk-0", "subvol-402-disk-1"]
 
 
@@ -253,6 +269,10 @@ def main():
     TOKEN[0] = body.get("ticket") or body.get("token")
     check(bool(TOKEN[0]), "got an API token")
     sh("ip link add hxbr1 type bridge 2>/dev/null || true; ip link set hxbr1 up")
+    if not os.path.exists("/dev/zfs"):
+        print("::warning::the runner kernel has no zfs module: adopt-in-place e2e NOT run")
+        log("SKIP: no /dev/zfs")
+        return
     try:
         make_pool()
         build_volumes()
@@ -274,7 +294,7 @@ def run():
     step("plan BEFORE the snapshot exists: refused per volume, nothing created")
     _, plan = req("POST", "/import/proxmox/plan", {"source": source, "bridge_map": bridges})
     g = {x["vmid"]: x for x in plan["guests"]}
-    check(set(g) == {401, 402, 403}, f"three guests read from config.db: {sorted(g)}")
+    check(set(g) == {401, 402, 403, 404}, f"four guests read from config.db: {sorted(g)}")
     check(any("snapshot" in b and "does not exist" in b for b in g[401]["blockers"]),
           f"missing snapshot is a blocker: {g[401]['blockers']}")
     _, e = req("POST", "/import/proxmox/plan", {"source": {**source, "snapshot": None}}, expect=400)
@@ -287,14 +307,14 @@ def run():
     step("plan (read only, offline): adopt volumes, onboot guard, QEMU line on the zvols")
     _, plan = req("POST", "/import/proxmox/plan", {"source": source, "bridge_map": bridges})
     g = {x["vmid"]: x for x in plan["guests"]}
-    for k in (401, 402, 403):
+    for k in (401, 402, 403, 404):
         check(g[k]["blockers"] == [], f"guest {k} has no blockers: {g[k]['blockers']}")
     a = {v["key"]: v for v in g[401]["adopt"]}
     check(a["scsi0"]["kept"] and a["scsi0"]["dataset"] == f"{PARENT}/adopt-vm-scsi0"
           and a["scsi0"]["from_snapshot"] == f"{POOL}/data/vm-401-disk-0@{SNAP}", f"scsi0 is a clone: {a['scsi0']}")
     check(not a["efidisk0"]["kept"] and not a["ide2"]["kept"], "efidisk/cloud-init are read via temporary clones")
     ca = {v["key"]: v for v in g[402]["adopt"]}
-    check("acltype=posixacl" in ca["rootfs"]["command"] and f"refquota={1 << 30}" in ca["rootfs"]["command"],
+    check(("acltype=posix" in ca["rootfs"]["command"]) and "xattr=sa" in ca["rootfs"]["command"] and f"refquota={1 << 30}" in ca["rootfs"]["command"],
           f"rootfs clone keeps Proxmox's local properties and size: {ca['rootfs']['command']}")
     check(not g[402]["ct"]["lxc"].get("disk_gb"), "no fixed-size rootfs image for an adopted container")
     rows403 = {r["key"]: r for r in g[403]["rows"]}
@@ -308,7 +328,7 @@ def run():
 
     step("apply (start_onboot): clones + guests, router first")
     t0 = time.time()
-    _, j = req("POST", "/import/proxmox", {"source": source, "bridge_map": bridges, "guests": [401, 402, 403],
+    _, j = req("POST", "/import/proxmox", {"source": source, "bridge_map": bridges, "guests": [401, 402, 403, 404],
                                            "start_onboot": True}, expect=202)
     st = wait_for("the adopt job", lambda: (lambda s: s if s["state"] != "running" else None)(
         req("POST", "/import/proxmox/status", {"job": j["job"]})[1]), timeout=600)
@@ -316,10 +336,10 @@ def run():
     if st["state"] != "done":
         fail(f"adopt: {json.dumps(st)[:3000]}")
     res = {x["vmid"]: x for x in st["guests"]}
-    for k in (401, 402, 403):
+    for k in (401, 402, 403, 404):
         log(f"TIMING guest {k}: apply {res[k].get('secs', 0):.2f} s, started at +{res[k].get('started_after_secs')}")
     log(f"TIMING job wall {wall:.1f} s (includes 2 s up delay of 401 and the job poll)")
-    check([x["vmid"] for x in st["guests"]] == [401, 402, 403], "applied in start order")
+    check([x["vmid"] for x in st["guests"]] == [401, 402, 403, 404], "applied in start order (no order = last)")
     check(res[401].get("started_after_secs") is not None and res[402].get("started_after_secs") is not None,
           "onboot guests started")
     check(res[403].get("started_after_secs") is None, "VM 403 (shared MAC) not started")
@@ -333,9 +353,12 @@ def run():
     check(zget(f"{PARENT}/adopt-vm-scsi0", "horcrux:guest") == "adopt-vm", "clone is tagged with its guest")
     check(sh(f"zfs list -H -o name -r {PARENT} | grep -c -- '-tmp$' || true").strip() == "0", "temporary clones dropped")
     side = f"{DATA}/vms/sidecars/zvol/{PARENT}/adopt-vm-scsi0"
-    sh(f"qemu-img convert -f qcow2 -O raw {side}.efivars.qcow2 /tmp/efivars.raw")
+    cold = f"{DATA}/vms/sidecars/zvol/{PARENT}/adopt-cold-scsi0"
+    sh(f"qemu-img convert -f qcow2 -O raw {cold}.efivars.qcow2 /tmp/efivars.raw")
     n = os.path.getsize("/tmp/efivars.raw")
-    check(sha_dev("/tmp/efivars.raw") == sha_dev("/tmp/efi.raw", n), f"UEFI variables carried into the sidecar dir ({n} bytes)")
+    check(sha_dev("/tmp/efivars.raw") == sha_dev("/tmp/efi.raw", n),
+          f"UEFI variables carried into the sidecar dir byte for byte ({n} bytes, VM 404 never started)")
+    check(os.path.exists(f"{side}.efivars.qcow2"), "VM 401's variable store is in its sidecar dir")
     check(sha_dev(f"{side}.cidata.iso") == sha_dev("/tmp/ci.iso"), "cloud-init seed carried into the sidecar dir")
     check(v["hardware"]["nets"][0]["mac"] == VM_MACS[0] and v["hardware"]["nets"][1]["mac"] == VM_MACS[1], "MACs kept")
     argv = wait_for("QEMU of adopt-vm", lambda: sh("ps -eo args | grep '[q]emu-system.*adopt-vm' || true"), timeout=60)
@@ -353,7 +376,8 @@ def run():
     rootds = f"{PARENT}/adopt-ct-rootfs"
     check(zget(rootds, "mountpoint") == f"{LXC_PATH}/adopt-ct/rootfs" and zget(rootds, "mounted") == "yes",
           "rootfs clone mounted at the container's rootfs")
-    check(zget(rootds, "acltype") == "posix" or zget(rootds, "acltype") == "posixacl", "acltype carried to the clone")
+    check(zget(rootds, "acltype") in ("posix", "posixacl") and zget(rootds, "xattr") == "sa",
+          "acltype/xattr carried to the clone (a clone inherits from its new parent otherwise)")
     check(zget(rootds, "refquota") == str(1 << 30), "size limit = refquota on the clone")
     wait_for("the container running", lambda: exec_ct("adopt-ct", "echo up") == "up", timeout=60)
     check(exec_ct("adopt-ct", "stat -c %u:%g /home/u/file") == "1000:1000", "file owner as the container saw it")
@@ -378,7 +402,7 @@ def run():
     wait_for("adopt-vm stopped", lambda: not sh("ps -eo args | grep '[q]emu-system.*adopt-vm' || true"), timeout=60)
     req("POST", "/containers/adopt-ct/stop", {}, expect=None)
     time.sleep(2)
-    for path in ["/vms/adopt-vm", "/vms/adopt-dup", "/containers/adopt-ct"]:
+    for path in ["/vms/adopt-vm", "/vms/adopt-dup", "/vms/adopt-cold", "/containers/adopt-ct"]:
         req("DELETE", path, None, expect=None)
     left = sh(f"zfs list -H -o name -r {PARENT} | tail -n +2 || true").strip()
     check(left == "", f"every clone destroyed: {left!r}")

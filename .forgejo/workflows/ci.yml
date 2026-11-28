@@ -720,6 +720,19 @@ jobs:
           bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Proxmox VE import"
           LXC_E2E_PY=proxmox_import_e2e.py bash horcrux-api/tests/lxc_e2e.sh test target/debug/horcrux-api
 
+      - name: "Proxmox adopt in place (real ZFS pool: cloned zvol boots, sources never written)"
+        # proxmox_adopt_zfs_e2e.py in the LXC sibling: a file-backed ZFS pool
+        # in the runner's kernel with a read-only Proxmox root (configs only
+        # in config.db), zvols for a UEFI VM and subvols for an unprivileged
+        # container; snapshot, plan, adopt with start_onboot, boot the VM
+        # from its clone and run the container from its cloned subvol, check
+        # the sources' written@snap = 0 / guid / bytes, then delete the
+        # guests (= clones destroyed). Skips with a warning on a runner
+        # without the zfs kernel module.
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Proxmox adopt in place"
+          LXC_E2E_PY=proxmox_adopt_zfs_e2e.py bash horcrux-api/tests/lxc_e2e.sh test target/debug/horcrux-api
+
       - name: Incus containers (real nested Incus, in-browser consoles)
         # incus_e2e.sh runs the built API next to a real Incus daemon in a
         # privileged sibling container: an Incus container is created from
