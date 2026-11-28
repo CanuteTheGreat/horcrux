@@ -7,6 +7,7 @@ pub mod console;
 pub mod container;
 pub mod declarative;
 pub mod ha;
+pub mod import;
 pub mod migrate;
 pub mod monitor;
 pub mod nas;
