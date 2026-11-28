@@ -37,7 +37,9 @@ pub fn reasons(running: &str, installed: &[String], marker: &[String]) -> Vec<St
     let mut out = vec![];
     if let Some(newest) = newest_kernel(installed) {
         if !running.is_empty() && newest != running && version_key(&newest) > version_key(running) {
-            out.push(format!("kernel {running} is running, {newest} is installed"));
+            out.push(format!(
+                "kernel {running} is running, {newest} is installed"
+            ));
         }
     }
     for m in marker {
@@ -65,7 +67,11 @@ fn marker_lines() -> Vec<String> {
     // the marker belongs to the boot it was written in
     let boot = std::fs::read_to_string("/proc/uptime")
         .ok()
-        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()))
+        .and_then(|s| {
+            s.split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<f64>().ok())
+        })
         .map(|up| std::time::SystemTime::now() - std::time::Duration::from_secs_f64(up));
     if let Some(b) = boot {
         if mt < b {
@@ -81,7 +87,9 @@ async fn status() -> Json<Value> {
     let installed: Vec<String> = std::fs::read_dir(rooted("lib/modules"))
         .map(|d| {
             d.filter_map(|e| e.ok())
-                .filter(|e| e.path().join("modules.dep").exists() || e.path().join("kernel").is_dir())
+                .filter(|e| {
+                    e.path().join("modules.dep").exists() || e.path().join("kernel").is_dir()
+                })
                 .map(|e| e.file_name().to_string_lossy().to_string())
                 .collect()
         })
@@ -105,13 +113,23 @@ mod tests {
 
     #[test]
     fn newer_kernel_than_running_is_a_reason() {
-        let r = reasons("6.18.64-gentoo-dist", &s(&["6.18.64-gentoo-dist", "6.18.65-gentoo-dist"]), &[]);
-        assert_eq!(r, s(&["kernel 6.18.64-gentoo-dist is running, 6.18.65-gentoo-dist is installed"]));
+        let r = reasons(
+            "6.18.64-gentoo-dist",
+            &s(&["6.18.64-gentoo-dist", "6.18.65-gentoo-dist"]),
+            &[],
+        );
+        assert_eq!(
+            r,
+            s(&["kernel 6.18.64-gentoo-dist is running, 6.18.65-gentoo-dist is installed"])
+        );
     }
 
     #[test]
     fn numeric_not_lexical_ordering() {
-        assert_eq!(newest_kernel(&s(&["6.9.1", "6.18.2", "6.10.0"])).as_deref(), Some("6.18.2"));
+        assert_eq!(
+            newest_kernel(&s(&["6.9.1", "6.18.2", "6.10.0"])).as_deref(),
+            Some("6.18.2")
+        );
     }
 
     #[test]
@@ -126,7 +144,10 @@ mod tests {
         let r = reasons(
             "6.18.64",
             &s(&["6.18.65"]),
-            &s(&["kernel 6.18.64 is running, 6.18.65 is installed", "sys-fs/zfs-kmod updated"]),
+            &s(&[
+                "kernel 6.18.64 is running, 6.18.65 is installed",
+                "sys-fs/zfs-kmod updated",
+            ]),
         );
         assert_eq!(r.len(), 2);
         assert_eq!(r[1], "sys-fs/zfs-kmod updated");

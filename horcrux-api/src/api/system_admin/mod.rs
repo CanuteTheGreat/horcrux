@@ -33,8 +33,8 @@ pub mod host;
 pub mod kernel_line;
 pub mod logs;
 pub mod packages;
-pub mod reboot_required;
 pub mod portage_tree;
+pub mod reboot_required;
 pub mod services;
 pub mod versions;
 
