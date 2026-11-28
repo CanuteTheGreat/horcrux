@@ -185,11 +185,12 @@ Content-Type: application/json
 **Response**:
 ```json
 {
-  "key_id": "key_abc123",
+  "id": "5b0c9e3a-...",
   "key": "hx_1234567890abcdef...",
   "name": "CI/CD Pipeline",
-  "created_at": "2025-10-09T10:30:45Z",
-  "expires_at": "2026-01-07T10:30:45Z"
+  "user": "svc-hostjobs",
+  "enabled": true,
+  "expires_at": 1767783045
 }
 ```
 
@@ -235,7 +236,12 @@ Authorization: Bearer <token>
 
 ### Using API Keys
 
-API keys can be used instead of JWT tokens:
+API keys can be used instead of JWT tokens, as the `X-API-Key` header or as
+a bearer token (every key starts with `hx_`, so a client that only sends
+`Authorization: Bearer <key>` works, the `horcrux` CLI included). A key acts
+with its owner's rights and stops working the moment the owner is disabled or
+deleted; see [SERVICE-ACCOUNTS.md](SERVICE-ACCOUNTS.md) for service accounts
+(host jobs without a login):
 
 ```http
 GET /api/vms
@@ -467,7 +473,44 @@ Authorization: Bearer <token>
   or with `force_stop` the VM is stopped.
 - `POST /api/vms/:id/reboot` `{"timeout": 60}`: shutdown (stopped after the
   timeout), then start.
-- `POST /api/vms/:id/reset`: hard reset.
+- `POST /api/vms/:id/reset`: hard reset (QMP `system_reset`, like `qm reset`):
+  the virtual reset button, no guest shutdown, 200 with the VM; 409 when the VM
+  is not running. Needs `VM.PowerMgmt` on the VM and is audited (`VmRestarted`,
+  action "hard reset"). CLI: `horcrux vm reset <id>`.
+
+### Run a command in a VM (guest agent)
+
+`POST /api/vms/:id/guest-exec` runs a program inside a QEMU VM through its
+guest agent and waits for it (Proxmox `qm guest exec`):
+
+```json
+{"path": "/bin/sh", "args": ["-c", "cat; echo done >&2"], "env": ["LANG=C"],
+ "stdin": "text", "timeout_secs": 30, "encoding": "utf8"}
+```
+
+`stdin_base64` replaces `stdin` for binary input; `encoding: "base64"` returns
+`stdout`/`stderr` base64. The answer is always 200 once the command ran:
+`{vm_id, pid, exited, exit_code, signal, timed_out, stdout, stderr,
+stdout_truncated, stderr_truncated, encoding, duration_ms}`. A command that is
+still running at `timeout_secs` answers `timed_out: true` (it keeps running in
+the guest under `pid`). Errors: 404 no such VM, 409 VM not running, 422 bad
+input (empty path, `env` not `NAME=value`, timeout or stdin over the node's
+limit), 424 with reason `guest-exec-disabled` (the guest agent's own policy
+refuses `guest-exec`) or `guest-exec-off` (switched off on the node), 424/422
+when the VM has no agent channel (enable "QEMU guest agent" in its hardware).
+
+Access: `VM.Console` on the VM (running a program in the guest is
+console-equivalent). Every call is audited as `GuestExec` with user, VM,
+program, argument count, stdin size and exit status; argument values are
+recorded only with `log_arguments = true`. Limits live under `[guest_exec]` in
+config.toml (`enabled`, `default_timeout_secs` 60, `max_timeout_secs` 3600,
+`max_input_bytes` 1 MiB, `max_output_bytes` 4 MiB per stream,
+`poll_interval_ms` 250, `log_arguments` false; env `HORCRUX_GUEST_EXEC_ENABLED`,
+`HORCRUX_GUEST_EXEC_MAX_TIMEOUT_SECS`).
+
+CLI: `horcrux vm exec <id> [-t secs] [-e NAME=value] [--stdin FILE|-] -- PROG ARGS...`
+prints the command's stdout and stderr and exits with its status (124 on
+timeout, 128+N after signal N).
 
 ### ISO Images
 
@@ -926,7 +969,9 @@ N periods not already covered. Protected backups are always kept.
 "always"/"failure"/"never"}`, plus the server-set `last_run`, `last_status`
 ("ok"/"failed"), `last_error` and `next_run`. `schedule` is a 5-field cron
 expression in local time (`*/15 9-17 * * mon-fri`) or `hourly`, `daily`,
-`weekly`, `monthly`, `yearly`. The server's scheduler runs due jobs. After
+`weekly`, `monthly`, `yearly`. The server's scheduler runs due jobs. Jobs can
+also be declared in a spec (`backup_jobs:` in `horcrux apply`, same fields,
+matched by `id`; see docs/design/declarative-config.md). After
 each run the job's retention is applied per guest and storage, and the result
 goes to the configured notification channels as `notify` says.
 

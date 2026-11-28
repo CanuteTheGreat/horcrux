@@ -75,8 +75,24 @@ Notes:
   subnets by derived id.
 - `guest_power` is planned as kind `guest_power` (`(node defaults)` and one entry
   per VM override); with `prune`, overrides the spec does not list are removed.
+- `backup_jobs` is a list of jobs with exactly the fields of
+  `POST /api/backup-jobs` (a field the API gains is accepted here at once),
+  matched by `id` (required). The server-owned run history (`last_run`,
+  `last_status`, `last_error`, `next_run`) is never part of a spec or an
+  export and never counts as drift. Create/update/delete go through the same
+  manager and validation as the API (an invalid schedule or unknown storage
+  fails that change with the manager's message). Needs USE=backup (a spec with
+  `backup_jobs` on a node without it is refused at plan time).
+  ```yaml
+  backup_jobs:
+    - id: nightly
+      schedule: "30 2 * * *"
+      targets: ["100", "101"]
+      storage: bulk-dump
+      retention: {keep_last: 3}
+  ```
 - Keys for later phases (`containers`, `users`, `acl`, `firewall`,
-  `backup_jobs`, `ha_groups`, `nodes`) are *rejected* with "not supported
+  `ha_groups`, `nodes`) are *rejected* with "not supported
   yet" rather than ignored, so a spec never half-applies without saying so.
 
 ## Semantics
@@ -116,7 +132,10 @@ zone with VNets) fail with the manager's message.
   is `{ok, plan, results[{.., status: applied|failed|skipped, message}]}`;
   `ok` is false if anything failed or was blocked.
 - Re-running is safe: applied changes no longer show up in the next plan.
-- No rollback in phase 1; plan first (or review the GitOps PR).
+- No generation store yet (`horcrux apply --rollback` is phase 5); a manual
+  rollback is: keep the `export` taken before the change, and apply it later
+  with `prune` (restores changed objects and removes the new ones in every
+  managed section, backup jobs included). Plan first.
 
 ### Export
 `GET /api/declarative/export` returns the live state as a spec with every
@@ -156,8 +175,8 @@ that fans out to nodes is phase 4.
    (UI button / CLI). Webhook trigger for push events; sync status + last
    commit in the API. Signed-commit verification option.
 4. **More kinds + cluster fan-out.** containers, users/groups/ACLs (secrets
-   as references, never plaintext in git), firewall, backup jobs, HA groups,
-   nodes; a cluster-level spec with per-node sections applied through the
+   as references, never plaintext in git), firewall, HA groups,
+   nodes (backup jobs landed in phase 1b); a cluster-level spec with per-node sections applied through the
    peer channel.
 5. **Safety rails.** Pre-apply snapshot of the config store with
    `horcrux apply --rollback`, change windows, per-kind prune allow-lists.

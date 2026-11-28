@@ -60,6 +60,16 @@ horcrux auth logout
 
 Authentication tokens are stored in `~/.config/horcrux/config.toml` and used automatically for subsequent commands.
 
+Scripts and host jobs use an API key of a service account instead of a login (no password, no second factor):
+
+```bash
+export HORCRUX_API_KEY_FILE=/etc/horcrux/svc.key   # first line: hx_...
+horcrux vm list
+# or: horcrux --api-key hx_... vm list   (HORCRUX_API_KEY)
+```
+
+See [SERVICE-ACCOUNTS.md](SERVICE-ACCOUNTS.md). A key given this way wins over a stored login token.
+
 ## Command Reference
 
 ### Virtual Machines (`vm`)
@@ -87,6 +97,14 @@ horcrux vm restart <vm-id>
 
 # Delete a VM (with confirmation)
 horcrux vm delete <vm-id>
+
+# Hard reset a running VM (the virtual reset button)
+horcrux vm reset <vm-id>
+
+# Run a command inside a VM through its QEMU guest agent; the output is the
+# command's, and so is the exit status (124 = timed out, 128+N = signal N)
+horcrux vm exec <vm-id> -t 30 -e LANG=C -- /bin/sh -c 'uptime'
+echo data | horcrux vm exec <vm-id> --stdin - -- /usr/bin/wc -c
 
 # Clone from template
 horcrux vm clone <template-id> --name new-vm

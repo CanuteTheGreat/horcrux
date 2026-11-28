@@ -73,9 +73,59 @@ pub struct Spec {
     /// shared VGs; docs/SAN.md). Needs USE=san. Absent = unmanaged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub san: Option<horcrux_storage::san::SanSpec>,
+    /// Scheduled backup jobs (the same schema as `/api/backup-jobs`; the
+    /// server-owned run history is ignored). Matched by `id`. Needs
+    /// USE=backup. Absent = unmanaged.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "ser_backup_jobs"
+    )]
+    pub backup_jobs: Option<Vec<BackupJobSpec>>,
     /// Sections reserved for later phases: rejected with a clear message.
     #[serde(flatten, skip_serializing)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+/// A backup job in a spec: exactly the API's job object, so a field added
+/// to the API (selection, retention, ...) is accepted here at once. Without
+/// USE=backup the section is carried as raw values and refused at plan time.
+#[cfg(feature = "backup")]
+pub type BackupJobSpec = crate::backup::BackupJob;
+#[cfg(not(feature = "backup"))]
+pub type BackupJobSpec = serde_json::Value;
+
+/// Fields the server owns (run history) are not part of a spec.
+const BACKUP_JOB_SERVER_FIELDS: [&str; 4] = ["last_run", "last_status", "last_error", "next_run"];
+
+/// A job as comparable JSON: no server-owned fields, no nulls.
+pub fn backup_job_value(j: &BackupJobSpec) -> serde_json::Value {
+    fn strip(v: &mut serde_json::Value) {
+        if let serde_json::Value::Object(m) = v {
+            m.retain(|_, x| !x.is_null());
+            m.values_mut().for_each(strip);
+        }
+    }
+    let mut v = serde_json::to_value(j).unwrap_or_default();
+    if let Some(m) = v.as_object_mut() {
+        for k in BACKUP_JOB_SERVER_FIELDS {
+            m.remove(k);
+        }
+    }
+    strip(&mut v);
+    v
+}
+
+pub fn backup_job_id(j: &BackupJobSpec) -> String {
+    backup_job_value(j)["id"].as_str().unwrap_or("").to_string()
+}
+
+fn ser_backup_jobs<S: serde::Serializer>(
+    v: &Option<Vec<BackupJobSpec>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    let jobs: Vec<serde_json::Value> = v.iter().flatten().map(backup_job_value).collect();
+    serde::Serialize::serialize(&jobs, s)
 }
 
 /// Host shutdown / boot behaviour of guests (see docs/SAVE_STATE.md). Every
@@ -215,7 +265,7 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
     }
     if let Some(k) = spec.extra.keys().next() {
         return Err(format!(
-            "section {k:?} is not supported yet (phase 1 manages storage_pools, networks, vms, guest_power, console, remote_play and security)"
+            "section {k:?} is not supported yet (this version manages storage_pools, networks, vms, guest_power, console, remote_play, security, san and backup_jobs)"
         ));
     }
     if let Some(gp) = &spec.guest_power {
@@ -225,6 +275,20 @@ pub fn validate(spec: &Spec) -> Result<(), String> {
         for (name, o) in &gp.vms {
             o.validate()
                 .map_err(|e| format!("guest_power.vms.{name}: {e}"))?;
+        }
+    }
+    if let Some(jobs) = &spec.backup_jobs {
+        let ids: Vec<String> = jobs.iter().map(backup_job_id).collect();
+        dup("backup job", ids.iter().map(|s| s.as_str()))?;
+        for j in jobs {
+            let id = backup_job_id(j);
+            if id.trim().is_empty() {
+                return Err("backup_jobs: every job needs an id (jobs are matched by id)".into());
+            }
+            let v = backup_job_value(j);
+            if v["schedule"].as_str().unwrap_or("").trim().is_empty() {
+                return Err(format!("backup job {id}: schedule is required"));
+            }
         }
     }
     if let Some(pools) = &spec.storage_pools {
@@ -350,6 +414,8 @@ pub struct Live {
     pub power_vms: BTreeMap<String, crate::api::guest_state::GuestOverride>,
     /// The cluster-wide SAN config (empty without USE=san).
     pub san: horcrux_storage::san::SanSpec,
+    /// Scheduled backup jobs (empty without USE=backup).
+    pub backup_jobs: Vec<BackupJobSpec>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -402,6 +468,74 @@ fn json_diff<T: Serialize>(a: &T, b: &T) -> Vec<String> {
         }
     }
     d
+}
+
+/// `key: live -> wanted` for every top-level key of two job objects.
+fn job_diff(live: &serde_json::Value, want: &serde_json::Value) -> Vec<String> {
+    let empty = serde_json::Map::new();
+    let (l, w) = (
+        live.as_object().unwrap_or(&empty),
+        want.as_object().unwrap_or(&empty),
+    );
+    let keys: BTreeSet<&String> = l.keys().chain(w.keys()).collect();
+    keys.into_iter()
+        .filter(|k| l.get(*k) != w.get(*k))
+        .map(|k| {
+            let show = |v: Option<&serde_json::Value>| {
+                v.map(|v| v.to_string()).unwrap_or_else(|| "(unset)".into())
+            };
+            format!("{k}: {} -> {}", show(l.get(k)), show(w.get(k)))
+        })
+        .collect()
+}
+
+/// Backup jobs by id: create, update (field by field) and, with prune,
+/// delete the ones the spec lacks.
+fn backup_jobs_plan(
+    p: &mut Plan,
+    creates: &mut Vec<Change>,
+    deletes: &mut Vec<Change>,
+    want: &[BackupJobSpec],
+    live: &[BackupJobSpec],
+    prune: bool,
+) {
+    if !cfg!(feature = "backup") {
+        p.errors.push(
+            "backup_jobs: backups are not compiled into this build (rebuild with USE=backup)"
+                .into(),
+        );
+        return;
+    }
+    let live: BTreeMap<String, serde_json::Value> = live
+        .iter()
+        .map(|j| (backup_job_id(j), backup_job_value(j)))
+        .collect();
+    let mut seen = BTreeSet::new();
+    for j in want {
+        let (id, w) = (backup_job_id(j), backup_job_value(j));
+        seen.insert(id.clone());
+        match live.get(&id) {
+            None => creates.push(ch(
+                "backup_job",
+                &id,
+                Action::Create,
+                vec![format!(
+                    "{} to {}",
+                    w["schedule"].as_str().unwrap_or(""),
+                    w["storage"].as_str().unwrap_or("(default storage)")
+                )],
+            )),
+            Some(l) if *l != w => {
+                creates.push(ch("backup_job", &id, Action::Update, job_diff(l, &w)))
+            }
+            _ => {}
+        }
+    }
+    if prune {
+        for id in live.keys().filter(|id| !seen.contains(*id)) {
+            deletes.push(ch("backup_job", id, Action::Delete, vec![]));
+        }
+    }
 }
 
 fn san_plan(
@@ -850,6 +984,18 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
         san_plan(&mut p, &mut creates, &mut deletes, w, &live.san, prune);
     }
 
+    // Backup jobs reference storage and guests, so they come after both.
+    if let Some(w) = &spec.backup_jobs {
+        backup_jobs_plan(
+            &mut p,
+            &mut creates,
+            &mut deletes,
+            w,
+            &live.backup_jobs,
+            prune,
+        );
+    }
+
     // Creates/updates run dependency-first (pools, zones, vnets, subnets,
     // VMs, guest power); deletes run in the opposite order (VMs first, pools last).
     let rank = |k: &str| {
@@ -866,6 +1012,7 @@ pub fn plan(spec: &Spec, live: &Live, prune: bool) -> Plan {
             "subnet",
             "vm",
             "guest_power",
+            "backup_job",
         ]
         .iter()
         .position(|x| *x == k)
@@ -1139,6 +1286,11 @@ pub fn export(live: &Live) -> Spec {
             vms: live.power_vms.clone(),
         }),
         san: cfg!(feature = "san").then(|| live.san.normalized()),
+        backup_jobs: cfg!(feature = "backup").then(|| {
+            let mut j = live.backup_jobs.clone();
+            j.sort_by_key(backup_job_id);
+            j
+        }),
         extra: BTreeMap::new(),
     }
 }

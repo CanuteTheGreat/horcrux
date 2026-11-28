@@ -1,7 +1,9 @@
 //! Authentication middleware
 //!
 //! Accepts a bearer JWT (issued at login), the `session_id` cookie, or an
-//! `X-API-Key`. Every credential is tied to a live database row: a JWT names
+//! API key (`X-API-Key: hx_...` or `Authorization: Bearer hx_...`, so a
+//! service account's key works with any client that sends a bearer token,
+//! the `horcrux` CLI included). Every credential is tied to a live database row: a JWT names
 //! its login session (`sid`), so logging out, deleting the session, or
 //! disabling/deleting the user revokes it immediately instead of leaving a
 //! 24-hour bearer token valid.
@@ -55,6 +57,10 @@ pub struct AuthUser {
     pub session_id: Option<String>,
     pub method: AuthMethod,
 }
+
+/// Every API key starts with this (JWTs never do, which lets a key travel as
+/// a bearer token).
+pub const API_KEY_PREFIX: &str = "hx_";
 
 /// Scope of the restricted "set up your second factor first" login.
 pub const SCOPE_TFA_SETUP: &str = "tfa_setup";
@@ -217,6 +223,14 @@ pub async fn auth_middleware<S: super::AuthState>(
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
     {
+        // An API key sent as a bearer token (JWTs never start with `hx_`).
+        if token.starts_with(API_KEY_PREFIX) {
+            let auth_user = validate_api_key(state.database(), token)
+                .await
+                .map_err(|e| unauthorized("invalid_api_key", e))?;
+            request.extensions_mut().insert(auth_user);
+            return Ok(next.run(request).await);
+        }
         let claims = validate_jwt_token(token)
             .map_err(|e| unauthorized("invalid_token", format!("Invalid JWT token: {}", e)))?;
         if claims.role == CLUSTER_NODE_ROLE
@@ -511,7 +525,7 @@ async fn validate_api_key(
     use argon2::{Argon2, PasswordHash, PasswordVerifier};
 
     // API keys should be in the format: "hx_<random_string>"
-    if !api_key.starts_with("hx_") || api_key.len() < 32 {
+    if !api_key.starts_with(API_KEY_PREFIX) || api_key.len() < 32 {
         return Err("Invalid API key format".to_string());
     }
 

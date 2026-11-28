@@ -37,6 +37,17 @@ struct Cli {
     )]
     insecure: bool,
 
+    /// API key (`hx_...`) of a service account: sent with every request, so
+    /// scripts and host jobs need no login. Create one with
+    /// `POST /api/users/<name>/api-keys`; see docs/SERVICE-ACCOUNTS.md.
+    #[arg(long, env = "HORCRUX_API_KEY", hide_env_values = true)]
+    api_key: Option<String>,
+
+    /// Read the API key from this file (first line), so it stays out of the
+    /// process list and the environment.
+    #[arg(long, env = "HORCRUX_API_KEY_FILE")]
+    api_key_file: Option<std::path::PathBuf>,
+
     /// Output format (table, json, yaml)
     #[arg(short, long, default_value = "table")]
     output: String,
@@ -267,6 +278,30 @@ enum VmCommands {
     Stop { id: String },
     /// Restart a VM
     Restart { id: String },
+    /// Hard reset a running VM (the virtual reset button: no guest
+    /// shutdown, memory and devices are reinitialised)
+    Reset { id: String },
+    /// Run a command inside a VM through the QEMU guest agent. Prints the
+    /// command's stdout and stderr and exits with its exit status (124 when
+    /// it did not finish in time, 128+N when killed by signal N).
+    Exec {
+        /// VM id
+        id: String,
+        /// Seconds to wait for the command (the node's default and maximum
+        /// apply)
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Add NAME=value to the command's environment (repeatable)
+        #[arg(short, long = "env")]
+        env: Vec<String>,
+        /// Feed this file to the command's standard input (`-` = this
+        /// process's standard input)
+        #[arg(long)]
+        stdin: Option<String>,
+        /// Program and arguments, after `--`
+        #[arg(last = true, required = true, num_args = 1..)]
+        command: Vec<String>,
+    },
     /// Delete a VM
     Delete { id: String },
     /// Clone a VM from template
@@ -1222,6 +1257,10 @@ async fn main() -> Result<()> {
     if let Some(token) = &config.token {
         api_client.set_token(token.clone()).await;
     }
+    // A service account's API key beats a stored login token.
+    if let Some(key) = resolve_api_key(cli.api_key.as_deref(), cli.api_key_file.as_deref())? {
+        api_client.set_token(key).await;
+    }
 
     // Execute command
     match cli.command {
@@ -1318,9 +1357,87 @@ fn generate_completions(shell: clap_complete::Shell) {
     generate(shell, &mut cmd, name, &mut io::stdout());
 }
 
+/// The API key from `--api-key` or the first line of `--api-key-file`.
+fn resolve_api_key(
+    key: Option<&str>,
+    file: Option<&std::path::Path>,
+) -> anyhow::Result<Option<String>> {
+    if let Some(k) = key.map(str::trim).filter(|k| !k.is_empty()) {
+        return Ok(Some(k.to_string()));
+    }
+    let Some(path) = file else {
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("reading API key file {}: {}", path.display(), e))?;
+    let k = text.lines().next().unwrap_or("").trim();
+    if k.is_empty() {
+        anyhow::bail!("API key file {} is empty", path.display());
+    }
+    Ok(Some(k.to_string()))
+}
+
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+
+    #[test]
+    fn api_key_comes_from_the_flag_or_the_first_line_of_a_file() {
+        assert_eq!(resolve_api_key(None, None).unwrap(), None);
+        assert_eq!(
+            resolve_api_key(Some(" hx_abc "), None).unwrap().as_deref(),
+            Some("hx_abc")
+        );
+        let dir = std::env::temp_dir().join(format!("hx-cli-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("key");
+        std::fs::write(&f, "hx_fromfile\nignored\n").unwrap();
+        // the flag wins over the file
+        assert_eq!(
+            resolve_api_key(Some("hx_flag"), Some(&f))
+                .unwrap()
+                .as_deref(),
+            Some("hx_flag")
+        );
+        assert_eq!(
+            resolve_api_key(None, Some(&f)).unwrap().as_deref(),
+            Some("hx_fromfile")
+        );
+        std::fs::write(&f, "\n").unwrap();
+        assert!(resolve_api_key(None, Some(&f)).is_err());
+        assert!(resolve_api_key(None, Some(&dir.join("missing"))).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vm_exec_and_reset_parse() {
+        let c = Cli::try_parse_from([
+            "horcrux", "vm", "exec", "101", "-t", "9", "-e", "A=1", "--stdin", "-", "--",
+            "/bin/sh", "-c", "echo hi",
+        ])
+        .unwrap();
+        match c.command {
+            Commands::Vm {
+                command:
+                    VmCommands::Exec {
+                        id,
+                        timeout,
+                        env,
+                        stdin,
+                        command,
+                    },
+            } => {
+                assert_eq!((id.as_str(), timeout), ("101", Some(9)));
+                assert_eq!(env, vec!["A=1".to_string()]);
+                assert_eq!(stdin.as_deref(), Some("-"));
+                assert_eq!(command, vec!["/bin/sh", "-c", "echo hi"]);
+            }
+            _ => panic!("not vm exec"),
+        }
+        // a command is required
+        assert!(Cli::try_parse_from(["horcrux", "vm", "exec", "101"]).is_err());
+        assert!(Cli::try_parse_from(["horcrux", "vm", "reset", "101"]).is_ok());
+    }
 
     /// `HORCRUX_INSECURE=1` used to be refused ("invalid value '1' for
     /// '--insecure' [possible values: true, false]"). Env access is

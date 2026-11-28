@@ -567,6 +567,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::sdn_zones::routes(&state))
         .merge(api::sdn_ovs::routes(&state))
         .merge(api::vm_hw::routes())
+        .merge(api::vm_guest_exec::routes())
         .merge(api::gaming::routes())
         .merge(api::remote_play::routes(&state))
         .merge(api::vm_devices::routes())

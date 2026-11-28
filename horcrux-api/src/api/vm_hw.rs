@@ -1049,8 +1049,29 @@ async fn reboot(
 async fn reset(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    user: Option<axum::Extension<crate::middleware::auth::AuthUser>>,
 ) -> Result<Json<VmConfig>, ApiError> {
-    Ok(Json(state.vm_manager.reset_vm(&id).await?))
+    let r = state.vm_manager.reset_vm(&id).await;
+    state
+        .audit_logger
+        .log(crate::audit::AuditEvent {
+            timestamp: chrono::Utc::now(),
+            event_type: crate::audit::AuditEventType::VmRestarted,
+            severity: crate::audit::AuditSeverity::Info,
+            user: user.map(|axum::Extension(u)| u.username),
+            source_ip: None,
+            resource: Some(id.clone()),
+            action: "hard reset".into(),
+            result: if r.is_ok() {
+                crate::audit::AuditResult::Success
+            } else {
+                crate::audit::AuditResult::Failure
+            },
+            details: r.as_ref().err().map(|e| e.to_string()),
+            session_id: None,
+        })
+        .await;
+    Ok(Json(r?))
 }
 
 /// Freeze the VM's vCPUs (status "paused"); `POST .../resume` continues it.
