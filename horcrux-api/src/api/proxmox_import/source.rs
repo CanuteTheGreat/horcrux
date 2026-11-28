@@ -182,12 +182,34 @@ pub async fn ssh_run(src: &Source, cmd: &str) -> Result<Vec<u8>, ApiError> {
         .await
         .map_err(|e| ApiError::Internal(format!("ssh: {e}")))?;
     if !out.status.success() {
-        return Err(ApiError::BadRequest(format!(
-            "on the Proxmox node: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
+        return Err(ssh_error(src, &String::from_utf8_lossy(&out.stderr)));
     }
     Ok(out.stdout)
+}
+
+/// A readable error for a failed ssh call (the host key case says what to do).
+pub fn ssh_error(src: &Source, stderr: &str) -> ApiError {
+    let e = stderr.trim();
+    if e.contains("Host key verification failed")
+        || e.contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
+    {
+        let (host, port) = match src {
+            Source::Ssh { host, port, .. } => (
+                host.rsplit('@').next().unwrap_or(host).to_string(),
+                port.unwrap_or(22),
+            ),
+            _ => (String::new(), 22),
+        };
+        return ApiError::BadRequest(format!(
+            "the Proxmox node's SSH host key is not known to this host (or changed), so the connection was refused: check the node's fingerprint (on the node: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub), then add it on this host as root: ssh-keyscan -p {port} {host} >> /root/.ssh/known_hosts"
+        ));
+    }
+    if e.contains("Permission denied") {
+        return ApiError::BadRequest(format!(
+            "the Proxmox node refused the login ({e}): give a key file this host's root can read whose public key is in the node's /root/.ssh/authorized_keys"
+        ));
+    }
+    ApiError::BadRequest(format!("on the Proxmox node: {e}"))
 }
 
 /// Single-quote for a remote shell.
@@ -489,18 +511,21 @@ fn local(path: PathBuf) -> Result<Resolved, String> {
             path: p,
             kind: VolKind::Dir,
             format: "dir".into(),
+            size: None,
         })
     } else if m.file_type().is_block_device() {
         Ok(Resolved {
             path: p,
             kind: VolKind::Block,
             format: "raw".into(),
+            size: None,
         })
     } else {
         Ok(Resolved {
             format: format_of(&p),
             path: p,
             kind: VolKind::File,
+            size: None,
         })
     }
 }
@@ -593,7 +618,7 @@ pub async fn resolve_ssh(src: &Source, specs: &[String]) -> Volumes {
     let mut script = String::new();
     for s in specs {
         script.push_str(&format!(
-            "p=$(pvesm path {q} 2>/dev/null); if [ -b \"$p\" ]; then t=block; elif [ -d \"$p\" ]; then t=dir; elif [ -f \"$p\" ]; then t=file; else t=missing; fi; echo \"HXVOL {s}|$t|$p\"\n",
+            "p=$(pvesm path {q} 2>/dev/null); z=''; if [ -b \"$p\" ]; then t=block; z=$(blockdev --getsize64 \"$p\" 2>/dev/null); elif [ -d \"$p\" ]; then t=dir; elif [ -f \"$p\" ]; then t=file; z=$(stat -c %s \"$p\" 2>/dev/null); else t=missing; fi; echo \"HXVOL {s}|$t|$z|$p\"\n",
             q = sq(s)
         ));
     }
@@ -603,25 +628,30 @@ pub async fn resolve_ssh(src: &Source, specs: &[String]) -> Volumes {
                 let Some(r) = l.strip_prefix("HXVOL ") else {
                     continue;
                 };
-                let f: Vec<&str> = r.splitn(3, '|').collect();
-                if f.len() < 3 {
+                let f: Vec<&str> = r.splitn(4, '|').collect();
+                if f.len() < 4 {
                     continue;
                 }
+                let size = f[2].trim().parse::<u64>().ok();
+                let f = [f[0], f[1], f[3]];
                 let res = match f[1] {
                     "block" => Ok(Resolved {
                         path: f[2].into(),
                         kind: VolKind::Block,
                         format: "raw".into(),
+                        size,
                     }),
                     "dir" => Ok(Resolved {
                         path: f[2].into(),
                         kind: VolKind::Dir,
                         format: "dir".into(),
+                        size: None,
                     }),
                     "file" => Ok(Resolved {
                         path: f[2].into(),
                         kind: VolKind::File,
                         format: format_of(f[2]),
+                        size,
                     }),
                     _ => Err(format!("pvesm path {} found nothing on the node", f[0])),
                 };

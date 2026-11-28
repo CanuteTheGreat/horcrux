@@ -222,6 +222,7 @@ pub async fn plan_guests(
                         path: path.clone(),
                         kind: VolKind::File,
                         format: "vzdump-tar".into(),
+                        size: None,
                     }),
                     None => Err("a host path".into()),
                 },
@@ -942,7 +943,7 @@ async fn import_vm(
     for v in &disk_vols {
         let r = resolved(v)?;
         let bytes = if ssh {
-            v.size_bytes.unwrap_or(0)
+            r.size.or(v.size_bytes).unwrap_or(0)
         } else if r.kind == VolKind::File && r.format != "raw" {
             let info: serde_json::Value = serde_json::from_str(
                 &crate::api::vm_import::qemu_img(&["info", "--output=json", &r.path]).await?,
@@ -1270,10 +1271,11 @@ async fn import_ct(
             let tar = lxc_dir.join(format!(".import-{}.tar", cfg.id));
             undo.files.push(tar.clone());
             let inner = match idmap {
-                Some((b, n)) => format!("lxc-usernsexec -m b:0:{b}:{n} -- tar --numeric-owner --xattrs -cpf - --exclude=./dev/* -C {} .", source::sq(&rootfs.path)),
-                None => format!("tar --numeric-owner --xattrs -cpf - --exclude=./dev/* -C {} .", source::sq(&rootfs.path)),
+                Some((b, n)) => format!("lxc-usernsexec -m b:0:{b}:{n} -- tar --numeric-owner --xattrs -cpf - '--exclude=./dev/*' -C {} .", source::sq(&rootfs.path)),
+                None => format!("tar --numeric-owner --xattrs -cpf - '--exclude=./dev/*' -C {} .", source::sq(&rootfs.path)),
             };
             ssh_to_file(src, &inner, &tar).await?;
+            check_tar(&tar)?;
             RootfsSource::Tar(tar)
         }
         (VolKind::Block | VolKind::File, false, _) => {
@@ -1519,24 +1521,54 @@ fn tree_count(p: &Path) -> (u64, u64) {
     acc
 }
 
+/// `path` starts with a tar header (`ustar` at 257): a remote shell that
+/// prints anything to stdout would otherwise hand tar a broken archive.
+fn check_tar(path: &Path) -> Result<(), ApiError> {
+    use std::io::Read;
+    let mut head = vec![0u8; 512];
+    let n = std::fs::File::open(path)?.read(&mut head)?;
+    if n < 263 || &head[257..262] != b"ustar" {
+        return Err(ApiError::Internal(format!(
+            "the Proxmox node did not send a tar archive (it starts with {:?}): check that root's shell start files print nothing",
+            String::from_utf8_lossy(&head[..n.min(80)])
+        )));
+    }
+    Ok(())
+}
+
 /// Run `cmd` on the SSH source and save its stdout in `to`.
 async fn ssh_to_file(src: &Source, cmd: &str, to: &Path) -> Result<(), ApiError> {
+    use tokio::io::AsyncReadExt;
     let argv = src
         .ssh_argv()
         .ok_or_else(|| ApiError::Internal("not ssh".into()))?;
-    let f = std::fs::File::create(to)?;
-    let o = Command::new(&argv[0])
+    let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .arg(cmd)
-        .stdout(std::process::Stdio::from(f))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .output()
-        .await
+        .spawn()
         .map_err(|e| ApiError::Internal(format!("ssh: {e}")))?;
-    if !o.status.success() {
+    let mut out = child.stdout.take().expect("piped");
+    let mut err = child.stderr.take().expect("piped");
+    let errt = tokio::spawn(async move {
+        let mut v = Vec::new();
+        let _ = err.read_to_end(&mut v).await;
+        v
+    });
+    let mut f = tokio::fs::File::create(to).await?;
+    let n = tokio::io::copy(&mut out, &mut f).await?;
+    f.sync_all().await?;
+    let st = child.wait().await?;
+    let stderr = errt.await.unwrap_or_default();
+    if !st.success() {
+        return Err(source::ssh_error(src, &String::from_utf8_lossy(&stderr)));
+    }
+    if n == 0 {
         return Err(ApiError::Internal(format!(
-            "on the Proxmox node: {}",
-            String::from_utf8_lossy(&o.stderr).trim()
+            "the Proxmox node sent nothing: {}",
+            String::from_utf8_lossy(&stderr).trim()
         )));
     }
     Ok(())

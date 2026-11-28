@@ -191,10 +191,12 @@ pub fn VmImportProxmoxPage() -> impl IntoView {
                 None => view! {
                     <div class="empty-state" id="pve-empty">
                         <p>"No source read yet: enter where the Proxmox guests are and press Read guests. Nothing is changed until you import."</p>
+                        <a href="#pve-path" class="btn btn-primary" id="pve-empty-action">"Enter the source"</a>
                     </div>
                 }.into_view(),
                 Some(p) if p.guests.is_empty() => view! {
-                    <div class="empty-state" id="pve-empty"><p>"The source has no guests."</p></div>
+                    <div class="empty-state" id="pve-empty"><p>"The source has no guests."</p>
+                        <a href="#pve-path" class="btn" id="pve-empty-action">"Pick another source"</a></div>
                 }.into_view(),
                 Some(p) => {
                     let guests = p.guests.clone();
