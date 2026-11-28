@@ -180,6 +180,13 @@ class BinaryFiles(unittest.TestCase):
 
 
 class InstallerDropsPayload(unittest.TestCase):
+    def test_env_d_file_runs_env_update(self):
+        mp = {"schema": 1, "machine": {"hostname": "box1"}, "files": [{"path": "/etc/env.d/99editor", "content": "EDITOR=vim\n"}]}
+        with tempfile.TemporaryDirectory() as b:
+            sy = Recorder(b, log=lambda *_: None, dry=True)
+            with mock.patch.object(E.shutil, "which", side_effect=lambda x: "/usr/bin/" + x):
+                E.apply(mp, [], sy, install=True, sync=False)
+        self.assertIn(["env-update"], [c for c, _ in sy.cmds])
     def test_drop(self):
         with tempfile.TemporaryDirectory() as st:
             tree(st, {"bundle/offline/binpkgs/Packages": "", "bundle/profile.toml": "x"})

@@ -886,6 +886,9 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=(), offline=None
         sy.write(f["path"], data, mode)
         if f.get("owner") and not sy.dry:
             sy.run(["chown", f["owner"], f["path"]])
+    if any(str(f.get("path", "")).startswith("/etc/env.d/") for f in mp.get("files", [])) and shutil.which("env-update"):
+        # /etc/env.d is only read through /etc/profile.env: without env-update an EDITOR/PATH file never reaches a login shell
+        sy.run(["env-update"], check=False)
     sv = mp.get("services", {})
     for lay in layers:
         for s in lay.get("services", {}).get("enable", []):
