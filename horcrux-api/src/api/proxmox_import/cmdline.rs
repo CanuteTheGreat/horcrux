@@ -224,6 +224,11 @@ pub fn facts(argv: &[String]) -> BTreeMap<String, String> {
                         .unwrap_or_default()
                         .to_ascii_lowercase();
                     f.insert(format!("net{nics}"), format!("{dev} {mac}"));
+                    // the card's slot on the root bus (pci.0 on i440FX,
+                    // pcie.0 on q35: bus 0 either way): the guest's PCI path
+                    if let Some(slot) = root_bus_slot(&m) {
+                        f.insert(format!("net{nics}-pci-slot"), format!("0x{slot:02x}"));
+                    }
                     nics += 1;
                 }
                 match dev.as_str() {
@@ -344,6 +349,18 @@ pub struct DiffRow {
     /// Why a difference is expected (empty = an unexplained difference).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+}
+
+/// The root-bus slot a `-device` pins itself to (`bus=pci.0,addr=0x12`), if
+/// it names one.
+fn root_bus_slot(m: &BTreeMap<String, String>) -> Option<u8> {
+    if !matches!(m.get("bus").map(String::as_str), Some("pci.0" | "pcie.0")) {
+        return None;
+    }
+    let a = m.get("addr")?;
+    let a = a.strip_prefix("0x").unwrap_or(a);
+    // `addr=0x12` is slot 0x12; `addr=0x12.0` the same, function 0
+    u8::from_str_radix(a.strip_suffix(".0").unwrap_or(a), 16).ok()
 }
 
 /// Side-by-side facts; `expected` explains known, deliberate differences

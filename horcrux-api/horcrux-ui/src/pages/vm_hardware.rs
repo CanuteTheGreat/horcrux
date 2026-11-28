@@ -129,6 +129,7 @@ pub fn HardwareFields(
                 mac: None,
                 vlan: None,
                 rate_mbps: None,
+                pci_slot: None,
             })
         });
     };
@@ -174,6 +175,7 @@ pub fn HardwareFields(
                         let model = model_value(nic.model);
                         let vlan = nic.vlan.map(|v| v.to_string()).unwrap_or_default();
                         let rate = nic.rate_mbps.map(|v| v.to_string()).unwrap_or_default();
+                        let pci_slot = nic.pci_slot.map(|v| format!("0x{v:02x}")).unwrap_or_default();
                         let mac = nic.mac.clone().unwrap_or_else(|| "generated on save".to_string());
                         view! {
                             <div class="vm-nic-row form-row" data-nic=i>
@@ -226,6 +228,19 @@ pub fn HardwareFields(
                                     on:change=move |ev| {
                                         let v = event_target_value(&ev).trim().parse::<u32>().ok();
                                         hardware.update(|h| if let Some(n) = h.nets.get_mut(i) { n.rate_mbps = v });
+                                    }/>
+                                <input class="vm-nic-pci-slot" type="text" size="6"
+                                    placeholder="PCI slot (auto)"
+                                    title="Slot on the root PCI bus, e.g. 0x12 (3-28); empty = QEMU picks. The guest's interface name and a DHCP client-id derived from the PCI path follow this slot: keep it when moving a VM from another hypervisor"
+                                    disabled={move || running.get()}
+                                    prop:value=pci_slot
+                                    on:change=move |ev| {
+                                        let raw = event_target_value(&ev);
+                                        let v = if raw.trim().is_empty() { Some(None) } else { horcrux_common::parse_pci_slot(&raw).ok().map(Some) };
+                                        // an unparsable slot leaves the card as it was
+                                        if let Some(v) = v {
+                                            hardware.update(|h| if let Some(n) = h.nets.get_mut(i) { n.pci_slot = v });
+                                        }
                                     }/>
                                 <code class="vm-nic-mac">{mac}</code>
                                 <button type="button" class="btn btn-sm btn-danger vm-nic-remove" disabled={move || running.get()}

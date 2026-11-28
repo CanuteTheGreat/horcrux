@@ -487,6 +487,18 @@ pub fn device_args(hw: &horcrux_common::VmHardware, disk: &std::path::Path) -> V
     a
 }
 
+/// Name of the machine's root PCI bus: `pci.0` on the i440FX PC machine,
+/// `pcie.0` on q35 and the ARM/RISC-V `virt` machines. Slot N on either is
+/// bus 0 slot N to the guest, so a pinned device keeps its PCI path.
+fn root_bus(vm: &QemuVm) -> &'static str {
+    let x86 = vm.architecture == horcrux_common::VmArchitecture::X86_64;
+    if x86 && vm.hardware.machine.is_default() {
+        "pci.0"
+    } else {
+        "pcie.0"
+    }
+}
+
 /// Network arguments for `vm`: one tap netdev + NIC device per configured
 /// card (the taps are created and attached to their bridges by
 /// `setup_taps` before QEMU starts), or `-nic none` when the VM has no
@@ -512,6 +524,9 @@ fn network_args(vm: &QemuVm, boot: &BootIndex) -> Vec<String> {
         let mut dev = format!("{},netdev=net{i},id=nic{i}", nic.model.qemu_device());
         if let Some(mac) = &nic.mac {
             dev.push_str(&format!(",mac={mac}"));
+        }
+        if let Some(slot) = nic.pci_slot {
+            dev.push_str(&format!(",bus={},addr=0x{slot:02x}", root_bus(vm)));
         }
         if let Some(n) = boot.nic(i) {
             dev.push_str(&format!(",bootindex={n}"));
@@ -2073,6 +2088,7 @@ mod tests {
                 mac: None,
                 vlan: None,
                 rate_mbps: None,
+                pci_slot: None,
             })
             .collect();
         let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
@@ -2087,6 +2103,59 @@ mod tests {
     }
 
     #[test]
+    fn pinned_nic_slots_become_bus_and_addr_on_the_machines_root_bus() {
+        use horcrux_common::{MachineType, NicModel, VmNic};
+        let mk = |slot| VmNic {
+            model: NicModel::Virtio,
+            bridge: "vmbr0".into(),
+            attach: Default::default(),
+            mac: Some("02:00:00:00:00:01".into()),
+            vlan: None,
+            rate_mbps: None,
+            pci_slot: slot,
+        };
+        let line = |arch, machine, nets: Vec<VmNic>| {
+            let mut v = vm(arch, VmDisplay::default());
+            v.hardware.machine = machine;
+            v.hardware.nets = nets;
+            let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+            qemu_command(&v, &rt, true, None).1.join(" ")
+        };
+        // i440FX: pci.0; q35 and ARM virt: pcie.0; both = bus 0 for the guest
+        let a = line(
+            VmArchitecture::X86_64,
+            MachineType::I440fx,
+            vec![mk(Some(0x12)), mk(Some(0x13)), mk(None)],
+        );
+        assert!(a.contains("-device virtio-net-pci,netdev=net0,id=nic0,mac=02:00:00:00:00:01,bus=pci.0,addr=0x12"), "{a}");
+        assert!(
+            a.contains("netdev=net1,id=nic1,mac=02:00:00:00:00:01,bus=pci.0,addr=0x13"),
+            "{a}"
+        );
+        // an unpinned card keeps the exact old command line
+        assert!(
+            a.contains("netdev=net2,id=nic2,mac=02:00:00:00:00:01"),
+            "{a}"
+        );
+        assert!(!a.contains("nic2,mac=02:00:00:00:00:01,bus="), "{a}");
+        let a = line(
+            VmArchitecture::X86_64,
+            MachineType::Q35,
+            vec![mk(Some(0x12))],
+        );
+        assert!(
+            a.contains("nic0,mac=02:00:00:00:00:01,bus=pcie.0,addr=0x12"),
+            "{a}"
+        );
+        let a = line(
+            VmArchitecture::Aarch64,
+            MachineType::I440fx,
+            vec![mk(Some(0x12))],
+        );
+        assert!(a.contains("bus=pcie.0,addr=0x12"), "{a}");
+    }
+
+    #[test]
     fn configured_nics_are_tap_devices_on_their_bridges() {
         use horcrux_common::{NicModel, VmNic};
         let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
@@ -2098,6 +2167,7 @@ mod tests {
                 mac: Some("02:00:00:00:00:01".into()),
                 vlan: Some(20),
                 rate_mbps: None,
+                pci_slot: None,
             },
             VmNic {
                 model: NicModel::E1000,
@@ -2106,6 +2176,7 @@ mod tests {
                 mac: Some("02:00:00:00:00:02".into()),
                 vlan: None,
                 rate_mbps: None,
+                pci_slot: None,
             },
         ];
         let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
@@ -2847,6 +2918,7 @@ esac
             mac: None,
             vlan,
             rate_mbps: None,
+            pci_slot: None,
         }
     }
 

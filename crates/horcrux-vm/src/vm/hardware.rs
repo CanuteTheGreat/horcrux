@@ -710,6 +710,7 @@ mod tests {
             mac: mac.map(Into::into),
             vlan: None,
             rate_mbps: None,
+            pci_slot: None,
         }
     }
 

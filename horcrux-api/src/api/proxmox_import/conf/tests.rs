@@ -120,6 +120,10 @@ fn router_vm_keeps_firmware_macs_passthrough_and_start_order() {
             ("52:54:00:11:20:31".to_string(), "vmbr2".to_string())
         ]
     );
+    // Proxmox seats netN at root-bus slot 0x12+N; the guest keeps its PCI path
+    let slots: Vec<_> = vm.hardware.nets.iter().map(|n| n.pci_slot).collect();
+    assert_eq!(slots, vec![Some(0x12), Some(0x13)]);
+    assert!(row(&p, "net0").note.contains("PCI slot 0x12 kept"));
     assert_eq!(vm.hardware.hostpci.len(), 1);
     assert_eq!(vm.hardware.hostpci[0].device, "0000:03:00.0");
     assert!(vm.hardware.hostpci[0].managed);
@@ -291,6 +295,34 @@ fn raw_args_and_windows_clock_are_reported() {
 }
 
 #[test]
+fn nic_slots_follow_proxmox_and_bridged_nics_are_not_pinned() {
+    let conf = (0..8)
+        .map(|n| format!("net{n}: virtio=52:54:00:aa:00:0{n},bridge=vmbr0"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let c = parse_conf(&format!("cores: 1\nmemory: 512\n{conf}\n"));
+    let p = plan_vm(204, &c, &resolve_all, &host());
+    let vm = p.vm.as_ref().unwrap();
+    let slots: Vec<_> = vm.hardware.nets.iter().map(|n| n.pci_slot).collect();
+    assert_eq!(
+        slots,
+        vec![
+            Some(0x12),
+            Some(0x13),
+            Some(0x14),
+            Some(0x15),
+            Some(0x16),
+            Some(0x17),
+            None,
+            None
+        ]
+    );
+    // the plan says so for the unpinned ones instead of staying silent
+    assert!(row(&p, "net6").note.contains("PCI slot not kept"));
+    assert!(vm.hardware.validate().is_ok());
+}
+
+#[test]
 fn container_with_a_vpn_device_and_io_limits() {
     let c = parse_conf(CT_TUN);
     let mut h = host();
@@ -415,6 +447,7 @@ fn qemu_command_lines_match_for_carried_settings() {
         );
         for must in [
             "net0",
+            "net0-pci-slot",
             "smbios-uuid",
             "vmgenid",
             "machine",
@@ -563,4 +596,39 @@ fn unsupported_cpu_options_are_listed_not_silently_dropped() {
             .contains("not carried: hv-vendor-id=x, phys-bits=host"),
         "{r:?}"
     );
+}
+
+#[test]
+fn showcmd_facts_carry_the_nic_root_bus_slot() {
+    use crate::api::proxmox_import::cmdline;
+    let w = |s: &str| cmdline::shell_words(s);
+    // i440FX (pci.0) and q35 (pcie.0) name the root bus differently, the slot is what matters
+    let pve = cmdline::facts(&w(
+        "kvm -device 'virtio-net-pci,mac=52:54:00:10:20:30,netdev=net0,bus=pci.0,addr=0x12,id=net0' \\
+         -device 'e1000,mac=52:54:00:11:20:31,netdev=net1,bus=pci.0,addr=0x13,id=net1'",
+    ));
+    assert_eq!(pve["net0-pci-slot"], "0x12");
+    assert_eq!(pve["net1-pci-slot"], "0x13");
+    let hx = cmdline::facts(&w(
+        "kvm -device virtio-net-pci,netdev=net0,id=nic0,mac=52:54:00:10:20:30,bus=pcie.0,addr=0x12 \\
+         -device e1000,netdev=net1,id=nic1,mac=52:54:00:11:20:31,bus=pcie.0,addr=0x14",
+    ));
+    assert_eq!(hx["net0-pci-slot"], "0x12");
+    let rows = cmdline::diff(&pve, &hx, &Default::default());
+    assert!(
+        rows.iter()
+            .find(|r| r.fact == "net0-pci-slot")
+            .unwrap()
+            .same
+    );
+    let bad = rows.iter().find(|r| r.fact == "net1-pci-slot").unwrap();
+    assert!(
+        !bad.same && bad.note.is_empty(),
+        "a moved slot is an unexplained difference"
+    );
+    // a card with no pinned slot has no fact at all (QEMU picks one)
+    let none = cmdline::facts(&w(
+        "kvm -device virtio-net-pci,mac=52:54:00:10:20:30,netdev=net0,id=nic0",
+    ));
+    assert!(!none.contains_key("net0-pci-slot"));
 }

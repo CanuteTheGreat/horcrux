@@ -186,8 +186,11 @@ linear volume, same keys), CPU model/cores/sockets, memory, balloon, every
 disk (bus, `virtio-scsi-single`, `iothread`, `discard`, `ssd`, `cache`,
 `mbps_rd`/`mbps_wr`/`iops_rd`/`iops_wr` as QEMU block throttling), the boot
 disk first, the cloud-init drive (copied byte for byte as the VM's NoCloud
-seed), NICs (model, **MAC kept**, bridge mapping, VLAN tag, `rate` in MB/s as
-Mbit/s), PCI passthrough (managed vfio-pci; the device must exist here with
+seed), NICs (model, **MAC kept**, **PCI slot kept** (netN = root-bus slot
+`0x12`+N for net0-net5, as Proxmox seats them, so the guest's PCI path, interface
+name and path-derived DHCP client-id IAID do not change; net6 and up sit behind a
+PCI bridge and are not pinned, the plan row says so), bridge mapping, VLAN tag,
+`rate` in MB/s as Mbit/s), PCI passthrough (managed vfio-pci; the device must exist here with
 an IOMMU group), USB devices by vendor:product, `serial0: socket` (the VM's
 serial console), extra serial ports, video card, guest agent, tablet,
 SMBIOS UUID and strings, VM generation id, NUMA, huge pages, CPU affinity,

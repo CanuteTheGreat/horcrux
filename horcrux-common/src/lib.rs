@@ -269,6 +269,86 @@ pub struct VmNic {
     /// (`tc`) when the VM starts; unset = unlimited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_mbps: Option<u32>,
+    /// PCI slot of the card on the machine's root bus (bus 0, function 0),
+    /// e.g. 18 (0x12). Unset = QEMU picks the next free slot. The guest's
+    /// predictable interface name (`enp0s18`) and anything derived from the
+    /// PCI path (a systemd-networkd DHCP client-id IAID) follow this slot, so
+    /// a VM moved from another hypervisor keeps its network identity when
+    /// the slot is kept (the Proxmox importer does this: net0 = 0x12, ...).
+    /// Accepted in JSON as a number or a string (`"0x12"`, `"18"`,
+    /// `"00:12.0"`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_pci_slot"
+    )]
+    pub pci_slot: Option<u8>,
+}
+
+/// Lowest and highest root-bus PCI slot a NIC can be pinned to: slots 0-2
+/// belong to the host bridge, the chipset and the display adapter, and the
+/// top slots (0x1d-0x1f) to the chipset's own functions.
+pub const NIC_PCI_SLOT_MIN: u8 = 3;
+pub const NIC_PCI_SLOT_MAX: u8 = 0x1c;
+
+/// Parse a NIC PCI slot: `0x12` (hex), `18` (decimal: only the `0x` prefix
+/// or the `bus:slot.fn` form is hex), or `00:12.0` (as `lspci` prints it:
+/// bus must be 00, slot in hex, function 0).
+pub fn parse_pci_slot(s: &str) -> std::result::Result<u8, String> {
+    let t = s.trim();
+    let bad = || format!("invalid PCI slot {s:?} (use 0x12, 18 or 00:12.0)");
+    let v = if let Some(h) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+        u8::from_str_radix(h, 16).map_err(|_| bad())?
+    } else if t.contains(':') || t.contains('.') {
+        let t = t.strip_prefix("0000:").unwrap_or(t);
+        let (bus, rest) = t.split_once(':').ok_or_else(bad)?;
+        let (slot, func) = rest.split_once('.').ok_or_else(bad)?;
+        if u8::from_str_radix(bus, 16).map_err(|_| bad())? != 0 {
+            return Err(format!(
+                "PCI slot {s:?}: only bus 00 (the root bus) is supported"
+            ));
+        }
+        if func != "0" {
+            return Err(format!("PCI slot {s:?}: only function 0 is supported"));
+        }
+        u8::from_str_radix(slot, 16).map_err(|_| bad())?
+    } else {
+        t.parse::<u8>().map_err(|_| bad())?
+    };
+    if !(NIC_PCI_SLOT_MIN..=NIC_PCI_SLOT_MAX).contains(&v) {
+        return Err(format!(
+            "PCI slot {v} (0x{v:02x}) is outside {NIC_PCI_SLOT_MIN}-{NIC_PCI_SLOT_MAX} (0x{NIC_PCI_SLOT_MIN:02x}-0x{NIC_PCI_SLOT_MAX:02x})"
+        ));
+    }
+    Ok(v)
+}
+
+fn de_pci_slot<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<u8>, D::Error> {
+    use serde::de::Error;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        N(u64),
+        S(String),
+    }
+    match Option::<Raw>::deserialize(d)? {
+        None => Ok(None),
+        Some(Raw::N(n)) => u8::try_from(n)
+            .map_err(|_| D::Error::custom(format!("invalid PCI slot {n}")))
+            .map(Some),
+        Some(Raw::S(s)) if s.trim().is_empty() => Ok(None),
+        Some(Raw::S(s)) => parse_pci_slot(&s).map(Some).map_err(D::Error::custom),
+    }
+}
+
+/// The root-bus slot Proxmox VE gives guest NIC `netN`: net0-net5 sit at
+/// bus 0 slots 0x12-0x17 (`bus=pci.0,addr=0x12` for net0 on the QEMU command
+/// line; confirmed against `qm showcmd` of i440fx and q35 guests). net6 and
+/// up live behind a PCI bridge, which Horcrux can't pin: `None`.
+pub fn proxmox_nic_pci_slot(n: u32) -> Option<u8> {
+    (n <= 5).then(|| 0x12 + n as u8)
 }
 
 /// Highest NIC rate limit accepted (Mbit/s).
@@ -1105,6 +1185,7 @@ impl VmHardware {
             return Err(format!("a VM can have at most {MAX_VM_NICS} network cards"));
         }
         let mut macs = Vec::new();
+        let mut slots: Vec<u8> = Vec::new();
         for (i, n) in self.nets.iter().enumerate() {
             if !valid_ifname(&n.bridge) {
                 return Err(format!("net{i}: invalid bridge name {:?}", n.bridge));
@@ -1126,6 +1207,17 @@ impl VmHardware {
                     return Err(format!("net{i}: MAC {m} is used twice"));
                 }
                 macs.push(m);
+            }
+            if let Some(s) = n.pci_slot {
+                if !(NIC_PCI_SLOT_MIN..=NIC_PCI_SLOT_MAX).contains(&s) {
+                    return Err(format!(
+                        "net{i}: PCI slot {s} (0x{s:02x}) must be {NIC_PCI_SLOT_MIN}-{NIC_PCI_SLOT_MAX} (0x{NIC_PCI_SLOT_MIN:02x}-0x{NIC_PCI_SLOT_MAX:02x})"
+                    ));
+                }
+                if slots.contains(&s) {
+                    return Err(format!("net{i}: PCI slot 0x{s:02x} is used by two cards"));
+                }
+                slots.push(s);
             }
         }
         for (i, d) in self.boot.iter().enumerate() {
@@ -1977,6 +2069,55 @@ mod tests {
     }
 
     #[test]
+    fn nic_pci_slot_parses_validates_and_roundtrips() {
+        assert_eq!(parse_pci_slot("0x12"), Ok(0x12));
+        assert_eq!(parse_pci_slot("18"), Ok(18));
+        assert_eq!(parse_pci_slot("00:12.0"), Ok(0x12));
+        assert_eq!(parse_pci_slot("0000:00:13.0"), Ok(0x13));
+        assert!(parse_pci_slot("01:12.0").unwrap_err().contains("root bus"));
+        assert!(parse_pci_slot("00:12.1")
+            .unwrap_err()
+            .contains("function 0"));
+        assert!(parse_pci_slot("0x02").is_err() && parse_pci_slot("0x1f").is_err());
+        assert!(parse_pci_slot("zz").is_err() && parse_pci_slot("300").is_err());
+        assert_eq!(proxmox_nic_pci_slot(0), Some(0x12));
+        assert_eq!(proxmox_nic_pci_slot(1), Some(0x13));
+        assert_eq!(proxmox_nic_pci_slot(5), Some(0x17));
+        assert_eq!(proxmox_nic_pci_slot(6), None);
+
+        let nic: VmNic = serde_json::from_str(r#"{"bridge":"br0","pci_slot":"0x12"}"#).unwrap();
+        assert_eq!(nic.pci_slot, Some(0x12));
+        let nic: VmNic = serde_json::from_str(r#"{"bridge":"br0","pci_slot":19}"#).unwrap();
+        assert_eq!(nic.pci_slot, Some(19));
+        let nic: VmNic = serde_json::from_str(r#"{"bridge":"br0","pci_slot":""}"#).unwrap();
+        assert_eq!(nic.pci_slot, None);
+        assert!(serde_json::from_str::<VmNic>(r#"{"bridge":"br0","pci_slot":"0x99"}"#).is_err());
+        // unset = absent from the stored JSON (old rows and specs stay byte-identical)
+        let nic: VmNic = serde_json::from_str(r#"{"bridge":"br0"}"#).unwrap();
+        assert_eq!(nic.pci_slot, None);
+        assert!(!serde_json::to_string(&nic).unwrap().contains("pci_slot"));
+        let pinned = VmNic {
+            pci_slot: Some(0x12),
+            ..nic
+        };
+        let back: VmNic = serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
+        assert_eq!(back, pinned);
+
+        let mut hw = VmHardware {
+            nets: vec![pinned.clone(), pinned.clone()],
+            ..Default::default()
+        };
+        assert!(hw.validate().unwrap_err().contains("two cards"));
+        hw.nets[1].pci_slot = Some(0x13);
+        assert!(hw.validate().is_ok());
+        hw.nets[1].pci_slot = Some(0x1f);
+        assert!(hw.validate().unwrap_err().contains("PCI slot"));
+        // a clone is the same machine layout: the slot is kept (MAC is not)
+        hw.nets[1].pci_slot = Some(0x13);
+        assert_eq!(hw.for_clone().nets[1].pci_slot, Some(0x13));
+    }
+
+    #[test]
     fn vm_hardware_validation() {
         let nic = |bridge: &str| VmNic {
             model: NicModel::Virtio,
@@ -1985,6 +2126,7 @@ mod tests {
             mac: None,
             vlan: None,
             rate_mbps: None,
+            pci_slot: None,
         };
         let mut hw = VmHardware {
             nets: vec![nic("vmbr0")],

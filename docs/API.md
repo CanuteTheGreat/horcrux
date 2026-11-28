@@ -437,6 +437,16 @@ Authorization: Bearer <token>
 - Each NIC is a tap device (`tap<hash>i<n>`) plugged into the host bridge; `vlan`
   sets the tap's PVID and needs a VLAN-aware bridge. A missing `mac` is generated
   (locally administered). `model`: `virtio` (default), `e1000`, `rtl8139`.
+- `pci_slot` (optional, 3-28 / `0x03`-`0x1c`) pins the card to that slot on the
+  machine's root PCI bus (`bus=pci.0,addr=0x12` on i440FX, `pcie.0` on q35 and
+  ARM/RISC-V `virt`; bus 0 either way). Number or string (`18`, `"0x12"`,
+  `"00:12.0"`); unset = QEMU picks a free slot. The slot decides the guest's
+  PCI path, so the interface name (`enp0s18`) and a systemd-networkd DHCP
+  client-id IAID stay the same for a VM that moved from another hypervisor
+  (the Proxmox importer carries Proxmox's slots: net0 = `0x12` ... net5 =
+  `0x17`). Two cards can't share a slot. UI: the "PCI slot" box on the VM
+  Hardware page; declarative: `hardware.nets[].pci_slot` in the spec. Applies
+  at the next start.
 - `rate_mbps` (1-400000, optional) caps the NIC's bandwidth in Mbit/s in both
   directions: at start Horcrux sets a `tc` token-bucket filter on the tap (towards
   the guest) and an ingress policer (from the guest). Unset = unlimited; applies

@@ -225,6 +225,7 @@ fn generated_macs_are_not_drift() {
         mac: Some("52:54:00:aa:bb:cc".into()),
         vlan: None,
         rate_mbps: None,
+        pci_slot: None,
     }];
     let live = Live {
         vms: vec![vm],
@@ -236,6 +237,54 @@ fn generated_macs_are_not_drift() {
     let s = parse("vms: [{name: app1, memory: 512, cpus: 2, hardware: {nets: [{bridge: br1}]}}]")
         .unwrap();
     assert_eq!(actions(&plan(&s, &live, false)), ["Blocked vm app1"]);
+}
+
+#[test]
+fn nic_pci_slot_is_declarative_validated_and_drift_checked() {
+    let mut vm = live_vm("app1", VmStatus::Stopped);
+    vm.hardware.nets = vec![VmNic {
+        model: Default::default(),
+        bridge: "br0".into(),
+        attach: Default::default(),
+        mac: Some("52:54:00:aa:bb:cc".into()),
+        vlan: None,
+        rate_mbps: None,
+        pci_slot: Some(0x12),
+    }];
+    let live = Live {
+        vms: vec![vm],
+        ..Default::default()
+    };
+    let spec = |slot: &str| {
+        parse(&format!(
+            "vms: [{{name: app1, memory: 512, cpus: 2, hardware: {{nets: [{{bridge: br0{slot}}}]}}}}]"
+        ))
+    };
+    // matches (number, hex number or string), or left out = whatever QEMU picks: no drift
+    for ok in [
+        ", pci_slot: 18",
+        ", pci_slot: 0x12",
+        ", pci_slot: \"00:12.0\"",
+        "",
+    ] {
+        assert!(plan(&spec(ok).unwrap(), &live, false).in_sync(), "{ok}");
+    }
+    // a different slot is drift: the NIC is a start-time property, so it is planned as a change
+    let p = plan(&spec(", pci_slot: 0x13").unwrap(), &live, false);
+    assert!(!p.in_sync());
+    assert!(
+        p.changes[0].details.iter().any(|d| d.starts_with("nets:")),
+        "{:?}",
+        p.changes[0].details
+    );
+    // bad slots are refused when the spec is parsed
+    assert!(spec(", pci_slot: 0x1f").is_err());
+    assert!(spec(", pci_slot: 0x02").is_err());
+    assert!(spec(", pci_slot: nonsense").is_err());
+    let two = parse(
+        "vms: [{name: a, memory: 1, cpus: 1, hardware: {nets: [{bridge: b, pci_slot: 0x12}, {bridge: b, pci_slot: 0x12}]}}]",
+    );
+    assert!(two.unwrap_err().contains("two cards"));
 }
 
 #[test]

@@ -1145,6 +1145,7 @@ mod tests {
             mac: Some("52:54:00:00:00:01".into()),
             vlan: None,
             rate_mbps: None,
+            pci_slot: None,
         };
         assert!(matches!(
             nic_reach(&[nic("vmbr0", NicAttach::Bridge)], d.path()),

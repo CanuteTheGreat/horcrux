@@ -7,10 +7,10 @@
 //! form) or not carried, with the reason.
 use horcrux_common::lxc::{LxcFeatures, LxcIoLimit, LxcMount, LxcNet, LxcOptions};
 use horcrux_common::{
-    BootDevice, ContainerConfig, ContainerRuntime, ContainerStatus, DiskThrottle, Firmware,
-    MachineType, NicModel, TpmModel, UsbDevice, VideoDevice, VmAdvanced, VmArchitecture, VmConfig,
-    VmDisk, VmDisplay, VmHardware, VmHostPci, VmHypervisor, VmNic, VmSerialPort, VmSmbios,
-    VmStatus,
+    proxmox_nic_pci_slot, BootDevice, ContainerConfig, ContainerRuntime, ContainerStatus,
+    DiskThrottle, Firmware, MachineType, NicModel, TpmModel, UsbDevice, VideoDevice, VmAdvanced,
+    VmArchitecture, VmConfig, VmDisk, VmDisplay, VmHardware, VmHostPci, VmHypervisor, VmNic,
+    VmSerialPort, VmSmbios, VmStatus,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -1076,8 +1076,17 @@ pub fn plan_vm(vmid: u32, conf: &PveConf, resolve: Resolver, host: &HostCtx) -> 
             mac: (!mac.is_empty()).then(|| mac.to_ascii_lowercase()),
             vlan: m.get("tag").and_then(|t| t.parse().ok()),
             rate_mbps: m.get("rate").and_then(|r| mb_s_to_mbit(r)),
+            pci_slot: proxmox_nic_pci_slot(*n),
         };
         let mut note = format!("MAC {} kept", nic.mac.clone().unwrap_or_default());
+        match nic.pci_slot {
+            Some(slot) => note.push_str(&format!(
+                "; PCI slot 0x{slot:02x} kept (the guest sees the same PCI path, so its interface name and DHCP client-id IAID do not change)"
+            )),
+            None => note.push_str(&format!(
+                "; PCI slot not kept (Proxmox puts net{n} behind a PCI bridge): the guest's PCI path, interface name and path-derived DHCP client-id may change"
+            )),
+        }
         if bridge != src_bridge {
             note.push_str(&format!("; bridge {src_bridge} -> {bridge}"));
         }

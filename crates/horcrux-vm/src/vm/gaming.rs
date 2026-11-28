@@ -719,6 +719,7 @@ pub fn compose(
                 mac: None,
                 vlan: None,
                 rate_mbps: None,
+                pci_slot: None,
             })
             .collect(),
         cdrom: Some(req.windows_iso.clone()),
