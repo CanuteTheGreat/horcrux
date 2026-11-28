@@ -42,11 +42,19 @@ import horcrux_profile as E  # noqa: E402
 EDIT_PKG = "app-misc/screen"        # a small package with a binary on the binhosts, used for the declarative add/remove check
 
 
-def build_bundle(src, dst, dev_overlay=None, private_overlay=None):
+def nvme_glob(serial):
+    """the by-id name udev gives a QEMU NVMe controller with this serial (model 'QEMU NVMe Ctrl'), as a glob: model-independent"""
+    return f"/dev/disk/by-id/nvme-*_{serial}"
+
+
+def build_bundle(src, dst, dev_overlay=None, private_overlay=None, nvme_serial=""):
     """copy the profile bundle; add the branch's overlay as repo horcrux-dev (pre-merge: the published overlay does not have the new
     packages yet) and, when the profile names it, a snapshot of the private overlay"""
     shutil.copytree(src, dst)
     prof = open(os.path.join(dst, "profile.toml")).read()
+    if nvme_serial:
+        # the machine's own disk id does not exist in QEMU: point [disk] disks at the emulated NVMe by its serial (same by-id code path)
+        prof = re.sub(r"(?m)^disks = \[.*\]$", f'disks = ["{nvme_glob(nvme_serial)}"]', prof, count=1)
     if dev_overlay:
         r = os.path.join(dst, "repos", "horcrux-dev")
         shutil.copytree(dev_overlay, r, ignore=shutil.ignore_patterns(".git", "ci", "*.pyc", "t2"))
@@ -86,7 +94,36 @@ class PRun(ZE.ZRun):
         args = super().qemu_args(iso, installed, nvars)
         if iso and self.pa.mac_esp:          # the Mac's own disk with its EFI partition: only present while the installer runs
             args += ["-drive", f"file={self.pa.mac_esp},if=virtio,format=raw,readonly=on"]
+        pa = self.pa
+        if pa.nvme_serial:                   # the target disk as an NVMe controller: /dev/disk/by-id/nvme-QEMU_NVMe_Ctrl_<serial>
+            i = args.index(f"file={self.disk},if=virtio,format=qcow2")
+            args[i] = f"file={self.disk},if=none,id=hxtgt,format=qcow2"
+            args[i + 1:i + 1] = ["-device", f"nvme,serial={pa.nvme_serial},drive=hxtgt"]
+        for n, img in enumerate(pa.usb_disk):  # removable USB disks present at install and every boot: must never be chosen or written
+            args += ["-drive", f"if=none,id=hxusb{n},file={img},format=raw", "-device", f"usb-storage,bus=xhci.0,drive=hxusb{n},removable=on"]
+        if pa.nic_macs or pa.user_net or pa.restrict_net:
+            i = args.index("-netdev")
+            nd = args[i + 1].split(",")
+            if pa.user_net:
+                host = pa.user_net.rsplit(".", 1)[0] + ".1"
+                ip = self.guest_ip(installed)
+                nd = [x for x in nd if not x.startswith("hostfwd=")] + [f"net={pa.user_net}", f"host={host}"] + \
+                     [re.sub(r"-[0-9.]+:(\d+)$", f"-{ip}:\\1", x) for x in nd if x.startswith("hostfwd=")]
+            if pa.restrict_net:
+                nd.append("restrict=on")     # no route out of the VM (the host forwards still work): the machine has no internet
+            args[i + 1] = ",".join(nd)
+            if pa.nic_macs:
+                args[i + 3] = re.sub(r"mac=[0-9a-f:]+", f"mac={pa.nic_macs[0]}", args[i + 3])
+                for n, mac in enumerate(pa.nic_macs[1:], 1):
+                    args += ["-netdev", f"user,id=hxn{n},restrict=on", "-device", f"{qt.ARCHS[qt.ARCH]['nic']},netdev=hxn{n},mac={mac}"]
         return args
+
+    def guest_ip(self, installed):
+        if not self.pa.user_net:
+            return super().guest_ip(installed)
+        if installed and self.pa.guest_ip:
+            return self.pa.guest_ip
+        return self.pa.user_net.rsplit(".", 1)[0] + ".15"      # QEMU user net's first DHCP address (the live system)
 
     def wait_installer(self, vm, timeout, *rest):
         # base install + hardware layers + the profile's packages (binary): the profile part is a download-bound emerge
@@ -95,7 +132,22 @@ class PRun(ZE.ZRun):
     def toml(self, pubkey, pwhash):
         t = super().toml(pubkey, pwhash)
         t = t.replace('t2 = "yes"', 't2 = "yes"\nt2_kernel = "skip"') if self.pa.fake_t2 and not self.pa.real_t2_kernel else t
+        if self.pa.nvme_serial:
+            t = t.replace('disks = ["/dev/vda"]', f'disks = ["{nvme_glob(self.pa.nvme_serial)}"]')
         return t + '\n[profile]\nsource = "/run/answers-media/profile"\n'
+
+    def usb_disk_digests(self):
+        """sha256 of the first and last 64 MiB of each removable USB disk (partition tables, labels, ZFS uberblocks live there)"""
+        import hashlib
+        out = []
+        for img in self.pa.usb_disk:
+            h, sz = hashlib.sha256(), os.path.getsize(img)
+            with open(img, "rb") as f:
+                h.update(f.read(64 << 20))
+                f.seek(max(0, sz - (64 << 20)))
+                h.update(f.read())
+            out.append(h.hexdigest())
+        return out
 
     def run(self):
         a = self.z
@@ -119,8 +171,12 @@ class PRun(ZE.ZRun):
         self.step("answer-file-and-profile-bundle-built", True, f"profile {self.mp['machine']['hostname']} edition={self.mp['machine'].get('edition')}; "
                   "the answer file carries only the harness's secrets")
         t0 = time.time()
+        usb0 = self.usb_disk_digests()
         self.phase1(nvars)
         self.timings["install_s"] = round(time.time() - t0)
+        if self.pa.usb_disk:
+            self.step("removable-usb-disks-untouched-by-the-install", self.usb_disk_digests() == usb0,
+                      f"{len(usb0)} removable disk(s): first/last 64 MiB unchanged (the profile's disk selection never picks a USB disk)")
         log = open(f"{a.out}/1-install-serial.log", errors="replace").read()
         m = re.search(r"machine profile applied in (\d+) s \(layers: ([^)]*)\)", log)
         self.timings["profile_apply_s"] = int(m.group(1)) if m else None
@@ -153,14 +209,30 @@ class PRun(ZE.ZRun):
                 vm.send(ZE.PASSPHRASE + "\r")
             self.step("boot1-ssh-after-passphrase", self.wait_ssh(), "system came up after the passphrase")
             self.profile_checks()
+            self.extra_checks()
             if a.desktop:
                 self.desktop_profile_checks(vm)
-            self.declarative_change_checks()
+            if self.pa.restrict_net:
+                self.step("declarative-change-checks-skipped-offline", True, "--restrict-net: no binhost to add a package from (phase 2 runs after the network is up)")
+            else:
+                self.declarative_change_checks()
             self.sh("poweroff", timeout=10)
             self.wait_exit(vm)
         finally:
             if vm.alive():
                 vm.p.kill()
+
+    def extra_checks(self):
+        """--check-script: a machine's own checks (shell, run as root over ssh); every `PASS <name> [info]` / `FAIL <name> [info]` line is a step"""
+        if not self.pa.check_script:
+            return
+        body = open(self.pa.check_script).read()
+        rc, o = self.sh(f"cat > /root/hx-extra-checks.sh <<'HXEOF'\n{body}\nHXEOF\nbash /root/hx-extra-checks.sh 2>&1", timeout=600)
+        n = 0
+        for m in re.finditer(r"(?m)^(PASS|FAIL) (\S+) ?(.*)$", o):
+            n += 1
+            self.step(f"machine-{m.group(2)}", m.group(1) == "PASS", m.group(3)[:300])
+        self.step("machine-check-script-ran", rc == 0 and n > 0, f"{n} checks, rc={rc}" + ("" if n else " | " + re.sub(r"\s+", " ", o)[-300:]))
 
     def profile_checks(self):
         mp, u = self.mp, self.user
@@ -311,7 +383,15 @@ def main():
     ap.add_argument("--disk-gb", type=int, default=40)
     ap.add_argument("--keep-disks", action="store_true")
     ap.add_argument("--make-mac-esp", default="", help="only write the synthetic Mac ESP image to this path and exit")
+    ap.add_argument("--nvme-serial", default="", help="target disk as an NVMe controller with this serial; the profile's [disk] disks is pointed at it by id")
+    ap.add_argument("--usb-disk", action="append", default=[], help="raw image attached as a removable USB disk (install + boots); asserted untouched by the install")
+    ap.add_argument("--nic-macs", default="", help="comma-separated MACs: the first is the user-net NIC (ssh), the rest are extra NICs with no route")
+    ap.add_argument("--user-net", default="", help="QEMU user network CIDR for the first NIC (gateway .1, live DHCP .15), e.g. for a profile with a static address")
+    ap.add_argument("--guest-ip", default="", help="the installed system's static address on --user-net (ssh forward target)")
+    ap.add_argument("--restrict-net", action="store_true", help="no internet for the VM at any time (install + boots): an offline install must still pass")
+    ap.add_argument("--check-script", default="", help="shell script run as root after boot 1; its PASS/FAIL <name> lines become steps")
     a = ap.parse_args()
+    a.nic_macs = [m.strip().lower() for m in a.nic_macs.split(",") if m.strip()]
     if a.make_mac_esp:
         print(make_mac_esp(a.make_mac_esp))
         return
@@ -322,7 +402,7 @@ def main():
     a.bundle = os.path.join(a.out, "bundle")
     if os.path.exists(a.bundle):
         shutil.rmtree(a.bundle)
-    mp = build_bundle(a.profile, a.bundle, a.dev_overlay or None, a.private_overlay or None)
+    mp = build_bundle(a.profile, a.bundle, a.dev_overlay or None, a.private_overlay or None, a.nvme_serial)
     errs = E.problems(mp, a.bundle)
     if errs:
         raise SystemExit("profile invalid: " + "; ".join(errs))
