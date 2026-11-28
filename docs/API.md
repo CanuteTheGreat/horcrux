@@ -188,7 +188,7 @@ Content-Type: application/json
   "id": "5b0c9e3a-...",
   "key": "hx_1234567890abcdef...",
   "name": "CI/CD Pipeline",
-  "user": "svc-hostjobs",
+  "user": "svc-hostjobs@pam",
   "enabled": true,
   "expires_at": 1767783045
 }

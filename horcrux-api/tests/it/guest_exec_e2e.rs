@@ -147,6 +147,8 @@ async fn declared_vm(api: &crate::support::Api, dir: &Path) -> (String, std::pat
     )
 }
 
+/// Service accounts are system (PAM) accounts, as on a real node: the local
+/// realm has no writable store without ADMIN_PASSWORD.
 async fn user_with_privs(api: &crate::support::Api, name: &str, privs: &[&str]) -> String {
     let (s, v) = api
         .post(
@@ -165,12 +167,12 @@ async fn user_with_privs(api: &crate::support::Api, name: &str, privs: &[&str]) 
     let (s, v) = api
         .post(
             "/acl",
-            json!({"path": "/vms", "subject_type": "user", "subject": name, "role": format!("role-{name}")}),
+            json!({"path": "/vms", "subject_type": "user", "subject": format!("{name}@pam"), "role": format!("role-{name}")}),
         )
         .await;
     assert_eq!(s, 201, "{v}");
     let (s, v) = api
-        .post(&format!("/users/{name}/api-keys"), json!({"name": "svc"}))
+        .post(&format!("/users/{name}@pam/api-keys"), json!({"name": "svc"}))
         .await;
     assert_eq!(s, 200, "{v}");
     v["key"].as_str().unwrap().to_string()
@@ -327,7 +329,7 @@ async fn guest_exec_runs_commands_through_the_agent_with_rbac_audit_and_keys() {
     assert_eq!(s, 200, "{a}");
     let events = a["events"].as_array().unwrap();
     assert!(events.len() >= 8, "{a}");
-    assert!(events.iter().any(|e| e["user"] == "gx-runner"
+    assert!(events.iter().any(|e| e["user"] == "gx-runner@pam"
         && e["details"]
             .as_str()
             .unwrap_or("")

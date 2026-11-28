@@ -31,18 +31,24 @@ Permissions, and the user's API keys page).
      https://node:8006/api/roles
    ```
 
-2. The user, with a random password nobody keeps (the key is the credential):
+2. The user. Service accounts are host (PAM) accounts: a no-login system
+   user, registered in the `pam` realm. The `local` realm (a password stored
+   in Horcrux) is refused on a stock install with 403 "Horcrux has no
+   accounts of its own", so do not use it here. The key is the credential,
+   so the account needs no password:
 
    ```sh
-   curl -sk ... -d '{"username":"svc-hostjobs","password":"<random>","email":"svc-hostjobs@example.invalid"}' \
+   useradd --system --no-create-home --shell /sbin/nologin svc-hostjobs
+   curl -sk ... -d '{"username":"svc-hostjobs","realm":"pam"}' \
      https://node:8006/api/users
+   # the account is now named svc-hostjobs@pam
    ```
 
 3. The grant, on the narrowest path that works (`/vms` for every VM, `/vms/100`
    for one, `/` for node-wide settings such as backup jobs):
 
    ```sh
-   curl -sk ... -d '{"path":"/vms","subject_type":"user","subject":"svc-hostjobs","role":"HostJobs"}' \
+   curl -sk ... -d '{"path":"/vms","subject_type":"user","subject":"svc-hostjobs@pam","role":"HostJobs"}' \
      https://node:8006/api/acl
    ```
 
@@ -50,14 +56,14 @@ Permissions, and the user's API keys page).
 
    ```sh
    curl -sk ... -d '{"name":"host jobs","expires_days":365}' \
-     https://node:8006/api/users/svc-hostjobs/api-keys
-   # {"id":"...","key":"hx_...","user":"svc-hostjobs","expires_at":...}
+     https://node:8006/api/users/svc-hostjobs@pam/api-keys
+   # {"id":"...","key":"hx_...","user":"svc-hostjobs@pam","expires_at":...}
    ```
 
    Put the key in a root-only file (mode 0600) on the host that needs it.
 
 Rotate by creating a second key, switching the job over, then
-`DELETE /api/users/svc-hostjobs/api-keys/<id>` (or `.../toggle` to disable it
+`DELETE /api/users/svc-hostjobs@pam/api-keys/<id>` (or `.../toggle` to disable it
 first). Revoke everything for an account by disabling the user.
 
 ## Which privileges
