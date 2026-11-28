@@ -7951,6 +7951,18 @@ pub async fn stop_task(upid: &str) -> Result<(), ApiError> {
     delete_json(&format!("/tasks/{}", upid)).await
 }
 
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct RebootRequired {
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub reasons: Vec<String>,
+}
+
+pub async fn get_reboot_required() -> Result<RebootRequired, ApiError> {
+    fetch_json("/system/reboot-required").await
+}
+
 // ---------------------------------------------------------------- Boot environments (ZFS)
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]

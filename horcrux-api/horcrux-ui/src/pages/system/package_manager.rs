@@ -263,8 +263,17 @@ pub fn PackageManagerPage() -> impl IntoView {
         refresh_packages.dispatch(());
     });
 
+    let reboot = create_resource(|| (), |_| async { get_reboot_required().await.ok() });
+    let reboot = move || reboot.get().flatten();
+
     view! {
         <div class="package-manager-page">
+            {move || reboot().filter(|r| r.required).map(|r| view! {
+                <div class="alert alert-warning" id="reboot-required">
+                    <strong>"Restart required. "</strong>
+                    "The system is running older software than what is installed: " {r.reasons.join("; ")}
+                </div>
+            })}
             <div class="page-header">
                 <h1>"Package Manager"</h1>
                 <div class="header-actions">

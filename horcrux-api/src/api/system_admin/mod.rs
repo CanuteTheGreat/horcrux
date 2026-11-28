@@ -12,6 +12,7 @@
 //! * `GET|DELETE /api/system/logs`, `GET .../logs/export`
 //! * `GET /api/system/packages`, `.../packages/search?q=`, install / remove /
 //!   upgrade / upgrade-all / bulk-install / update (long ones run as tasks)
+//! * `GET /api/system/reboot-required`       newer kernel installed than running, or updater-recorded reasons
 //! * `GET /api/system/boot-environments`, snapshot / pin / rollback / activate / destroy (ZFS boot environments)
 //! * `GET /api/system/diagnostics`, `POST .../tests/:name`, `.../tests/run-all`,
 //!   `GET .../report`
@@ -29,6 +30,7 @@ pub mod diagnostics;
 pub mod host;
 pub mod logs;
 pub mod packages;
+pub mod reboot_required;
 pub mod services;
 
 pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
@@ -38,6 +40,7 @@ pub fn routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .merge(logs::routes())
         .merge(packages::routes())
         .merge(boot_environments::routes())
+        .merge(reboot_required::routes())
         .merge(diagnostics::routes())
 }
 

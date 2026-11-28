@@ -36,6 +36,8 @@ pub fn BootEnvironmentsPage() -> impl IntoView {
             },
         }
     });
+    let reboot = create_resource(|| (), |_| async { get_reboot_required().await.ok() });
+    let reboot = move || reboot.get().flatten();
     load.dispatch(());
 
     // (path, body, confirmation) -> POST, or DELETE when the body is null
@@ -91,6 +93,12 @@ pub fn BootEnvironmentsPage() -> impl IntoView {
                 "the newest " {move || info.get().map(|i| i.keep).unwrap_or(5)} " automatic snapshots are kept, pinned ones forever."
             </p>
 
+            {move || reboot().filter(|r| r.required).map(|r| view! {
+                <div class="alert alert-warning" id="reboot-required">
+                    <strong>"Restart required. "</strong>
+                    "The system is running older software than what is installed: " {r.reasons.join("; ")}
+                </div>
+            })}
             {move || error_message.get().map(|m| view! { <div class="alert alert-error">{m}</div> })}
             {move || ok_message.get().map(|m| view! { <div class="alert alert-success">{m}</div> })}
             {move || unavailable.get().map(|u| view! {
