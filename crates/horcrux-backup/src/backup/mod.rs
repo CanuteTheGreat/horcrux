@@ -109,7 +109,7 @@ pub struct BackupConfig {
 }
 
 /// Scheduled backup job.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupJob {
     /// Generated when empty.
     #[serde(default)]

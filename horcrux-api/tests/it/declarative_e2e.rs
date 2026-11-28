@@ -228,3 +228,101 @@ async fn needs_a_login() {
         .unwrap();
     assert_eq!(r.status().as_u16(), 401);
 }
+
+/// `backup_jobs:` through plan / apply / export / "rollback" (applying an
+/// earlier export with prune), against the real backup manager.
+#[tokio::test]
+async fn backup_jobs_converge_export_and_roll_back() {
+    let dir = scratch("declarative-backup-jobs");
+    let mut srv = Server::new(&dir);
+    srv.start();
+    srv.wait_healthy().await;
+    let api = srv.api().await;
+    let store = dir.join("bk");
+    std::fs::create_dir_all(&store).unwrap();
+    let spec = |sched: &str, extra: &str| {
+        format!(
+            "version: 1\nbackup_jobs:\n  - id: decl-nightly\n    schedule: \"{sched}\"\n    targets: [\"100\"]\n    storage: {}\n    retention: {{keep_last: 2}}\n{extra}",
+            store.display()
+        )
+    };
+
+    // create
+    let first = spec("30 2 * * *", "");
+    let (s, v) = api.post("/declarative/plan", json!({"spec": first})).await;
+    assert_eq!(s, 200, "{v}");
+    assert!(kinds(&v["plan"]).contains(&"create backup_job decl-nightly".to_string()));
+    let (s, v) = api.post("/declarative/apply", json!({"spec": first})).await;
+    assert_eq!((s, &v["ok"]), (200, &json!(true)), "{v}");
+    let (s, jobs) = api.get("/backup-jobs").await;
+    assert_eq!(s, 200, "{jobs}");
+    let job = &jobs.as_array().unwrap()[0];
+    assert_eq!(job["id"], "decl-nightly");
+    assert_eq!(job["schedule"], "30 2 * * *");
+    assert_eq!(job["retention"]["keep_last"], 2);
+
+    // idempotent, even though the server added run bookkeeping (next_run)
+    let (_, v) = api.post("/declarative/plan", json!({"spec": first})).await;
+    assert_eq!(v["in_sync"], true, "{v}");
+
+    // the export carries the job without server-owned fields; remember it
+    let (s, ex) = api.get("/declarative/export").await;
+    assert_eq!(s, 200, "{ex}");
+    let saved = ex["spec"].as_str().unwrap().to_string();
+    assert!(saved.contains("decl-nightly"), "{saved}");
+    assert!(!saved.contains("next_run"), "{saved}");
+
+    // change it, add a second job
+    let changed = spec(
+        "0 4 * * *",
+        &format!(
+            "  - id: decl-extra\n    schedule: daily\n    targets: [\"101\"]\n    storage: {}\n",
+            store.display()
+        ),
+    );
+    let (s, v) = api
+        .post("/declarative/apply", json!({"spec": changed}))
+        .await;
+    assert_eq!((s, &v["ok"]), (200, &json!(true)), "{v}");
+    let (_, jobs) = api.get("/backup-jobs").await;
+    assert_eq!(jobs.as_array().unwrap().len(), 2, "{jobs}");
+    assert!(jobs
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|j| j["id"] == "decl-nightly" && j["schedule"] == "0 4 * * *"));
+
+    // a bad job is refused by the manager's own validation, nothing else breaks
+    let bad = spec("not a schedule", "");
+    let (_, v) = api.post("/declarative/apply", json!({"spec": bad})).await;
+    assert_eq!(v["ok"], false, "{v}");
+
+    // rollback = apply the saved export with prune: back to one job
+    let (s, v) = api
+        .post("/declarative/apply", json!({"spec": saved, "prune": true}))
+        .await;
+    assert_eq!((s, &v["ok"]), (200, &json!(true)), "{v}");
+    let (_, jobs) = api.get("/backup-jobs").await;
+    let ids: Vec<&str> = jobs
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(&"decl-nightly") && !ids.contains(&"decl-extra"),
+        "{ids:?}"
+    );
+    assert_eq!(
+        jobs.as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["id"] == "decl-nightly")
+            .unwrap()["schedule"],
+        "30 2 * * *"
+    );
+    let (_, v) = api
+        .post("/declarative/plan", json!({"spec": saved, "prune": true}))
+        .await;
+    assert_eq!(v["in_sync"], true, "{v}");
+}

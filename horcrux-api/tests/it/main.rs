@@ -27,6 +27,7 @@ mod depth_restart_crash;
 mod depth_upgrade;
 mod depth_vm_journey;
 mod esxi_import_tests;
+mod guest_exec_e2e;
 mod integration_tests;
 mod inventory_tests;
 mod k8s_restart_tests;

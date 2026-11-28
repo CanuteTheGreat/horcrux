@@ -48,7 +48,10 @@ API route.
   `User.Modify` cannot change an administrator's account, password or API
   keys, and the last administrator can't be disabled or deleted.
 - Logging out, disabling or deleting an account revokes its tokens
-  immediately (tokens are bound to a database session). API keys act with
+  immediately (tokens are bound to a database session). `POST /api/vms/<id>/guest-exec`
+(a command inside a VM through its guest agent) needs `VM.Console`, like the
+console. API keys (`X-API-Key` or `Authorization: Bearer hx_...`; see
+SERVICE-ACCOUNTS.md) act with
   their owner's rights.
 
 **For contributors:** every route is checked by `middleware/rbac.rs` using

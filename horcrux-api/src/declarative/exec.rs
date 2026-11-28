@@ -29,6 +29,10 @@ pub async fn gather(state: &Arc<AppState>) -> Live {
         san: crate::api::san::live_spec(state).await,
         #[cfg(not(feature = "san"))]
         san: Default::default(),
+        #[cfg(feature = "backup")]
+        backup_jobs: state.backup_manager.list_jobs().await.unwrap_or_default(),
+        #[cfg(not(feature = "backup"))]
+        backup_jobs: Vec::new(),
     }
 }
 
@@ -146,6 +150,31 @@ async fn run_change(
             Ok(Some(
                 "replicated to every cluster member and applied on each".into(),
             ))
+        }
+
+        #[cfg(feature = "backup")]
+        ("backup_job", a) => {
+            let id = c.name.clone();
+            match a {
+                Action::Delete => state.backup_manager.delete_job(&id).await,
+                Action::Create | Action::Update => {
+                    let job = spec
+                        .backup_jobs
+                        .iter()
+                        .flatten()
+                        .find(|j| super::backup_job_id(j) == id)
+                        .ok_or("not in spec")?
+                        .clone();
+                    if a == Action::Create {
+                        state.backup_manager.create_job(job).await.map(|_| ())
+                    } else {
+                        state.backup_manager.update_job(&id, job).await.map(|_| ())
+                    }
+                }
+                _ => return Err(format!("unsupported action {a:?} for a backup job")),
+            }
+            .map_err(|x| x.to_string())?;
+            Ok(None)
         }
 
         ("remote_play", Action::Update) => {

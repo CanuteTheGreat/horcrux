@@ -43,6 +43,46 @@ pub struct HorcruxConfig {
     /// how it ended.
     #[serde(default)]
     pub access_log: AccessLogConfig,
+    /// Running commands in VMs through the guest agent (`[guest_exec]`).
+    #[serde(default)]
+    pub guest_exec: GuestExecConfig,
+}
+
+/// `POST /api/vms/:id/guest-exec` limits (`[guest_exec]` in config.toml).
+/// Env overrides: `HORCRUX_GUEST_EXEC_ENABLED`,
+/// `HORCRUX_GUEST_EXEC_MAX_TIMEOUT_SECS`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct GuestExecConfig {
+    /// Switch the route off for the whole node.
+    pub enabled: bool,
+    /// Seconds to wait for a command when the request names no timeout.
+    pub default_timeout_secs: u64,
+    /// Largest `timeout_secs` a request may ask for.
+    pub max_timeout_secs: u64,
+    /// Largest standard input accepted, in bytes.
+    pub max_input_bytes: usize,
+    /// Standard output and error are each cut to this many bytes.
+    pub max_output_bytes: usize,
+    /// How often a running command's status is asked for, in milliseconds.
+    pub poll_interval_ms: u64,
+    /// Put the argument values in the audit record (they may hold secrets,
+    /// so the default is the program name and the argument count only).
+    pub log_arguments: bool,
+}
+
+impl Default for GuestExecConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_timeout_secs: 60,
+            max_timeout_secs: 3600,
+            max_input_bytes: 1 << 20,
+            max_output_bytes: 4 << 20,
+            poll_interval_ms: 250,
+            log_arguments: false,
+        }
+    }
 }
 
 /// API access log settings (`[access_log]` in config.toml).
@@ -567,6 +607,18 @@ impl HorcruxConfig {
         }
         if let Ok(path) = std::env::var("HORCRUX_LXC_PATH") {
             self.backup.lxc_path = PathBuf::from(path);
+        }
+
+        // Guest exec
+        if let Ok(v) = std::env::var("HORCRUX_GUEST_EXEC_ENABLED") {
+            self.guest_exec.enabled = v.parse().unwrap_or(true);
+        }
+        if let Some(secs) = std::env::var("HORCRUX_GUEST_EXEC_MAX_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|s| *s > 0)
+        {
+            self.guest_exec.max_timeout_secs = secs;
         }
 
         // CNI

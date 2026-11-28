@@ -45,6 +45,9 @@ pub enum AuditEventType {
     /// Horcrux guest tools installed into a guest through its guest agent
     /// (requested or automatic).
     GuestToolsInstall,
+    /// A command run inside a VM through the guest agent
+    /// (`POST /api/vms/:id/guest-exec`).
+    GuestExec,
 
     // Storage Operations
     StoragePoolCreated,

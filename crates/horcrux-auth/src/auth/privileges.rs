@@ -535,9 +535,11 @@ fn guest_action(m: &str, base: &str, action: &str) -> Requirement {
         "snapshots" => read_write(m, P::VmAudit, P::VmSnapshot, base),
         "clone" | "clone-cross-node" => need(P::VmClone, base),
         "migrate" => read_write(m, P::VmAudit, P::VmMigrate, base),
-        // console-ticket: a container's interactive system console
+        // console-ticket: a container's interactive system console;
+        // guest-exec runs a program in the guest through its agent: as
+        // powerful as the console, so it takes the same privilege.
         "console" | "vnc" | "spice" | "serial" | "exec" | "exec-ticket" | "console-ticket"
-        | "terminal" => need(P::VmConsole, base),
+        | "terminal" | "guest-exec" => need(P::VmConsole, base),
         "logs" | "logs-ticket" | "status" | "stats" | "metrics" | "rrd" => need(P::VmAudit, base),
         "backup" | "backups" => read_write(m, P::VmAudit, P::VmBackup, base),
         _ => read_write(m, P::VmAudit, P::VmConfig, base),
@@ -747,6 +749,15 @@ mod tests {
             requirement("GET", "/api/ws"),
             Requirement::Authenticated
         ));
+        assert_eq!(
+            priv_of(requirement("POST", "/api/vms/abc/guest-exec")),
+            (P::VmConsole, "/vms/abc".into()),
+            "running a command in a guest is console-equivalent"
+        );
+        assert_eq!(
+            priv_of(requirement("POST", "/api/vms/abc/reset")),
+            (P::VmPowerMgmt, "/vms/abc".into())
+        );
         assert_eq!(
             priv_of(requirement("POST", "/api/vms/abc/start")),
             (P::VmPowerMgmt, "/vms/abc".into())

@@ -68,6 +68,7 @@ pub mod tasks;
 pub mod tls;
 pub mod unavailable;
 pub mod vm_devices;
+pub mod vm_guest_exec;
 pub mod vm_hw;
 pub mod vm_import;
 pub mod vm_migration;

@@ -484,3 +484,128 @@ fn san_section_plans_creates_updates_and_prunes() {
     );
     assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
 }
+
+// ------------------------------------------------------------ backup jobs
+
+#[cfg(feature = "backup")]
+mod backup_jobs {
+    use super::*;
+    use serde_json::json;
+
+    const JOBS: &str = r#"
+backup_jobs:
+  - id: nightly
+    schedule: "30 2 * * *"
+    targets: ["100", "101"]
+    storage: bulk-dump
+    retention: {keep_last: 3}
+"#;
+
+    /// What the node reports for a job: the spec's fields plus run history.
+    fn live_job(id: &str, extra: serde_json::Value) -> BackupJobSpec {
+        let mut v = serde_json::json!({
+            "id": id, "schedule": "30 2 * * *", "targets": ["100", "101"],
+            "storage": "bulk-dump", "retention": {"keep_last": 3},
+            "last_run": 1_700_000_000, "last_status": "ok", "next_run": 1_700_086_400,
+        });
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().cloned().unwrap_or_default());
+        serde_json::from_value(v).unwrap()
+    }
+
+    fn live_with(jobs: Vec<BackupJobSpec>) -> Live {
+        Live {
+            backup_jobs: jobs,
+            ..Live::default()
+        }
+    }
+
+    #[test]
+    fn backup_jobs_use_the_api_schema_and_are_checked() {
+        let s = parse(JOBS).unwrap();
+        let j = &s.backup_jobs.as_ref().unwrap()[0];
+        assert_eq!(backup_job_id(j), "nightly");
+        for (text, want) in [
+            ("backup_jobs: [{schedule: daily, targets: ['1']}]", "needs an id"),
+            (
+                "backup_jobs: [{id: a, schedule: daily, targets: ['1']}, {id: a, schedule: daily, targets: ['1']}]",
+                "listed twice",
+            ),
+            ("backup_jobs: [{id: a, schedule: ' ', targets: ['1']}]", "schedule is required"),
+        ] {
+            let e = parse(text).unwrap_err();
+            assert!(e.contains(want), "{text}: {e}");
+        }
+    }
+
+    #[test]
+    fn plan_creates_updates_and_prunes_jobs_by_id() {
+        let spec = parse(JOBS).unwrap();
+        // absent: created
+        let p = plan(&spec, &live_with(vec![]), false);
+        assert_eq!(actions(&p), vec!["Create backup_job nightly"], "{p:?}");
+        // identical apart from the server's run history: nothing to do
+        let p = plan(
+            &spec,
+            &live_with(vec![live_job("nightly", json!({}))]),
+            true,
+        );
+        assert!(p.in_sync(), "{p:?}");
+        // a differing field is an update that names it
+        let p = plan(
+            &spec,
+            &live_with(vec![live_job("nightly", json!({"schedule": "0 4 * * *"}))]),
+            false,
+        );
+        assert_eq!(actions(&p), vec!["Update backup_job nightly"]);
+        assert!(p.changes[0].details[0].starts_with("schedule:"), "{p:?}");
+        // a job the spec lacks: kept, unless pruned
+        let live = live_with(vec![
+            live_job("nightly", json!({})),
+            live_job("old", json!({})),
+        ]);
+        assert!(plan(&spec, &live, false).in_sync());
+        assert_eq!(
+            actions(&plan(&spec, &live, true)),
+            vec!["Delete backup_job old"]
+        );
+        // an absent section is unmanaged
+        let none = parse("version: 1").unwrap();
+        assert!(plan(&none, &live, true).in_sync());
+    }
+
+    #[test]
+    fn export_lists_jobs_without_run_history_and_round_trips() {
+        let live = live_with(vec![live_job("nightly", json!({}))]);
+        let e = export(&live);
+        let yaml = serde_yaml::to_string(&e).unwrap();
+        assert!(
+            yaml.contains("backup_jobs:") && yaml.contains("id: nightly"),
+            "{yaml}"
+        );
+        for k in ["last_run", "last_status", "next_run"] {
+            assert!(!yaml.contains(k), "{k} leaked into the export: {yaml}");
+        }
+        let back = parse(&yaml).unwrap();
+        assert!(plan(&back, &live, true).in_sync());
+    }
+
+    #[test]
+    fn rollback_is_applying_an_earlier_export_with_prune() {
+        // before: one job; after: edited + a second one; the earlier export
+        // restores the first and removes the second
+        let before = live_with(vec![live_job("nightly", json!({}))]);
+        let saved = parse(&serde_yaml::to_string(&export(&before)).unwrap()).unwrap();
+        let after = live_with(vec![
+            live_job("nightly", json!({"enabled": false})),
+            live_job("extra", json!({})),
+        ]);
+        let p = plan(&saved, &after, true);
+        assert_eq!(
+            actions(&p),
+            vec!["Update backup_job nightly", "Delete backup_job extra"],
+            "{p:?}"
+        );
+    }
+}
