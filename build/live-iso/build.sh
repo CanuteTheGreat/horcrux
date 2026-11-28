@@ -60,6 +60,18 @@ if [ "$PROJECT" = horcrux ]; then
   mkdir -p "$OUT/mgr"; _mc=$(docker create $PLAT "$TAG-app" true 2>/dev/null) \
     && docker cp "$_mc:/out/usr/share/horcrux/prebuilt/." "$OUT/mgr/" >/dev/null 2>&1; [ -z "$_mc" ] || docker rm -f "$_mc" >/dev/null 2>&1 || true
 fi
+# Overlay packages named in project/packages.txt (app-containers/grype-bin: upstream release binary, ::gentoo's grype is too old and
+# has no arm64) have no ebuild in the rootfs stage (the Horcrux overlay is only synced onto installed machines, and the CTG binhost
+# lags a new package until its first CI build), so `emerge --noreplace $(live-pkglist ...)` died with "no ebuilds to satisfy".
+# Stage them from the repo's own overlay (single source of truth: gentoo/) into a tiny local repo that project/portage/ ships to
+# /etc/portage/hx-local-repo (Dockerfile.rootfs `COPY project/portage/ /etc/portage/`). Generated, git-ignored.
+_hl="$HERE/project/portage/hx-local-repo"; rm -rf "$_hl" "$HERE/project/portage/repos.conf"
+if [ -d "$REPO/gentoo/app-containers/grype-bin" ]; then
+  mkdir -p "$_hl/app-containers" "$_hl/metadata" "$_hl/profiles" "$HERE/project/portage/repos.conf"
+  cp -a "$REPO/gentoo/app-containers/grype-bin" "$_hl/app-containers/"
+  echo hx-local > "$_hl/profiles/repo_name"; printf 'masters = gentoo\nthin-manifests = true\n' > "$_hl/metadata/layout.conf"
+  printf '[hx-local]\nlocation = /etc/portage/hx-local-repo\nauto-sync = no\n' > "$HERE/project/portage/repos.conf/hx-local.conf"
+fi
 lap "stage 2: gentoo rootfs (stage3 + binhost + ccache)"
 docker build $PLAT $ARCHARGS -f common/Dockerfile.rootfs --build-arg APP_IMAGE=$TAG-app --build-arg PROJECT=$PROJECT \
     --build-arg ISO_LABEL=$ISO_LABEL --build-arg PROJECT_TITLE="$PROJECT_TITLE" -t $TAG-rootfs . 2>&1 | tee "$OUT/rootfs-build.log" | tail -40
