@@ -147,8 +147,15 @@ def main():
             print(f"[gate] {name}: {' '.join(tcmd)}", flush=True)
             with open(os.path.join(out, f"test-{name}.log"), "w") as lf:
                 p = subprocess.Popen(tcmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+                tb = 0
                 for line in p.stdout:
                     lf.write(line)
+                    if line.startswith("Traceback"):
+                        tb = 25
+                    elif tb > 0:
+                        tb -= 1
+                        print(f"  {name}: {line.rstrip()[:400]}", flush=True)
+                        continue
                     if line.startswith(("[PASS]", "[FAIL]", "RESULT", "Traceback")) or "Error" in line[:60]:
                         print(f"  {name}: {line.rstrip()[:(3000 if 'diag-x11' in line else 260)]}", flush=True)
                 p.wait()
