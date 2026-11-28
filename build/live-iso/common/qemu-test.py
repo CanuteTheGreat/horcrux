@@ -1352,7 +1352,9 @@ class Runner:
                 bad = vm.expect_raw(r"(ANSWER-FILE-ERROR[^\n]*|No answer file found[^\n]*)", 3, consume=False)
                 self.step("answer-file-accepted", not bad, bad.group(0).decode() if bad else "validated")
                 ok = self.wait_installer(vm, 1700 * (2 if a.fs == "zfs" and SLOW > 1 else 1), stall_retry)   # ZFS under TCG: 2x the budget
-                self.step("installer-finished", ok and b"AUTOINSTALL-OK" in ok.group(0), ok.group(0).decode() if ok else "timeout" + serial_tail(vm))
+                good = bool(ok and b"AUTOINSTALL-OK" in ok.group(0))
+                # a FAILED install names only the command; the command's own output is the lines before it, so print them (run 7208 apple-t2 apply)
+                self.step("installer-finished", good, (ok.group(0).decode() + ("" if good else serial_tail(vm, 40))) if ok else "timeout" + serial_tail(vm))
                 vm.shot("auto-finished")
                 if a.headless_gates:
                     # the live clock started MONTHS off: the installer must have corrected it and written the hardware clock (liveinst/rtc.py `rtc:` line)
@@ -2156,6 +2158,9 @@ class Runner:
         dlg = [("Interface to configure", nic), ("IP configuration", "s"), ("IP address/prefix", addr)]
         if a.project == "horcrux":
             dlg += [("Gateway", "10.0.2.2"), ("DNS server", "10.0.2.3")]
+        # the menu asks for the IPv6 mode after the IPv4 answers (484be61c); an unanswered prompt left the menu waiting, dhcpcd.conf was never
+        # written and the step failed with the guest still on its DHCP lease (run 7208). Keep the default (auto).
+        dlg += [("IPv6: \\(a\\)uto", "a")]
         t = self.opt(vm, "2", dlg, timeout=120)
         # dhcpcd re-applies the address and the port-forwarded sshd can be unreachable for a while afterwards: on the aarch64 TCG
         # guest the single immediate ssh failed (run 1302, rc 255 -> "ssh still works" FAIL) while x86 KVM passed. Retry for up to
