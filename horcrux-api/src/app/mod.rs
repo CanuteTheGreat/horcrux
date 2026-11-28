@@ -2036,6 +2036,59 @@ async fn stop_vm(
 struct DeleteVmQuery {
     #[serde(default, deserialize_with = "deserialize_flag")]
     purge: bool,
+    /// Proxmox's "Destroy unreferenced disks owned by guest": also delete
+    /// disk images named for this VM in its disk directories that no VM has
+    /// attached (disks detached with "keep the file").
+    #[serde(default, deserialize_with = "deserialize_flag")]
+    destroy_unreferenced_disks: bool,
+}
+
+/// Is `file` a disk image Horcrux names for VM `id` (`<id>.qcow2`,
+/// `<id>-disk<N>.qcow2`)?
+fn owned_disk_name(id: &str, file: &str) -> bool {
+    file == format!("{id}.qcow2")
+        || file
+            .strip_prefix(&format!("{id}-disk"))
+            .and_then(|r| r.strip_suffix(".qcow2"))
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Disk images named for `vm` in the directories its disks live in that no
+/// VM (this one included) has attached.
+async fn unreferenced_disks(state: &AppState, vm: &VmConfig) -> Vec<std::path::PathBuf> {
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut dirs: Vec<std::path::PathBuf> = vm
+        .disks
+        .iter()
+        .filter_map(|d| std::path::Path::new(&d.path).parent().map(canon))
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    let attached: std::collections::HashSet<std::path::PathBuf> = state
+        .vm_manager
+        .list_vms()
+        .await
+        .iter()
+        .flat_map(|v| v.disks.iter().map(|d| canon(std::path::Path::new(&d.path))))
+        .collect();
+    let mut out = Vec::new();
+    for dir in dirs {
+        let Ok(mut rd) = tokio::fs::read_dir(&dir).await else {
+            continue;
+        };
+        while let Ok(Some(e)) = rd.next_entry().await {
+            let p = e.path();
+            let named = p
+                .file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(|f| owned_disk_name(&vm.id, f));
+            if named && p.is_file() && !attached.contains(&canon(&p)) {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// `1`/`true`/`yes` (Proxmox sends `purge=1`).
@@ -2112,14 +2165,37 @@ async fn delete_vm(
     api::protection::ensure_vm_unlocked(&state, &id, "deleting it").await?;
     api::protection::ensure_vm_unprotected(&state, &id).await?;
     // Get VM name before deletion
-    let vm_name = state
-        .vm_manager
-        .get_vm(&id)
-        .await
-        .map(|vm| vm.name)
-        .unwrap_or_else(|_| id.clone());
+    let q = q.map(|Query(q)| q).unwrap_or_default();
+    let before = state.vm_manager.get_vm(&id).await.ok();
+    let vm_name = before
+        .as_ref()
+        .map(|vm| vm.name.clone())
+        .unwrap_or_else(|| id.clone());
+    // found while the VM's disk directories are still known
+    let stray = match (&before, q.destroy_unreferenced_disks) {
+        (Some(vm), true) => unreferenced_disks(&state, vm).await,
+        _ => Vec::new(),
+    };
 
     state.vm_manager.delete_vm(&id).await?;
+    for p in stray {
+        // never under a linked clone (an overlay on that image)
+        let users = state.vm_manager.vms_backed_by(&p).await;
+        if !users.is_empty() {
+            tracing::warn!(
+                "VM {id} deleted; kept {} (base of {})",
+                p.display(),
+                users.join(", ")
+            );
+        } else if let Err(e) = tokio::fs::remove_file(&p).await {
+            tracing::warn!(
+                "VM {id} deleted; could not delete its unused disk {}: {e}",
+                p.display()
+            );
+        } else {
+            tracing::info!("VM {id}: unused disk {} deleted", p.display());
+        }
+    }
     api::protection::forget(&state, &api::protection::vm_key(&id)).await;
     // Its firewall goes with it: the rules used to stay stored, be
     // re-installed at every start, and apply to a new VM with the same id.
@@ -2130,7 +2206,7 @@ async fn delete_vm(
     {
         tracing::warn!("VM {id} deleted, but its firewall rules stayed: {e}");
     }
-    if q.map(|Query(q)| q.purge).unwrap_or(false) {
+    if q.purge {
         purge_vm_from_jobs(&state, &id).await;
     }
 
@@ -6224,5 +6300,21 @@ mod delete_purge_tests {
         };
         assert!(q("purge=1") && q("purge=true"));
         assert!(!q("purge=0") && !q(""));
+    }
+}
+
+#[cfg(test)]
+mod delete_unused_disk_tests {
+    use super::*;
+
+    #[test]
+    fn only_files_named_for_the_vm_count_as_its_disks() {
+        assert!(owned_disk_name("vm-1", "vm-1.qcow2"));
+        assert!(owned_disk_name("vm-1", "vm-1-disk3.qcow2"));
+        assert!(!owned_disk_name("vm-1", "vm-10.qcow2"));
+        assert!(!owned_disk_name("vm-1", "vm-1-disk.qcow2"));
+        assert!(!owned_disk_name("vm-1", "vm-1-diskx.qcow2"));
+        assert!(!owned_disk_name("vm-1", "vm-1-disk2.qcow2.bak"));
+        assert!(!owned_disk_name("vm-1", "vm-1.serial.log"));
     }
 }
