@@ -127,6 +127,8 @@ pub fn portage_installed(root: &FsPath) -> Vec<Installed> {
 }
 
 /// `[ebuild     U  ] sys-apps/foo-2.0:0 [1.9]` -> (atom, new version).
+/// Rebuilds (`R`) and new slots (`NS`) count too: Upgrade All merges them, so
+/// the pending list must show them (dogfood 2026-11-27: 5 listed, 22 merged).
 pub fn parse_pretend_upgrades(text: &str) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for l in text.lines() {
@@ -136,7 +138,11 @@ pub fn parse_pretend_upgrades(text: &str) -> HashMap<String, String> {
         let Some((flags, rest)) = rest.split_once(']') else {
             continue;
         };
-        if !flags.contains('U') {
+        // U = upgrade/downgrade, R = rebuild (new USE, changed deps), NS = a
+        // new SLOT of an installed package (kernels, zfs-kmod). A plain N is a
+        // new dependency, not an installed package, so it never matches.
+        let new_slot = flags.contains('N') && flags.contains('S');
+        if !(flags.contains('U') || flags.contains('R') || new_slot) {
             continue;
         }
         let Some(tok) = rest.split_whitespace().next() else {
@@ -756,12 +762,17 @@ mod tests {
     }
 
     #[test]
-    fn pretend_output_lists_only_upgrades() {
-        let t = "[ebuild     U  ] sys-apps/foo-2.0:0 [1.9] USE=\"a\"\n[ebuild  N     ] dev-libs/new-1.0\n[ebuild   R    ] x/y-1\n[ebuild     UD ] app-misc/down-1.0 [2.0]\nrandom\n";
+    fn pretend_output_lists_upgrades_rebuilds_and_new_slots() {
+        let t = "[ebuild     U  ] sys-apps/foo-2.0:0 [1.9] USE=\"a\"\n[ebuild  N     ] dev-libs/new-1.0\n[ebuild   R    ] x/y-1\n[ebuild     UD ] app-misc/down-1.0 [2.0]\n[ebuild  N S   ] sys-kernel/gentoo-kernel-bin-6.18.65:6.18.65 [6.18.64]\n[blocks B      ] a/b\nrandom\n";
         let u = parse_pretend_upgrades(t);
-        assert_eq!(u.len(), 2);
+        // plain N (a new build dep, not installed) is also parsed but harmless:
+        // list() only looks up installed atoms.
+        assert_eq!(u.len(), 4);
+        assert!(!u.contains_key("dev-libs/new"));
         assert_eq!(u["sys-apps/foo"], "2.0");
+        assert_eq!(u["x/y"], "1");
         assert_eq!(u["app-misc/down"], "1.0");
+        assert_eq!(u["sys-kernel/gentoo-kernel-bin"], "6.18.65");
     }
 
     #[test]
