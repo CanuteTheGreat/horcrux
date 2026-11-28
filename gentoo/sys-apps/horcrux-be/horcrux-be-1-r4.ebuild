@@ -25,6 +25,10 @@ REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 # Kernel safety: every boot environment keeps KERNELS_KEEP (default 2) kernels in /boot/be/<be>/ -> one GRUB entry each ("previous kernel"), a new kernel
 # is booted ONCE (grub next_entry) and becomes the default only after the boot-time service horcrux-be-good ran in that boot. Settings:
 # /etc/horcrux/be.conf (KERNELS_KEEP, KERNEL_TRIAL, GOOD_DELAY). OpenRC script and systemd unit both ship; the program never reboots.
+# -r4: boot entries no longer force the root pool import (zfsforce=1) when their initramfs host id is the pool's. be.conf ZFS_FORCE_IMPORT=auto|yes|no
+# (default auto, also for installs whose be.conf has no such key): auto forces only an entry whose initramfs host id differs from the pool's or is
+# unknown, so a consistent install keeps ZFS's "pool is in use by another host" protection and an inconsistent one still boots. pkg_postinst
+# regenerates grub.cfg, which is how an existing install picks the new rule up. `horcrux-be import-policy` shows the decision per entry.
 RDEPEND="
 	${PYTHON_DEPS}
 	net-misc/rsync

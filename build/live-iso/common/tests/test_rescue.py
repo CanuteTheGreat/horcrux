@@ -159,7 +159,7 @@ class Scan(unittest.TestCase):
 
     def test_static_zfs_grubcfg(self):
         c = SC.static_zfs_grubcfg("Horcrux", "6.12.1", "uuid-1", "rpool/ROOT", "")
-        self.assertIn("root=ZFS=rpool/ROOT zfsforce=1", c)
+        self.assertIn("root=ZFS=rpool/ROOT zfsforce=1", c)      # the rescue entry keeps the force (foreign host id)
         self.assertNotIn("serial", c)
 
     def test_os_pretty(self):

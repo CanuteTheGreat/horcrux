@@ -42,6 +42,10 @@ def conf(path=CONF):
          # default only after `mark-good` ran in that boot, otherwise the next boot is the last known-good kernel again
          "KERNELS_KEEP": "2", "KERNEL_TRIAL": "yes", "GOOD_DELAY": "60", "BOOT_LOADER": "grub", "GRUBENV": "",
          "MODULES_DIR": "/lib/modules",
+         # root-pool import policy of the boot entries (zfsforce=1 on the kernel command line): auto = force an entry only when its
+         # initramfs host id differs from the host id stored in the pool (a consistent install imports cleanly and keeps ZFS's
+         # protection against a pool that another machine still has imported), yes = every entry forces, no = none does
+         "ZFS_FORCE_IMPORT": "auto",
          # directories that hold user data / VM disks: they MUST be their own datasets (outside rpool/ROOT), or a rollback would lose them
          "DATA_PATHS": "/home /var/lib/libvirt /var/lib/horcrux/vms /var/lib/docker /var/lib/lxc /var/lib/incus /var/lib/lxd"}
     try:
@@ -405,6 +409,69 @@ def entry_id(be, kver=None):
     return f"be-{be}" if kver is None else f"be-{be}-k-{re.sub(r'[^A-Za-z0-9_.-]', '_', kver)}"
 
 
+FORCE_MODES = ("auto", "yes", "no")
+
+
+def force_mode(c):
+    m = str(c.get("ZFS_FORCE_IMPORT", "auto")).strip().lower()
+    return m if m in FORCE_MODES else "auto"
+
+
+def hostid_of(raw):
+    """host id (int) of the 4 bytes of an /etc/hostid file; None when absent, short or all zero (= no host id)"""
+    if not raw or len(raw) != 4 or raw == b"\0\0\0\0":
+        return None
+    return int.from_bytes(raw, sys.byteorder)
+
+
+def initramfs_hostid(img):
+    """host id inside the initramfs image `img` (lsinitrd -f etc/hostid), None when it has none or cannot be read"""
+    try:
+        r = subprocess.run(["lsinitrd", "-f", "etc/hostid", img], capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return hostid_of(r.stdout) if r.returncode == 0 else None
+
+
+def parse_hostid(text):
+    m = re.search(r"^\s*hostid:\s*(\d+)\s*$", text or "", re.M)
+    return int(m.group(1)) or None if m else None
+
+
+def pool_hostid(pool):
+    """host id stored in the pool's config (what the last importing host was): zdb -C, else the first vdev label; None = unknown"""
+    r = subprocess.run(["zdb", "-C", pool], capture_output=True, text=True)
+    hid = parse_hostid(r.stdout) if r.returncode == 0 else None
+    if hid:
+        return hid
+    r = subprocess.run(["zpool", "list", "-v", "-H", "-L", "-P", pool], capture_output=True, text=True)
+    for line in (r.stdout.splitlines() if r.returncode == 0 else []):
+        dev = line.split("\t")[1].strip() if line.startswith("\t") and len(line.split("\t")) > 1 else ""
+        if dev.startswith("/dev/"):
+            z = subprocess.run(["zdb", "-l", dev], capture_output=True, text=True)
+            hid = parse_hostid(z.stdout)
+            if hid:
+                return hid
+    return None
+
+
+def force_plan(c, boot, pool, bes, kernels, previous, pool_hid=None, img_hid=None):
+    """zfsforce decision for render_grub: True/False for the whole menu (ZFS_FORCE_IMPORT yes/no), or in auto mode a dict {menu id: bool}
+    that forces exactly the entries whose initramfs host id is not the pool's (or either is unknown: then the old safe behaviour).
+    pool_hid / img_hid(path) are test hooks."""
+    mode = force_mode(c)
+    if mode != "auto":
+        return mode == "yes"
+    ph = pool_hid if pool_hid is not None else pool_hostid(pool)
+    img_hid = img_hid or initramfs_hostid
+    plan = {}
+    for b in bes:
+        plan[entry_id(b)] = not (ph and img_hid(os.path.join(boot, "be", b, "initramfs.img")) == ph)
+        for kv in (previous or {}).get(b, []):
+            plan[entry_id(b, kv)] = not (ph and img_hid(os.path.join(boot, "be", b, "kernels", kv, "initramfs.img")) == ph)
+    return plan
+
+
 RETRY_ID = "hx-retry"
 RETRY_ROUNDS = 3
 
@@ -433,7 +500,7 @@ def fallback_ids(order, kernels, previous, good, default):
 
 
 def render_grub(bes, active, pool, boot_uuid, cmdline="", timeout=5, serial_lines=None, title="Horcrux", kernels=None,
-                previous=None, default=None, good=None, env_file="/grub/grubenv", cfg_file="/grub/grub.cfg"):
+                previous=None, default=None, good=None, env_file="/grub/grubenv", cfg_file="/grub/grub.cfg", force=False):
     """grub.cfg text. bes: list of BE names that have a kernel dir; active goes first and is the default.
     kernels {be: kver of the newest kernel}; previous {be: [kver, ...]} older kernels kept bootable (newest first), each its own menu
     entry; good {be: kver known to have booted}; default = menu id to boot by default (the known-good kernel while the newest one is
@@ -448,7 +515,11 @@ def render_grub(bes, active, pool, boot_uuid, cmdline="", timeout=5, serial_line
     - the environment block is read only when it exists, from the /boot file system itself (env_file, relative to $root, not $prefix);
     - a one-shot trial kernel is booted only when GRUB managed to clear next_entry first (save_env succeeded): a loader that cannot
       write the block never retries a hanging trial forever; the previous default becomes the first fallback;
-    - the countdown is always > 0 (menu_timeout)."""
+    - the countdown is always > 0 (menu_timeout).
+
+    force: `zfsforce=1` on the entries. False (default) = none; True = all; dict {menu id: bool} = per entry (missing = True). Forcing the
+    import defeats ZFS's check that another host still has the pool imported, so only an entry whose initramfs cannot import the pool
+    cleanly (host id differs from the pool's) carries it (force_plan, be.conf ZFS_FORCE_IMPORT)."""
     timeout = menu_timeout(timeout)
     order = [active] + [b for b in bes if b != active] if active in bes else list(bes)
     ser = (serial_lines + "\nterminal_input console serial\nterminal_output console serial\n") if serial_lines else ""
@@ -491,7 +562,8 @@ def render_grub(bes, active, pool, boot_uuid, cmdline="", timeout=5, serial_line
         label = f"{title} - {b}" + ("" if newest else ", previous kernel") + (f" ({', '.join(tags)})" if tags else "") + (f"  [kernel {kver}]" if kver else "")
         img = f"/be/{b}/vmlinuz" if newest else f"/be/{b}/kernels/{kver}/vmlinuz"
         ird = f"/be/{b}/initramfs.img" if newest else f"/be/{b}/kernels/{kver}/initramfs.img"
-        return [f'menuentry "{label}" --id {d} {{', f"    linux {img} root=ZFS={pool}/ROOT/{b} zfsforce=1 ro {cmdline}".rstrip(),
+        zf = " zfsforce=1" if (force.get(d, True) if isinstance(force, dict) else force) else ""
+        return [f'menuentry "{label}" --id {d} {{', f"    linux {img} root=ZFS={pool}/ROOT/{b}{zf} ro {cmdline}".rstrip(),
                 f"    initrd {ird}", "}"]
 
     for b in order:
@@ -691,7 +763,8 @@ def grubcfg(c, boot=BOOT, uuid=None):
     env = os.path.relpath(grubenv_path(c, boot), boot)
     env = "/" + env if not env.startswith("..") else "/grub/grubenv"   # GRUB reads it from the /boot file system ($root)
     text = render_grub(bes, act, pool, uuid or boot_uuid(boot), c.get("CMDLINE", ""), c.get("TIMEOUT", "5"), serial, kernels=kern,
-                       previous=prev, default=default, good=goods, env_file=env)
+                       previous=prev, default=default, good=goods, env_file=env,
+                       force=force_plan(c, boot, pool, bes, kern, prev))
     os.makedirs(os.path.join(boot, "grub"), exist_ok=True)
     ensure_grubenv(c, boot)
     tmp = os.path.join(boot, "grub", "grub.cfg.new")
@@ -1017,12 +1090,27 @@ def init_installer(c, be="horcrux", boot=BOOT, uuid=None):
     return grubcfg(c, boot, uuid)
 
 
+def cmd_import_policy(c, boot=BOOT):
+    pool = c["POOL"]
+    bes = [b for b in be_datasets(pool) if os.path.isfile(os.path.join(boot, "be", b, "vmlinuz"))]
+    prev = {b: be_kernels(boot, b)[1] for b in bes}
+    ph = pool_hostid(pool)
+    print(f"ZFS_FORCE_IMPORT={force_mode(c)}  pool {pool} host id: {ph if ph else 'unknown'}")
+    plan = force_plan(c, boot, pool, bes, {}, prev, pool_hid=ph)
+    for b in bes:
+        for eid in [entry_id(b)] + [entry_id(b, kv) for kv in prev[b]]:
+            f = plan.get(eid, True) if isinstance(plan, dict) else plan
+            print(f"{eid:<40} {'zfsforce=1 (initramfs host id differs from the pool or is unknown)' if f and force_mode(c) == 'auto' else 'zfsforce=1' if f else 'no force'}")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="horcrux-be", description="ZFS boot environments and rollback")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("list"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("pin", help="keep a boot environment or BE@snapshot forever (never pruned)"); p.add_argument("name")
     p = sub.add_parser("unpin"); p.add_argument("name")
+    sub.add_parser("import-policy", help="show which boot entries force the root pool import (zfsforce=1) and why (ZFS_FORCE_IMPORT)")
     sub.add_parser("check", help="verify that user data / VM disks are outside the boot environments (exit 1 when not)")
     p = sub.add_parser("snapshot"); p.add_argument("name", nargs="?")
     p = sub.add_parser("create"); p.add_argument("name"); p.add_argument("--from", dest="src", help="snapshot, BE@snap")
@@ -1053,6 +1141,8 @@ def main(argv=None):
         cmd_pin(c, a.name)
     elif a.cmd == "unpin":
         cmd_pin(c, a.name, False)
+    elif a.cmd == "import-policy":
+        return cmd_import_policy(c)
     elif a.cmd == "check":
         d = data_isolation(c)
         for x in d:

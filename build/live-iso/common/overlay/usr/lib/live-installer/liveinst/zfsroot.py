@@ -158,6 +158,19 @@ def ensure_initramfs_hostid(inst):
     inst.log("initramfs host id = system host id = pool host id")
 
 
+def force_arg(inst, kver):
+    """The ' zfsforce=1' kernel argument or "" for the static (non-BE) grub entry of kernel `kver`, by the zfs_force_import setting: yes/no as said, auto = forced
+    only when the initramfs host id is not the pool's (unknown = forced, the old behaviour)"""
+    from . import be
+    mode = str(inst.c.get("zfs_force_import", "auto")).lower()
+    if mode in ("yes", "no"):
+        return " zfsforce=1" if mode == "yes" else ""
+    have = be.hostid_of(_initramfs_hostid(inst, f"/boot/initramfs-{kver}.img"))
+    sysid = be.hostid_of(open(f"{inst.target}/etc/hostid", "rb").read() if os.path.exists(f"{inst.target}/etc/hostid") else b"")
+    want = be.pool_hostid(pool_name(inst.c)) or sysid
+    return "" if (have and have == want) else " zfsforce=1"
+
+
 def mkpool(inst):
     c = inst.c
     devs = [inst.layout(d)[4] for d in c["disks"]]
@@ -223,6 +236,8 @@ KEEP="5"
 AUTO_SNAPSHOT="yes"
 TIMEOUT="5"
 CMDLINE="{cmdline}"
+# root pool import: auto = zfsforce=1 only on boot entries whose initramfs host id differs from the pool's; yes = always; no = never
+ZFS_FORCE_IMPORT="{force}"
 KERNEL_GLOB="{kglob}"
 # kernels kept bootable per boot environment (one boot-menu entry each); a new kernel boots once as a trial and becomes the default only
 # after horcrux-be-good marked it known-good (KERNEL_TRIAL=no: the newest kernel is the default at once); GOOD_DELAY = seconds into a boot
@@ -256,7 +271,7 @@ def configure(inst, cmdline_extra="", kernel_glob="*"):
     configure_zram(inst)
     # systemd: the image's zram-swap.service (the same script as OpenRC's zram-swap, reads /etc/conf.d/zram-swap) is the one zram swap,
     # enabled by cfg_finish_config
-    inst.write("/etc/horcrux/be.conf", BE_CONF.format(pool=pool_name(inst.c), cmdline=cmdline_extra.strip(), kglob=kernel_glob))
+    inst.write("/etc/horcrux/be.conf", BE_CONF.format(pool=pool_name(inst.c), cmdline=cmdline_extra.strip(), kglob=kernel_glob, force=inst.c.get("zfs_force_import", "auto")))
     inst.write("/etc/portage/bashrc", PORTAGE_BASHRC)
     inst.write("/etc/kernel/postinst.d/90-horcrux-be", "#!/bin/sh\nexec horcrux-be sync\n", 0o755)
     # the boot-time import of the other pools/datasets: zfs-import/zfs-mount (OpenRC) or zfs-import-cache/zfs-mount + zfs.target (systemd);

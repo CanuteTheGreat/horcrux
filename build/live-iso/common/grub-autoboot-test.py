@@ -163,6 +163,8 @@ def build_disk(img, case, d):
     cfg = BE.render_grub(["horcrux"], "horcrux", "rpool", uuid, f"console={img.a['console']} panic=0 loglevel=7", TIMEOUT,
                          img.a["serial"], kernels={"horcrux": "0.0.2-newest"}, previous={"horcrux": [PREV]},
                          default=case.get("default"), good={"horcrux": case.get("good", "0.0.2-newest")})
+    # the installed default: the boot entries do NOT force the root pool import (be.conf ZFS_FORCE_IMPORT, tests/test_zfs_force_import.py)
+    assert "zfsforce" not in cfg, "the generated menu forces the pool import"
     if case.get("strip"):
         cfg = "".join(l for l in cfg.splitlines(True) if not l.lstrip().startswith("set fallback="))
     open(os.path.join(w, "grub/grub.cfg"), "w").write(cfg)
