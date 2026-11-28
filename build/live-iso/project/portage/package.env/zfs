@@ -1,2 +1,2 @@
-# kernel-module build fails inside the ccache wrapper toolchain (configure: cannot compute suffix of object files)
-sys-fs/zfs-kmod noccache.conf
+# kernel-module build fails inside the ccache wrapper toolchain (configure: cannot compute suffix of object files); since 2.4 sys-fs/zfs builds the module
+sys-fs/zfs noccache.conf

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""print the installed packages that zfs/zfs-kmod need headers/libs from at build time (DEPEND + BDEPEND, flags ignored).
+"""print the installed packages that sys-fs/zfs (userland + module, USE=modules) needs headers/libs from at build time (DEPEND + BDEPEND, flags ignored).
 
 The gnome-light layer strips /usr/include (and static libs) to fit the ISO under 2 GiB; Portage keeps the records, the files are gone, so
 `emerge --nodeps` of exactly these packages puts their development files back (binary packages, no source build) before zfs is compiled
@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 atoms = set()
-for pkg in sys.argv[1:] or ["sys-fs/zfs-2.3.9", "sys-fs/zfs-kmod-2.3.9"]:
+for pkg in sys.argv[1:] or ["sys-fs/zfs-2.4.4"]:
     for var in ("DEPEND", "BDEPEND", "RDEPEND"):
         out = subprocess.run(["portageq", "metadata", "/", "ebuild", pkg, var], capture_output=True, text=True).stdout
         for m in re.finditer(r"(?<![\w/+-])((?:[a-z0-9]+-[a-z0-9]+|virtual)/[A-Za-z0-9_+][A-Za-z0-9_+.-]*?)(?=[\s:\[\])]|-[0-9]|$)", out):

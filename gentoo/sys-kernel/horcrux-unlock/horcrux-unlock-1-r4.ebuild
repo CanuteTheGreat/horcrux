@@ -49,11 +49,11 @@ src_install() {
 		EOF2
 	fi
 	# ZFS root + dist-kernel: the kernel update must rebuild the ZFS module IN THE SAME TRANSACTION and before the new initramfs is made
-	# (without USE=dist-kernel on zfs-kmod dracut fails with "Failed to find module zfs" and the ZFS-root laptop does not boot).
+	# (without USE=dist-kernel on the module package dracut fails with "Failed to find module zfs" and the ZFS-root laptop does not boot).
+	# -r4: OpenZFS >= 2.4 builds the module in sys-fs/zfs itself (USE=modules); sys-fs/zfs-kmod is retired.
 	insinto /etc/portage/package.use
 	newins - horcrux-zfs <<-'EOF2'
 		# owned by sys-kernel/horcrux-unlock: rebuild the ZFS kernel module with every dist-kernel update (see the package ebuild)
-		sys-fs/zfs rootfs dist-kernel
-		sys-fs/zfs-kmod dist-kernel
+		sys-fs/zfs rootfs dist-kernel modules
 	EOF2
 }

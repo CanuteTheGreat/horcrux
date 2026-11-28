@@ -49,7 +49,7 @@ COPY --from=kernel /lib/modules/ /lib/modules/
 COPY --from=kernel /usr/src/ /usr/src/
 RUN --mount=type=cache,id=hs-binpkgs,target=/var/cache/binpkgs,sharing=locked \
     --mount=type=cache,id=hs-distfiles,target=/var/cache/distfiles,sharing=locked \
-    set -e; ls -l /usr/src; emerge --noreplace --usepkg=n --getbinpkg=n =sys-fs/zfs-kmod-2.3.9; emerge --noreplace =sys-fs/zfs-2.3.9; \
+    set -e; ls -l /usr/src; emerge --noreplace --usepkg=n --getbinpkg=n =sys-fs/zfs-2.4.4; \
     kr=$(cat /boot/.kernelrelease); find /lib/modules/$kr -name 'zfs.ko*' | grep .; depmod $kr
 
 COPY gentoo/t2/live/overlay/ /

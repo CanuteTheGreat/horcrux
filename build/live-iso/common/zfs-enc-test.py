@@ -655,8 +655,8 @@ class ZRun(qt.Runner):
                         "grep -c canutethegreat /etc/ctg-backup/paths /etc/ctg-backup/excludes; ls /etc/ctg-backup/required 2>&1 | head -1")
         self.step("backup-in-core-generic-not-provisioned-no-owner-paths", "BACKUP-RC=0" in o and "CONTENT-RC=0" in o and "/etc/cron.d/horcrux-backup" in o and "CRONDUP" in o
                   and "paths:0" in o and "excludes:0" in o and "No such file" in o, re.sub(r"\s+", " ", o).strip()[:300])
-        rc, o = self.sh("grep -x 'sys-fs/zfs-kmod dist-kernel' /etc/portage/package.use/horcrux-core && grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-kmod-*/USE && echo KMOD-DIST-KERNEL-OK; "
-                        "grep -x 'sys-fs/zfs dist-kernel' /etc/portage/package.use/horcrux-core | head -1; grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-[0-9]*/USE && echo ZFS-DIST-KERNEL-OK")
+        rc, o = self.sh("grep -x 'sys-fs/zfs rootfs dist-kernel modules' /etc/portage/package.use/horcrux-core && grep -qw modules /var/db/pkg/sys-fs/zfs-[0-9]*/USE && ! qlist -I sys-fs/zfs-kmod | grep -q . && echo KMOD-DIST-KERNEL-OK; "
+                        "grep -x 'sys-fs/zfs rootfs dist-kernel modules' /etc/portage/package.use/horcrux-core | head -1; grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-[0-9]*/USE && echo ZFS-DIST-KERNEL-OK")
         self.step("zfs-dist-kernel-rule-owned-by-core-and-active", "KMOD-DIST-KERNEL-OK" in o and "ZFS-DIST-KERNEL-OK" in o, re.sub(r"\s+", " ", o).strip()[:300])
 
     def web_checks(self):
@@ -1098,7 +1098,7 @@ class ZRun(qt.Runner):
                   f"booted {int(time.time()) - first} s from the host clock ({(int(time.time()) - first) // 86400} days off), after {int(time.time() - t0)} s the offset is {delta} s | " + re.sub(r"\s+", " ", ch)[:200])
 
     def toolchain_check(self):
-        """the image strip once deleted /usr/include and every static lib: `C compiler cannot create executables`, no zfs-kmod rebuild on a kernel update"""
+        """the image strip once deleted /usr/include and every static lib: `C compiler cannot create executables`, no zfs module rebuild on a kernel update"""
         rc, o = self.sh("printf '#include <stdio.h>\\n#include <linux/types.h>\\nint main(void){puts(\"hx-ok\");return 0;}\\n' > /tmp/t.c && gcc /tmp/t.c -o /tmp/t && /tmp/t; rm -f /tmp/t /tmp/t.c", timeout=90)
         self.step("toolchain-compiles-and-links-a-c-program", "hx-ok" in o, o.strip()[-200:])
 
@@ -1117,14 +1117,14 @@ class ZRun(qt.Runner):
         self.step("package-contents-complete-no-missing-files", bool(m) and m.group(1) == "0" and "CONTENTS-PACKAGES" in o, re.sub(r"\s+", " ", o).strip()[:400])
 
     def kmod_build_check(self):
-        """a kernel module builds against the RUNNING kernel's build tree (what zfs-kmod needs after every kernel update: kernel tree + compiler + libelf/openssl)"""
+        """a kernel module builds against the RUNNING kernel's build tree (what the zfs module needs after every kernel update: kernel tree + compiler + libelf/openssl)"""
         rc, o = self.sh(self._b64sh("sh", self.KMOD_CHECK), timeout=600)
         self.step("kernel-module-builds-against-running-kernel", "KMOD-OK" in o, re.sub(r"\s+", " ", o).strip()[-300:])
-        # ... and a kernel UPDATE must rebuild the ZFS module in the same transaction (USE=dist-kernel on zfs-kmod), else the new initramfs has no zfs.ko
+        # ... and a kernel UPDATE must rebuild the ZFS module in the same transaction (USE=dist-kernel modules on sys-fs/zfs), else the new initramfs has no zfs.ko
         rc, o = self.sh("if qlist -I sys-kernel/gentoo-kernel-bin sys-kernel/gentoo-kernel | grep -q .; then "
-                        "grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-kmod-*/USE && echo DISTKERNEL-OK || echo DISTKERNEL-MISSING; else echo NOT-DIST-KERNEL; fi; "
+                        "grep -qw dist-kernel /var/db/pkg/sys-fs/zfs-[0-9]*/USE && grep -qw modules /var/db/pkg/sys-fs/zfs-[0-9]*/USE && echo DISTKERNEL-OK || echo DISTKERNEL-MISSING; else echo NOT-DIST-KERNEL; fi; "
                         "grep -h dist-kernel /etc/portage/package.use/* 2>/dev/null | head -4; qfile -q /etc/portage/package.use/horcrux-zfs")
-        self.step("zfs-kmod-rebuilds-with-every-dist-kernel-update", "DISTKERNEL-OK" in o or "NOT-DIST-KERNEL" in o, re.sub(r"\s+", " ", o).strip()[:300])
+        self.step("zfs-module-rebuilds-with-every-dist-kernel-update", "DISTKERNEL-OK" in o or "NOT-DIST-KERNEL" in o, re.sub(r"\s+", " ", o).strip()[:300])
 
     def desktop_exec_check(self):
         rc, o = self.sh(DESKTOP_EXEC_CHECK, timeout=120)
@@ -1194,7 +1194,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--desktop", action="store_true")
     ap.add_argument("--server", action="store_true", help="HEADLESS SERVER gate (server-first): serial console + ssh only, no VGA/USB keyboard path; the same checks as the desktop run "
-                    "(months-off RTC, late network, package-contents-complete, kernel-module build, zfs-kmod dist-kernel rule, shadow reuse, no autologin, reboot into the installed system) "
+                    "(months-off RTC, late network, package-contents-complete, kernel-module build, zfs module dist-kernel rule, shadow reuse, no autologin, reboot into the installed system) "
                     "plus: no display stack installed, web UI answers, core packages present, nothing personal. Runs on x86_64 (KVM) and aarch64 (TCG).")
     ap.add_argument("--public", action="store_true", help="a PUBLIC image: nothing personal / machine-specific may be installed (project/public-forbidden.txt)")
     ap.add_argument("--overlay-dir", default="", help="(--server) the repo's gentoo/ overlay: its horcrux-core packages are copied over the synced /var/db/repos/horcrux before `emerge -pvuDN @world`, "

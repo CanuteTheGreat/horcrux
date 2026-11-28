@@ -36,6 +36,9 @@ EMERGE_LOG = os.environ.get("HX_AU_EMERGE_LOG", "/var/log/emerge.log")
 PRESERVED = os.environ.get("HX_AU_PRESERVED", "/var/lib/portage/preserved_libs_registry")
 RUN_REBOOT_FLAG = os.environ.get("HX_AU_RUN_FLAG", "/run/reboot-required")
 GENTOO_REPO = os.environ.get("HX_AU_GENTOO_REPO", "")  # empty: ask portageq, else /var/db/repos/gentoo
+PORTAGE_ETC = os.environ.get("HX_AU_PORTAGE_ETC", "/etc/portage")
+WORLD = os.environ.get("HX_AU_WORLD", "/var/lib/portage/world")
+VDB = os.environ.get("HX_AU_VDB", "/var/db/pkg")
 SLEEP = time.sleep
 
 # Binary-package managers: Portage matches a binary package by version, and these ebuilds install a tarball fetched at unpack time, so a
@@ -70,7 +73,11 @@ DEFAULTS = {
     "RESTART_IDLE": "yes",        # yes: wait while a client (web UI, API, console viewer) is connected; the hourly trigger retries
     "RESTART_WAIT_SECS": "90",    # how long the restarted service may take to run again
     "REBOOT_PACKAGES": "sys-kernel/gentoo-kernel sys-kernel/gentoo-kernel-bin sys-kernel/vanilla-kernel sys-kernel/vanilla-kernel-bin "
-                       "sys-kernel/linux-firmware sys-firmware/intel-microcode sys-fs/zfs-kmod x11-drivers/nvidia-drivers sys-apps/systemd",
+                       "sys-kernel/linux-firmware sys-firmware/intel-microcode sys-fs/zfs sys-fs/zfs-kmod x11-drivers/nvidia-drivers sys-apps/systemd",
+    # kernel-module packages: built against the installed kernel tree. A binary package of them is only right for the binhost's binary kernel
+    # (gentoo-kernel-bin); with a kernel built from source on this machine (gentoo-kernel, vanilla-kernel: own config, own module-signing key)
+    # they are always built here (--usepkg-exclude), else a module made for another build of the same version could be installed.
+    "KMOD_PACKAGES": "sys-fs/zfs sys-fs/zfs-kmod x11-drivers/nvidia-drivers",
 }
 
 
@@ -216,9 +223,17 @@ def prio(argv):
     return pre + argv
 
 
-def emerge_opts(conf):
+def source_kernel_installed(vdb=None):
+    """a dist kernel built from source on this machine (sys-kernel/gentoo-kernel, vanilla-kernel; not the -bin packages) is installed"""
+    vdb = vdb or VDB
+    return any(glob.glob(os.path.join(vdb, "sys-kernel", f"{pn}-[0-9]*")) for pn in ("gentoo-kernel", "vanilla-kernel"))
+
+
+def emerge_opts(conf, vdb=None):
     o = ["--ask=n", "--color=n", "--nospinner", "--quiet-build=y", "--getbinpkg", "--usepkg"]
     o += [f"--usepkg-exclude={p}" for p in PREBUILT]
+    if source_kernel_installed(vdb):
+        o += [f"--usepkg-exclude={p}" for p in conf.get("KMOD_PACKAGES", "").split()]
     o += conf.get("EXTRA_EMERGE_OPTS", "").split()
     return o
 
@@ -754,6 +769,67 @@ def snapshot(log, conf):
     return rc == 0, snap if rc == 0 else "zfs snapshot failed: " + " ".join(tail[-2:])
 
 
+# OpenZFS 2.4: Gentoo merged the kernel module into sys-fs/zfs (USE=modules) and sys-fs/zfs 2.4 blocks the retired sys-fs/zfs-kmod. Installs made
+# with OpenZFS 2.3 carry (1) the image's /etc/portage/package.mask/zfs that kept the 2.3 zfs/zfs-kmod pair together and (2) sys-fs/zfs-kmod in the
+# world file. With either one left, `emerge -uDN @world` silently skips the ZFS update forever ("skipped due to a dependency conflict"). Both are
+# undone here once, before the update; the update itself then replaces zfs-kmod by zfs[modules]. Pools are never touched (no `zpool upgrade`).
+ZFS23_PAIR_MASK = {">=sys-fs/zfs-2.4", ">=sys-fs/zfs-kmod-2.4"}
+
+
+def path_owned(path, vdb=None):
+    """some installed package's CONTENTS lists `path`"""
+    vdb = vdb or VDB
+    needle = f"obj {path} "
+    for c in glob.glob(os.path.join(vdb, "*", "*", "CONTENTS")):
+        try:
+            with open(c, errors="replace") as f:
+                if any(ln.startswith(needle) for ln in f):
+                    return True
+        except OSError:
+            pass
+    return False
+
+
+def best_visible(atom, runner=sh):
+    rc, out = runner(["portageq", "best_visible", "/", atom], None, full=True)
+    v = (out[-1] if out else "").strip() if rc == 0 else ""
+    return v
+
+
+def version_tuple(cpv):
+    m = re.search(r"-(\d+(?:\.\d+)*)", cpv or "")
+    return tuple(int(x) for x in m.group(1).split(".")) if m else ()
+
+
+def zfs24_migration(log=None, runner=sh, etc=None, world=None, vdb=None, moved_dir=None):
+    """returns the list of what was done (empty: nothing to do)"""
+    etc, world = etc or PORTAGE_ETC, world or WORLD
+    moved_dir = moved_dir or state_path("migrated")
+    done = []
+    mask = os.path.join(etc, "package.mask", "zfs")
+    try:
+        with open(mask) as f:
+            atoms = {ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")}
+    except OSError:
+        atoms = None
+    if atoms and atoms <= ZFS23_PAIR_MASK and not path_owned(mask, vdb):
+        os.makedirs(moved_dir, exist_ok=True)
+        dest = os.path.join(moved_dir, "package.mask.zfs-" + time.strftime("%Y%m%d%H%M%S"))
+        shutil.move(mask, dest)
+        done.append(f"moved the OpenZFS 2.3 pair mask {mask} to {dest}")
+    try:
+        with open(world) as f:
+            in_world = any(ln.strip() == "sys-fs/zfs-kmod" for ln in f)
+    except OSError:
+        in_world = False
+    if in_world:
+        best = best_visible("sys-fs/zfs", runner)
+        if version_tuple(best) >= (2, 4):
+            rc, tail = runner(["emerge", "--ask=n", "--color=n", "--nospinner", "--deselect", "sys-fs/zfs-kmod"], log)
+            done.append(f"deselected sys-fs/zfs-kmod (module part of {best})" if rc == 0 else "emerge --deselect sys-fs/zfs-kmod failed: " + " ".join(tail[-2:]))
+    return done
+
+
 def do_run(conf, reason="manual", runner=sh):
     """returns the status dict; the caller has the lock"""
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -785,6 +861,13 @@ def do_run(conf, reason="manual", runner=sh):
             fail("snapshot", detail)  # no rollback point: do not touch the system
         merged = []
         if failed_step != "snapshot":
+            try:
+                mig = zfs24_migration(log, runner)
+            except Exception as e:  # never block the update on the migration
+                mig = [f"zfs 2.4 migration error: {e}"]
+            if mig:
+                st["steps"]["zfs24"] = mig
+                log.write("zfs 2.4 migration: " + "; ".join(mig) + "\n")
             off = size_of(EMERGE_LOG)
             rc, tail = runner(prio(["emerge"] + world_args(conf)), log, timeout=int(float(conf["MAX_RUNTIME_HOURS"]) * 3600))
             st["steps"]["update"] = rc

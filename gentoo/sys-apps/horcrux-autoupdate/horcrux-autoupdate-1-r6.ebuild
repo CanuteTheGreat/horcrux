@@ -23,6 +23,10 @@ IUSE="systemd"
 # packages (old kernels) no longer block the whole depclean, and the repo.postsync.d md5-cache hook.
 # -r5: after an update (and hourly in between), a Horcrux service whose program was replaced (horcrux-api) is restarted so the installed
 # code runs; guests keep running, the restart waits while a web UI/API/console client is connected (`restart-services`, RESTART_* keys).
+# -r6: OpenZFS 2.3 -> 2.4 (the kernel module moved into sys-fs/zfs, USE=modules): before the update the 2.3 images' pair mask
+#   (/etc/portage/package.mask/zfs, unowned, only the two >=2.4 lines) is moved to /var/lib/horcrux-autoupdate/migrated/ and the retired
+#   sys-fs/zfs-kmod is deselected once the tree offers sys-fs/zfs >= 2.4; never a pool upgrade. With a source-built kernel installed
+#   (gentoo-kernel, vanilla-kernel) the kernel-module packages (KMOD_PACKAGES) are never taken from a binhost (built against another kernel build).
 RDEPEND="
 	dev-lang/python
 	sys-apps/portage

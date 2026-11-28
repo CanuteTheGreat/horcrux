@@ -469,7 +469,7 @@ class KernelLayerTransaction(unittest.TestCase):
     @needs_layers
     def test_layer_declares_the_module_reinstall_and_the_lane_use(self):
         lay = E.load(os.path.join(PROJECT_LAYERS, "apple-t2.toml"))
-        self.assertEqual(lay["kernel"]["reinstall"], ["sys-fs/zfs-kmod"])
+        self.assertEqual(lay["kernel"]["reinstall"], ["sys-fs/zfs"])
         self.assertEqual(lay["portage"]["use"], {"sys-kernel/gentoo-kernel": "-debug"})   # the USE the lane amd64/t2 is built with
         self.assertIn("amd64/t2", lay["kernel"]["binrepo"]["uri"])
 

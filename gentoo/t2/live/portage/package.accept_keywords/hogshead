@@ -1,4 +1,3 @@
-# OpenZFS 2.3.9 is ~amd64 (declares Linux-Maximum 7.2; zfs-kmod 2.4.x is not in the Gentoo tree yet)
-=sys-fs/zfs-2.3.9 ~amd64
-=sys-fs/zfs-kmod-2.3.9 ~amd64
+# OpenZFS 2.4.4 declares Linux-Maximum 7.2; since 2.4 the module is part of sys-fs/zfs (USE=modules), sys-fs/zfs-kmod is retired
+=sys-fs/zfs-2.4.4 ~amd64
 =sys-kernel/gentoo-sources-7.2.15 ~amd64

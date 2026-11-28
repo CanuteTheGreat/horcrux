@@ -610,14 +610,14 @@ DRACUT_KERNEL_TXN = "/etc/dracut.conf.d/00-horcrux-profile-kernel-install.conf"
 def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules"):
     """emerge a transaction that brings a new dist-kernel (a hardware layer's kernel binhost) together with its ZFS module.
 
-    The kernel's postinst builds an initramfs through installkernel/dracut BEFORE zfs-kmod for that kernel is merged (zfs-kmod depends on
+    The kernel's postinst builds an initramfs through installkernel/dracut BEFORE the zfs module package (sys-fs/zfs, USE=modules) for that kernel is merged (zfs-kmod depends on
     the kernel), and dracut's `zfs` module (forced by the live image's dracut config, and by encrypted-ZFS installs) dies with
     "Failed to find module 'zfs'" on the new kernel, which fails the kernel's postinst and with it the whole transaction. So the zfs
     module is omitted for the duration of the transaction, and every kernel that appeared in /lib/modules is then given its real initramfs
     (all dracut config again, zfs included, now that zfs.ko exists for it); a missing module is a hard error, never a silent
     initramfs without it.
 
-    `reinstall` = the layer's [kernel] reinstall list: module packages (sys-fs/zfs-kmod) that must be merged again from the kernel lane once the
+    `reinstall` = the layer's [kernel] reinstall list: module packages (sys-fs/zfs) that must be merged again from the kernel lane once the
     kernel is in. A kernel of the SAME version as the one already installed (the stock kernel-bin vs the layer's patched gentoo-kernel) does not
     trigger Portage's slot-operator rebuild, so the old zfs.ko stays under the old kernel and the new kernel has none. Binary-only: the lane
     publishes the module built against exactly that kernel, a source build here would be a bug."""
@@ -628,7 +628,7 @@ def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules"):
     try:
         sy.run(cmd, env={"PORTAGE_NICENESS": "10"})
         newk = [] if sy.dry else sorted(set(os.listdir(mods)) - before if os.path.isdir(mods) else ())
-        # zfs-kmod's postinst reinstalls the kernel through /usr/src/linux (dist-kernel_reinstall_initramfs): while that symlink still
+        # the zfs module package's postinst reinstalls the kernel through /usr/src/linux (dist-kernel_reinstall_initramfs): while that symlink still
         # names the stock kernel (the kernel's own postinst leaves it as-is when it points elsewhere) /boot/vmlinuz-<new release>,
         # System.map and config are overwritten with the STOCK kernel's files and the machine boots the unpatched kernel
         # against the new kernel's initramfs. Point it at the new kernel first.

@@ -54,6 +54,7 @@ class Base(unittest.TestCase):
         m.root_zfs = lambda: None  # no ZFS root unless a test says so
         m.PROC, m.CGROUP, m.RC_CONF = os.path.join(d, "proc"), os.path.join(d, "cgroup"), os.path.join(d, "rc.conf")
         m.init_system = lambda: "openrc"
+        m.PORTAGE_ETC, m.WORLD, m.VDB = os.path.join(d, "etc-portage"), os.path.join(d, "world"), os.path.join(d, "vdb")
         m.sh = self.fake_sh  # logger etc. also go through it
         self.calls = []
         self.rc = {}
@@ -625,6 +626,80 @@ class RestartServices(Base):
         self.assertEqual(len(self.restarts()), 1)
         self.assertEqual(self.m.read_status()["restart"]["result"], "restarted horcrux-api (guests kept 1/1)")
         self.assertFalse([c for c in self.calls if c[:1] == ["emerge"]])
+
+
+class Zfs24Migration(Base):
+    """OpenZFS 2.3 -> 2.4: the image's pair mask and the world entry of the retired sys-fs/zfs-kmod are undone once, nothing else"""
+    MASK = "# keep zfs and zfs-kmod a matching pair (stable zfs-kmod lags the ~arch zfs userland)\n>=sys-fs/zfs-2.4\n>=sys-fs/zfs-kmod-2.4\n"
+
+    def put(self, path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+
+    def setUp(self):
+        super().setUp()
+        self.mask = os.path.join(self.m.PORTAGE_ETC, "package.mask", "zfs")
+        self.put(self.m.WORLD, "app-editors/vim\nsys-fs/zfs\nsys-fs/zfs-kmod\n")
+        self.out["portageq best_visible / sys-fs/zfs"] = "sys-fs/zfs-2.4.4\n"
+
+    def test_old_pair_mask_moved_and_zfs_kmod_deselected(self):
+        self.put(self.mask, self.MASK)
+        done = self.m.zfs24_migration(None, self.fake_sh)
+        self.assertFalse(os.path.exists(self.mask))
+        moved = os.listdir(os.path.join(self.m.STATE_DIR, "migrated"))
+        self.assertEqual(len(moved), 1)
+        self.assertIn(["emerge", "--ask=n", "--color=n", "--nospinner", "--deselect", "sys-fs/zfs-kmod"], self.calls)
+        self.assertEqual(len(done), 2)
+        # the deselect is asked only after the mask is gone (best_visible must see 2.4)
+        self.assertLess(self.calls.index(["portageq", "best_visible", "/", "sys-fs/zfs"]), len(self.calls))
+
+    def test_a_mask_with_other_atoms_or_owned_by_a_package_is_kept(self):
+        self.put(self.mask, self.MASK + ">=sys-fs/zfs-2.5\n")
+        self.m.zfs24_migration(None, self.fake_sh)
+        self.assertTrue(os.path.exists(self.mask))
+        self.put(self.mask, self.MASK)
+        self.put(os.path.join(self.m.VDB, "sys-apps", "x-1", "CONTENTS"), f"obj {self.mask} 0123 1\n")
+        self.m.zfs24_migration(None, self.fake_sh)
+        self.assertTrue(os.path.exists(self.mask))
+
+    def test_no_deselect_while_the_tree_offers_only_2_3(self):
+        self.out["portageq best_visible / sys-fs/zfs"] = "sys-fs/zfs-2.3.9\n"
+        self.assertEqual(self.m.zfs24_migration(None, self.fake_sh), [])
+        self.assertFalse([c for c in self.calls if "--deselect" in c])
+
+    def test_nothing_to_do_on_a_migrated_install(self):
+        self.put(self.m.WORLD, "sys-fs/zfs\n")
+        self.assertEqual(self.m.zfs24_migration(None, self.fake_sh), [])
+        self.assertEqual(self.calls, [])
+
+    def test_never_touches_pools(self):
+        self.put(self.mask, self.MASK)
+        self.m.zfs24_migration(None, self.fake_sh)
+        self.assertFalse([c for c in self.calls if c[:1] in (["zpool"], ["zfs"])])
+
+    def test_run_does_the_migration_before_the_world_update(self):
+        self.put(self.mask, self.MASK)
+        st = self.m.do_run(self.conf(SYNC="no", DEPCLEAN="no", PRESERVED_REBUILD="no", ETC_UPDATE="off"), runner=self.fake_sh)
+        self.assertIn("zfs24", st["steps"])
+        i_desel = next(i for i, c in enumerate(self.calls) if "--deselect" in c)
+        i_world = next(i for i, c in enumerate(self.calls) if c[:1] == ["emerge"] and "@world" in c and "--pretend" not in c)
+        self.assertLess(i_desel, i_world)
+
+
+class KernelModuleBinpkgs(Base):
+    def test_source_kernel_builds_module_packages_here(self):
+        c = self.conf()
+        self.assertFalse([o for o in self.m.emerge_opts(c) if "sys-fs/zfs" in o])
+        os.makedirs(os.path.join(self.m.VDB, "sys-kernel", "gentoo-kernel-bin-6.18.65"))
+        self.assertFalse([o for o in self.m.emerge_opts(c) if "sys-fs/zfs" in o])
+        os.makedirs(os.path.join(self.m.VDB, "sys-kernel", "gentoo-kernel-6.18.65"))
+        o = self.m.emerge_opts(c)
+        for p in ("sys-fs/zfs", "sys-fs/zfs-kmod", "x11-drivers/nvidia-drivers"):
+            self.assertIn(f"--usepkg-exclude={p}", o)
+
+    def test_zfs_update_asks_for_a_reboot(self):
+        self.assertIn("sys-fs/zfs", self.m.DEFAULTS["REBOOT_PACKAGES"].split())
 
 
 if __name__ == "__main__":

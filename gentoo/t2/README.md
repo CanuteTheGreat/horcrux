@@ -8,8 +8,8 @@ Hardware target: MacBookPro16,2 (Ice Lake i5-1038NG7, Iris Plus G7, T2, BCM4364 
 |---|---|
 | kernel | `sys-kernel/gentoo-sources-7.2.13` (Gentoo tree, `~amd64`), built from source, `LOCALVERSION=-t2-horcrux` |
 | patch set | `t2linux/linux-t2-patches` commit **`e167207`** (`PATCHSET`; its `version` file says KVER=7.2.10), 23 patches, **APFS (8001/8002) skipped** |
-| why not 7.3 | OpenZFS 2.4.4 / 2.3.9 declare `Linux-Maximum: 7.2`; only unreleased master (2.4.99) lists 7.3. Root-on-ZFS needs <= 7.2 |
-| ZFS | `sys-fs/zfs` + `zfs-kmod` **2.3.9** (Linux-Maximum 7.2) built out of tree against `/usr/src/linux` (`USE=-dist-kernel rootfs`). The Gentoo tree has `zfs-2.4.4` but NO `zfs-kmod-2.4.x` yet, so userland and module are both 2.3.9 (same as the existing Horcrux `>=2.4` mask) |
+| why not 7.3 | OpenZFS 2.4.4 declares `Linux-Maximum: 7.2`; only unreleased master (2.4.99) lists 7.3. Root-on-ZFS needs <= 7.2 |
+| ZFS | `sys-fs/zfs` **2.4.4** (Linux-Maximum 7.2) with USE=modules (since 2.4 the kernel module is part of `sys-fs/zfs`; `sys-fs/zfs-kmod` is retired), built out of tree against `/usr/src/linux` (`USE=-dist-kernel rootfs modules`) |
 | base config | Gentoo's own dist-kernel config (taken from `gentoo-kernel-bin`), `olddefconfig`, then `kernel/t2.config`, then the patch set's `extra_config` |
 | checked | `kernel/required-config.txt` is asserted against the final `.config` (build fails if an option is missing) |
 | verified | all 23 patches apply to gentoo-sources-7.2.13 with no fuzz and no rejects (same commit applies to vanilla 7.2.13 per docs/T2-MACS.md) |
@@ -37,7 +37,7 @@ Apple Wi-Fi/BT firmware (`brcmfmac4364b3-pcie.apple,*`, `brcmbt*-apple,*`) is ex
 ## Build notes / pitfalls (learned the hard way)
 - Full kernel compile = ~50 min on an idle 8-core rw-man host (2 h when loaded). BuildKit re-runs it when ANY earlier layer changes: the `base` stage (`live/portage/**`, `make.conf`) feeds the kernel stage, so put late package.use in `live/portage-late/` (copied only in the `rootfs` stage). `build.sh` pins mtimes for the same reason; `KEEP_ROOTFS=tag` keeps the finished image and `REBASE=tag -p PRIV` re-bakes private files in ~4 min.
 - Gentoo's `sys-fs/lvm2` binpkg has no LVM tools without `USE=lvm` (needed by hogshead-backup and the installer).
-- zfs-kmod must be built against OUR kernel (`--usepkg=n --getbinpkg=n`): a cached binpkg built for another kernel release silently yields no `zfs.ko`.
+- sys-fs/zfs (it carries zfs.ko) must be built against OUR kernel (`--usepkg=n --getbinpkg=n`): a cached binpkg built for another kernel release silently yields no `zfs.ko`.
 - `sshd -T` needs an absolute path; the live sshd drop-in sets `SetEnv PATH` so ssh sessions find `/sbin` tools. The live clock is wrong (RTC not trusted): TLS fails until the clock is set (`hogshead-remote` does it from an HTTP `Date:` header).
 - Gentoo's dist config references Gentoo's own module-signing key paths: build-kernel.sh clears them (no module signing; Secure Boot is off on T2 laptops here).
 - QEMU test: `live/qemu-test.py` (USB-attached ISO via OVMF, HSKEYS stick, emulated NVMe LUKS+LVM). 110 checks; evidence for the v1 private ISO in ctg-infrastructure `hosts/hogshead/live-usb-evidence/`.

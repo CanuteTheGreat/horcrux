@@ -19,10 +19,10 @@ distfile = "apple-t2-firmware-local.tar"
 # the T2 kernel (gentoo-kernel + the t2linux patch set from sys-kernel/horcrux-t2-config) and ZFS built against it come from their own binhost
 # lane; the stock gentoo-kernel-bin is replaced
 [kernel]
-packages = ["sys-kernel/gentoo-kernel", "sys-fs/zfs-kmod"]
+packages = ["sys-kernel/gentoo-kernel", "sys-fs/zfs"]
 unmerge = ["sys-kernel/gentoo-kernel-bin"]
 # module packages merged again from the lane once the kernel is in (a kernel of the same version as the stock one does not trigger the slot-operator rebuild)
-reinstall = ["sys-fs/zfs-kmod"]
+reinstall = ["sys-fs/zfs"]
 binrepo = { name = "ctg-binhost-t2", uri = "https://f002.backblazeb2.com/file/ctg-binhost/amd64/t2", priority = 9000 }
 
 # the USE the kernel binhost lane (ctg-binhost/amd64/t2) is built with: a binary package is only used when the USE matches

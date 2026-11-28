@@ -212,7 +212,7 @@ class PRun(ZE.ZRun):
 
     def t2_kernel_checks(self):
         """--real-t2-kernel: the T2 kernel came from the binhost lane and this boot is on it (no t2_kernel = skip anywhere)"""
-        rc, o = self.sh("uname -r; echo MODS $(ls /lib/modules); echo PKGS $(qlist -ICv sys-kernel/gentoo-kernel sys-kernel/gentoo-kernel-bin sys-fs/zfs-kmod); "
+        rc, o = self.sh("uname -r; echo MODS $(ls /lib/modules); echo PKGS $(qlist -ICv sys-kernel/gentoo-kernel sys-kernel/gentoo-kernel-bin sys-fs/zfs); "
                         "kr=$(uname -r); echo BOOT $(ls /boot | grep -F $kr); "
                         "echo ZFSKO $(find /lib/modules/$kr -name 'zfs.ko*' | head -1); echo T2KO $(find /lib/modules/$kr -name 't2bce_core.ko*' | head -1); "
                         "echo INITRD $(lsinitrd /boot/initramfs-$kr.img 2>/dev/null | grep -cE 't2bce_core|t2bce_dma|t2bce_vhci|hid[-_]apple'); "
@@ -224,7 +224,7 @@ class PRun(ZE.ZRun):
         self.step("t2-kernel-booted-is-the-binhost-t2-kernel", "-t2" in kr, flat[:300])
         self.step("t2-use-flag-written-by-the-layer-matches-the-lane", "gentoo-kernel -debug" in o, flat[:300])
         self.step("t2-kernel-and-zfs-module-installed-from-the-binhost-stock-kernel-bin-gone",
-                  "sys-kernel/gentoo-kernel-" in flat and "sys-fs/zfs-kmod-" in flat and "sys-kernel/gentoo-kernel-bin" not in flat, flat[:300])
+                  "sys-kernel/gentoo-kernel-" in flat and re.search(r"sys-fs/zfs-\d", flat) is not None and "sys-kernel/gentoo-kernel-bin" not in flat, flat[:300])
         self.step("t2-kernel-has-zfs-ko-and-apple-bce-modules", "ZFSKO /lib/modules" in o and "T2KO /lib/modules" in o, flat[:300])
         m = re.search(r"(?m)^INITRD (\d+)$", o)
         self.step("t2-initramfs-lists-apple-bce-and-hid-apple", bool(m) and int(m.group(1)) >= 4, flat[:300])

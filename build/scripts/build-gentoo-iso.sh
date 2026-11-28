@@ -469,7 +469,6 @@ dev-lang/rust ~amd64 ~arm64
 # NOTE: there is no virtual/rust package in the Gentoo tree (never has been -
 # depend on dev-lang/rust / dev-lang/rust-bin directly, see package.use/horcrux)
 sys-fs/zfs ~amd64 ~arm64
-sys-fs/zfs-kmod ~amd64 ~arm64
 app-containers/podman ~amd64 ~arm64
 app-containers/buildah ~amd64 ~arm64
 net-misc/openvswitch ~amd64 ~arm64

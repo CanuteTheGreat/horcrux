@@ -97,7 +97,7 @@ RUN set -e; chmod 644 /usr/share/horcrux/desktop/*; \
     # KEEP the toolchain's own development files (glibc + kernel headers + the libraries kernel-module builds link: elfutils, openssl, zlib, zstd, xz, ncurses;\
     # glib + elogind + openrc because gnome-base/gnome-session-openrc::horcrux is a source package and its updates compile on the installed system):\
     # stripping them left every installed system unable to compile anything (gringotts, 2026-11-03: `C compiler cannot create executables`, missing\
-    # libc_nonshared.a/stdio.h), which also breaks the zfs-kmod rebuild on every kernel update. ~100 MB; the rest of the headers/static libs go.\
+    # libc_nonshared.a/stdio.h), which also breaks the zfs module rebuild on every kernel update. ~100 MB; the rest of the headers/static libs go.\
     if [ -z "$KEEP_DEV" ]; then \
     qlist -e sys-libs/glibc sys-kernel/linux-headers dev-libs/glib sys-auth/elogind sys-apps/openrc dev-libs/elfutils dev-libs/openssl sys-libs/zlib app-arch/zstd app-arch/xz-utils sys-libs/ncurses sys-libs/libxcrypt | grep -E '^/usr/(include|lib64?)/' | sort -u > /tmp/devkeep.lst; \
     test "$(wc -l < /tmp/devkeep.lst)" -gt 500; \

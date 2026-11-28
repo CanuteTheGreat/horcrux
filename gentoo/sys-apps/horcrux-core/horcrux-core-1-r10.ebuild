@@ -64,6 +64,11 @@ KEYWORDS="amd64 arm64"
 #   the installer writes it, and pkg_postinst adds it to /etc/default/grub when that file does not set it either way (an explicit choice is kept),
 #   then refreshes /boot/grub/grub.cfg through 91-horcrux-boot-entry (never a reboot). Settings: /etc/conf.d/horcrux-boot-entry. QEMU gate:
 #   build/live-iso/common/grub-autoboot-test.py --mode mkconfig (the image's own grub-mkconfig + scripts, booted with no key pressed).
+# OpenZFS 2.4 (-r10): ::gentoo merged the kernel module into sys-fs/zfs (USE=modules; sys-fs/zfs-2.4 blocks the retired sys-fs/zfs-kmod). package.use
+#   now sets `sys-fs/zfs rootfs dist-kernel modules`. /etc/portage/package.env/horcrux-core builds sys-fs/zfs outside the ccache wrapper (the module
+#   build fails in it, as zfs-kmod's did: the images had `sys-fs/zfs-kmod noccache.conf`). Installs made with 2.3 also carry the image's
+#   /etc/portage/package.mask/zfs (the 2.3 pair mask) and sys-fs/zfs-kmod in the world file: horcrux-autoupdate (-r6) undoes both once before its
+#   update; pkg_postinst tells an administrator who updates by hand. No pool is ever upgraded (a 2.4 install imports 2.3 and 2.4 pools as they are).
 RDEPEND="
 	acct-group/portage
 	app-portage/eix
@@ -88,6 +93,16 @@ RDEPEND="
 src_install() {
 	insinto /etc/portage/package.use
 	newins "${FILESDIR}"/package.use horcrux-core
+	insinto /etc/portage/env
+	newins - horcrux-noccache.conf <<-EOF
+		# owned by sys-apps/horcrux-core: kernel-module builds (sys-fs/zfs USE=modules) fail inside the ccache wrapper toolchain
+		FEATURES="-ccache"
+	EOF
+	insinto /etc/portage/package.env
+	newins - horcrux-core <<-EOF
+		# owned by sys-apps/horcrux-core
+		sys-fs/zfs horcrux-noccache.conf
+	EOF
 	insinto /etc/docker
 	newins "${FILESDIR}"/docker-daemon.json daemon.json
 	insinto /etc/rc.conf.d
@@ -151,6 +166,12 @@ pkg_postinst() {
 				>> /etc/default/grub && elog "/etc/default/grub: GRUB_DISABLE_SUBMENU=y (older kernels are automatic fallbacks)"
 		fi
 		"${EROOT%/}"/etc/kernel/postinst.d/91-horcrux-boot-entry refresh
+	fi
+	# OpenZFS 2.3 -> 2.4: a world entry of the retired sys-fs/zfs-kmod (or the 2.3 images' pair mask) keeps `emerge -uDN @world` from updating ZFS
+	if [[ -z ${ROOT} ]] && grep -qx 'sys-fs/zfs-kmod' "${EROOT}"/var/lib/portage/world 2>/dev/null; then
+		elog "OpenZFS 2.4 carries its kernel module in sys-fs/zfs: horcrux-autoupdate retires sys-fs/zfs-kmod on its next run. Updating by hand:"
+		elog "  emerge --deselect sys-fs/zfs-kmod; rm /etc/portage/package.mask/zfs (if it only holds the >=sys-fs/zfs-2.4 pair mask); emerge -uDN @world"
+		elog "Existing pools keep their features: never run 'zpool upgrade' on a pool an older OpenZFS (or GRUB) must still read."
 	fi
 	# eix answers only from its cache: build it once so `eix` works right away (eix's own post-sync hook keeps it current). Only on a booted install
 	# (firstboot done), never during an image build, whose tree is not shipped

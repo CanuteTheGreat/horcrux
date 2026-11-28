@@ -1,5 +1,4 @@
-# merged AFTER the kernel (kernel modules are built against the installed gentoo-kernel-bin tree)
-sys-fs/zfs-kmod
+# merged AFTER the kernel (the ZFS kernel module, part of sys-fs/zfs since 2.4 with USE=modules, is built against the installed gentoo-kernel-bin tree)
 sys-fs/zfs
-# kernel modules (zfs-kmod rebuilds, DKMS-style builds) fail at the BTF step without pahole: `pahole: command not found`, make Error 127
+# kernel modules (the zfs module rebuild, DKMS-style builds) fail at the BTF step without pahole: `pahole: command not found`, make Error 127
 dev-util/pahole

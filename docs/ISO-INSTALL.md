@@ -15,7 +15,7 @@ Horcrux is built in three layers; every fix that applies to every install lives 
 
 | layer | what | where |
 |---|---|---|
-| **core** | the headless server: kernel + ZFS (with `dist-kernel`, so every kernel update rebuilds `zfs-kmod`), installer, `horcrux-api` + web UI, chrony + the clock rules (`makestep 1 -1`, `rtcsync`, UTC RTC, sources re-resolved when a network comes up on dhcpcd/static/NetworkManager), the first-boot network wait + Portage tree sync, the overlay sync config, backup (restic to B2, 30 days, secrets provisioned after first boot), the password-separation and no-autologin rules | package `sys-apps/horcrux-core` (overlay `gentoo/`), image layer `build/live-iso/project/variants/core`, applied by `build.sh` to **every** image |
+| **core** | the headless server: kernel + ZFS (with `dist-kernel`, so every kernel update rebuilds the ZFS module, which is part of `sys-fs/zfs` since OpenZFS 2.4), installer, `horcrux-api` + web UI, chrony + the clock rules (`makestep 1 -1`, `rtcsync`, UTC RTC, sources re-resolved when a network comes up on dhcpcd/static/NetworkManager), the first-boot network wait + Portage tree sync, the overlay sync config, backup (restic to B2, 30 days, secrets provisioned after first boot), the password-separation and no-autologin rules | package `sys-apps/horcrux-core` (overlay `gentoo/`), image layer `build/live-iso/project/variants/core`, applied by `build.sh` to **every** image |
 | **desktop edition** (optional) | GNOME on Wayland (OpenRC + elogind, `gnome-light`); an XFCE edition for small devices follows the same pattern. Depends on core; adds only the desktop (`gnome-extra/horcrux-gnome-defaults`: tray icons, first-login Wi-Fi chooser, working login keyring) and generic desktop tools (Firefox, terminator, vim, virt-manager, CUPS, Bluetooth, ...) | `build/live-iso/project/variants/gnome-light` |
 | **machine layers** (private) | per-machine layers kept outside the public images: machine-specific apps, kernels, firmware, restore helpers and backup lists for individual installs | private overlay (not in this repository) |
 
@@ -555,7 +555,7 @@ After the install matrix, `boot-modes-test.py` runs the boot-menu / rescue / for
 `horcrux-server-openrc-daily-aarch64.iso` under TCG; no VGA, no USB keyboard, no GPU): answer-file install to encrypted ZFS, passphrase typed on the **serial** console, then a
 **reboot into the installed system** with the NIC link down at boot and a months-off hardware clock on every boot, and these checks on the installed server: no display
 stack installed (`qlist -I`) and none in `emerge -pvuDN @world`, no X/Wayland process or display manager, serial console in use, core packages installed/package-owned/enabled and no service
-`crashed`, backup wrapper present and not provisioned (no owner paths in the generic set), `zfs`/`zfs-kmod` `dist-kernel` rule, web UI answers from outside and in the guest, chrony steps the months-off clock
+`crashed`, backup wrapper present and not provisioned (no owner paths in the generic set), `sys-fs/zfs` `dist-kernel modules` rule, userland = loaded module = OpenZFS >= 2.4, a pool with `block_cloning_endian` active (foreign 2.4 fixture + one made in the guest) imports read-write, web UI answers from outside and in the guest, chrony steps the months-off clock
 after the late network, `package-contents-complete` (no installed package with a missing file), a kernel module builds against the running kernel, the first-boot service waited for the network and finished without
 showing `crashed`, no account password equals the disk passphrase, no display-manager autologin, no personal package from `public-forbidden.txt`, boot-environment rollback survives the reboot.
 
@@ -642,3 +642,17 @@ stale copy are caught.
 * The live image has no desktop; the Portage tree is stripped from the image, so run `emerge-webrsync` before using `emerge` on a live/installed system.
 * **Follow-up (graphical installer, when agent A's `stages.py`/`gui.py` land):** the GTK stages must expose the same backend keys as the text wizard: `zfs_encrypt` + `zfs_passphrase` (+ confirm, min 12 chars, `zfsroot.passphrase_problem`), `swap` (`auto|none|hibernate`, shown for ZFS only when encrypted: `app.swap_field`), `t2` + `t2_firmware` (`app.s_t2`, shown on a T2 Mac only), `install_type = desktop` + `user_name/user_fullname/user_password/user_autologin` (`app.s_gnome`, Desktop image only). Everything is already plain config keys in `Installer.c`; the answer file drives all of it today.
 * Hibernate/resume and the T2 profile are verified in QEMU only (the T2 PCI id is forced with `t2 = "yes"`); the real MacBookPro16,2 is untested.
+
+## ZFS version and pool features
+
+Horcrux ships OpenZFS 2.4 (`sys-fs/zfs` with `USE="rootfs dist-kernel modules"`: since 2.4 Gentoo builds the kernel module in
+`sys-fs/zfs` itself, `sys-fs/zfs-kmod` is retired). It imports pools made by Proxmox VE 9 and other OpenZFS 2.4 systems read-write,
+including pools with `feature@block_cloning_endian` active (OpenZFS 2.3 could only import those read-only).
+
+- Installs made with OpenZFS 2.3 update on their own: `horcrux-autoupdate` moves the old images' `/etc/portage/package.mask/zfs` (the
+  2.3 pair mask) aside and deselects `sys-fs/zfs-kmod`, then the normal update replaces it by `sys-fs/zfs[modules]` (binary packages from
+  the binhost; built locally when the machine runs a kernel built from source). Reboot afterwards to load the new module.
+  Updating by hand: `emerge --deselect sys-fs/zfs-kmod`, remove that mask file, `emerge -uDN @world`.
+- Nothing ever runs `zpool upgrade`: existing pools keep their feature set, so an older Horcrux ISO, the Proxmox host a pool came from,
+  or GRUB can still read them. Upgrade a pool by hand only when nothing older needs it.
+- A pool created by a 2.4 install has the 2.4 features enabled and cannot be imported by OpenZFS 2.3 (older Horcrux ISOs as rescue systems).

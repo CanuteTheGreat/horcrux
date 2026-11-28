@@ -83,7 +83,7 @@ Image name: the Surface image follows the repo-wide scheme `<product>-<desktop e
   the Rustinion agent (`app-admin/rustinion-agent`), Tailscale, `intel-microcode`, `sof-firmware`, `linux-firmware`.
   GNOME was not measured or compared (owner chose XFCE).
 * Binpkg-first: the tablet never compiles anything. The image is built on an rw-man host (official binhost; source builds only for what the USE flags force:
-  the kernel, zfs-kmod, a few libraries); the installer copies the ISO's squashfs.
+  the kernel, sys-fs/zfs (the module), a few libraries); the installer copies the ISO's squashfs.
 
 ## XFCE image, packages and ownership (2026-10-29)
 

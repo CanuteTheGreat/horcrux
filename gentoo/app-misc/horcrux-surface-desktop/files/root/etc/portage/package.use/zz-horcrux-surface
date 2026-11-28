@@ -16,8 +16,7 @@ net-misc/networkmanager wifi bluetooth modemmanager -ppp -iwd
 net-print/cups -systemd
 sys-apps/fwupd -systemd
 sys-kernel/gentoo-kernel -initramfs
-sys-fs/zfs rootfs dist-kernel
-sys-fs/zfs-kmod dist-kernel
+sys-fs/zfs rootfs dist-kernel modules
 gnome-base/gvfs elogind udisks -systemd
 sys-apps/dbus X
 # today's xfce4-power-manager/xfce4-settings/... require `|| ( X wayland )` and the image's global -X made the resolver refuse them (tree drift)

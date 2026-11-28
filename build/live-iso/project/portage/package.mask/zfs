@@ -1,3 +1,0 @@
-# keep zfs and zfs-kmod a matching pair (stable zfs-kmod lags the ~arch zfs userland)
->=sys-fs/zfs-2.4
->=sys-fs/zfs-kmod-2.4

@@ -168,7 +168,7 @@ DEFAULT_FULL_ON = ["spice", "usbredir", "vnc", "sasl", "lzo", "zstd", "lz4", "br
 
 BUILD_MIN = {"app-emulation/qemu": 28, "app-emulation/libvirt": 9, "llvm-core/llvm": 70, "media-libs/mesa": 35,
              "gui-libs/gtk": 14, "dev-lang/rust": 100, "dev-lang/python": 12, "sys-devel/gcc": 120,
-             "sys-kernel/gentoo-kernel": 25, "sys-fs/zfs": 8, "sys-fs/zfs-kmod": 8, "net-libs/webkit-gtk": 150,
+             "sys-kernel/gentoo-kernel": 25, "sys-fs/zfs": 14, "net-libs/webkit-gtk": 150,
              "app-containers/docker": 20, "dev-lang/go": 20, "sys-libs/glibc": 25}
 
 EXPAND_PREFIXES = ("python_targets_", "python_single_target_", "ruby_targets_", "video_cards_", "cpu_flags_", "abi_x86_",

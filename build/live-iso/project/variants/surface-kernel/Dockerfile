@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.4
 # Variant `surface-kernel` (1st half of the Surface image; VARIANT=surface-kernel,surface ISO_VNAME=surface-): the
 # long-lived layers (about 2 h on a loaded host): overlays + kernel config package + the source-built gentoo-kernel binary package
-# + zfs-kmod. Kept separate so that edits to the desktop/apps layers never recompile the kernel.
+# + the zfs module (sys-fs/zfs, USE=modules). Kept separate so that edits to the desktop/apps layers never recompile the kernel.
 # Horcrux Surface variant (Surface Pro 1/2 tablet, 4 GB, everything owned by a Portage package):
 #   BASE (the finished server rootfs) + overlays (horcrux, GURU, canutethegreat-overlay) + the Surface kernel as
 #   sys-kernel/gentoo-kernel (source-built; linux-surface series + config from sys-kernel/horcrux-surface-config) +
-#   zfs-kmod rebuilt for it + the XFCE tablet desktop and the owner's apps as ONE meta package (app-misc/horcrux-surface-desktop).
+#   sys-fs/zfs (module) rebuilt for it + the XFCE tablet desktop and the owner's apps as ONE meta package (app-misc/horcrux-surface-desktop).
 #   Build context = build/live-iso, named context `hxgentoo` = the repo's gentoo/ (the horcrux overlay).
 ARG BASE
 FROM ${BASE} AS surface
@@ -39,7 +39,7 @@ RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/di
 
 FROM surface-kbuild AS surface-kinstall
 ARG SURFACE_KERNEL=6.18.60
-# the stock binary kernel goes (modules, vmlinuz), the freshly built one is installed; dracut cannot add zfs/unlock before zfs-kmod
+# the stock binary kernel goes (modules, vmlinuz), the freshly built one is installed; dracut cannot add zfs/unlock before the zfs module
 # exists for this kernel: omit them for THIS step only (the live initramfs is rebuilt below, the installer builds the installed one)
 RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/surface-binpkgs; \
@@ -49,7 +49,7 @@ RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/di
     ls /lib/modules /boot
 RUN --mount=type=cache,id=surface-distfiles-${ARCH:-x86_64},target=/var/cache/distfiles,sharing=locked \
     set -e; unset ARCH; export FEATURES="-ccache" PKGDIR=/var/cache/surface-binpkgs; \
-    emerge --oneshot --usepkg=n --getbinpkg=n sys-fs/zfs-kmod sys-fs/zfs; \
+    emerge --oneshot --usepkg=n --getbinpkg=n sys-fs/zfs; \
     rm -f /etc/dracut.conf.d/00-surface-build.conf; \
     rm -rf /lib/modules/*-gentoo-dist-bin /boot/*-gentoo-dist-bin; \
     kr=$(readlink /usr/src/linux | sed 's/^linux-//'); test -n "$kr" && test -d /lib/modules/$kr; \
