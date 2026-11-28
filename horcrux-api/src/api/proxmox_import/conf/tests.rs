@@ -340,6 +340,24 @@ fn container_rate_and_keyctl() {
     assert!(o.nets[0].gateway.is_none());
     assert!(o.features.keyctl && o.features.nesting);
     assert!(!o.onboot);
+    assert!(p.blockers.is_empty(), "{:?}", p.blockers);
+}
+
+#[test]
+fn container_refused_when_the_node_has_no_lxc_runtime() {
+    let c = parse_conf(CT_RATE);
+    let h = HostCtx {
+        lxc_missing: Some(crate::api::proxmox_import::LXC_MISSING.into()),
+        ..host()
+    };
+    let p = plan_ct(212, &c, &resolve_all, &h);
+    assert!(
+        p.blockers
+            .iter()
+            .any(|b| b.contains("LXC runtime not installed") && b.contains("app-containers/lxc")),
+        "{:?}",
+        p.blockers
+    );
 }
 
 #[test]

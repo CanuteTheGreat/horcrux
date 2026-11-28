@@ -224,6 +224,9 @@ pub struct HostCtx {
     pub io_devices: BTreeMap<String, String>,
     /// The host has the Secure Boot OVMF build.
     pub ovmf_secboot: bool,
+    /// Why this node cannot run imported containers (no LXC runtime
+    /// installed, or a build without LXC support); `None` = it can.
+    pub lxc_missing: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1446,6 +1449,9 @@ pub fn plan_ct(vmid: u32, conf: &PveConf, resolve: Resolver, host: &HostCtx) -> 
     }
     if !rootfs_seen {
         p.blockers.push("the container has no rootfs".into());
+    }
+    if let Some(why) = &host.lxc_missing {
+        p.blockers.push(why.clone());
     }
     if o.unprivileged {
         o.idmap_base = Some(horcrux_common::lxc::LXC_DEFAULT_IDMAP_BASE);

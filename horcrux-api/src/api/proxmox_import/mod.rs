@@ -162,6 +162,25 @@ async fn ssh_io_devices(src: &Source, confs: &[PveConf]) -> BTreeMap<String, Str
     out
 }
 
+/// Plan blocker when the node has no LXC tools.
+pub const LXC_MISSING: &str = "LXC runtime not installed on this node (app-containers/lxc): lxc-start was not found, so an imported container could not start. Install app-containers/lxc, then plan again";
+
+/// Why imported containers could not run on this node: refused up front in
+/// the plan instead of creating containers that never start.
+#[cfg(feature = "lxc")]
+async fn lxc_missing(state: &AppState) -> Option<String> {
+    if state.container_manager.lxc().host_info().await.available {
+        None
+    } else {
+        Some(LXC_MISSING.into())
+    }
+}
+
+#[cfg(not(feature = "lxc"))]
+async fn lxc_missing(_state: &AppState) -> Option<String> {
+    Some("this Horcrux build has no LXC support: containers are imported as LXC containers (build Horcrux with USE=lxc)".into())
+}
+
 /// Host facts + the source's volumes, then every guest planned.
 pub async fn plan_guests(
     state: &AppState,
@@ -197,6 +216,7 @@ pub async fn plan_guests(
         pci: host_pci(),
         io_devices,
         ovmf_secboot: crate::vm::firmware::find_ovmf_for(true).is_some(),
+        lxc_missing: lxc_missing(state).await,
     };
     let src = req.source.clone();
     let cfg = storage_cfg_of(&src);

@@ -60,7 +60,9 @@ The plan lists every key of each guest config as **carried**, **changed**
 reason and what to do) or **ignored** (Proxmox bookkeeping). Settings that
 would change the guest's identity or lose data are blockers: the import is
 refused with the reason (a TPM 1.2 state, a missing TPM volume, a PCI device
-or bridge that does not exist on this host, a Proxmox lock).
+or bridge that does not exist on this host, a Proxmox lock, and for
+containers a node without the LXC runtime: install `app-containers/lxc`
+first, or every imported container would fail to start).
 
 VMs: machine type, firmware (OVMF + its UEFI variable store, copied from the
 `efidisk` when its layout matches this host's OVMF), `pre-enrolled-keys`
