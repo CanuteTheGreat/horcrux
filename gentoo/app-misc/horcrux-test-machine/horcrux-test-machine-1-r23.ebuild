@@ -18,6 +18,10 @@ KEYWORDS="~amd64"
 # +gnome / xfce (per-login xfconf power settings: the XFCE defaults file is owned by horcrux-surface-desktop).
 IUSE="+gnome +plain smallram xfce"
 
+# -r23: netwatch no longer mistakes a resume from suspend for a boot with no network (links are down for seconds after every wake; it restarted
+#   NetworkManager each time): the no-link state must last NOLINK_DEBOUNCE s of consecutive polls, a polling gap resets it, `unknown` operstate with carrier + a
+#   global address counts as up. Its NetworkManager restart adopts a daemon OpenRC lost track of across a package upgrade (zap + stop + start) instead of
+#   leaving the service `failed`. pkg_postinst restarts a RUNNING netwatch so the new script runs.
 # -r21: world.allowlist also accepts gnome-session, gnome-session-openrc, gnome-shell and mutter (selected explicitly on GNOME-edition machines).
 # -r20: pkg_postinst restarts a RUNNING horcrux-test-klog (OpenRC or systemd) so an upgrade takes effect: a logger started by an older revision kept
 #   running its old iso-stamped, block-buffered dmesg for days and the persistent-log check failed although the package was current.
@@ -175,6 +179,12 @@ pkg_postinst() {
 			systemctl is-active --quiet horcrux-test-klog && systemctl restart horcrux-test-klog
 		elif rc-service horcrux-test-klog status >/dev/null 2>&1; then
 			rc-service horcrux-test-klog restart >/dev/null 2>&1
+		fi
+		# netwatch is a long-running shell loop: an upgrade only takes effect once it is restarted
+		if [[ -d /run/systemd/system ]]; then
+			systemctl is-active --quiet horcrux-test-netwatch && systemctl restart horcrux-test-netwatch
+		elif rc-service horcrux-test-netwatch status >/dev/null 2>&1; then
+			rc-service horcrux-test-netwatch restart >/dev/null 2>&1
 		fi
 		elog "Enabled in the default runlevel: horcrux-test-power horcrux-test-klog horcrux-test-netwatch horcrux-test-watchdog (start them now with rc-service)"
 	fi

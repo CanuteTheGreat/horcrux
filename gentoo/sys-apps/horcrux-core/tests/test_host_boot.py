@@ -265,7 +265,7 @@ class NetwatchFallback(unittest.TestCase):
         s = open(os.path.join(TM, "files", "horcrux-test-netwatch.sh")).read()
         subprocess.run(["bash", "-n", os.path.join(TM, "files", "horcrux-test-netwatch.sh")], check=True)
         for needle in ("udevadm trigger --type=devices --action=add", "rc-service udev-trigger start", "rc-service NetworkManager restart",
-                       "systemctl restart NetworkManager.service", "openrc --sys", "HEALTH_FILE", ". /etc/conf.d/horcrux-test-netwatch"):
+                       "systemctl restart NetworkManager.service", "openrc --sys", "HEALTH_FILE", "NOLINK_DEBOUNCE", "rc-service NetworkManager zap", "nm_tracked", ". /etc/conf.d/horcrux-test-netwatch"):
             self.assertIn(needle, s)
         _, e = latest(TM, "horcrux-test-machine")
         self.assertIn('newins "${FILESDIR}"/horcrux-test-netwatch.conf horcrux-test-netwatch', e)
