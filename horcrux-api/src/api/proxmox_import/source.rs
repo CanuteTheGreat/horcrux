@@ -493,13 +493,20 @@ fn format_of(path: &str) -> String {
     }
 }
 
-fn zfs_mountpoint(ds: &str) -> Option<PathBuf> {
+/// `(mounted, mountpoint)` of a dataset (None: no such dataset / no zfs).
+fn zfs_mount(ds: &str) -> Option<(bool, PathBuf)> {
     let out = std::process::Command::new("zfs")
-        .args(["get", "-H", "-o", "value", "mountpoint", ds])
+        .args(["get", "-H", "-o", "value", "mounted,mountpoint", ds])
         .output()
         .ok()?;
-    let mp = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && mp.starts_with('/')).then(|| PathBuf::from(mp))
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let mut l = text.lines().map(str::trim);
+    let mounted = l.next()? == "yes";
+    let mp = l.next()?.to_string();
+    mp.starts_with('/').then(|| (mounted, PathBuf::from(mp)))
 }
 
 fn local(path: PathBuf) -> Result<Resolved, String> {
@@ -561,8 +568,17 @@ pub fn resolve_dir(
         Some(StorageLoc::Zfs(prefix)) => {
             let ds = format!("{}/{base}", prefix.trim_end_matches('/'));
             if base.starts_with("subvol-") || base.starts_with("basevol-") {
-                if let Some(mp) = zfs_mountpoint(&ds) {
-                    return local(mp);
+                match zfs_mount(&ds) {
+                    // a received dataset (`zfs recv -u`) is not mounted: its
+                    // mountpoint is an empty directory, never import that
+                    Some((false, mp)) => {
+                        return Err(format!(
+                            "dataset {ds} is not mounted (its files are not at {}): mount it with `zfs mount {ds}` and plan again",
+                            mp.display()
+                        ))
+                    }
+                    Some((true, mp)) => return local(mp),
+                    None => {}
                 }
                 let guess = PathBuf::from(format!("/{ds}"));
                 tried.push(format!("the mountpoint of dataset {ds}"));
