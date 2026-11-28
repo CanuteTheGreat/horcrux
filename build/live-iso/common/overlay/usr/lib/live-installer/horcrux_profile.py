@@ -753,11 +753,19 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=(), offline=None
         elif not sy.dry and not os.path.isdir("/var/db/repos/gentoo/sys-apps"):
             raise RuntimeError("offline install: no ::gentoo tree on this system and none in the offline payload")
         sync = False
-        pkg_env = {"PKGDIR": off["binpkgs"]}
+        pkg_env = {"PKGDIR": off["binpkgs"], "FEATURES": "-getbinpkg"}
         sy.log(f"offline install: binary packages from {off['binpkgs']} only, no repository sync")
     if stage_dir:
         ensure_dirs(os.path.join(stage_dir, "binpkgs"), public=True)
-        pkg_env = {"PKGDIR": os.path.join(stage_dir, "binpkgs")}
+        if not sy.dry:
+            # FEATURES=userfetch downloads as the portage user: a PKGDIR it can't write makes Portage fetch into a temp dir and drop the file
+            try:
+                shutil.chown(os.path.join(stage_dir, "binpkgs"), "root", "portage")
+                os.chmod(os.path.join(stage_dir, "binpkgs"), 0o2775)
+            except (LookupError, OSError) as e:
+                sy.log(f"stage-offline: could not give the portage group the payload's PKGDIR ({e})")
+        # buildpkg: the script/config packages built from the trusted overlays land in the payload as binary packages too
+        pkg_env = {"PKGDIR": os.path.join(stage_dir, "binpkgs"), "FEATURES": "buildpkg"}
     gen, prev = next_generation() if not sy.dry else (0, {})
     t0 = time.time()
     rec = {"generation": gen, "time": time.strftime("%FT%TZ", time.gmtime()), "profile_sha256": profile_hash(mp),
@@ -805,7 +813,8 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=(), offline=None
     if SELF_ATOM not in atoms and (sy.run(["portageq", "best_visible", "/", SELF_ATOM], check=False, capture=True) or "").strip().startswith(SELF_ATOM.split("/")[0]):
         atoms.append(SELF_ATOM)          # this program, so later `horcrux-profile apply` runs come from the package
     rec["packages"] = atoms
-    pkg_args = ["--usepkgonly"] if off else ["--getbinpkg", "--usepkg"]
+    pkg_args = ["--usepkgonly", "--getbinpkg=n"] if off else ["--getbinpkg", "--usepkg"]   # =n: images default to --getbinpkg
+    before = installed_cpvs() if stage_dir else set()
     base = ["emerge", "--update", "--newuse", *pkg_args, "--select", "--noreplace", "--quiet-build=y", "--with-bdeps=n", *emerge_args]
     if any(lay.get("kernel", {}).get("binrepo") for lay in layers):
         # a hardware layer's kernel binhost lane (the Apple T2 kernel) builds gentoo-kernel with the layer's user patches (/etc/portage/patches), and
@@ -842,7 +851,7 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=(), offline=None
         kernel_layers = [lay for lay in layers if lay.get("kernel", {}).get("packages")]
         if kernel_layers:
             kernel_transaction(sy, base + atoms, sorted({a for lay in kernel_layers for a in lay["kernel"].get("reinstall", [])}),
-                               pkg_args=("--usepkgonly",) if off else ("--usepkgonly", "--getbinpkg"), env=pkg_env)
+                               pkg_args=("--usepkgonly", "--getbinpkg=n") if off else ("--usepkgonly", "--getbinpkg"), env=pkg_env)
         else:
             sy.run(base + atoms, env={"PORTAGE_NICENESS": "10", **pkg_env})
     for a in prev.get("packages", []):
@@ -891,8 +900,10 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=(), offline=None
     rec["files"] = sorted(list(owned_files) + [f["path"] for f in mp.get("files", [])])
     if off:
         rec["offline"] = True
-    if stage_dir and not sy.dry:
-        finish_stage(sy, stage_dir)
+    if stage_dir:
+        fetch_into_stage(sy, sorted(installed_cpvs() - before), pkg_env)
+        if not sy.dry:
+            finish_stage(sy, stage_dir)
     rec["seconds"] = round(time.time() - t0, 1)
     if not sy.dry:
         sy.write(f"{GEN_DIR}/{gen}.json", json.dumps(rec, indent=1, sort_keys=True) + "\n")
@@ -904,6 +915,85 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=(), offline=None
         sy.write(f"{STATE}/profile.toml.applied", json.dumps(mp, indent=1, sort_keys=True, default=str) + "\n", 0o600)
     sy.log(f"generation {gen} applied in {rec['seconds']} s: {len(atoms)} packages, {len(rec['files'])} files")
     return rec
+
+
+def installed_cpvs(vdb="/var/db/pkg"):
+    """{'cat/pf'} of every installed package (the vdb directory names)"""
+    out = set()
+    try:
+        for c in os.listdir(vdb):
+            if os.path.isdir(os.path.join(vdb, c)) and not c.startswith("."):
+                out |= {f"{c}/{p}" for p in os.listdir(os.path.join(vdb, c)) if not p.startswith(("-MERGING-", "."))}
+    except OSError:
+        pass
+    return out
+
+
+def binrepo_caches():
+    """where Portage keeps binary packages fetched from each [binrepo] (`location`, default /var/cache/binhost/<name>)"""
+    locs, files = set(glob.glob("/var/cache/binhost/*")), []
+    for p in ("/etc/portage/binrepos.conf",):
+        files += [p] if os.path.isfile(p) else sorted(glob.glob(p + "/*.conf"))
+    for f in files:
+        try:
+            for l in open(f):
+                m = re.match(r"\s*location\s*=\s*(\S+)", l)
+                if m:
+                    locs.add(m.group(1))
+        except OSError:
+            pass
+    return sorted(d for d in locs if os.path.isdir(d))
+
+
+def collect_from_caches(sy, cpvs, pkgdir, vdb="/var/db/pkg"):
+    """copy the binary packages of `cpvs` from the binrepo caches into pkgdir (same <cat>/<pn>/<file> layout); returns the ones found.
+    When the installed package records its BUILD_ID, exactly that instance is taken (a cache can hold several builds of one version)."""
+    want, found = set(cpvs), set()
+    for d in binrepo_caches():
+        for p in sorted(glob.glob(os.path.join(d, "*", "*", "*.gpkg.tar"))):
+            cat, pn, fn = p.split(os.sep)[-3:]
+            m = re.match(r"^(.*)-([0-9]+)\.gpkg\.tar$", fn)
+            if not m or f"{cat}/{m.group(1)}" not in want or f"{cat}/{m.group(1)}" in found:
+                continue
+            try:
+                with open(os.path.join(vdb, cat, m.group(1), "BUILD_ID")) as f:
+                    if f.read().strip() != m.group(2):
+                        continue
+            except OSError:
+                pass
+            if not sy.dry:
+                ensure_dirs(os.path.join(pkgdir, cat, pn), public=True)
+                shutil.copy2(p, os.path.join(pkgdir, cat, pn, fn))
+            found.add(f"{cat}/{m.group(1)}")
+    return found
+
+
+def fetch_into_stage(sy, cpvs, env):
+    """`stage-offline`: Portage keeps binary packages it merged from a remote binhost in that binrepo's cache (/var/cache/binhost/<name>),
+    not in PKGDIR: copy exactly the versions this apply installed into the payload's PKGDIR, fetching any the cache lost (the ones
+    built here from the trusted overlays are already in PKGDIR via buildpkg)"""
+    pkgdir = env["PKGDIR"]
+    want = [c for c in cpvs if c not in installed_in_pkgdir(pkgdir)]
+    left = [c for c in want if c not in collect_from_caches(sy, want, pkgdir)]
+    if left:
+        sy.run(["emerge", "--fetchonly", "--getbinpkgonly", "--nodeps", "--oneshot", "--quiet=y", *[f"={c}" for c in left]], env=env)
+        collect_from_caches(sy, left, pkgdir)
+    miss = [c for c in want if c not in installed_in_pkgdir(pkgdir)] if not sy.dry else []
+    if miss:
+        raise RuntimeError("stage-offline: no binary package could be found for " + ", ".join(miss))
+
+
+def installed_in_pkgdir(pkgdir):
+    """{'cat/pf'} that have a binary package in pkgdir (multi-instance gpkg: <cat>/<pn>/<pf>-<build>.gpkg.tar, or <cat>/<pf>.tbz2)"""
+    out = set()
+    for p in glob.glob(os.path.join(pkgdir, "*", "*", "*.gpkg.tar")):
+        cat, pf = p.split(os.sep)[-3], re.sub(r"-[0-9]+\.gpkg\.tar$", "", os.path.basename(p))
+        out.add(f"{cat}/{pf}")
+    for p in glob.glob(os.path.join(pkgdir, "*", "*.tbz2")) + glob.glob(os.path.join(pkgdir, "*", "*", "*.xpak")):
+        cat = p.split(os.sep)[-2] if p.endswith(".tbz2") else p.split(os.sep)[-3]
+        pf = re.sub(r"\.tbz2$", "", os.path.basename(p)) if p.endswith(".tbz2") else re.sub(r"-[0-9]+\.xpak$", "", os.path.basename(p))
+        out.add(f"{cat}/{pf}")
+    return out
 
 
 def finish_stage(sy, d):
