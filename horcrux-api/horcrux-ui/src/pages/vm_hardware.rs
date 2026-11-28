@@ -886,7 +886,8 @@ pub fn VmHardwarePage() -> impl IntoView {
                 <VmDisks vm_id=Signal::derive(vm_id) vm=vm set_vm=set_vm running=running options=options/>
                 <crate::pages::vm_devices::VmLiveDevices vm_id=Signal::derive(vm_id) vm=vm set_vm=set_vm hardware=hardware running=running/>
                 <crate::pages::vm_advanced::VmHotplug vm_id=Signal::derive(vm_id) set_vm=set_vm running=running/>
-                <GuestFirewall guest_id=Signal::derive(vm_id) container=false/>
+                <p class="help-text" id="vm-hw-firewall-moved">"This VM's firewall rules are on its "
+                    <A href=move || crate::components::vm_tabs::tab_href(&vm_id(), "/firewall")>"Firewall"</A>" tab."</p>
             </Show>
         </div>
     }
@@ -1013,6 +1014,9 @@ pub fn GuestFirewall(
             <table class="vm-table" id="vm-fw-table">
                 <thead><tr><th>"Direction"</th><th>"Action"</th><th>"Protocol"</th><th>"Port"</th><th>"Source"</th><th>"Comment"</th><th></th></tr></thead>
                 <tbody>
+                    {move || rules.with(|r| r.is_empty()).then(|| view! {
+                        <tr class="vm-fw-empty"><td colspan="7">"No rules yet: all traffic is allowed. Add one below."</td></tr>
+                    })}
                     {move || rules.get().into_iter().map(|r| {
                         let rid = r.id.clone();
                         view! {

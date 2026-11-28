@@ -684,7 +684,8 @@ a.filter-link.active, a.filter-link[aria-current="page"] { background: var(--pri
     cursor: pointer;
     text-decoration: none;
 }
-.tab.active { background: var(--surface); font-weight: 600; color: var(--primary); }
+/* .tab-active: the per-VM tab bar (it had no rule, so the current tab looked like the others) */
+.tab.active, .tab.tab-active, .tabs .tab[aria-current="page"] { background: var(--surface); font-weight: 600; color: var(--primary); }
 /* System Configuration, Notifications and Alert Center use .tab-buttons/.tab-button: same look as .tabs/.tab
    (they had no rules and rendered as tiny native buttons run together: "GeneralNetworkDNSTime & NTP"). */
 .tab-buttons { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 1rem 0; border-bottom: 1px solid var(--border); }

@@ -164,6 +164,7 @@ pub fn title_for(path: &str, subject: Option<&str>) -> String {
             ["security", "vulnerabilities", id] => format!("Scan {} · Vulnerabilities", named(id)),
             ["vms", id, "console"] => format!("{} · Console", named(id)),
             ["vms", id, "hardware"] => format!("{} · Hardware", named(id)),
+            ["vms", id, "firewall"] => format!("{} · Firewall", named(id)),
             ["containers", id, sub] => format!(
                 "{} · {}",
                 named(id),

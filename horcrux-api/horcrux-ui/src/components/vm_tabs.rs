@@ -11,6 +11,9 @@ const TABS: &[(&str, &str)] = &[
     ("Console", "/console"),
     ("Remote Play", "/remote-play"),
     ("Snapshots", "/snapshots?vm={id}"),
+    ("Firewall", "/firewall"),
+    // the VM's own scan results (vulnerability targets are named by VM id)
+    ("Security", "/security/vulnerabilities?q={id}"),
 ];
 
 pub fn tab_href(id: &str, path: &str) -> String {
@@ -48,5 +51,19 @@ mod tests {
         assert_eq!(tab_href("web 1", "/hardware"), "/vms/web%201/hardware");
         assert_eq!(tab_href("web", ""), "/vms/web");
         assert_eq!(tab_href("web", "/snapshots?vm={id}"), "/snapshots?vm=web");
+        assert_eq!(tab_href("web", "/firewall"), "/vms/web/firewall");
+        assert_eq!(
+            tab_href("web 1", "/security/vulnerabilities?q={id}"),
+            "/security/vulnerabilities?q=web%201"
+        );
+    }
+
+    #[test]
+    fn no_tab_opens_a_node_wide_page() {
+        // every tab is about this VM: its own path, or a page filtered to it
+        for &(label, path) in TABS {
+            let href = tab_href("vm-77", path);
+            assert!(href.contains("vm-77"), "{label} tab opens {href}");
+        }
     }
 }

@@ -239,6 +239,7 @@ pub fn App() -> impl IntoView {
                     <Route path="/vms/:id/console" view=VmConsole/>
                     <Route path="/vms/:id/hardware" view=crate::pages::VmHardwarePage/>
                     <Route path="/vms/:id/remote-play" view=crate::pages::VmRemotePlayPage/>
+                    <Route path="/vms/:id/firewall" view=crate::pages::VmFirewallPage/>
                     <Route path="/storage/isos" view=crate::pages::IsoLibraryPage/>
                     <Route path="/storage/content" view=crate::pages::StorageContentPage/>
                     <Route path="/pools" view=crate::pages::ResourcePoolsPage/>

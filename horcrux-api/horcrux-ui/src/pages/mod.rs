@@ -43,6 +43,7 @@ mod vm_create;
 mod vm_detail;
 pub mod vm_devices;
 mod vm_display;
+mod vm_firewall;
 mod vm_hardware;
 pub mod vm_import_esxi;
 pub mod vm_import_libvirt;
@@ -83,6 +84,7 @@ pub use storage::{DiskManagementPage, SanPage, SanWizard, SmartMonitoringPage, S
 pub use storage_content::StorageContentPage;
 pub use vm_create::VmCreate;
 pub use vm_detail::VmDetailPage;
+pub use vm_firewall::VmFirewallPage;
 pub use vm_hardware::VmHardwarePage;
 pub use vm_import_esxi::VmImportEsxiPage;
 pub use vm_import_libvirt::{ImportCleanup, UnmanagedLibvirtBanner, VmImportLibvirtPage};
