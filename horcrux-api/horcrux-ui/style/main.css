@@ -1422,3 +1422,11 @@ td .actions { flex-wrap: nowrap; }
 .vm-power-bar + .alert { margin-top: 0.25rem; }
 .new-vm-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
 .vm-power-bar > .btn { display: inline-flex; align-items: center; box-sizing: border-box; height: 2.25rem; }
+/* VM Summary usage graphs (components/vm_usage.rs) */
+.vm-usage { margin: 1rem 0; }
+.vm-usage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.75rem; }
+.vm-usage-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.75rem; color: var(--primary); }
+.vm-usage-head { display: flex; justify-content: space-between; color: var(--text); font-weight: 600; }
+.vm-usage-now { font-variant-numeric: tabular-nums; }
+.vm-usage-chart svg { display: block; width: 100%; height: 60px; }
+.vm-usage-peak { font-size: 0.8rem; color: var(--secondary); }

@@ -88,6 +88,18 @@ pub struct TimeSeriesPoint {
     pub value: f64,
 }
 
+/// The per-VM history series of one sample: `(key below vm.<id>., value)`.
+pub fn vm_history_series(m: &ResourceMetrics) -> [(&'static str, f64); 6] {
+    [
+        ("cpu.usage", m.cpu.usage_percent),
+        ("mem.usage", m.memory.usage_percent),
+        ("net.rx", m.network.rx_bytes_per_sec as f64),
+        ("net.tx", m.network.tx_bytes_per_sec as f64),
+        ("disk.read", m.disk.read_bytes_per_sec as f64),
+        ("disk.write", m.disk.write_bytes_per_sec as f64),
+    ]
+}
+
 /// Monitoring manager
 pub struct MonitoringManager {
     vm_metrics: Arc<RwLock<HashMap<String, ResourceMetrics>>>,
@@ -201,20 +213,22 @@ impl MonitoringManager {
     }
 
     /// Store the latest metrics of a VM (keyed by its Horcrux VM id) and
-    /// append its CPU usage to the `vm.<id>.cpu.usage` history.
+    /// append its usage to the per-VM histories the VM Summary graphs read:
+    /// `vm.<id>.cpu.usage` (%), `vm.<id>.mem.usage` (%), `vm.<id>.net.rx` /
+    /// `.net.tx` and `vm.<id>.disk.read` / `.disk.write` (bytes/s).
     pub async fn record_vm_metrics(&self, metrics: ResourceMetrics) {
         {
             let mut hist = self.history.write().await;
-            let points = hist
-                .entry(format!("vm.{}.cpu.usage", metrics.id))
-                .or_default();
-            points.push(TimeSeriesPoint {
-                timestamp: metrics.timestamp,
-                value: metrics.cpu.usage_percent,
-            });
-            if points.len() > self.max_history_points {
-                let excess = points.len() - self.max_history_points;
-                points.drain(..excess);
+            for (key, value) in vm_history_series(&metrics) {
+                let points = hist.entry(format!("vm.{}.{key}", metrics.id)).or_default();
+                points.push(TimeSeriesPoint {
+                    timestamp: metrics.timestamp,
+                    value,
+                });
+                if points.len() > self.max_history_points {
+                    let excess = points.len() - self.max_history_points;
+                    points.drain(..excess);
+                }
             }
         }
         self.vm_metrics
@@ -750,6 +764,13 @@ mod tests {
         let hist = manager.get_history("vm.web-1.cpu.usage", 0, i64::MAX).await;
         let values: Vec<f64> = hist.iter().map(|p| p.value).collect();
         assert_eq!(values, vec![30.0, 40.0, 50.0]);
+        // the Summary graphs' other series are kept the same way
+        for key in ["mem.usage", "net.rx", "net.tx", "disk.read", "disk.write"] {
+            let h = manager
+                .get_history(&format!("vm.web-1.{key}"), 0, i64::MAX)
+                .await;
+            assert_eq!(h.len(), 3, "{key}");
+        }
     }
 
     #[tokio::test]

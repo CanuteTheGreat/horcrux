@@ -156,6 +156,8 @@ pub fn VmDetailPage() -> impl IntoView {
                     <tr><th>"Pool"</th><td class="vmd-pool">{inv.get().and_then(|i| i.pool).unwrap_or_else(|| "-".into())}</td></tr>
                 </table>
             })}
+            <crate::components::vm_usage::VmUsageGraphs vm_id=Signal::derive(id)
+                running=Signal::derive(move || vm.with(|v| v.as_ref().is_some_and(|v| v.status == horcrux_common::VmStatus::Running)))/>
             <h3>"When the host shuts down or restarts"</h3>
             <div class="form-row">
                 <select id="vmd-stop" aria-label="Shutdown method" prop:value=stop_sel

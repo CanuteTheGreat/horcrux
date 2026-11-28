@@ -502,6 +502,27 @@ pub async fn get_node_metrics() -> Result<Option<NodeMetrics>, ApiError> {
     fetch_json("/monitoring/node").await
 }
 
+/// One point of a metric history (`GET /api/monitoring/history/:metric`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct HistoryPoint {
+    pub timestamp: i64,
+    pub value: f64,
+}
+
+/// A metric's history between `from` and `to` (unix seconds), e.g.
+/// `vm.<id>.cpu.usage`.
+pub async fn get_metric_history(
+    metric: &str,
+    from: i64,
+    to: i64,
+) -> Result<Vec<HistoryPoint>, ApiError> {
+    fetch_json(&format!(
+        "/monitoring/history/{}?from={from}&to={to}",
+        urlencoding::encode(metric)
+    ))
+    .await
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Alert {
     pub id: String,
