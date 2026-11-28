@@ -24,6 +24,11 @@ Profile (schema 1), every key optional except schema and machine.hostname:
     [services]  enable = ["sshd", "name:runlevel"]   disable = [...]
     [[wifi]]    ssid = "Net"  psk = "..."  (or psk_file = "bundle:secrets/wifi-net")  autoconnect = true
     [[files]]   path = "/etc/x"  source = "bundle:files/x" | content = "..."  mode = "0644"  owner = "root:root"
+                (a bundle source is copied byte for byte: binary files such as raw ZFS key files are fine)
+    [offline]   dir = "bundle:offline"   (INSTALL TIME ONLY: everything `apply --install` needs with NO network, written by
+                `horcrux-profile stage-offline` on a networked copy of the same image: <dir>/binpkgs (a PKGDIR with its Packages
+                index) and <dir>/gentoo.tar.xz (or <dir>/gentoo/) for ::gentoo. The install then emerges --usepkgonly from it and
+                syncs nothing; later applies use the binhosts again. The installer drops the payload from the stored bundle.)
 
 Generations: every apply records /var/lib/horcrux/profile/generations/<N>.json (profile hash, packages, files) and, on a ZFS root with
 boot environments, takes a `horcrux-be snapshot profile-<N>` first; `horcrux-profile rollback <N>` re-activates that boot environment.
@@ -179,6 +184,12 @@ def problems(mp, bundle=None):
             errs.append(f"files: refusing path {p!r}")
         if ("source" in f) == ("content" in f):
             errs.append(f"files.{p}: exactly one of source / content")
+    for k in mp.get("offline", {}):
+        if k != "dir":
+            errs.append(f"offline.{k}: unknown key (known: dir)")
+    od = mp.get("offline", {}).get("dir")
+    if od is not None and not (isinstance(od, str) and od.startswith("bundle:")):
+        errs.append("offline.dir must be a bundle: reference")
     # every bundle: reference must exist (only checkable when the bundle is at hand)
     if bundle:
         for ref in _bundle_refs(mp):
@@ -202,6 +213,65 @@ def _bundle_refs(mp):
     if isinstance(fw, str) and fw.startswith("bundle:"):
         out.append(fw)
     return [x for x in out if isinstance(x, str) and x.startswith("bundle:")]
+
+
+OFFLINE_MANIFEST = "manifest.json"
+
+
+def offline_payload(d):
+    """the parts of an offline directory: {'binpkgs': dir, 'gentoo': tarball or dir or None, 'manifest': {...}}; raises when unusable"""
+    if not d or not os.path.isdir(d):
+        raise RuntimeError(f"offline payload {d!r} is not a directory")
+    b = os.path.join(d, "binpkgs")
+    if not os.path.isfile(os.path.join(b, "Packages")):
+        raise RuntimeError(f"offline payload {d}: binpkgs/Packages is missing (run `horcrux-profile stage-offline` to write it)")
+    g = None
+    for cand in ("gentoo.tar.xz", "gentoo.tar.zst", "gentoo.tar.gz", "gentoo.tar", "gentoo"):
+        if os.path.exists(os.path.join(d, cand)):
+            g = os.path.join(d, cand)
+            break
+    return {"binpkgs": b, "gentoo": g, "manifest": load_json(os.path.join(d, OFFLINE_MANIFEST))}
+
+
+def image_build_id(root="/"):
+    """BUILD_ID (else VERSION_ID) from os-release: an offline payload is staged against one image build"""
+    for p in ("etc/os-release", "usr/lib/os-release"):
+        try:
+            with open(os.path.join(root, p)) as f:
+                kv = dict(l.rstrip("\n").split("=", 1) for l in f if "=" in l)
+        except OSError:
+            continue
+        return kv.get("BUILD_ID", kv.get("VERSION_ID", "")).strip('"')
+    return ""
+
+
+def unpack_gentoo(sy, src, dst="/var/db/repos/gentoo"):
+    """::gentoo from the offline payload, only into an empty/absent tree (the image ships an empty one); never over a real tree"""
+    if os.path.isdir(os.path.join(dst, "sys-apps")):
+        sy.log("::gentoo already present: offline snapshot not needed")
+        return
+    if sy.dry:
+        sy.log(f"::gentoo from {src}")
+        return
+    ensure_dirs(dst, public=True)
+    if os.path.isdir(src):
+        shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True)
+    else:
+        # webrsync snapshots carry a top-level gentoo/ directory; a tarball written by stage-offline does not
+        import tarfile
+        with tarfile.open(src) as t:
+            first = t.next()
+            strip = 1 if first is not None and (first.name.rstrip("/") == "gentoo" or first.name.startswith("gentoo/")) else 0
+        sy.run(["tar", "-x", "-f", src, "-C", dst, "--no-same-owner"] + ([f"--strip-components={strip}"] if strip else []))
+    for dp, dn, fn in os.walk(dst):
+        os.chmod(dp, 0o755)
+        for f in fn:
+            fp = os.path.join(dp, f)
+            if not os.path.islink(fp):
+                os.chmod(fp, 0o644)
+    if not os.path.isdir(os.path.join(dst, "sys-apps")):
+        raise RuntimeError(f"offline ::gentoo snapshot {src} does not contain a Gentoo tree")
+    sy.log(f"::gentoo from the offline payload ({src})")
 
 
 def profile_hash(mp):
@@ -439,7 +509,7 @@ class Sys:
         ensure_dirs(os.path.dirname(path))
         mode = portage_config_mode(path, mode)
         tmp = path + ".hxp-new"
-        with open(tmp, "w") as f:
+        with open(tmp, "wb" if isinstance(text, bytes) else "w") as f:
             f.write(text)
         os.chmod(tmp, mode)
         os.replace(tmp, path)
@@ -612,7 +682,7 @@ def bzimage_release(path):
 DRACUT_KERNEL_TXN = "/etc/dracut.conf.d/00-horcrux-profile-kernel-install.conf"
 
 
-def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules"):
+def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules", pkg_args=("--usepkgonly", "--getbinpkg"), env=None):
     """emerge a transaction that brings a new dist-kernel (a hardware layer's kernel binhost) together with its ZFS module.
 
     The kernel's postinst builds an initramfs through installkernel/dracut BEFORE zfs-kmod for that kernel is merged (zfs-kmod depends on
@@ -631,7 +701,7 @@ def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules"):
         sy.write(DRACUT_KERNEL_TXN, "# horcrux-profile: only while a kernel layer's packages are merged (removed afterwards, the initramfs is rebuilt)\n"
                                     'omit_dracutmodules+=" zfs "\n')
     try:
-        sy.run(cmd, env={"PORTAGE_NICENESS": "10"})
+        sy.run(cmd, env={"PORTAGE_NICENESS": "10", **(env or {})})
         newk = [] if sy.dry else sorted(set(os.listdir(mods)) - before if os.path.isdir(mods) else ())
         # zfs-kmod's postinst reinstalls the kernel through /usr/src/linux (dist-kernel_reinstall_initramfs): while that symlink still
         # names the stock kernel (the kernel's own postinst leaves it as-is when it points elsewhere) /boot/vmlinuz-<new release>,
@@ -642,8 +712,8 @@ def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules"):
                 sy.run(["eselect", "kernel", "set", f"linux-{kr}"], check=False)
         # only when this transaction brought a kernel: a later `apply` of an installed machine (profile edit) has nothing to re-merge
         if reinstall and (sy.dry or newk):
-            sy.run(["emerge", "--oneshot", "--usepkgonly", "--getbinpkg", "--binpkg-respect-user-patches=n", "--quiet-build=y", "--with-bdeps=n", *reinstall],
-                   env={"PORTAGE_NICENESS": "10"})
+            sy.run(["emerge", "--oneshot", *pkg_args, "--binpkg-respect-user-patches=n", "--quiet-build=y", "--with-bdeps=n", *reinstall],
+                   env={"PORTAGE_NICENESS": "10", **(env or {})})
     finally:
         if not sy.dry and os.path.exists(DRACUT_KERNEL_TXN):
             os.remove(DRACUT_KERNEL_TXN)
@@ -662,11 +732,32 @@ def kernel_transaction(sy, cmd, reinstall=(), mods="/lib/modules"):
                                f"the machine would boot the wrong kernel against this initramfs")
 
 
-def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
-    """converge the running system (or the installer's chroot) to the profile; returns the generation record"""
+def apply(mp, layers, sy, install=False, sync=True, emerge_args=(), offline=None, stage_dir=None):
+    """converge the running system (or the installer's chroot) to the profile; returns the generation record.
+
+    offline: an offline payload directory (default at install: the profile's [offline] dir): no sync, --usepkgonly from its binpkgs.
+    stage_dir: `stage-offline`: a normal networked apply whose fetched binary packages and ::gentoo are kept in that directory."""
     errs = problems(mp, sy.bundle)
     if errs:
         raise RuntimeError("profile is invalid: " + "; ".join(errs))
+    if offline is None and install and not stage_dir and mp.get("offline", {}).get("dir"):
+        offline = bundle_path(sy.bundle, mp["offline"]["dir"])
+    off = offline_payload(offline) if offline else None
+    pkg_env = {}
+    if off:
+        want, have = off["manifest"].get("image_build_id", ""), image_build_id()
+        if want and have and want != have:
+            sy.log(f"WARNING: the offline payload was staged on image {want}, this system is {have}: packages may be missing")
+        if off["gentoo"]:
+            unpack_gentoo(sy, off["gentoo"])
+        elif not sy.dry and not os.path.isdir("/var/db/repos/gentoo/sys-apps"):
+            raise RuntimeError("offline install: no ::gentoo tree on this system and none in the offline payload")
+        sync = False
+        pkg_env = {"PKGDIR": off["binpkgs"]}
+        sy.log(f"offline install: binary packages from {off['binpkgs']} only, no repository sync")
+    if stage_dir:
+        ensure_dirs(os.path.join(stage_dir, "binpkgs"), public=True)
+        pkg_env = {"PKGDIR": os.path.join(stage_dir, "binpkgs")}
     gen, prev = next_generation() if not sy.dry else (0, {})
     t0 = time.time()
     rec = {"generation": gen, "time": time.strftime("%FT%TZ", time.gmtime()), "profile_sha256": profile_hash(mp),
@@ -714,7 +805,8 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
     if SELF_ATOM not in atoms and (sy.run(["portageq", "best_visible", "/", SELF_ATOM], check=False, capture=True) or "").strip().startswith(SELF_ATOM.split("/")[0]):
         atoms.append(SELF_ATOM)          # this program, so later `horcrux-profile apply` runs come from the package
     rec["packages"] = atoms
-    base = ["emerge", "--update", "--newuse", "--getbinpkg", "--usepkg", "--select", "--noreplace", "--quiet-build=y", "--with-bdeps=n", *emerge_args]
+    pkg_args = ["--usepkgonly"] if off else ["--getbinpkg", "--usepkg"]
+    base = ["emerge", "--update", "--newuse", *pkg_args, "--select", "--noreplace", "--quiet-build=y", "--with-bdeps=n", *emerge_args]
     if any(lay.get("kernel", {}).get("binrepo") for lay in layers):
         # a hardware layer's kernel binhost lane (the Apple T2 kernel) builds gentoo-kernel with the layer's user patches (/etc/portage/patches), and
         # Portage ignores a binary package whose USER_PATCHES digest differs from the local one: the patch-set package installs in the same
@@ -724,33 +816,35 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
     if pre_atoms:
         # packages owning /etc/portage files (keywords, USE, licences) that the rest of the profile needs: Portage only sees those
         # files once they are installed, so they go in first, under the same binary-only rule
-        pre = sy.run(base + ["--pretend", "--verbose", "--color=n", *pre_atoms], check=False, capture=True)
+        pre = sy.run(base + ["--pretend", "--verbose", "--color=n", *pre_atoms], check=False, capture=True, env=pkg_env)
         if resolve_failed(pre):
             raise RuntimeError("the preinstall packages of the machine profile can't be resolved:\n" + resolve_failure(pre or ""))
         bad = forbidden_source_builds(source_builds(pre or ""), mp)
         if bad:
             raise RuntimeError("these would be compiled on this machine (no binary package on the binhosts): " + ", ".join(bad)
                                + " - publish them on the binhost or list them in software.allow_source")
-        sy.run(base + pre_atoms, env={"PORTAGE_NICENESS": "10"})
+        sy.run(base + pre_atoms, env={"PORTAGE_NICENESS": "10", **pkg_env})
     if atoms:
-        pre = sy.run(base + ["--pretend", "--verbose", "--color=n", *atoms], check=False, capture=True)
+        pre = sy.run(base + ["--pretend", "--verbose", "--color=n", *atoms], check=False, capture=True, env=pkg_env)
         if resolve_failed(pre):
             # name EVERY missing keyword/USE/licence/unmask at once, in profile syntax, instead of one error per attempt
             au = sy.run(base + ["--pretend", "--color=n", "--autounmask=y", "--autounmask-write=n", "--autounmask-continue=n", *atoms],
-                        check=False, capture=True)
+                        check=False, capture=True, env=pkg_env)
             hints = autounmask_hints(au or "")
             if hints:
                 raise RuntimeError("the packages need these [portage.*] entries in the machine profile:\n" + format_hints(hints))
-            raise RuntimeError("the packages of the machine profile can't be resolved:\n" + resolve_failure(pre or ""))
+            raise RuntimeError("the packages of the machine profile can't be resolved"
+                               + (" from the offline payload (stage it again from this image)" if off else "") + ":\n" + resolve_failure(pre or ""))
         bad = forbidden_source_builds(source_builds(pre or ""), mp)
         if bad:
             raise RuntimeError("these would be compiled on this machine (no binary package on the binhosts): " + ", ".join(bad)
                                + " - publish them on the binhost or list them in software.allow_source")
         kernel_layers = [lay for lay in layers if lay.get("kernel", {}).get("packages")]
         if kernel_layers:
-            kernel_transaction(sy, base + atoms, sorted({a for lay in kernel_layers for a in lay["kernel"].get("reinstall", [])}))
+            kernel_transaction(sy, base + atoms, sorted({a for lay in kernel_layers for a in lay["kernel"].get("reinstall", [])}),
+                               pkg_args=("--usepkgonly",) if off else ("--usepkgonly", "--getbinpkg"), env=pkg_env)
         else:
-            sy.run(base + atoms, env={"PORTAGE_NICENESS": "10"})
+            sy.run(base + atoms, env={"PORTAGE_NICENESS": "10", **pkg_env})
     for a in prev.get("packages", []):
         if a not in atoms and a != SELF_ATOM:
             sy.run(["emerge", "--deselect", a], check=False)
@@ -772,7 +866,11 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
         sy.log(f"wifi {w['ssid']}: written")
     for f in mp.get("files", []):
         mode = int(str(f.get("mode", "0644")), 8)
-        data = f["content"] if "content" in f else open(bundle_path(sy.bundle, f["source"])).read()
+        if "content" in f:
+            data = f["content"]
+        else:
+            with open(bundle_path(sy.bundle, f["source"]), "rb") as fh:
+                data = fh.read()
         sy.write(f["path"], data, mode)
         if f.get("owner") and not sy.dry:
             sy.run(["chown", f["owner"], f["path"]])
@@ -791,6 +889,10 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
                 os.remove("/etc/localtime")
             os.symlink(f"../usr/share/zoneinfo/{m['timezone']}", "/etc/localtime")
     rec["files"] = sorted(list(owned_files) + [f["path"] for f in mp.get("files", [])])
+    if off:
+        rec["offline"] = True
+    if stage_dir and not sy.dry:
+        finish_stage(sy, stage_dir)
     rec["seconds"] = round(time.time() - t0, 1)
     if not sy.dry:
         sy.write(f"{GEN_DIR}/{gen}.json", json.dumps(rec, indent=1, sort_keys=True) + "\n")
@@ -802,6 +904,23 @@ def apply(mp, layers, sy, install=False, sync=True, emerge_args=()):
         sy.write(f"{STATE}/profile.toml.applied", json.dumps(mp, indent=1, sort_keys=True, default=str) + "\n", 0o600)
     sy.log(f"generation {gen} applied in {rec['seconds']} s: {len(atoms)} packages, {len(rec['files'])} files")
     return rec
+
+
+def finish_stage(sy, d):
+    """after a `stage-offline` apply: index the fetched binary packages, pack ::gentoo, record which image it was staged on"""
+    b = os.path.join(d, "binpkgs")
+    sy.run(["emaint", "binhost", "--fix"], check=False, env={"PKGDIR": b})
+    if not os.path.isfile(os.path.join(b, "Packages")):        # nothing was fetched (the image already had everything)
+        sy.write(os.path.join(b, "Packages"), "")
+    g = os.path.join(d, "gentoo.tar.xz")
+    sy.run(["tar", "-C", "/var/db/repos/gentoo", "--exclude=./.git", "--exclude=./distfiles", "--exclude=./packages",
+            "-cJf", g + ".new", "."], env={"XZ_OPT": "-T0 -6"})
+    os.replace(g + ".new", g)
+    n = len([x for x in glob.glob(os.path.join(b, "**", "*"), recursive=True) if x.endswith((".gpkg.tar", ".tbz2", ".xpak"))])
+    man = {"image_build_id": image_build_id(), "staged": time.strftime("%FT%TZ", time.gmtime()), "binary_packages": n,
+           "bytes": sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fn in os.walk(d) for f in fn)}
+    sy.write(os.path.join(d, OFFLINE_MANIFEST), json.dumps(man, indent=1, sort_keys=True) + "\n")
+    sy.log(f"offline payload {d}: {n} binary packages, {man['bytes'] // (1 << 20)} MiB (image {man['image_build_id'] or '?'})")
 
 
 # ------------------------------------------------------------------------------------------------ CLI
@@ -825,6 +944,10 @@ def main(argv=None):
     a_apply.add_argument("--no-sync", action="store_true")
     a_apply.add_argument("--dry-run", action="store_true")
     a_apply.add_argument("--accounts-only", action="store_true", help="only group memberships and ssh keys (the installer runs this once the users exist)")
+    a_apply.add_argument("--offline", default=None, metavar="DIR", help="offline payload (binpkgs/ + gentoo.tar.xz): no sync, binary packages from DIR only")
+    so = sub.add_parser("stage-offline", help="on a NETWORKED throw-away copy of the image: apply --install and keep everything it fetched "
+                                             "in DIR, the payload a later offline install uses ([offline] dir)")
+    so.add_argument("dir")
     sub.add_parser("generations")
     rb = sub.add_parser("rollback")
     rb.add_argument("generation", type=int)
@@ -863,12 +986,15 @@ def main(argv=None):
         for l in plan(mp, layers, state) or ["(nothing to change)"]:
             print(l)
         return 0
-    sy = Sys(bundle, dry=a.dry_run)
+    sy = Sys(bundle, dry=getattr(a, "dry_run", False))
     try:
-        if a.accounts_only:
+        if getattr(a, "accounts_only", False):
             apply_accounts(mp, sy)
             return 0
-        apply(mp, layers, sy, install=a.install, sync=not a.no_sync)
+        if a.cmd == "stage-offline":
+            apply(mp, layers, sy, install=True, sync=True, stage_dir=os.path.abspath(a.dir))
+            return 0
+        apply(mp, layers, sy, install=a.install, sync=not a.no_sync, offline=a.offline)
     except RuntimeError as e:
         print("horcrux-profile: " + str(e), file=sys.stderr)
         return 1

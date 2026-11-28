@@ -341,5 +341,18 @@ def stage(inst):
         inst.run(cmd, chroot=True)
     finally:
         shutil.rmtree(f"{T}/var/tmp/horcrux-profile", ignore_errors=True)
+        drop_offline_payload(mp, st)
     inst.log(f"machine profile applied in {time.time() - t0:.0f} s (layers: {ids or 'none'})")
     return time.time() - t0
+
+
+def drop_offline_payload(mp, st):
+    """the [offline] payload (binary packages + ::gentoo snapshot, often GBs) is install-time only: not kept in the stored bundle.
+    Later `horcrux-profile apply` runs use the binhosts; the engine does not require the payload outside --install."""
+    ref = (mp or {}).get("offline", {}).get("dir")
+    if not (isinstance(ref, str) and ref.startswith("bundle:")):
+        return
+    rel = os.path.normpath(ref[len("bundle:"):])
+    if rel in (".", "") or rel.startswith(("/", "..")):
+        return
+    shutil.rmtree(os.path.join(st, "bundle", rel), ignore_errors=True)
