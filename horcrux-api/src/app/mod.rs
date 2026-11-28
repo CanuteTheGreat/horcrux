@@ -575,6 +575,7 @@ pub async fn run() -> anyhow::Result<()> {
         .merge(api::passthrough::routes())
         .merge(api::ovf::routes())
         .merge(api::libvirt_import::routes())
+        .merge(api::proxmox_import::routes())
         .merge(api::import_cleanup::routes())
         .merge(api::esxi::routes())
         .merge(api::storage_volumes::routes())

@@ -143,6 +143,7 @@ pub const KNOWN_AREAS: &[&str] = &[
     "host-agent",
     "tasks",
     "lxc",
+    "import",
 ];
 
 /// The requirement for `method` on `path` (the full request path, e.g.
@@ -188,6 +189,9 @@ pub fn requirement(method: &str, path: &str) -> Requirement {
         },
         "roles" => read_write(m, P::SysAudit, P::PermissionsModify, "/"),
         "privileges" => Requirement::Authenticated,
+        // Importers from other hypervisors read host paths and reach other
+        // hosts over SSH as the service, and create guests: node admins only.
+        "import" => need(P::SysModify, "/"),
         "acl" => acl_rule(m),
         "groups" => read_write(m, P::SysAudit, P::UserModify, "/access/groups"),
 

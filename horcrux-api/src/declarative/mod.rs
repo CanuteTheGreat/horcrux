@@ -132,6 +132,9 @@ pub struct DiskSpec {
     pub ssd: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub iothread: bool,
+    /// I/O limits (bytes/s, operations/s).
+    #[serde(default, skip_serializing_if = "horcrux_common::DiskThrottle::is_none")]
+    pub throttle: horcrux_common::DiskThrottle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -329,6 +332,7 @@ pub fn to_disk(d: &DiskSpec, pool_id: Option<String>) -> VmDisk {
         ssd: d.ssd,
         iothread: d.iothread,
         storage: pool_id,
+        throttle: d.throttle,
     }
 }
 
@@ -1074,6 +1078,7 @@ fn disk_of(d: &VmDisk, pools: &[crate::storage::StoragePool]) -> DiskSpec {
         discard: d.discard,
         ssd: d.ssd,
         iothread: d.iothread,
+        throttle: d.throttle,
     }
 }
 

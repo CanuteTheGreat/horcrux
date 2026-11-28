@@ -389,6 +389,7 @@ impl VmManager {
             ssd: spec.ssd,
             iothread: spec.iothread,
             storage: spec.storage.clone(),
+            throttle: spec.throttle,
         };
         disk.validate(disks.len()).map_err(Error::Validation)?;
         disks.push(disk);
@@ -440,6 +441,9 @@ impl VmManager {
             }
             if let Some(v) = upd.iothread {
                 next.iothread = v;
+            }
+            if let Some(t) = upd.throttle {
+                next.throttle = t;
             }
             next.validate(index).map_err(Error::Validation)?;
             let options_changed = {
@@ -620,6 +624,9 @@ pub struct DiskSpec {
     pub ssd: bool,
     #[serde(default)]
     pub iothread: bool,
+    /// I/O limits (bytes/s, operations/s); default unlimited.
+    #[serde(default)]
+    pub throttle: horcrux_common::DiskThrottle,
     /// Storage pool (id) to create the image in; `None` = the VM storage
     /// directory. The API resolves it to `dir` (a file-based pool's
     /// directory) before calling `add_disk`.
@@ -648,6 +655,9 @@ pub struct DiskUpdate {
     pub ssd: Option<bool>,
     #[serde(default)]
     pub iothread: Option<bool>,
+    /// I/O limits (bytes/s, operations/s); all-empty = unlimited.
+    #[serde(default)]
+    pub throttle: Option<horcrux_common::DiskThrottle>,
 }
 
 /// Insert (`Some`) or eject (`None`) the medium of a running VM's CD-ROM.

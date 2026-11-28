@@ -160,6 +160,55 @@ async fn run(cmd: &mut Command, what: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Where a new container's root filesystem comes from (besides templates).
+#[derive(Debug, Clone)]
+pub enum RootfsSource {
+    /// A rootfs tarball (.tar, .tar.gz, .tar.xz, .tar.zst); owners as the
+    /// container sees them (vzdump and template archives are like that).
+    Tar(PathBuf),
+    /// An existing rootfs directory (another hypervisor's container, a
+    /// received ZFS dataset). `src_idmap`: (base, size) its owners are
+    /// shifted by on disk (Proxmox unprivileged: 100000/65536); None = a
+    /// privileged container (owners unshifted).
+    Dir {
+        path: PathBuf,
+        src_idmap: Option<(u32, u32)>,
+    },
+}
+
+impl RootfsSource {
+    fn label(&self) -> String {
+        match self {
+            RootfsSource::Tar(p) | RootfsSource::Dir { path: p, .. } => p.display().to_string(),
+        }
+    }
+}
+
+/// Cap a container's host-side veth at `mbps` both ways (same tc shape as a
+/// VM tap: tbf egress + ingress policer).
+pub async fn limit_veth_rate(veth: &str, mbps: u32) -> Result<()> {
+    let tc = std::env::var("HORCRUX_TC").unwrap_or_else(|_| "tc".into());
+    let rate = format!("{mbps}mbit");
+    let burst = format!("{}", (u64::from(mbps) * 125_000 / 100).max(32_768));
+    for args in [
+        vec![
+            "qdisc", "replace", "dev", veth, "root", "tbf", "rate", &rate, "burst", &burst,
+            "latency", "50ms",
+        ],
+        vec![
+            "qdisc", "replace", "dev", veth, "handle", "ffff:", "ingress",
+        ],
+        vec![
+            "filter", "replace", "dev", veth, "parent", "ffff:", "protocol", "all", "prio", "1",
+            "u32", "match", "u32", "0", "0", "police", "rate", &rate, "burst", &burst, "drop",
+            "flowid", ":1",
+        ],
+    ] {
+        run(Command::new(&tc).args(&args), "tc").await?;
+    }
+    Ok(())
+}
+
 /// Valid LXC container name (also a directory name under lxcpath).
 pub fn valid_lxc_name(name: &str) -> bool {
     let mut c = name.chars();
@@ -588,17 +637,77 @@ impl LxcManager {
         Ok(())
     }
 
-    /// Extract a rootfs tarball into `target` (an empty directory). For an
-    /// unprivileged container tar runs inside the container's user
-    /// namespace, so file owners land shifted by the id map.
-    async fn extract(&self, tarball: &Path, target: &Path, o: &LxcOptions) -> Result<()> {
-        let file = std::fs::File::open(tarball)
-            .map_err(|e| sys(format!("open {}: {e}", tarball.display())))?;
-        let flag = tar_decompress_flag(tarball);
+    /// Fill `target` (an empty directory) from a rootfs tarball or an
+    /// existing rootfs directory. For an unprivileged container tar runs
+    /// inside the container's user namespace, so file owners land shifted
+    /// by the id map. A directory is read inside ITS id map (`src_idmap`: the source
+    /// container's base and size, e.g. Proxmox's 100000/65536) and written
+    /// inside the new container's, so every file keeps its owner as the
+    /// container sees it whatever the two host-side bases are.
+    async fn extract_from(&self, src: &RootfsSource, target: &Path, o: &LxcOptions) -> Result<()> {
         let mut tar_args: Vec<String> = vec!["tar".into(), "--numeric-owner".into(), "-xp".into()];
-        if !flag.is_empty() {
-            tar_args.push(flag.into());
-        }
+        let mut producer = None;
+        let mut producer_err: Option<std::fs::File> = None;
+        let stdin = match src {
+            RootfsSource::Tar(tarball) => {
+                let file = std::fs::File::open(tarball)
+                    .map_err(|e| sys(format!("open {}: {e}", tarball.display())))?;
+                let flag = tar_decompress_flag(tarball);
+                if !flag.is_empty() {
+                    tar_args.push(flag.into());
+                }
+                Stdio::from(file)
+            }
+            RootfsSource::Dir { path, src_idmap } => {
+                if !path.is_dir() {
+                    return Err(Error::Validation(format!(
+                        "rootfs source {} is not a directory",
+                        path.display()
+                    )));
+                }
+                let pack = [
+                    "tar",
+                    "--numeric-owner",
+                    "--xattrs",
+                    "-cpf",
+                    "-",
+                    "--exclude=./dev/*",
+                    ".",
+                ];
+                let mut c = match src_idmap {
+                    Some((b, n)) => {
+                        let mut c = Command::new("lxc-usernsexec");
+                        c.arg("-m").arg(format!("b:0:{b}:{n}")).arg("--").args(pack);
+                        c
+                    }
+                    None => {
+                        let mut c = Command::new(pack[0]);
+                        c.args(&pack[1..]);
+                        c
+                    }
+                };
+                // stderr to a file: a pipe nobody drains while the
+                // extract runs could fill up and stall both tars.
+                let errf = tempfile::tempfile().map_err(|e| sys(format!("temp file: {e}")))?;
+                producer_err = Some(errf.try_clone()?);
+                c.current_dir(path)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::from(errf));
+                tar_args.extend([
+                    "--xattrs".into(),
+                    "--xattrs-include=security.capability".into(),
+                ]);
+                let mut child = c
+                    .spawn()
+                    .map_err(|e| sys(format!("failed to run tar on {}: {e}", path.display())))?;
+                let out = child.stdout.take().expect("piped");
+                let fd: std::os::fd::OwnedFd = out
+                    .into_owned_fd()
+                    .map_err(|e| sys(format!("tar pipe: {e}")))?;
+                producer = Some(child);
+                Stdio::from(fd)
+            }
+        };
         // /dev is populated by LXC (autodev); device nodes can't be created
         // in a user namespace anyway.
         tar_args.extend(["--exclude=./dev/*".into(), "-f".into(), "-".into()]);
@@ -618,15 +727,34 @@ impl LxcManager {
         };
         // cwd is opened as root before the user namespace is entered, so
         // the mapped root can extract even if lxcpath is root-only (0700).
-        cmd.current_dir(target).stdin(Stdio::from(file));
+        cmd.current_dir(target).stdin(stdin);
         let out = cmd
             .output()
             .await
             .map_err(|e| sys(format!("failed to run tar: {e}")))?;
+        if let Some(p) = producer {
+            let po = p
+                .wait_with_output()
+                .await
+                .map_err(|e| sys(format!("tar (read side): {e}")))?;
+            if !po.status.success() {
+                let mut msg = String::new();
+                if let Some(mut f) = producer_err {
+                    use std::io::{Read, Seek};
+                    let _ = f.rewind();
+                    let _ = f.read_to_string(&mut msg);
+                }
+                return Err(sys(format!(
+                    "reading {} failed: {}",
+                    src.label(),
+                    msg.trim()
+                )));
+            }
+        }
         if !out.status.success() {
             return Err(sys(format!(
                 "extracting {} failed: {}",
-                tarball.display(),
+                src.label(),
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
@@ -844,14 +972,49 @@ impl LxcManager {
                 config.name
             )));
         }
+        self.create_container_with(config, None).await
+    }
+
+    /// Create a container whose root filesystem is copied from `src` (an
+    /// import from another hypervisor) instead of a template; everything
+    /// else (config, guest network setup, metadata) as `create_container`.
+    pub async fn create_container_from(
+        &self,
+        config: &ContainerConfig,
+        src: RootfsSource,
+    ) -> Result<Container> {
+        info!(
+            "Creating LXC container {} (ID: {}) from {}",
+            config.name,
+            config.id,
+            src.label()
+        );
+        self.create_container_with(config, Some(src)).await
+    }
+
+    async fn create_container_with(
+        &self,
+        config: &ContainerConfig,
+        src: Option<RootfsSource>,
+    ) -> Result<Container> {
+        if !valid_lxc_name(&config.name) {
+            return Err(Error::Validation(format!(
+                "invalid LXC container name '{}': letters, digits, '-', '_' or '.', starting \
+                 with a letter or digit",
+                config.name
+            )));
+        }
         let mut opts = config.lxc.clone().unwrap_or_default();
         opts.validate().map_err(Error::Validation)?;
         let arch = opts
             .arch
             .clone()
             .unwrap_or_else(|| lxc_config::host_arch().to_string());
-        let tref = TemplateRef::parse(&config.rootfs, &arch).map_err(Error::Validation)?;
-        if let TemplateRef::Catalog { arch: a, .. } = &tref {
+        let tref = match &src {
+            Some(_) => None,
+            None => Some(TemplateRef::parse(&config.rootfs, &arch).map_err(Error::Validation)?),
+        };
+        if let Some(TemplateRef::Catalog { arch: a, .. }) = &tref {
             if *a != arch {
                 return Err(Error::Validation(format!(
                     "template architecture {a} does not match the container's ({arch})"
@@ -866,7 +1029,14 @@ impl LxcManager {
             )));
         }
         self.prepare_host(&opts)?;
-        let (tarball, distro_hint) = self.templates.resolve(&tref).await?;
+        let (src, distro_hint) = match (src, &tref) {
+            (Some(s), _) => (s, None),
+            (None, Some(t)) => {
+                let (tarball, hint) = self.templates.resolve(t).await?;
+                (RootfsSource::Tar(tarball), hint)
+            }
+            (None, None) => unreachable!("a template or a source"),
+        };
 
         // Fill in what the user left to us, so it's stable from now on.
         for n in opts.nets.iter_mut() {
@@ -879,7 +1049,7 @@ impl LxcManager {
         std::fs::create_dir(&dir)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))?;
         let result = self
-            .create_inner(config, &opts, &arch, &tarball, distro_hint)
+            .create_inner(config, &opts, &arch, &src, distro_hint)
             .await;
         match result {
             Ok(meta) => {
@@ -905,7 +1075,7 @@ impl LxcManager {
         config: &ContainerConfig,
         opts: &LxcOptions,
         arch: &str,
-        tarball: &Path,
+        src: &RootfsSource,
         distro_hint: Option<String>,
     ) -> Result<LxcMeta> {
         let dir = self.dir(&config.name);
@@ -940,7 +1110,7 @@ impl LxcManager {
             }
         };
         let res = async {
-            self.extract(tarball, &target, opts).await?;
+            self.extract_from(src, &target, opts).await?;
             let distro = os_release_id(&target)
                 .map(|id| lxc_distro_name(&id))
                 .or(distro_hint)
@@ -1038,6 +1208,19 @@ impl LxcManager {
             return Err(sys(format!("{e} {detail}")));
         }
         self.wait_state(&container.name, "RUNNING", 30).await?;
+        if let Ok(meta) = self.read_meta(&container.name) {
+            for (n, net) in meta.lxc.nets.iter().enumerate() {
+                if let Some(mbps) = net.rate_mbps {
+                    let veth = horcrux_common::ct_veth_name(&meta.id, n);
+                    if let Err(e) = limit_veth_rate(&veth, mbps).await {
+                        warn!(
+                            "container {}: rate limit on net{n} ({veth}) not applied: {e}",
+                            container.id
+                        );
+                    }
+                }
+            }
+        }
         info!("LXC container {} started", container.id);
         Ok(())
     }

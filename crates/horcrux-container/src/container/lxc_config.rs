@@ -274,7 +274,75 @@ pub fn render_config(i: &ConfigInput) -> String {
             "lxc.mount.entry = /dev/fuse dev/fuse none bind,create=file,optional 0 0"
         );
     }
+    if !o.devices.is_empty() {
+        let _ = writeln!(c, "\n# Host devices");
+    }
+    for d in &o.devices {
+        // Same rule as /dev/fuse above: an allow entry only where a device
+        // policy exists (privileged containers).
+        if !o.unprivileged {
+            if let Some((kind, maj, min)) = device_numbers(d) {
+                let _ = writeln!(c, "lxc.cgroup2.devices.allow = {kind} {maj}:{min} rwm");
+            }
+        }
+        let _ = writeln!(
+            c,
+            "lxc.mount.entry = {d} {} none bind,create=file,optional 0 0",
+            d.trim_start_matches('/')
+        );
+    }
+    if !o.io_limits.is_empty() {
+        let _ = writeln!(
+            c,
+            "\n# Block I/O limits (device numbers looked up at start)"
+        );
+    }
+    for l in &o.io_limits {
+        match whole_disk_numbers(&l.device) {
+            Some((maj, min)) => {
+                let _ = writeln!(c, "lxc.cgroup2.io.max = {maj}:{min} {}", l.limits());
+            }
+            None => {
+                let _ = writeln!(
+                    c,
+                    "# io limit on {} not applied: no such block device on this host",
+                    l.device
+                );
+            }
+        }
+    }
     c
+}
+
+/// `(b|c, major, minor)` of a device node (symlinks followed).
+pub fn device_numbers(path: &str) -> Option<(char, u64, u64)> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let m = std::fs::metadata(path).ok()?;
+    let kind = if m.file_type().is_block_device() {
+        'b'
+    } else if m.file_type().is_char_device() {
+        'c'
+    } else {
+        return None;
+    };
+    let r = m.rdev();
+    Some((kind, nix::sys::stat::major(r), nix::sys::stat::minor(r)))
+}
+
+/// major:minor of the whole disk holding block device `path` (cgroup2
+/// `io.max` takes whole disks only: a partition maps to its parent).
+pub fn whole_disk_numbers(path: &str) -> Option<(u64, u64)> {
+    let (kind, maj, min) = device_numbers(path)?;
+    if kind != 'b' {
+        return None;
+    }
+    let sys = std::path::PathBuf::from(format!("/sys/dev/block/{maj}:{min}"));
+    if sys.join("partition").exists() {
+        let parent = std::fs::read_to_string(sys.join("../dev")).ok()?;
+        let (a, b) = parent.trim().split_once(':')?;
+        return Some((a.parse().ok()?, b.parse().ok()?));
+    }
+    Some((maj, min))
 }
 
 fn render_net(c: &mut String, id: &str, n: usize, net: &LxcNet, guest_net_managed: bool) {

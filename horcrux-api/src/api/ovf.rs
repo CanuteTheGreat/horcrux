@@ -991,6 +991,7 @@ async fn run_import(
                 vm_id: r.vm.id.clone(),
                 source: "ovf".into(),
                 items,
+                guest: None,
             },
         );
     }
