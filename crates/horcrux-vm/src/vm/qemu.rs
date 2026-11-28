@@ -252,6 +252,21 @@ pub fn qemu_command(
     } else {
         vm.hardware.cpu_type.clone()
     };
+    // Feature flags (`cpu_flags`) follow the model.
+    let cpu = cpu.map(|c| {
+        let flags: Vec<&str> = vm
+            .hardware
+            .cpu_flags
+            .iter()
+            .map(String::as_str)
+            .filter(|f| horcrux_common::valid_cpu_flag(f))
+            .collect();
+        if x86 && !flags.is_empty() {
+            format!("{c},{}", flags.join(","))
+        } else {
+            c
+        }
+    });
     match cpu {
         Some(cpu) => args.extend(["-cpu".into(), cpu]),
         None if !x86 => args.extend(["-cpu".into(), "max".into()]),
@@ -2483,6 +2498,26 @@ mod tests {
         ] {
             assert!(a.contains(want), "missing {want}\nin {a}");
         }
+    }
+
+    #[test]
+    fn cpu_flags_follow_the_model() {
+        let mut v = vm(VmArchitecture::X86_64, VmDisplay::default());
+        v.hardware.cpu_type = Some("Westmere".into());
+        v.hardware.cpu_flags = vec![
+            "+aes".into(),
+            "-pcid".into(),
+            "kvm=off".into(),
+            "x,y".into(),
+        ];
+        let rt = super::super::display::DisplayRuntime::plan(&v.disk_path, &v.display).unwrap();
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        // an invalid flag (it could add a QEMU option) is never emitted
+        assert!(a.contains("-cpu Westmere,+aes,-pcid,kvm=off -m"), "{a}");
+        // no model, no flags: QEMU's default
+        v.hardware.cpu_type = None;
+        let a = qemu_command(&v, &rt, true, None).1.join(" ");
+        assert!(!a.contains("-cpu"), "{a}");
     }
 
     #[test]

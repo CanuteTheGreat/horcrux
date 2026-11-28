@@ -224,6 +224,9 @@ pub struct HostCtx {
     pub io_devices: BTreeMap<String, String>,
     /// The host has the Secure Boot OVMF build.
     pub ovmf_secboot: bool,
+    /// The node has KVM (`/dev/kvm`): Proxmox's `host` CPU model stays
+    /// `host`; without it the emulator's `max` stands in.
+    pub kvm: bool,
     /// Why this node cannot run imported containers (no LXC runtime
     /// installed, or a build without LXC support); `None` = it can.
     pub lxc_missing: Option<String>,
@@ -504,20 +507,25 @@ pub fn plan_vm(vmid: u32, conf: &PveConf, resolve: Resolver, host: &HostCtx) -> 
                 cpu_seen = true;
                 let m = kv(v);
                 let model = m.get("").or(m.get("cputype")).cloned().unwrap_or_default();
-                if horcrux_common::valid_cpu_type(&model) {
-                    hw.cpu_type = Some(model.clone());
-                    let extra: Vec<&String> = m.keys().filter(|k| !k.is_empty() && *k != "cputype").collect();
-                    if extra.is_empty() {
-                        p.row(k, v, Carry::Carried, "hardware.cpu_type", "");
+                if model.is_empty() || horcrux_common::valid_cpu_type(&model) {
+                    let map = super::cpu::map_cpu(&m, host.kvm);
+                    hw.cpu_type = Some(map.model.clone());
+                    hw.cpu_flags = map.flags.clone();
+                    let target = if map.flags.is_empty() {
+                        format!("hardware.cpu_type = {}", map.model)
                     } else {
-                        p.row(
-                            k,
-                            v,
-                            Carry::Changed,
-                            "hardware.cpu_type",
-                            &format!("the CPU model is carried; {} not", extra.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")),
-                        );
+                        format!("hardware.cpu_type = {} (+ cpu_flags {})", map.model, map.flags.join(","))
+                    };
+                    let mut notes = map.notes.clone();
+                    if !map.dropped.is_empty() {
+                        notes.push(format!("not carried: {}", map.dropped.join(", ")));
                     }
+                    let carry = if map.model != model || !notes.is_empty() {
+                        Carry::Changed
+                    } else {
+                        Carry::Carried
+                    };
+                    p.row(k, v, carry, &target, &notes.join("; "));
                 } else {
                     p.row(k, v, Carry::NotCarried, "", "unknown CPU model: QEMU's default is used");
                 }
@@ -818,15 +826,17 @@ pub fn plan_vm(vmid: u32, conf: &PveConf, resolve: Resolver, host: &HostCtx) -> 
         hw.balloon = true; // Proxmox's default: a balloon device
     }
     if !cpu_seen {
-        // Proxmox >= 8 default model
-        hw.cpu_type = Some("x86-64-v2-AES".into());
+        // A config without `cpu:` runs Proxmox's default model there;
+        // stock QEMU lacks it, so its mapped equivalent is used.
+        let map = super::cpu::map_cpu(&BTreeMap::new(), host.kvm);
         p.row(
             "cpu",
             "(default)",
             Carry::Changed,
-            "hardware.cpu_type = x86-64-v2-AES",
-            "Proxmox's default CPU model",
+            &format!("hardware.cpu_type = {}", map.model),
+            &format!("Proxmox's default CPU model; {}", map.notes.join("; ")),
         );
+        hw.cpu_type = Some(map.model);
     }
     if !bios_ovmf && p.volumes.iter().any(|v| v.role == VolRole::Efivars) {
         p.volumes.retain(|v| v.role != VolRole::Efivars);

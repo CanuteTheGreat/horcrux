@@ -305,6 +305,11 @@ pub struct VmHardware {
     /// `EPYC-v4`, ...). None = QEMU's default for the machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_type: Option<String>,
+    /// QEMU CPU feature flags appended to the model (`+aes`, `-pcid`,
+    /// `kvm=off`), e.g. the flags of an imported Proxmox `cpu:` line.
+    /// Needs `cpu_type`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cpu_flags: Vec<String>,
     /// CPU sockets the VM's CPUs are split over (CPUs = sockets x cores;
     /// must divide the CPU count). None = 1 socket.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -963,6 +968,25 @@ impl Firmware {
 
 /// Whether `s` is a plausible QEMU CPU model name (`-cpu` value without
 /// flags): letters, digits, `-`, `_`, `.`. QEMU itself checks the model exists.
+/// A QEMU `-cpu` feature flag: `+name`, `-name` or `name=value`
+/// (letters, digits, `-` `_` `.` only; no commas, so a flag can never add
+/// another QEMU option).
+pub fn valid_cpu_flag(s: &str) -> bool {
+    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
+    let (name, val) = match body.split_once('=') {
+        Some((n, v)) if !s.starts_with(['+', '-']) => (n, Some(v)),
+        Some(_) => return false,
+        None => (body, None),
+    };
+    let ok = |t: &str| {
+        !t.is_empty()
+            && t.len() <= 64
+            && t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    ok(name) && val.is_none_or(ok)
+}
+
 pub fn valid_cpu_type(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
@@ -1133,6 +1157,16 @@ impl VmHardware {
                     "cpu type {c:?}: letters, digits, - _ . only (e.g. host, max, x86-64-v2-AES)"
                 ));
             }
+        }
+        for f in &self.cpu_flags {
+            if !valid_cpu_flag(f) {
+                return Err(format!(
+                    "cpu flag {f:?}: +name, -name or name=value (letters, digits, - _ . only)"
+                ));
+            }
+        }
+        if !self.cpu_flags.is_empty() && self.cpu_type.is_none() {
+            return Err("cpu_flags need a cpu_type".into());
         }
         if let Some(s) = self.sockets {
             if !(1..=16).contains(&s) {
@@ -1683,6 +1717,27 @@ pub enum FirewallProtocol {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cpu_flags_are_validated() {
+        for ok in ["+aes", "-pcid", "kvm=off", "hv-vendor-id=abc", "+md-clear"] {
+            assert!(valid_cpu_flag(ok), "{ok}");
+        }
+        for bad in [
+            "", "+", "aes,pcid", "+a=b", "+a b", "=x", "-", "kvm=", "+a;b",
+        ] {
+            assert!(!valid_cpu_flag(bad), "{bad}");
+        }
+        let mut hw = VmHardware {
+            cpu_flags: vec!["+aes".into()],
+            ..Default::default()
+        };
+        assert!(hw.validate().unwrap_err().contains("need a cpu_type"));
+        hw.cpu_type = Some("Westmere".into());
+        assert!(hw.validate().is_ok());
+        hw.cpu_flags = vec!["+aes,-x".into()];
+        assert!(hw.validate().unwrap_err().contains("cpu flag"));
+    }
+
     use super::*;
 
     #[test]

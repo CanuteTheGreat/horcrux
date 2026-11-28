@@ -38,6 +38,7 @@ fn host() -> HostCtx {
             .into_iter()
             .collect(),
         ovmf_secboot: true,
+        kvm: true,
         ..Default::default()
     }
 }
@@ -482,4 +483,84 @@ fn real_configs_from_env() {
         }
     }
     assert!(n > 0);
+}
+
+fn cpu_plan(extra: &str, kvm: bool) -> GuestPlan {
+    let c = parse_conf(&format!("name: c\nmemory: 512\n{extra}"));
+    plan_vm(900, &c, &resolve_all, &HostCtx { kvm, ..host() })
+}
+
+#[test]
+fn no_cpu_key_gets_a_model_stock_qemu_has() {
+    let p = cpu_plan("", true);
+    let hw = &p.vm.as_ref().unwrap().hardware;
+    assert_eq!(hw.cpu_type.as_deref(), Some("Westmere"));
+    assert!(hw.cpu_flags.is_empty());
+    let r = row(&p, "cpu");
+    assert_eq!(r.carry, Carry::Changed);
+    assert!(r.horcrux.contains("hardware.cpu_type = Westmere"), "{r:?}");
+    assert!(
+        r.note.contains("Proxmox's default") && r.note.contains("x86-64-v2-AES"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn pve_only_model_is_mapped_and_shown_in_the_plan() {
+    let p = cpu_plan("cpu: x86-64-v2-AES,flags=+aes;-pcid\n", true);
+    let hw = &p.vm.as_ref().unwrap().hardware;
+    assert_eq!(hw.cpu_type.as_deref(), Some("Westmere"));
+    assert_eq!(hw.cpu_flags, ["+aes", "-pcid"]);
+    let r = row(&p, "cpu");
+    assert_eq!(r.carry, Carry::Changed);
+    assert!(
+        r.horcrux.contains("Westmere") && r.horcrux.contains("+aes,-pcid"),
+        "{r:?}"
+    );
+    assert!(r.note.contains("only in Proxmox's QEMU build"), "{r:?}");
+    assert!(
+        !p.blockers.iter().any(|b| b.to_lowercase().contains("cpu")),
+        "{:?}",
+        p.blockers
+    );
+}
+
+#[test]
+fn stock_model_and_host_are_carried_unchanged_with_kvm() {
+    let p = cpu_plan("cpu: kvm64\n", false);
+    assert_eq!(row(&p, "cpu").carry, Carry::Carried);
+    assert_eq!(p.vm.unwrap().hardware.cpu_type.as_deref(), Some("kvm64"));
+    let p = cpu_plan("cpu: host\n", true);
+    assert_eq!(row(&p, "cpu").carry, Carry::Carried);
+    assert_eq!(p.vm.unwrap().hardware.cpu_type.as_deref(), Some("host"));
+}
+
+#[test]
+fn host_without_kvm_becomes_max() {
+    let p = cpu_plan("cpu: host,flags=+pcid\n", false);
+    let hw = &p.vm.as_ref().unwrap().hardware;
+    assert_eq!(hw.cpu_type.as_deref(), Some("max"));
+    assert_eq!(hw.cpu_flags, ["+pcid"]);
+    let r = row(&p, "cpu");
+    assert_eq!(r.carry, Carry::Changed);
+    assert!(r.note.contains("no /dev/kvm"), "{r:?}");
+}
+
+#[test]
+fn unsupported_cpu_options_are_listed_not_silently_dropped() {
+    let p = cpu_plan(
+        "cpu: x86-64-v3,hv-vendor-id=x,phys-bits=host,hidden=1\n",
+        true,
+    );
+    let hw = &p.vm.as_ref().unwrap().hardware;
+    assert_eq!(
+        (hw.cpu_type.as_deref(), hw.cpu_flags.as_slice()),
+        (Some("Haswell-noTSX"), ["kvm=off".to_string()].as_slice())
+    );
+    let r = row(&p, "cpu");
+    assert!(
+        r.note
+            .contains("not carried: hv-vendor-id=x, phys-bits=host"),
+        "{r:?}"
+    );
 }

@@ -725,6 +725,7 @@ pub fn compose(
         extra_cdroms: vec![req.virtio_iso.clone()],
         boot: vec![BootDevice::Disk, BootDevice::Cdrom],
         cpu_type: None,
+        cpu_flags: Vec::new(),
         sockets: None,
         machine: MachineType::Q35,
         firmware: Firmware::Ovmf,

@@ -25,6 +25,7 @@
 pub mod adopt;
 pub mod cmdline;
 pub mod conf;
+pub mod cpu;
 pub mod source;
 
 use crate::error::ApiError;
@@ -218,6 +219,7 @@ pub async fn plan_guests(
         pci: host_pci(),
         io_devices,
         ovmf_secboot: crate::vm::firmware::find_ovmf_for(true).is_some(),
+        kvm: std::path::Path::new("/dev/kvm").exists(),
         lxc_missing: lxc_missing(state).await,
     };
     let src = req.source.clone();
