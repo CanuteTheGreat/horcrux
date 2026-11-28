@@ -186,6 +186,19 @@ class ProductBlockers(unittest.TestCase):
         use = _rd("build", "live-iso", "project", "portage", "package.use", "horcrux-virt")
         self.assertRegex(use, r"(?m)^net-firewall/nftables .*\bjson\b")
 
+    def test_manager_pulls_lxc_tools_by_default(self):
+        # stock server ISO had no lxc (azkaban rehearsal 2026-11-28): GET /api/lxc/host available=false, Proxmox CT imports refused
+        d = os.path.join(GENTOO, "app-emulation", "horcrux-bin")
+        for eb in sorted(os.listdir(d)):
+            if eb.endswith(".ebuild"):
+                t = _rd("gentoo", "app-emulation", "horcrux-bin", eb)
+                self.assertRegex(t, r'(?m)^IUSE="[^"]*\+lxc\b', eb)
+                self.assertIn("lxc? ( app-containers/lxc[caps,tools] )", t, eb)
+        self.assertIn('flag name="lxc"', _rd("gentoo", "app-emulation", "horcrux-bin", "metadata.xml"))
+        self.assertIn("GATE: lxc tools missing", _rd("build", "live-iso", "project", "variants", "core", "Dockerfile"))
+        use = _rd("gentoo", "sys-apps", "horcrux-repo-config", "files", "horcrux-roles.use")
+        self.assertRegex(use, r"(?m)^sys-libs/libcap static-libs")   # lxc[tools] links libcap statically: read before horcrux-bin resolves
+
     def test_container_role_package(self):
         eb = _rd("gentoo", "sys-apps", "horcrux-role-containers", "horcrux-role-containers-1.ebuild")
         for atom in ("app-containers/incus", "app-containers/podman", "app-containers/buildah"):

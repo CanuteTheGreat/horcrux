@@ -2,6 +2,9 @@
 
 Horcrux manages LXC system containers with the same feature set as Proxmox
 VE's `pct`/`pveam`, on Gentoo (`USE=lxc`, pulls in `app-containers/lxc`).
+Every Horcrux image has it: the prebuilt manager `app-emulation/horcrux-bin`
+depends on `app-containers/lxc[caps,tools]` through its default `lxc` USE flag
+(`GET /api/lxc/host` reports `available: true` on a fresh install).
 
 ## Templates (`pveam`)
 

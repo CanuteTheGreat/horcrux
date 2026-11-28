@@ -6,7 +6,7 @@ Every Horcrux edition is a headless server first (`sys-apps/horcrux-core`); opti
 |---|---|---|
 | `sys-apps/horcrux-core` | headless base: clock, first boot, backup, overlay sync, ZFS rules | every image |
 | `app-emulation/horcrux-bin` | the **Horcrux manager** (API server, web UI, CLI), prebuilt; depends on `qemu[spice,usbredir,virtfs,vnc]`, libvirt, dnsmasq, bridge-utils | every image (installed by the core layer), so server, GNOME and every machine layer carry it |
-| `sys-apps/horcrux-role-containers` | Incus, Podman, Buildah, Skopeo, LXC (Docker is in the server image) | on demand: `emerge sys-apps/horcrux-role-containers` |
+| `sys-apps/horcrux-role-containers` | Incus, Podman, Buildah, Skopeo (Docker and Podman are in the server image; LXC comes with the manager, `horcrux-bin[lxc]`, on by default) | on demand: `emerge sys-apps/horcrux-role-containers` |
 | `app-emulation/horcrux` | the source build of the manager (cargo + wasm UI; USE flags pick backends); blocked by `horcrux-bin` | on demand, for developers |
 
 ## Manager

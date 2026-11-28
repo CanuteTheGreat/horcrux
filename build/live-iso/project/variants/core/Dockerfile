@@ -47,6 +47,8 @@ RUN --mount=type=cache,id=${BINPKG_ID},target=/var/cache/binpkgs,sharing=locked 
     # GATE: the release signing key (verifies downloaded Horcrux images, checksums and SBOMs: gpg --verify) is package-owned
     [ "$(qfile -q /usr/share/openpgp-keys/errantsolutions.asc)" = sec-keys/openpgp-keys-errantsolutions ]; [ "$(qfile -q /usr/bin/horcrux-api)" = app-emulation/horcrux-bin ]; [ "$(qfile -q /usr/bin/horcrux)" = app-emulation/horcrux-bin ]; test -d /usr/share/horcrux/ui; \
     cat /var/db/pkg/app-emulation/qemu-*/USE | tr ' ' '\n' | grep -qx spice || { echo "GATE: qemu built without SPICE"; exit 1; }; \
+    # GATE: the manager's LXC backend has its tools (horcrux-bin[lxc]): without them GET /api/lxc/host says available=false and imported CTs cannot start
+    lxc-start --version >/dev/null && command -v lxc-attach lxc-info lxc-checkpoint >/dev/null || { echo "GATE: lxc tools missing (horcrux-bin[lxc])"; exit 1; }; \
     rm -f /usr/share/horcrux/prebuilt/horcrux-manager-*.tar.zst; rmdir /usr/share/horcrux/prebuilt 2>/dev/null || true; \
     qfile -q /usr/sbin/horcrux-time-config /usr/libexec/horcrux-timesync /etc/init.d/horcrux-timesync /etc/init.d/horcrux-firstboot /usr/libexec/horcrux-firstboot \
               /etc/NetworkManager/dispatcher.d/20-horcrux-chrony /etc/portage/package.use/horcrux-core /etc/portage/repos.conf/horcrux.conf /usr/sbin/ctg-restic /usr/share/horcrux/core-release; \

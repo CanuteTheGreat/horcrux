@@ -37,7 +37,7 @@ KEYWORDS="amd64 arm64 riscv"
 
 # security: the vulnerability scanner (Grype) behind Security > Vulnerabilities, on by default so every edition can scan images, containers and VMs.
 # The scanning code is always in the manager; without the scanner the page says so. Offline databases: docs/SECURITY-SUITE.md.
-IUSE="+security"
+IUSE="+lxc +security"
 
 # ffmpeg[vpx,x264]: the Horcrux Console encodes guest screens with an ffmpeg child process (H.264, VP8 fallback);
 # QEMU's D-Bus display (gio + gdbus-codegen, always on in the Gentoo ebuild) is its frame source.
@@ -58,6 +58,10 @@ RDEPEND="
 	sys-libs/pam
 	virtual/libudev
 	security? ( app-containers/grype-bin )
+	# lxc: the manager's LXC backend (system containers, Proxmox `pct` parity, docs/LXC.md) and the Proxmox importer's CT path drive
+	# lxc-create/-start/-attach/-info/-checkpoint; without the tools GET /api/lxc/host answers available=false and every imported CT is refused.
+	# On by default in every edition (small: lxc + libcap/libseccomp); Incus/Podman/Buildah stay in sys-apps/horcrux-role-containers.
+	lxc? ( app-containers/lxc[caps,tools] )
 !app-emulation/horcrux
 "
 BDEPEND="app-arch/zstd net-misc/curl"

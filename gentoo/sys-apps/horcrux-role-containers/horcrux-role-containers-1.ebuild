@@ -11,6 +11,7 @@ S="${WORKDIR}"
 # Lab finding 2026-11-05: Incus / Podman / Buildah were installed on no laptop edition, so the container tests (hx-containers) could only run Docker and the
 # Horcrux manager's incus/podman/lxc backends (USE incus podman lxc of app-emulation/horcrux) had nothing to talk to.
 # Not in the server core on purpose: the core stays small; a hypervisor-only node does not need five more runtimes.
+# (LXC itself also comes with the manager, app-emulation/horcrux-bin[lxc], default on: Proxmox CT parity and the CT importer need it everywhere.)
 # The keywords these runtimes need (testing on ::gentoo) come with sys-apps/horcrux-repo-config (/etc/portage/package.accept_keywords/horcrux-roles).
 LICENSE="MIT"
 SLOT="0"
