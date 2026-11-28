@@ -158,10 +158,7 @@ async fn user_with_privs(api: &crate::support::Api, name: &str, privs: &[&str]) 
         .await;
     assert_eq!(s, 201, "{v}");
     let (s, v) = api
-        .post(
-            "/users",
-            json!({"username": name, "password": "svc-test-pass-1", "email": format!("{name}@example.com")}),
-        )
+        .post("/users", json!({"username": name, "realm": "pam"}))
         .await;
     assert_eq!(s, 201, "{v}");
     let (s, v) = api
@@ -172,7 +169,10 @@ async fn user_with_privs(api: &crate::support::Api, name: &str, privs: &[&str]) 
         .await;
     assert_eq!(s, 201, "{v}");
     let (s, v) = api
-        .post(&format!("/users/{name}@pam/api-keys"), json!({"name": "svc"}))
+        .post(
+            &format!("/users/{name}@pam/api-keys"),
+            json!({"name": "svc"}),
+        )
         .await;
     assert_eq!(s, 200, "{v}");
     v["key"].as_str().unwrap().to_string()
