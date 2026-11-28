@@ -4,8 +4,7 @@
 //! (`x86-64-v2`, `x86-64-v2-AES`, `x86-64-v3`, `x86-64-v4`) and resolves
 //! `custom-*` models from its own `cpu-models.conf`; a VM started with one
 //! of them on stock QEMU fails with "unable to find CPU model". Each one maps
-//! to the named stock model with the same feature level (so a guest keeps the
-//! same instruction set and live-migrates between the same kinds of hosts);
+//! to the upstream `qemu64` base with Proxmox's own feature flags;
 //! `host` stays `host` where KVM is available and becomes `max` (the TCG
 //! equivalent) where it is not. Every other model name is stock QEMU's own
 //! and passes through. Flags are kept (see [`parse_flags`]).
@@ -26,27 +25,16 @@ pub struct CpuMap {
 }
 
 /// Proxmox-only model -> (stock model, what the level means).
-const PVE_ONLY: &[(&str, &str, &str)] = &[
-    (
-        "x86-64-v2",
-        "Nehalem",
-        "x86-64-v2: SSE4.2, POPCNT, CMPXCHG16B",
-    ),
-    ("x86-64-v2-AES", "Westmere", "x86-64-v2 plus AES, PCLMULQDQ"),
-    (
-        "x86-64-v3",
-        "Haswell-noTSX",
-        "x86-64-v3: AVX2, BMI1/2, FMA, MOVBE, F16C",
-    ),
-    (
-        "x86-64-v4",
-        "Skylake-Server-noTSX-IBRS",
-        "x86-64-v4: AVX-512 F/BW/CD/DQ/VL",
-    ),
+// Match the built-in definitions in Proxmox qemu-server CPUConfig.pm.
+const PVE_ONLY: &[(&str, &str)] = &[
+    ("x86-64-v2", "+popcnt;+pni;+sse4.1;+sse4.2;+ssse3"),
+    ("x86-64-v2-AES", "+aes;+popcnt;+pni;+sse4.1;+sse4.2;+ssse3"),
+    ("x86-64-v3", "+aes;+popcnt;+pni;+sse4.1;+sse4.2;+ssse3;+avx;+avx2;+bmi1;+bmi2;+f16c;+fma;+abm;+movbe;+xsave"),
+    ("x86-64-v4", "+aes;+popcnt;+pni;+sse4.1;+sse4.2;+ssse3;+avx;+avx2;+bmi1;+bmi2;+f16c;+fma;+abm;+movbe;+xsave;+avx512f;+avx512bw;+avx512cd;+avx512dq;+avx512vl"),
 ];
 
 /// The model Proxmox uses for a config without a `cpu:` key, mapped.
-pub const DEFAULT_PVE_MODEL: &str = "x86-64-v2-AES";
+pub const DEFAULT_PVE_MODEL: &str = "kvm64";
 
 /// Map Proxmox's `cpu:` option map (`kv` of the value: key `""` or
 /// `cputype` is the model) for a host with (`kvm`) or without KVM.
@@ -56,7 +44,13 @@ pub fn map_cpu(opts: &BTreeMap<String, String>, kvm: bool) -> CpuMap {
         .or(opts.get("cputype"))
         .cloned()
         .unwrap_or_else(|| DEFAULT_PVE_MODEL.to_string());
-    let (flags, dropped, mut notes) = parse_flags(opts);
+    let (mut flags, dropped, mut notes) = parse_flags(opts);
+    if let Some((_, features)) = PVE_ONLY.iter().find(|(from, _)| *from == model) {
+        let mut baseline: Vec<String> = features.split(';').map(str::to_string).collect();
+        baseline.retain(|base| !flags.iter().any(|flag| flag.get(1..) == base.get(1..)));
+        baseline.append(&mut flags);
+        flags = baseline;
+    }
     let (out, why) = map_model(&model, kvm);
     if let Some(w) = why {
         notes.insert(0, w);
@@ -71,11 +65,11 @@ pub fn map_cpu(opts: &BTreeMap<String, String>, kvm: bool) -> CpuMap {
 
 /// The model alone (`pve` name -> stock name, reason when it changed).
 pub fn map_model(model: &str, kvm: bool) -> (String, Option<String>) {
-    if let Some((_, to, level)) = PVE_ONLY.iter().find(|(from, _, _)| *from == model) {
+    if PVE_ONLY.iter().any(|(from, _)| *from == model) {
         return (
-            to.to_string(),
+            "qemu64".into(),
             Some(format!(
-                "{model} exists only in Proxmox's QEMU build; {to} is the stock QEMU model with the same feature level ({level})"
+                "{model} is a Proxmox-specific model; qemu64 and its Proxmox feature flags are used"
             )),
         );
     }
@@ -137,28 +131,30 @@ mod tests {
 
     #[test]
     fn pve_only_models_map_to_stock_levels() {
-        for (pve, stock) in [
-            ("x86-64-v2", "Nehalem"),
-            ("x86-64-v2-AES", "Westmere"),
-            ("x86-64-v3", "Haswell-noTSX"),
-            ("x86-64-v4", "Skylake-Server-noTSX-IBRS"),
-        ] {
+        for pve in ["x86-64-v2", "x86-64-v2-AES", "x86-64-v3", "x86-64-v4"] {
             for kvm in [true, false] {
                 let m = map_cpu(&opts(pve), kvm);
-                assert_eq!(m.model, stock);
-                assert!(
-                    m.notes[0].contains(pve) && m.notes[0].contains(stock),
-                    "{:?}",
-                    m.notes
-                );
+                assert_eq!(m.model, "qemu64");
+                assert!(!m.flags.is_empty());
+                assert!(m.notes[0].contains(pve) && m.notes[0].contains("qemu64"));
             }
         }
     }
 
     #[test]
+    fn explicit_flags_override_the_proxmox_baseline() {
+        let m = map_cpu(&opts("x86-64-v2-AES,flags=-aes;+pcid"), true);
+        assert_eq!(m.model, "qemu64");
+        assert!(m.flags.contains(&"-aes".to_string()));
+        assert!(!m.flags.contains(&"+aes".to_string()));
+        assert!(m.flags.contains(&"+sse4.2".to_string()));
+        assert!(m.flags.contains(&"+pcid".to_string()));
+    }
+
+    #[test]
     fn no_cpu_key_uses_the_mapped_default() {
         let m = map_cpu(&BTreeMap::new(), true);
-        assert_eq!(m.model, "Westmere");
+        assert_eq!(m.model, "kvm64");
         assert!(!m.model.starts_with("x86-64"));
     }
 
@@ -197,8 +193,11 @@ mod tests {
             ),
             true,
         );
-        assert_eq!(m.model, "Haswell-noTSX");
-        assert_eq!(m.flags, ["+aes", "-pcid", "+md-clear", "kvm=off"]);
+        assert_eq!(m.model, "qemu64");
+        assert!(m.flags.contains(&"+aes".to_string()));
+        assert!(m.flags.contains(&"-pcid".to_string()));
+        assert!(m.flags.contains(&"+md-clear".to_string()));
+        assert!(m.flags.contains(&"kvm=off".to_string()));
         assert_eq!(m.dropped, ["hv-vendor-id=proxmox", "phys-bits=host"]);
         // a flag with a comma-injection shape is dropped, not passed on
         let m = map_cpu(&opts("kvm64,flags=+aes;pcid;+a=b"), true);

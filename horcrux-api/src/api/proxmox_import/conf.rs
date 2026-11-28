@@ -826,8 +826,7 @@ pub fn plan_vm(vmid: u32, conf: &PveConf, resolve: Resolver, host: &HostCtx) -> 
         hw.balloon = true; // Proxmox's default: a balloon device
     }
     if !cpu_seen {
-        // A config without `cpu:` runs Proxmox's default model there;
-        // stock QEMU lacks it, so its mapped equivalent is used.
+        // Proxmox uses kvm64 when the config has no explicit CPU model.
         let map = super::cpu::map_cpu(&BTreeMap::new(), host.kvm);
         p.row(
             "cpu",

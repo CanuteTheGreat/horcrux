@@ -1029,9 +1029,8 @@ fn vm_diff(w: &VmSpec, l: &VmConfig, pools: &[crate::storage::StoragePool]) -> V
         }
     }
     if let Some(hw) = &w.hardware {
-        let nets = |v: &[VmNic],
-                    keep_mac: bool|
-         -> Vec<(String, String, Option<u16>, Option<String>, Option<u8>)> {
+        type NicComparison = (String, String, Option<u16>, Option<String>, Option<u8>);
+        let nets = |v: &[VmNic], keep_mac: bool| -> Vec<NicComparison> {
             v.iter()
                 .map(|n| {
                     (

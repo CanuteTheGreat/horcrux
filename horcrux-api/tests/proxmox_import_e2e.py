@@ -169,9 +169,9 @@ def main():
         check(k in keys, f"VM row {k}")
     rows = {r["key"]: r for r in vm["rows"]}
     check(rows["snapshots"]["carry"] == "not-carried", "snapshots reported as not carried")
-    check(rows["cpu"]["carry"] == "changed" and "Westmere" in rows["cpu"]["horcrux"]
+    check(rows["cpu"]["carry"] == "changed" and "qemu64" in rows["cpu"]["horcrux"]
           and "x86-64-v2-AES" in rows["cpu"]["note"], f"plan shows the CPU model mapping: {rows['cpu']}")
-    check("x86-64-v2-AES" not in vm["horcrux_cmdline"] and "-cpu Westmere,+aes" in vm["horcrux_cmdline"],
+    check("x86-64-v2-AES" not in vm["horcrux_cmdline"] and "-cpu qemu64," in vm["horcrux_cmdline"] and "+aes" in vm["horcrux_cmdline"],
           "planned QEMU line uses the stock model with the flag kept")
     check("throttling.bps-read=52428800" in vm["horcrux_cmdline"], "planned QEMU line carries mbps_rd=50")
     check(VM_MACS[0] in vm["horcrux_cmdline"] and UUID in vm["horcrux_cmdline"], "planned QEMU line keeps MAC and UUID")
@@ -217,7 +217,7 @@ def main():
     req("POST", "/vms/pve-e2e-vm/start", {}, expect=None)
     argv = wait_for("QEMU", lambda: sh("ps -eo args | grep '[q]emu-system.*pve-e2e-vm' || true"), timeout=60)
     check("x86-64-v2" not in argv, "QEMU is not given a Proxmox-only CPU model")
-    for want in ["-cpu Westmere,+aes", f"mac={VM_MACS[0]}", f"mac={VM_MACS[1]}", f"uuid={UUID}", f"guid={GENID}",
+    for want in ["-cpu qemu64,", "+aes", f"mac={VM_MACS[0]}", f"mac={VM_MACS[1]}", f"uuid={UUID}", f"guid={GENID}",
                  "throttling.bps-read=52428800", "throttling.bps-write=20971520", "if=pflash", "q35"]:
         check(want in argv, f"QEMU runs with {want}")
     serial_log = d0[: -len(".qcow2")] + ".serial.log"
@@ -321,10 +321,10 @@ esac
     sh(f"qemu-img compare -f raw -F qcow2 {STORE}/images/301/vm-301-disk-0.raw {d0}")
     log("ok: disk copied over ssh equals the source volume")
     check([n["mac"] for n in v["hardware"]["nets"]] == ["bc:24:11:aa:01:01", "bc:24:11:aa:01:02"], "MACs kept over ssh")
-    check(v["hardware"].get("cpu_type") == "Westmere", f"no cpu key -> a stock model: {v['hardware'].get('cpu_type')}")
+    check(v["hardware"].get("cpu_type") == "kvm64", f"no cpu key -> a stock model: {v['hardware'].get('cpu_type')}")
     req("POST", "/vms/pve-ssh-vm/start", {}, expect=None)
     argv = wait_for("QEMU of the no-cpu VM", lambda: sh("ps -eo args | grep '[q]emu-system.*pve-ssh-vm' || true"), timeout=60)
-    check("-cpu Westmere" in argv and "x86-64-v2" not in argv, "the no-cpu VM runs with a stock CPU model")
+    check("-cpu kvm64" in argv and "x86-64-v2" not in argv, "the no-cpu VM runs with a stock CPU model")
     serial_log = d0[: -len(".qcow2")] + ".serial.log"
     out = wait_for("the no-cpu VM's bootloader marker", lambda: (os.path.exists(serial_log)
                    and "HX-PVE-BOOT-OK" in open(serial_log, errors="replace").read()) and "ok", timeout=240)

@@ -161,21 +161,18 @@ first, or every imported container would fail to start).
 
 **CPU model.** Proxmox's QEMU build has CPU models that stock QEMU (what
 Horcrux runs) does not, and a VM started with one fails ("unable to find CPU
-model"). The importer maps them to the stock model of the same feature level
-and shows the mapping in the plan (the `cpu` row, `Changed`, with the reason):
+model"). The importer maps Proxmox's built-in levels to `qemu64` with their
+specified feature flags and shows the mapping in the plan:
 
 | Proxmox `cpu:` | Horcrux `cpu_type` |
 |---|---|
-| `x86-64-v2` | `Nehalem` |
-| `x86-64-v2-AES` | `Westmere` |
-| `x86-64-v3` | `Haswell-noTSX` |
-| `x86-64-v4` | `Skylake-Server-noTSX-IBRS` |
+| `x86-64-v2`, `x86-64-v2-AES`, `x86-64-v3`, `x86-64-v4` | `qemu64` plus that model's feature flags |
 | `host` | `host` with KVM on this node, else `max` |
 | `custom-*` (Proxmox `cpu-models.conf`) | `max` (pick a model under Hardware) |
-| no `cpu:` key (Proxmox's default) | `Westmere` (same as `x86-64-v2-AES`) |
+| no `cpu:` key (Proxmox's default) | `kvm64` |
 | anything else (`kvm64`, `qemu64`, `EPYC-v4`, ...) | unchanged |
 
-`flags=+aes;-pcid` is kept as `hardware.cpu_flags` (`-cpu Westmere,+aes,-pcid`)
+`flags=+aes;-pcid` overrides the corresponding `hardware.cpu_flags`
 and `hidden=1` becomes `kvm=off`; `hv-vendor-id`, `phys-bits`,
 `reported-model` and similar are listed in the row's note as not carried.
 

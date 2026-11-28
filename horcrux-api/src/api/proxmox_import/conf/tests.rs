@@ -527,30 +527,28 @@ fn cpu_plan(extra: &str, kvm: bool) -> GuestPlan {
 fn no_cpu_key_gets_a_model_stock_qemu_has() {
     let p = cpu_plan("", true);
     let hw = &p.vm.as_ref().unwrap().hardware;
-    assert_eq!(hw.cpu_type.as_deref(), Some("Westmere"));
+    assert_eq!(hw.cpu_type.as_deref(), Some("kvm64"));
     assert!(hw.cpu_flags.is_empty());
     let r = row(&p, "cpu");
     assert_eq!(r.carry, Carry::Changed);
-    assert!(r.horcrux.contains("hardware.cpu_type = Westmere"), "{r:?}");
-    assert!(
-        r.note.contains("Proxmox's default") && r.note.contains("x86-64-v2-AES"),
-        "{r:?}"
-    );
+    assert!(r.horcrux.contains("hardware.cpu_type = kvm64"), "{r:?}");
+    assert!(r.note.contains("Proxmox's default"), "{r:?}");
 }
 
 #[test]
 fn pve_only_model_is_mapped_and_shown_in_the_plan() {
     let p = cpu_plan("cpu: x86-64-v2-AES,flags=+aes;-pcid\n", true);
     let hw = &p.vm.as_ref().unwrap().hardware;
-    assert_eq!(hw.cpu_type.as_deref(), Some("Westmere"));
-    assert_eq!(hw.cpu_flags, ["+aes", "-pcid"]);
+    assert_eq!(hw.cpu_type.as_deref(), Some("qemu64"));
+    assert!(hw.cpu_flags.contains(&"+aes".to_string()));
+    assert!(hw.cpu_flags.contains(&"-pcid".to_string()));
     let r = row(&p, "cpu");
     assert_eq!(r.carry, Carry::Changed);
     assert!(
-        r.horcrux.contains("Westmere") && r.horcrux.contains("+aes,-pcid"),
+        r.horcrux.contains("qemu64") && r.horcrux.contains("-pcid"),
         "{r:?}"
     );
-    assert!(r.note.contains("only in Proxmox's QEMU build"), "{r:?}");
+    assert!(r.note.contains("Proxmox-specific"), "{r:?}");
     assert!(
         !p.blockers.iter().any(|b| b.to_lowercase().contains("cpu")),
         "{:?}",
@@ -586,10 +584,8 @@ fn unsupported_cpu_options_are_listed_not_silently_dropped() {
         true,
     );
     let hw = &p.vm.as_ref().unwrap().hardware;
-    assert_eq!(
-        (hw.cpu_type.as_deref(), hw.cpu_flags.as_slice()),
-        (Some("Haswell-noTSX"), ["kvm=off".to_string()].as_slice())
-    );
+    assert_eq!(hw.cpu_type.as_deref(), Some("qemu64"));
+    assert!(hw.cpu_flags.contains(&"kvm=off".to_string()));
     let r = row(&p, "cpu");
     assert!(
         r.note
