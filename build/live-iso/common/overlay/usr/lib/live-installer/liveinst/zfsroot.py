@@ -158,12 +158,38 @@ def ensure_initramfs_hostid(inst):
     inst.log("initramfs host id = system host id = pool host id")
 
 
+def hostid_problem(h):
+    """validate a profile/answer-file hostid (8 hex digits, optional 0x); '' is allowed (= generate)"""
+    import re
+    h = str(h or "")
+    if not h:
+        return ""
+    return "" if re.fullmatch(r"(0x)?[0-9a-fA-F]{1,8}", h) else f"hostid {h!r} is not an 8-digit hex value"
+
+
+def set_live_hostid(inst, hostid):
+    """Write the LIVE system's /etc/hostid to `hostid` (zgenhostid -f) BEFORE the pool is created, so an existing
+    pool (e.g. azkaban's `bulk`) imports without -f and the installed initramfs carries the matching id. No value = keep/generate."""
+    h = str(hostid or "").strip()
+    if not h:
+        inst.run("test -e /etc/hostid || zgenhostid", check=False)
+        return
+    bad = hostid_problem(h)
+    if bad:
+        from .system import InstallError
+        raise InstallError(bad)
+    h = h.lower()
+    if not h.startswith("0x"):
+        h = "0x" + h
+    inst.run(["zgenhostid", "-f", h])
+
+
 def mkpool(inst):
     c = inst.c
     devs = [inst.layout(d)[4] for d in c["disks"]]
     enc = bool(c.get("zfs_encrypt"))
     inst.run("modprobe zfs", check=False)
-    inst.run("test -e /etc/hostid || zgenhostid", check=False)
+    set_live_hostid(inst, c.get("hostid"))
     if enc:
         fd = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
