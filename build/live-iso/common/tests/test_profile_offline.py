@@ -108,9 +108,37 @@ class OfflineApply(unittest.TestCase):
             mp = {k: v for k, v in PROFILE.items() if k != "offline"}
             sy = Recorder(b, log=lambda *_: None, dry=True)
             E.apply(mp, [], sy, install=True, stage_dir=out)
-            em = [(c, env) for c, env in sy.cmds if c[:1] == ["emerge"]]
+            em = [(c, env) for c, env in sy.cmds if c[:1] == ["emerge"] and "--fetchonly" not in c]
             self.assertTrue(all("--getbinpkg" in c and env.get("PKGDIR") == os.path.join(out, "binpkgs") for c, env in em))
+            self.assertTrue(all("buildpkg" in env.get("FEATURES", "") for c, env in em))
             self.assertTrue([c for c, _ in sy.cmds if c[:1] == ["emerge-webrsync"]])
+
+    def test_collect_binrepo_cache_instance(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache, pk, vdb = os.path.join(d, "cache"), os.path.join(d, "pk"), os.path.join(d, "vdb")
+            tree(cache, {"app-editors/vim/vim-9.2-1.gpkg.tar": "one", "app-editors/vim/vim-9.2-3.gpkg.tar": "three",
+                         "dev-libs/x/x-1-1.gpkg.tar": "x"})
+            tree(vdb, {"app-editors/vim-9.2/BUILD_ID": "3\n"})
+            with mock.patch.object(E, "binrepo_caches", return_value=[cache]):
+                got = E.collect_from_caches(E.Sys(None, log=lambda *_: None), ["app-editors/vim-9.2", "dev-libs/x-1"], pk, vdb=vdb)
+            self.assertEqual(got, {"app-editors/vim-9.2", "dev-libs/x-1"})
+            self.assertEqual(open(os.path.join(pk, "app-editors/vim/vim-9.2-3.gpkg.tar")).read(), "three")   # the installed build
+            self.assertFalse(os.path.exists(os.path.join(pk, "app-editors/vim/vim-9.2-1.gpkg.tar")))
+            self.assertEqual(E.installed_in_pkgdir(pk), {"app-editors/vim-9.2", "dev-libs/x-1"})
+
+    def test_pkgdir_inventory(self):
+        with tempfile.TemporaryDirectory() as d:
+            tree(d, {"app-editors/vim/vim-9.2.1275-1.gpkg.tar": "", "sys-apps/horcrux-profile/horcrux-profile-1-r1-2.gpkg.tar": "",
+                     "dev-libs/old-1.tbz2": "", "Packages": ""})
+            self.assertEqual(E.installed_in_pkgdir(d), {"app-editors/vim-9.2.1275", "sys-apps/horcrux-profile-1-r1", "dev-libs/old-1"})
+
+    def test_offline_turns_image_getbinpkg_default_off(self):
+        with tempfile.TemporaryDirectory() as b:
+            self._bundle(b)
+            sy = Recorder(b, log=lambda *_: None, dry=True)
+            E.apply(PROFILE, [], sy, install=True)
+        em = [(c, env) for c, env in sy.cmds if c[:1] == ["emerge"] and "--deselect" not in c]
+        self.assertTrue(all("--getbinpkg=n" in c and env.get("FEATURES") == "-getbinpkg" for c, env in em))
 
 
 class GentooSnapshot(unittest.TestCase):
