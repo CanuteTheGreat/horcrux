@@ -262,7 +262,10 @@ def unpack_gentoo(sy, src, dst="/var/db/repos/gentoo"):
         with tarfile.open(src) as t:
             first = t.next()
             strip = 1 if first is not None and (first.name.rstrip("/") == "gentoo" or first.name.startswith("gentoo/")) else 0
-        sy.run(["tar", "-x", "-f", src, "-C", dst, "--no-same-owner"] + ([f"--strip-components={strip}"] if strip else []))
+        # quiet: an installer streams this to a 115200-baud serial console, and a live clock behind the snapshot's mtimes makes GNU
+        # tar warn once per file (600k lines = hours); errors still fail the run with tar's output
+        sy.run(["tar", "-x", "-f", src, "-C", dst, "--no-same-owner", "--warning=no-timestamp"] + ([f"--strip-components={strip}"] if strip else []),
+               capture=True)
     for dp, dn, fn in os.walk(dst):
         os.chmod(dp, 0o755)
         for f in fn:
