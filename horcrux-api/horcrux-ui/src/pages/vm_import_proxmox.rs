@@ -1,6 +1,7 @@
 //! VMs > Import from Proxmox VE: read the guests of a Proxmox source (a
 //! directory with the guest configs next to the received volumes, a node
-//! over SSH, or a container vzdump archive), show per guest what Horcrux
+//! over SSH, a container vzdump archive, or a Proxmox installation on this
+//! host's ZFS pool adopted in place as ZFS clones), show per guest what Horcrux
 //! makes of every Proxmox setting and how the QEMU command line compares,
 //! then import the chosen guests with progress and links to the results.
 use crate::api::{self, proxmox};
@@ -32,6 +33,11 @@ pub fn VmImportProxmoxPage() -> impl IntoView {
     let bridge_map = create_rw_signal(String::new());
     let io_devices = create_rw_signal(String::new());
     let storage = create_rw_signal(String::new());
+    let snapshot = create_rw_signal(String::new());
+    let target_dataset = create_rw_signal(String::new());
+    let node = create_rw_signal(String::new());
+    let allow_no_snapshot = create_rw_signal(false);
+    let start_onboot = create_rw_signal(false);
     let (options, set_options) = create_signal(None::<api::VmHostOptions>);
     let (plan, set_plan) = create_signal(None::<proxmox::PvePlan>);
     let picked = create_rw_signal(BTreeSet::<u32>::new());
@@ -54,6 +60,10 @@ pub fn VmImportProxmoxPage() -> impl IntoView {
         storage_map: storage_map.get_untracked(),
         bridge_map: bridge_map.get_untracked(),
         io_devices: io_devices.get_untracked(),
+        snapshot: snapshot.get_untracked(),
+        target_dataset: target_dataset.get_untracked(),
+        node: node.get_untracked(),
+        allow_no_snapshot: allow_no_snapshot.get_untracked(),
     };
 
     let do_plan = move |_| {
@@ -104,10 +114,11 @@ pub fn VmImportProxmoxPage() -> impl IntoView {
             .filter(|(k, v)| guests.contains(k) && !v.trim().is_empty())
             .collect();
         let st = storage.get_untracked();
+        let start = start_onboot.get_untracked();
         set_busy.set(true);
         set_error.set(None);
         spawn_local(async move {
-            match proxmox::start_import(&f, &guests, &chosen, &st).await {
+            match proxmox::start_import(&f, &guests, &chosen, &st, start).await {
                 Ok(jid) => loop {
                     gloo_timers::future::TimeoutFuture::new(2000).await;
                     match proxmox::status(&jid).await {
@@ -145,6 +156,7 @@ pub fn VmImportProxmoxPage() -> impl IntoView {
                         <option value="dir">"Directory on this host (configs + received volumes)"</option>
                         <option value="ssh">"Proxmox node over SSH (read only)"</option>
                         <option value="vzdump">"Container backup (vzdump .tar.zst)"</option>
+                        <option value="adopt">"Adopt in place: Proxmox on this host's ZFS pool (clones, nothing copied)"</option>
                     </select>
                 </div>
                 {move || match kind.get().as_str() {
@@ -156,6 +168,31 @@ pub fn VmImportProxmoxPage() -> impl IntoView {
                             <input id="pve-port" type="text" placeholder="22" prop:value=port on:input=move |ev| port.set(event_target_value(&ev))/>
                             <label for="pve-identity">"Key file on this host"</label>
                             <input id="pve-identity" type="text" placeholder="/root/.ssh/id_ed25519" prop:value=identity on:input=move |ev| identity.set(event_target_value(&ev))/>
+                        </div>
+                    }.into_view(),
+                    "adopt" => view! {
+                        <p class="form-help" id="pve-adopt-help">
+                            "For a node that ran Proxmox and now boots Horcrux from the same ZFS pool: every guest volume becomes a ZFS clone of a snapshot (seconds, no copy). The Proxmox datasets are never written, so booting Proxmox again is the rollback. Take the snapshot once the guests are stopped (zfs snapshot -r <pool>/data@<name>)."
+                        </p>
+                        <div class="form-row">
+                            <label for="pve-path">"Proxmox root file system (mounted read only)"</label>
+                            <input id="pve-path" type="text" placeholder="/mnt/pve-root" prop:value=path on:input=move |ev| path.set(event_target_value(&ev))/>
+                            <label for="pve-node">"Proxmox node (optional)"</label>
+                            <input id="pve-node" type="text" placeholder="the root's hostname" prop:value=node on:input=move |ev| node.set(event_target_value(&ev))/>
+                        </div>
+                        <div class="form-row">
+                            <label for="pve-snapshot">"Snapshot to clone from"</label>
+                            <input id="pve-snapshot" type="text" placeholder="hx-cutover" prop:value=snapshot on:input=move |ev| snapshot.set(event_target_value(&ev))/>
+                            <label for="pve-target">"Clones go under (dataset, same pool)"</label>
+                            <input id="pve-target" type="text" placeholder="rpool/horcrux/guests" prop:value=target_dataset on:input=move |ev| target_dataset.set(event_target_value(&ev))/>
+                        </div>
+                        <div class="form-row">
+                            <label for="pve-storage-map">"Storage datasets (only if not as in storage.cfg)"</label>
+                            <textarea id="pve-storage-map" rows="2" placeholder="local-zfs=rpool/data" prop:value=storage_map on:input=move |ev| storage_map.set(event_target_value(&ev))></textarea>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="pve-allow-no-snapshot" prop:checked=allow_no_snapshot on:change=move |ev| allow_no_snapshot.set(event_target_checked(&ev))/>
+                                "No snapshot: use the Proxmox datasets themselves (no rollback to Proxmox)"
+                            </label>
                         </div>
                     }.into_view(),
                     "vzdump" => view! {
@@ -243,6 +280,18 @@ pub fn VmImportProxmoxPage() -> impl IntoView {
                                     <div class="alert alert-error" id="pve-blockers"><strong>"Not imported until fixed"</strong>
                                         <ul>{g.blockers.iter().map(|b| view! { <li>{b.clone()}</li> }).collect_view()}</ul></div>
                                 })}
+                                {(!g.adopt.is_empty()).then(|| view! {
+                                    <h4>"Volumes taken over (ZFS clones, nothing copied)"</h4>
+                                    <table class="data-table" id="pve-adopt">
+                                        <thead><tr><th>"Key"</th><th>"From"</th><th>"Becomes"</th><th>"Command"</th></tr></thead>
+                                        <tbody>{g.adopt.iter().map(|v| view! {
+                                            <tr class="pve-adopt-vol"><td>{v.key.clone()}</td>
+                                                <td class="mono">{v.from_snapshot.clone().unwrap_or_else(|| v.source_dataset.clone())}</td>
+                                                <td class="mono">{if v.kept { v.dataset.clone() } else { format!("{} (read, then dropped)", v.dataset) }}</td>
+                                                <td class="mono">{v.command.clone()}</td></tr>
+                                        }).collect_view()}</tbody>
+                                    </table>
+                                })}
                                 <h4>"Data that moves into Horcrux storage"</h4>
                                 <ul id="pve-volumes">{g.volumes.iter().map(|v| view! { <li>{format!("{} ({}): {}{}{}", v.key, v.role, v.source,
                                     v.size_bytes.map(|b| format!(", {:.1} GiB", b as f64 / (1u64 << 30) as f64)).unwrap_or_default(),
@@ -276,6 +325,10 @@ pub fn VmImportProxmoxPage() -> impl IntoView {
                                 <option value="">"VM storage directory"</option>
                                 {move || options.get().map(|o| o.storage_pools.into_iter().map(|p| view! { <option value=p.id.clone()>{format!("{} ({})", p.name, p.storage_type)}</option> }).collect_view())}
                             </select>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="pve-start-onboot" prop:checked=start_onboot on:change=move |ev| start_onboot.set(event_target_checked(&ev))/>
+                                "Start the guests Proxmox started at boot, in its start order"
+                            </label>
                             <button class="btn btn-primary" id="pve-import" disabled=busy on:click=do_import>
                                 {move || format!("Import {} guest(s)", picked.with(|s| s.len()))}
                             </button>
@@ -293,7 +346,9 @@ pub fn VmImportProxmoxPage() -> impl IntoView {
                         <thead><tr><th>"Proxmox id"</th><th>"Name"</th><th>"State"</th><th>"Result"</th></tr></thead>
                         <tbody>{j.guests.into_iter().map(|r| view! {
                             <tr class=format!("pve-result pve-result-{}", r.state)>
-                                <td>{r.vmid}</td><td>{r.name.clone()}</td><td>{r.state.clone()}</td>
+                                <td>{r.vmid}</td><td>{r.name.clone()}</td>
+                                <td>{format!("{}{}{}", r.state, r.secs.map(|s| format!(" in {s:.1} s")).unwrap_or_default(),
+                                    r.started_after_secs.map(|s| format!(", started at +{s:.1} s")).unwrap_or_default())}</td>
                                 <td>
                                     {match (r.link.clone(), r.id.clone()) {
                                         (Some(l), Some(i)) => view! { <A href=l>{format!("Open {i}")}</A> }.into_view(),

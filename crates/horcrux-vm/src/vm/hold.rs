@@ -27,7 +27,7 @@ pub struct Hold {
 }
 
 pub fn path(disk: &Path) -> PathBuf {
-    disk.with_extension("hold.json")
+    super::sidecar::anchor(disk).with_extension("hold.json")
 }
 
 /// Record a hold (written and fsynced before the guest is touched).

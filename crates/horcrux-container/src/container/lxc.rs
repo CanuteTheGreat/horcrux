@@ -45,6 +45,9 @@ pub struct LxcMeta {
     /// Settings changed while running that only apply after a restart.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<String>,
+    /// The ZFS dataset mounted as `<ct>/rootfs` (RootfsSource::Zfs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rootfs_dataset: Option<String>,
 }
 
 impl LxcMeta {
@@ -174,14 +177,116 @@ pub enum RootfsSource {
         path: PathBuf,
         src_idmap: Option<(u32, u32)>,
     },
+    /// A ZFS filesystem dataset that BECOMES the rootfs, nothing copied:
+    /// it is mounted at `<ct>/rootfs` (an adopted clone of another
+    /// hypervisor's container volume). Its owners must already be in the
+    /// container's id map. Deleting the container destroys the dataset
+    /// only when it carries `horcrux:guest=<container id>`.
+    Zfs { dataset: String },
 }
 
 impl RootfsSource {
     fn label(&self) -> String {
         match self {
             RootfsSource::Tar(p) | RootfsSource::Dir { path: p, .. } => p.display().to_string(),
+            RootfsSource::Zfs { dataset } => format!("zfs dataset {dataset}"),
         }
     }
+}
+
+/// ZFS user property naming the guest a dataset was made for (the same
+/// key VMs use for adopted zvols).
+pub const ZFS_OWNER_PROP: &str = "horcrux:guest";
+
+fn zfs_cmd() -> Command {
+    Command::new(std::env::var("HORCRUX_ZFS").unwrap_or_else(|_| "zfs".into()))
+}
+
+/// Mount `dataset` at `at` (sets its mountpoint) and check it is there.
+pub async fn zfs_mount_at(dataset: &str, at: &Path) -> Result<()> {
+    run(
+        zfs_cmd()
+            .arg("set")
+            .arg(format!("mountpoint={}", at.display()))
+            .arg(dataset),
+        "zfs set mountpoint",
+    )
+    .await?;
+    let state = run(
+        zfs_cmd().args(["get", "-H", "-o", "value", "mounted", dataset]),
+        "zfs get mounted",
+    )
+    .await?;
+    if state.trim() != "yes" {
+        run(zfs_cmd().args(["mount", dataset]), "zfs mount").await?;
+    }
+    let mp = run(
+        zfs_cmd().args(["get", "-H", "-o", "value", "mounted,mountpoint", dataset]),
+        "zfs get mountpoint",
+    )
+    .await?;
+    let mut l = mp.lines().map(str::trim);
+    if l.next() != Some("yes") || l.next() != Some(&*at.to_string_lossy()) {
+        return Err(sys(format!(
+            "dataset {dataset} is not mounted at {} ({})",
+            at.display(),
+            mp.trim().replace('\n', " ")
+        )));
+    }
+    Ok(())
+}
+
+/// ZFS filesystems mounted at or below `dir` (deepest first), from
+/// /proc/self/mountinfo.
+fn zfs_mounts_under(dir: &Path) -> Vec<(String, PathBuf)> {
+    let text = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+    let mut v: Vec<(String, PathBuf)> = text
+        .lines()
+        .filter_map(|l| {
+            let (left, right) = l.split_once(" - ")?;
+            let mp = left.split(' ').nth(4)?;
+            let mut r = right.split(' ');
+            let (fstype, source) = (r.next()?, r.next()?);
+            let mp = PathBuf::from(mp.replace("\\040", " "));
+            (fstype == "zfs" && mp.starts_with(dir)).then(|| (source.to_string(), mp))
+        })
+        .collect();
+    v.sort_by_key(|(_, m)| std::cmp::Reverse(m.components().count()));
+    v.dedup();
+    v
+}
+
+/// Before a container directory is removed: datasets made for this
+/// container (`horcrux:guest=<id>`) are destroyed, any other dataset
+/// mounted inside it is unmounted and kept. Refuses if something stays
+/// mounted (its files would be deleted with the directory).
+async fn release_zfs_mounts(dir: &Path, id: &str) -> Result<()> {
+    for (ds, mp) in zfs_mounts_under(dir) {
+        let owner = run(
+            zfs_cmd().args(["get", "-H", "-o", "value", ZFS_OWNER_PROP, &ds]),
+            "zfs get",
+        )
+        .await
+        .unwrap_or_default();
+        if owner.trim() == id {
+            info!("container {id}: destroying its dataset {ds}");
+            run(zfs_cmd().args(["destroy", &ds]), "zfs destroy").await?;
+        } else {
+            info!(
+                "container {id}: unmounting dataset {ds} from {} (not made for this container: kept)",
+                mp.display()
+            );
+            run(zfs_cmd().args(["umount", &ds]), "zfs umount").await?;
+            let _ = run(zfs_cmd().args(["set", "canmount=noauto", &ds]), "zfs set").await;
+        }
+    }
+    if let Some((ds, mp)) = zfs_mounts_under(dir).into_iter().next() {
+        return Err(sys(format!(
+            "dataset {ds} is still mounted at {}: not removing the container's files",
+            mp.display()
+        )));
+    }
+    Ok(())
 }
 
 /// Cap a container's host-side veth at `mbps` both ways (same tc shape as a
@@ -658,6 +763,8 @@ impl LxcManager {
                 }
                 Stdio::from(file)
             }
+            // the dataset already is the rootfs
+            RootfsSource::Zfs { .. } => return Ok(()),
             RootfsSource::Dir { path, src_idmap } => {
                 if !path.is_dir() {
                     return Err(Error::Validation(format!(
@@ -1062,6 +1169,10 @@ impl LxcManager {
                 if mnt.exists() {
                     self.umount_image(&mnt).await;
                 }
+                if let Err(z) = release_zfs_mounts(&dir, &config.id).await {
+                    warn!("cleanup of {}: {z}", dir.display());
+                    return Err(e);
+                }
                 if let Err(rm) = std::fs::remove_dir_all(&dir) {
                     warn!("cleanup of {} failed: {rm}", dir.display());
                 }
@@ -1085,13 +1196,24 @@ impl LxcManager {
         } else {
             RootfsKind::Dir
         };
-        let target = match kind {
-            RootfsKind::Dir => {
+        let target = match (kind.clone(), src) {
+            (_, RootfsSource::Zfs { dataset }) => {
+                if opts.disk_gb.is_some() {
+                    return Err(Error::Validation(
+                        "a container whose rootfs is a ZFS dataset has no fixed disk size (disk_gb)"
+                            .into(),
+                    ));
+                }
+                let r = dir.join("rootfs");
+                zfs_mount_at(dataset, &r).await?;
+                r
+            }
+            (RootfsKind::Dir, _) => {
                 let r = dir.join("rootfs");
                 std::fs::create_dir(&r)?;
                 r
             }
-            RootfsKind::Loop => {
+            (RootfsKind::Loop, _) => {
                 let img = dir.join("rootfs.raw");
                 let size = opts.disk_gb.unwrap_or(0) * 1024 * 1024 * 1024;
                 std::fs::File::create(&img)?.set_len(size)?;
@@ -1110,7 +1232,9 @@ impl LxcManager {
             }
         };
         let res = async {
-            self.extract_from(src, &target, opts).await?;
+            if !matches!(src, RootfsSource::Zfs { .. }) {
+                self.extract_from(src, &target, opts).await?;
+            }
             let distro = os_release_id(&target)
                 .map(|id| lxc_distro_name(&id))
                 .or(distro_hint)
@@ -1140,6 +1264,10 @@ impl LxcManager {
                 lxc: opts.clone(),
                 created_at: chrono::Utc::now().to_rfc3339(),
                 pending: Vec::new(),
+                rootfs_dataset: match src {
+                    RootfsSource::Zfs { dataset } => Some(dataset.clone()),
+                    _ => None,
+                },
             };
             Self::setup_guest(&meta, &target, owner)?;
             Ok::<_, Error>(meta)
@@ -1177,6 +1305,10 @@ impl LxcManager {
             )));
         }
         if let Ok(mut meta) = self.read_meta(&container.name) {
+            if let Some(ds) = &meta.rootfs_dataset {
+                // never set the guest up in (or boot) an empty mountpoint
+                zfs_mount_at(ds, &self.dir(&container.name).join("rootfs")).await?;
+            }
             let owner = self.root_owner(&meta.lxc);
             let m2 = meta.clone();
             self.with_rootfs(&meta, move |root| Self::setup_guest(&m2, root, owner))
@@ -1317,6 +1449,9 @@ impl LxcManager {
         if snaps.exists() {
             tokio::fs::remove_dir_all(&snaps).await?;
         }
+        // A ZFS dataset as rootfs / mount point (adopted clones): destroy
+        // ours, unmount anyone else's BEFORE lxc-destroy deletes files.
+        release_zfs_mounts(&dir, &container.id).await?;
         if dir.join("config").exists() {
             run(&mut self.lxc("destroy", &container.name), "lxc-destroy").await?;
         }
@@ -2214,6 +2349,7 @@ mod tests {
             },
             created_at: String::new(),
             pending: Vec::new(),
+            rootfs_dataset: None,
         };
         LxcManager::setup_guest(&meta, root, me).unwrap();
         let conf = std::fs::read_to_string(root.join("etc/conf.d/net")).unwrap();
@@ -2280,6 +2416,7 @@ mod tests {
             },
             created_at: "now".into(),
             pending: vec![],
+            rootfs_dataset: None,
         };
         let me = {
             use std::os::unix::fs::MetadataExt;

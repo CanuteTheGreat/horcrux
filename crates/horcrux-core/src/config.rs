@@ -259,6 +259,21 @@ pub struct PathsConfig {
     pub restore: PathBuf,
     /// Directory for backups
     pub backups: PathBuf,
+    /// Where the files of VMs whose first disk is a block device (a ZFS
+    /// zvol, an LVM volume) live: UEFI variables, TPM state, cloud-init
+    /// seed, console sockets. Default `<vm_storage>/sidecars`. Env:
+    /// `HORCRUX_VM_SIDECARS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vm_sidecars: Option<PathBuf>,
+}
+
+impl PathsConfig {
+    /// `vm_sidecars`, or its default `<vm_storage>/sidecars`.
+    pub fn effective_vm_sidecars(&self) -> PathBuf {
+        self.vm_sidecars
+            .clone()
+            .unwrap_or_else(|| self.vm_storage.join("sidecars"))
+    }
 }
 
 /// Database configuration
@@ -339,6 +354,7 @@ impl Default for PathsConfig {
             cloudinit: data_dir.join("cloudinit"),
             restore: data_dir.join("restore"),
             backups: data_dir.join("backups"),
+            vm_sidecars: None,
             data_dir,
         }
     }
@@ -489,6 +505,11 @@ impl HorcruxConfig {
         }
         if let Ok(path) = std::env::var("HORCRUX_VM_STORAGE") {
             self.paths.vm_storage = PathBuf::from(path);
+        }
+        if let Ok(path) = std::env::var("HORCRUX_VM_SIDECARS") {
+            if !path.trim().is_empty() {
+                self.paths.vm_sidecars = Some(PathBuf::from(path));
+            }
         }
         if let Ok(path) = std::env::var("HORCRUX_SNAPSHOTS_DIR") {
             self.paths.snapshots = PathBuf::from(path);

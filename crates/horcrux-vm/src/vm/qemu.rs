@@ -157,7 +157,7 @@ fn qemu_running_from_pidfile(path: &std::path::Path) -> bool {
 
 /// Where a VM's cloud-init seed ISO lives (next to its first disk).
 pub fn cloudinit_seed(disk: &std::path::Path) -> PathBuf {
-    disk.with_extension("cidata.iso")
+    super::sidecar::anchor(disk).with_extension("cidata.iso")
 }
 
 /// Whether `vm` boots with UEFI (OVMF): only x86 guests set to OVMF (the
@@ -545,7 +545,7 @@ fn escape(v: &str) -> String {
 /// disk, like the cloud-init seed). Attached while the file exists; Horcrux
 /// deletes it once the installed guest's agent answers.
 pub fn unattend_iso(disk: &std::path::Path) -> PathBuf {
-    disk.with_extension("unattend.iso")
+    super::sidecar::anchor(disk).with_extension("unattend.iso")
 }
 
 /// The extra CD-ROM drives (`hardware.extra_cdroms`, read-only ISOs from the
@@ -1738,7 +1738,9 @@ impl QemuManager {
         // hold marker.
         super::display::DisplayRuntime::remove(&vm.disk_path).await;
         for ext in ["cidata.iso", "serial.log", "display.json", "hold.json"] {
-            let _ = tokio::fs::remove_file(vm.disk_path.with_extension(ext)).await;
+            let _ =
+                tokio::fs::remove_file(super::sidecar::anchor(&vm.disk_path).with_extension(ext))
+                    .await;
         }
         let _ = tokio::fs::remove_file(pidfile(&vm.id)).await;
         HostNet::system().remove_taps(&vm.id).await;
@@ -1755,6 +1757,14 @@ impl QemuManager {
             .collect();
         disks.rotate_left(1);
         for disk in disks {
+            if super::sidecar::is_device(&disk) {
+                // A device disk is never unlinked (that would only drop the
+                // /dev node). A zvol Horcrux made for this VM (an adopted
+                // clone, `horcrux:vm=<id>`) is destroyed; any other device
+                // belongs to someone else and stays.
+                super::sidecar::destroy_owned_zvol(&disk, &vm.id).await?;
+                continue;
+            }
             match tokio::fs::remove_file(&disk).await {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

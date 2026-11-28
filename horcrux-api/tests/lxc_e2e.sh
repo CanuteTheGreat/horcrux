@@ -39,7 +39,10 @@ cleanup_sibling() {
     for c in $(lxc-ls -P "$P" 2>/dev/null); do timeout 30 lxc-stop -P "$P" -n "$c" -k 2>/dev/null; done
     umount "$P"/*/.setup-mnt 2>/dev/null
     losetup -a | grep "($P/" | cut -d: -f1 | xargs -r -n1 losetup -d
-    ip link del hxbr0 2>/dev/null; [ -f /tmp/dnsmasq.pid ] && kill "$(cat /tmp/dnsmasq.pid)"' >/dev/null 2>&1 || true
+    ip link del hxbr0 2>/dev/null; [ -f /tmp/dnsmasq.pid ] && kill "$(cat /tmp/dnsmasq.pid)"
+    # a test ZFS pool lives in the runner kernel, not in this container
+    command -v zpool >/dev/null && for p in $(zpool list -H -o name 2>/dev/null | grep "^hx-e2e-.*-$(hostname)\$"); do zpool destroy -f "$p"; done
+    losetup -a | grep "/srv/hx-e2e-pool.img" | cut -d: -f1 | xargs -r -n1 losetup -d' >/dev/null 2>&1 || true
   docker rm -f "$name" >/dev/null 2>&1 || true
 }
 

@@ -42,6 +42,11 @@ pub enum Source {
     },
     /// One vzdump archive (`vzdump-lxc-<id>-*.tar[.zst|.gz|.lzo]`).
     Vzdump { path: String },
+    /// A Proxmox installation on THIS host's ZFS pool, adopted in place:
+    /// each guest volume becomes a `zfs clone` of a snapshot (nothing is
+    /// copied, the Proxmox datasets are never written, so booting Proxmox
+    /// again is the rollback). See `adopt.rs`.
+    Adopt(super::adopt::AdoptSource),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,7 +72,7 @@ pub struct Volumes {
     pub map: BTreeMap<String, Result<Resolved, String>>,
 }
 
-fn safe_path(p: &str) -> Result<PathBuf, ApiError> {
+pub(crate) fn safe_path(p: &str) -> Result<PathBuf, ApiError> {
     let pb = PathBuf::from(p.trim());
     if !pb.is_absolute() || pb.components().any(|c| c.as_os_str() == "..") {
         return Err(ApiError::BadRequest(format!(
@@ -139,6 +144,7 @@ impl Source {
                 }
                 Ok(())
             }
+            Source::Adopt(a) => a.validate(),
         }
     }
 
@@ -217,7 +223,7 @@ pub fn sq(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-fn conf_kind(text: &str) -> Kind {
+pub(crate) fn conf_kind(text: &str) -> Kind {
     let c = super::conf::parse_conf(text);
     if c.get("rootfs").is_some()
         || (c.get("hostname").is_some() && c.get("ostype").is_some() && c.get("name").is_none())
@@ -238,6 +244,7 @@ pub async fn list(src: &Source) -> Result<Vec<Guest>, ApiError> {
         Source::Dir { path, .. } => list_dir(Path::new(path)),
         Source::Vzdump { path } => list_vzdump(Path::new(path)).await,
         Source::Ssh { .. } => list_ssh(src).await,
+        Source::Adopt(a) => super::adopt::list(a).await,
     }
 }
 
@@ -292,7 +299,7 @@ fn list_dir(root: &Path) -> Result<Vec<Guest>, ApiError> {
 
 /// Saved `qm showcmd` output: `showcmd/<id>.txt`, `<id>.showcmd`, or one dump
 /// with `===== VM <id>` headers (`guests-qm-showcmd.txt`).
-fn read_showcmds(root: &Path) -> BTreeMap<u32, String> {
+pub(crate) fn read_showcmds(root: &Path) -> BTreeMap<u32, String> {
     let mut m = BTreeMap::new();
     for f in ["guests-qm-showcmd.txt", "qm-showcmd.txt"] {
         if let Ok(t) = std::fs::read_to_string(root.join(f)) {

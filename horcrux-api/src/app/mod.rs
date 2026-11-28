@@ -326,6 +326,9 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     let database_for_stacks = database.clone();
+    // VMs whose first disk is a device (an adopted ZFS zvol) keep their
+    // UEFI vars / TPM / seed / sockets in the sidecar directory.
+    crate::vm::sidecar::set_root(horcrux_config.paths.effective_vm_sidecars());
     let shared_container_manager = Arc::new(container::ContainerManager::with_database(
         database_for_stacks.clone(),
     ));

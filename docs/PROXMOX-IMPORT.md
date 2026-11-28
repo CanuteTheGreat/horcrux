@@ -17,6 +17,7 @@ API: `POST /api/import/proxmox/plan`, `POST /api/import/proxmox`,
 | `dir` | a directory with the guest configs (`qemu-server/*.conf`, `lxc/*.conf`, a copy of `/etc/pve`, or the `.conf` files directly), optionally `storage.cfg` and saved `qm showcmd` output (`showcmd/<id>.txt`, `<id>.showcmd` or one `guests-qm-showcmd.txt` dump with `===== VM <id>` headers) | the Proxmox host is being reinstalled: its pool was `zfs send`-ed to another pool (or disk) and the configs copied next to it |
 | `ssh` | a running Proxmox node, read only (`cat /etc/pve/...`, `pvesm path`, `qm showcmd`, `dd`/`tar` of the volumes) | moving guests off a node that keeps running |
 | `vzdump` | one container backup archive (`vzdump-lxc-<id>-*.tar[.zst|.gz|.lzo]`) | restoring a container from its backup |
+| `adopt` | a Proxmox installation on THIS host's ZFS pool (its root file system mounted read only) | the node that ran Proxmox boots Horcrux from a new root dataset in the same pool: the guests are taken over as ZFS clones, nothing is copied (see "Adopt in place" below) |
 
 VM backups in Proxmox's VMA format (`.vma.zst`) are not read directly: restore
 them on a Proxmox node and import over SSH, or unpack them with `vma extract`
@@ -52,6 +53,100 @@ Storages missing from the map are looked up in the source's `storage.cfg`
   container start. SSH sources find the device paths on the node.
 * `guests` `[111, 115]`, `ids` `{"111": "dns-b"}`, `storage` (pool for VM
   disks; default the VM storage directory).
+* `start_onboot` (import only): start every guest the source started at boot
+  right after it is created, in the source's start order and with its start
+  delay (router first). The job reports per guest how long its import took
+  (`secs`) and when it was started (`started_after_secs`).
+
+Two guests that start at boot with the same MAC address or the same
+passed-through PCI device would fight over it: the first by start order
+keeps starting at boot, every later one is planned (and imported) with start
+at boot off, and its plan row `onboot` says which guest it shares with.
+
+## Adopt in place (same ZFS pool, no copy)
+
+For a node that ran Proxmox VE on ZFS and now boots Horcrux from a new root
+dataset in the same pool. Each guest volume becomes `zfs clone
+<volume>@<snapshot> <target>/<guest>-<key>`: an O(1) operation, so applying
+takes seconds per guest whatever the disk sizes. The Proxmox datasets are
+never written: booting the Proxmox root again finds every guest exactly as it
+was at the snapshot, which is the rollback, and destroying the clones undoes
+the adoption on the Horcrux side.
+
+```json
+{"type": "adopt", "pve_root": "/mnt/pve-root", "snapshot": "hx-cutover",
+ "target_parent_dataset": "rpool/horcrux/guests"}
+```
+
+* `pve_root`: the Proxmox root file system, mounted read only. Proxmox keeps
+  its guest configs in its cluster database (`var/lib/pve-cluster/config.db`;
+  `/etc/pve` is only a view of it while Proxmox runs and is empty on disk),
+  which is read from a temporary copy (the write-ahead log is applied). A
+  directory with a copy of `/etc/pve` works too. `storage.cfg` says which
+  dataset backs each ZFS storage (`storage_map` `{"local-zfs":
+  "rpool/data"}` overrides it). `node` picks the node of a cluster database
+  (default: the root's `etc/hostname`, or the only node).
+* `snapshot`: taken once the guests are stopped, e.g. `zfs snapshot -r
+  rpool/data@hx-cutover`. A volume that changed after it (`written@<snap>`
+  not 0) is refused, in the plan and again at apply, so a clone never misses
+  writes. Without a snapshot the request is refused unless
+  `allow_no_snapshot` is set: then the Proxmox datasets themselves are
+  renamed under `target_parent_dataset` and the guests write Proxmox's data
+  (booting Proxmox again no longer finds them).
+* `target_parent_dataset`: where the clones go, in the same pool (created
+  with `mountpoint=none` if missing).
+* `showcmd`: saved `qm showcmd` output (file or directory, as for `dir`) for
+  the QEMU command-line diff; the plan otherwise works fully offline.
+
+What becomes what:
+
+* VM disks: the cloned zvols, used as raw block devices
+  (`/dev/zvol/<target>/<guest>-scsi0`); nothing is created or converted.
+  The VM's own files (UEFI variable store, swtpm state, cloud-init seed,
+  console sockets, serial log) live in the node's sidecar directory
+  (`paths.vm_sidecars`, env `HORCRUX_VM_SIDECARS`, default
+  `<vm_storage>/sidecars`) at the device path mirrored below it, because a
+  device has no directory of its own. The `efidisk`, `tpmstate` and
+  cloud-init volumes are read from temporary clones into those files, then
+  the temporary clones are dropped.
+* Container rootfs: the cloned subvolume, mounted at the container's
+  `<lxc path>/<ct>/rootfs`. Owners are not touched: Proxmox's unprivileged id
+  map (100000/65536) is Horcrux's, so the files are already right. The
+  clone gets the source's own local properties again (`acltype`, `xattr`, a
+  clone inherits from its new parent otherwise) and the Proxmox `size=` as
+  `refquota`. Storage-backed mount points are cloned and mounted the same
+  way; bind mounts keep their host path.
+* Everything else exactly as for the other sources (MACs, UUID, vmgenid,
+  hostpci, disk bus/iothread/discard/ssd, throttles, serial socket, CT
+  network rate, io.max by device path, start order and onboot).
+* Every clone carries the ZFS property `horcrux:guest=<id>`: deleting the
+  guest in Horcrux destroys its clones, and only those. A device disk without
+  that property (one Horcrux did not create) is never removed with a VM.
+* The plan lists every clone with the exact `zfs clone` command; the record
+  of what was taken over is `<data_dir>/proxmox-import/<id>.adopt.json`
+  (with the apply time).
+
+Cutover sequence (offline plan ahead, short window):
+
+1. Ahead of time, from Horcrux booted once, or from a copy of the configs:
+   `horcrux import proxmox plan --adopt /mnt/pve-root --snapshot hx-cutover
+   --target rpool/horcrux/guests --bridge vmbr0=br0 --details` (blockers,
+   every row, the clones). Bridges, PCI devices and bind-mount sources must
+   exist on the Horcrux side.
+2. In the window: stop the guests on Proxmox, `zfs snapshot -r
+   rpool/data@hx-cutover`, boot the Horcrux root dataset.
+3. On Horcrux: mount the Proxmox root read only WITHOUT changing its
+   properties (`mkdir -p /mnt/pve-root; mount -t zfs -o ro,zfsutil
+   rpool/ROOT/pve-1 /mnt/pve-root`; its mountpoint stays `/` for Proxmox),
+   then `horcrux import proxmox run --adopt
+   /mnt/pve-root --snapshot hx-cutover --target rpool/horcrux/guests --guest
+   117 --guest 111 ... --start-onboot`.
+4. Rollback: boot the Proxmox root again (its datasets are as at the
+   snapshot); on the Horcrux side `zfs destroy -r rpool/horcrux/guests`.
+
+Host notes: a zvol clone's partitions appear on the host like the original's
+(`/dev/zvol/...-part1`); keep LVM inside guests out of the host's LVM scan
+(a `global_filter` excluding `/dev/zd*`), as on Proxmox.
 
 ## What is carried
 

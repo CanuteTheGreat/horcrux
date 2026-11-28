@@ -22,6 +22,7 @@
 //! into the LXC store with their owners as the container sees them. Nothing
 //! of the source is changed; for a local source its volumes are offered for
 //! removal afterwards (`/api/vms/import/cleanup`, opt-in, with sizes).
+pub mod adopt;
 pub mod cmdline;
 pub mod conf;
 pub mod source;
@@ -92,6 +93,7 @@ fn source_label(s: &Source) -> String {
         Source::Dir { path, .. } => format!("dir:{path}"),
         Source::Ssh { host, .. } => format!("ssh:{host}"),
         Source::Vzdump { path } => format!("vzdump:{path}"),
+        Source::Adopt(a) => format!("adopt:{}", a.pve_root),
     }
 }
 
@@ -219,7 +221,10 @@ pub async fn plan_guests(
         lxc_missing: lxc_missing(state).await,
     };
     let src = req.source.clone();
-    let cfg = storage_cfg_of(&src);
+    let cfg = match &src {
+        Source::Adopt(a) => adopt::storage_cfg(a).await,
+        _ => storage_cfg_of(&src),
+    };
     let host2 = host.clone();
     let planned = tokio::task::spawn_blocking(move || {
         let resolver = |v: &conf::PveVol| -> Result<Resolved, String> {
@@ -249,6 +254,7 @@ pub async fn plan_guests(
                 Source::Dir { path, storage_map } => {
                     source::resolve_dir(Path::new(path), storage_map, &cfg, v)
                 }
+                Source::Adopt(a) => adopt::resolve(a, &cfg, v),
             }
         };
         guests
@@ -259,6 +265,9 @@ pub async fn plan_guests(
                     Kind::Vm => conf::plan_vm(g.vmid, &c, &resolver, &host2),
                     Kind::Ct => conf::plan_ct(g.vmid, &c, &resolver, &host2),
                 };
+                if let Source::Adopt(a) = &src {
+                    adopt::finish_plan(a, &cfg, &mut p);
+                }
                 if let (Source::Vzdump { .. }, Some(ct)) = (&src, p.ct.as_mut()) {
                     // backed-up mount point data is inside the rootfs archive
                     if let Some(o) = ct.lxc.as_mut() {
@@ -279,8 +288,78 @@ pub async fn plan_guests(
     })
     .await
     .map_err(|e| ApiError::Internal(format!("plan task: {e}")))?;
+    let mut planned = planned;
+    guard_shared_identity(&mut planned);
     let _ = state;
     Ok((planned, host))
+}
+
+/// MACs and passed-through PCI devices of a planned guest.
+fn identities(p: &GuestPlan) -> Vec<String> {
+    let mut v = Vec::new();
+    if let Some(vm) = &p.vm {
+        for n in &vm.hardware.nets {
+            if let Some(m) = &n.mac {
+                v.push(format!("MAC {}", m.to_ascii_lowercase()));
+            }
+        }
+        for h in &vm.hardware.hostpci {
+            v.push(format!("PCI device {}", conf::pci_addr(&h.device)));
+        }
+    }
+    if let Some(o) = p.ct.as_ref().and_then(|c| c.lxc.as_ref()) {
+        for n in &o.nets {
+            if let Some(m) = &n.hwaddr {
+                v.push(format!("MAC {}", m.to_ascii_lowercase()));
+            }
+        }
+    }
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// Two guests started at boot with one MAC address or one PCI device would
+/// fight over it (a duplicate address on the LAN, a device only one guest
+/// can own). The first by start order keeps starting at boot; every later
+/// one is set to not start at boot, with the reason in its plan.
+pub fn guard_shared_identity(planned: &mut [(source::Guest, GuestPlan)]) {
+    let mut order: Vec<usize> = (0..planned.len())
+        .filter(|i| planned[*i].1.autostart.onboot)
+        .collect();
+    order.sort_by_key(|i| {
+        let p = &planned[*i].1;
+        (p.autostart.order.unwrap_or(i32::MAX), p.vmid)
+    });
+    let mut claimed: BTreeMap<String, u32> = BTreeMap::new();
+    for i in order {
+        let ids = identities(&planned[i].1);
+        let clash: Vec<String> = ids
+            .iter()
+            .filter_map(|id| claimed.get(id).map(|o| format!("{id} with guest {o}")))
+            .collect();
+        let p = &mut planned[i].1;
+        if clash.is_empty() {
+            for id in ids {
+                claimed.insert(id, p.vmid);
+            }
+            continue;
+        }
+        p.autostart.onboot = false;
+        if let Some(o) = p.ct.as_mut().and_then(|c| c.lxc.as_mut()) {
+            o.onboot = false;
+        }
+        p.rows.push(conf::Row {
+            key: "onboot".into(),
+            value: "1".into(),
+            carry: conf::Carry::Changed,
+            horcrux: "not started at boot".into(),
+            note: format!(
+                "shares {}, which starts at boot first: both running would fight over it. Start it by hand once the other is gone",
+                clash.join(", ")
+            ),
+        });
+    }
 }
 
 /// Known, deliberate differences between the two command lines.
@@ -311,7 +390,9 @@ pub fn horcrux_argv_in(
     ovmf: Option<&crate::vm::firmware::Ovmf>,
 ) -> Vec<String> {
     let mut disks = vm.disks.clone();
-    for (i, d) in disks.iter_mut().enumerate() {
+    // a disk without a path goes where a copy would; an adopted one keeps
+    // its clone's device
+    for (i, d) in disks.iter_mut().filter(|d| d.path.is_empty()).enumerate() {
         d.path = dir
             .join(if i == 0 {
                 format!("{}.qcow2", vm.id)
@@ -353,7 +434,18 @@ fn with_diff(
     if vm.disks.is_empty() {
         return (None, None);
     }
-    let argv = horcrux_argv(state, vm);
+    let mut vm = vm.clone();
+    if !p.adopt.is_empty() {
+        let mut dv: Vec<&conf::PlanVol> =
+            p.volumes.iter().filter(|v| v.role == VolRole::Disk).collect();
+        dv.sort_by_key(|v| v.index);
+        for (d, v) in vm.disks.iter_mut().zip(dv) {
+            if let Some(a) = p.adopt.iter().find(|a| a.key == v.key) {
+                d.path = format!("/dev/zvol/{}", a.dataset);
+            }
+        }
+    }
+    let argv = horcrux_argv(state, &vm);
     let line = argv.join(" ");
     let diff = g.showcmd.as_ref().map(|s| {
         let pve = cmdline::facts(&cmdline::shell_words(s));
@@ -452,6 +544,11 @@ pub struct ImportRequest {
     /// Proxmox id -> Horcrux id (default: from the guest's name).
     #[serde(default)]
     pub ids: BTreeMap<u32, String>,
+    /// Start each guest the source started at boot (onboot) right after it
+    /// is created, in the source's start order with its up delay: the
+    /// cutover case (adopt in place at first boot), router first.
+    #[serde(default)]
+    pub start_onboot: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -468,6 +565,12 @@ pub struct GuestResult {
     pub warnings: Vec<String>,
     /// The new guest's page.
     pub link: Option<String>,
+    /// Seconds the import of this guest took (adopt: clones + definition).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secs: Option<f64>,
+    /// Started by `start_onboot`, and after how many seconds of the job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_after_secs: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -529,7 +632,9 @@ async fn import(
             .map_err(|e| ApiError::BadRequest(format!("id for guest {vmid}: {e}")))?;
     }
     // Plan first: a source that can't be read fails here, synchronously.
-    let (planned, _) = plan_guests(&state, &req.plan).await?;
+    let (mut planned, _) = plan_guests(&state, &req.plan).await?;
+    // the source's start order (router first), then the id
+    planned.sort_by_key(|(g, p)| (p.autostart.order.unwrap_or(i32::MAX), g.vmid));
     let id = format!("pve-{:016x}", rand::random::<u64>());
     {
         let mut j = jobs()
@@ -567,7 +672,11 @@ async fn import(
     tokio::spawn(async move {
         let total = planned.len().max(1) as f32;
         let mut failed = 0;
+        let job_start = std::time::Instant::now();
         for (n, (g, p)) in planned.into_iter().enumerate() {
+            let t0 = std::time::Instant::now();
+            let onboot = p.autostart.onboot;
+            let up_delay = p.autostart.up_delay_secs;
             let base = 100.0 * n as f32 / total;
             let vmid = g.vmid;
             let set = |f: &dyn Fn(&mut GuestResult)| {
@@ -588,8 +697,23 @@ async fn import(
                 })
             };
             let res = import_guest(&state, &req, &g, p, &progress).await;
+            let secs = t0.elapsed().as_secs_f64();
             match res {
-                Ok((hid, warnings)) => {
+                Ok((hid, mut warnings)) => {
+                    let mut started = None;
+                    if req.start_onboot && onboot {
+                        progress(99.0, "starting (onboot)".into());
+                        match start_guest(&state, g.kind, &hid).await {
+                            Ok(()) => {
+                                started = Some(job_start.elapsed().as_secs_f64());
+                                if let Some(d) = up_delay.filter(|d| *d > 0) {
+                                    tokio::time::sleep(std::time::Duration::from_secs(d.into()))
+                                        .await;
+                                }
+                            }
+                            Err(e) => warnings.push(format!("not started: {}", api_msg(e))),
+                        }
+                    }
                     let link = if g.kind == Kind::Vm {
                         format!("/vms/{hid}")
                     } else {
@@ -601,6 +725,8 @@ async fn import(
                         r.link = Some(link.clone());
                         r.message = "imported".into();
                         r.warnings = warnings.clone();
+                        r.secs = Some(secs);
+                        r.started_after_secs = started;
                     });
                 }
                 Err(e) => {
@@ -610,6 +736,7 @@ async fn import(
                     set(&|r| {
                         r.state = "failed".into();
                         r.error = Some(msg.clone());
+                        r.secs = Some(secs);
                     });
                 }
             }
@@ -625,6 +752,18 @@ async fn import(
         });
     });
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({ "job": id }))))
+}
+
+async fn start_guest(state: &Arc<AppState>, kind: Kind, id: &str) -> Result<(), ApiError> {
+    match kind {
+        Kind::Vm => crate::app::start_vm_by_id(state, id).await.map(|_| ()),
+        Kind::Ct => state
+            .container_manager
+            .start_container(id)
+            .await
+            .map(|_| ())
+            .map_err(ApiError::from),
+    }
 }
 
 fn api_msg(e: ApiError) -> String {
@@ -644,6 +783,8 @@ struct Undo {
     vm: Option<String>,
     ct: Option<String>,
     files: Vec<PathBuf>,
+    /// Adopt: clones made (destroyed) / datasets renamed (renamed back).
+    zfs: adopt::Made,
 }
 
 impl Undo {
@@ -657,6 +798,7 @@ impl Undo {
         for f in self.files.drain(..) {
             let _ = std::fs::remove_file(&f);
         }
+        self.zfs.undo().await;
     }
 }
 
@@ -696,9 +838,11 @@ async fn import_guest(
     }
     p.target_id = id.clone();
     let mut undo = Undo::default();
-    let r = match g.kind {
-        Kind::Vm => import_vm(state, req, g, &p, &mut undo, progress).await,
-        Kind::Ct => import_ct(state, req, g, &p, &mut undo, progress).await,
+    let r = match (&req.plan.source, g.kind) {
+        (Source::Adopt(a), Kind::Vm) => adopt_vm(state, a, g, &p, &mut undo, progress).await,
+        (Source::Adopt(a), Kind::Ct) => adopt_ct(state, a, g, &p, &mut undo, progress).await,
+        (_, Kind::Vm) => import_vm(state, req, g, &p, &mut undo, progress).await,
+        (_, Kind::Ct) => import_ct(state, req, g, &p, &mut undo, progress).await,
     };
     match r {
         Ok(w) => {
@@ -892,6 +1036,80 @@ fn zfs_dataset_of_zvol(path: &str) -> Option<String> {
     path.strip_prefix("/dev/zvol/").map(String::from)
 }
 
+/// The UEFI variable store, the swtpm state and the cloud-init seed of an
+/// imported VM, from its Proxmox volumes (`side`: role, where to read it,
+/// the Proxmox volume name), into the VM's own files (named after disk0:
+/// beside a file disk, in the sidecar dir for a device disk).
+async fn carry_sidecars(
+    src: &Source,
+    side: &[(VolRole, Option<Resolved>, String)],
+    disk0: &Path,
+    secure: bool,
+    undo: &mut Undo,
+    warnings: &mut Vec<String>,
+) -> Result<(), ApiError> {
+    if let Some((_, r, label)) = side.iter().find(|v| v.0 == VolRole::Efivars) {
+        let r = r
+            .clone()
+            .ok_or_else(|| ApiError::BadRequest(format!("efidisk0: volume {label} not found")))?;
+        let head = read_small(src, &r, 8 << 20).await?;
+        let tpl_len = crate::vm::firmware::find_ovmf_for(secure)
+            .and_then(|o| std::fs::metadata(o.vars_template).ok())
+            .map(|m| m.len());
+        match (ovmf_vars_len(&head), tpl_len) {
+            (Some(n), Some(t)) if n == t && head.len() as u64 >= n => {
+                let raw = crate::vm::sidecar::anchor(disk0).with_extension("efivars.import.raw");
+                undo.files.push(raw.clone());
+                std::fs::write(&raw, &head[..n as usize])?;
+                let vars = crate::vm::firmware::efivars_path(disk0);
+                crate::api::vm_import::qemu_img(&[
+                    "convert", "-f", "raw", "-O", "qcow2",
+                    &raw.to_string_lossy(), &vars.to_string_lossy(),
+                ])
+                .await?;
+                let _ = std::fs::remove_file(&raw);
+            }
+            (n, t) => warnings.push(format!(
+                "the UEFI variable store ({} bytes) does not match this host's OVMF layout ({} bytes): a fresh store is used; the firmware finds the boot disk itself (custom boot entries and enrolled keys must be added again)",
+                n.map(|x| x.to_string()).unwrap_or_else(|| "unreadable".into()),
+                t.map(|x| x.to_string()).unwrap_or_else(|| "?".into())
+            )),
+        }
+    }
+    if let Some((_, r, label)) = side.iter().find(|v| v.0 == VolRole::Tpm) {
+        let r = r
+            .clone()
+            .ok_or_else(|| ApiError::BadRequest(format!("tpmstate0: volume {label} not found")))?;
+        let raw = read_small(src, &r, 64 << 20).await?;
+        let to = crate::vm::firmware::tpm_state_dir(disk0);
+        let staged = crate::vm::sidecar::anchor(disk0).with_extension("tpm.import.raw");
+        undo.files.push(staged.clone());
+        std::fs::write(&staged, &raw)?;
+        let (s2, t2) = (staged.clone(), to.clone());
+        tokio::task::spawn_blocking(move || {
+            crate::vm::firmware::import_linear_tpm_volume(&s2, &t2)
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("TPM task: {e}")))?
+        .map_err(|e| ApiError::Internal(format!("TPM state not carried over: {e}")))?;
+        let _ = std::fs::remove_file(&staged);
+    }
+    if let Some((_, r, label)) = side.iter().find(|v| v.0 == VolRole::Cloudinit) {
+        match r {
+            Some(r) => {
+                let data = read_small(src, r, 64 << 20).await?;
+                let seed = crate::vm::qemu::cloudinit_seed(disk0);
+                std::fs::write(&seed, &data)?;
+            }
+            None => warnings.push(format!(
+                "the cloud-init drive {} was not found: the guest boots without its seed (create one with Horcrux cloud-init if the guest needs it again)",
+                label
+            )),
+        }
+    }
+    Ok(())
+}
+
 async fn import_vm(
     state: &Arc<AppState>,
     req: &ImportRequest,
@@ -1071,62 +1289,21 @@ async fn import_vm(
     // 5. UEFI variables, TPM state, cloud-init seed next to the first disk
     let disk0 = new_paths[0].clone();
     progress(93.0, "firmware variables, TPM state, cloud-init".into());
-    let secure = vm.hardware.secure_boot;
-    if let Some(v) = p.volumes.iter().find(|v| v.role == VolRole::Efivars) {
-        let r = resolved(v)?;
-        let head = read_small(src, &r, 8 << 20).await?;
-        let tpl_len = crate::vm::firmware::find_ovmf_for(secure)
-            .and_then(|o| std::fs::metadata(o.vars_template).ok())
-            .map(|m| m.len());
-        match (ovmf_vars_len(&head), tpl_len) {
-            (Some(n), Some(t)) if n == t && head.len() as u64 >= n => {
-                let raw = disk0.with_extension("efivars.import.raw");
-                undo.files.push(raw.clone());
-                std::fs::write(&raw, &head[..n as usize])?;
-                let vars = crate::vm::firmware::efivars_path(&disk0);
-                crate::api::vm_import::qemu_img(&[
-                    "convert", "-f", "raw", "-O", "qcow2",
-                    &raw.to_string_lossy(), &vars.to_string_lossy(),
-                ])
-                .await?;
-                let _ = std::fs::remove_file(&raw);
-            }
-            (n, t) => warnings.push(format!(
-                "the UEFI variable store ({} bytes) does not match this host's OVMF layout ({} bytes): a fresh store is used; the firmware finds the boot disk itself (custom boot entries and enrolled keys must be added again)",
-                n.map(|x| x.to_string()).unwrap_or_else(|| "unreadable".into()),
-                t.map(|x| x.to_string()).unwrap_or_else(|| "?".into())
-            )),
-        }
-    }
-    if let Some(v) = p.volumes.iter().find(|v| v.role == VolRole::Tpm) {
-        let r = resolved(v)?;
-        let raw = read_small(src, &r, 64 << 20).await?;
-        let to = crate::vm::firmware::tpm_state_dir(&disk0);
-        let staged = disk0.with_extension("tpm.import.raw");
-        undo.files.push(staged.clone());
-        std::fs::write(&staged, &raw)?;
-        let (s2, t2) = (staged.clone(), to.clone());
-        tokio::task::spawn_blocking(move || {
-            crate::vm::firmware::import_linear_tpm_volume(&s2, &t2)
-        })
-        .await
-        .map_err(|e| ApiError::Internal(format!("TPM task: {e}")))?
-        .map_err(|e| ApiError::Internal(format!("TPM state not carried over: {e}")))?;
-        let _ = std::fs::remove_file(&staged);
-    }
-    if let Some(v) = p.volumes.iter().find(|v| v.role == VolRole::Cloudinit) {
-        match &v.resolved {
-            Some(r) => {
-                let data = read_small(src, r, 64 << 20).await?;
-                let seed = crate::vm::qemu::cloudinit_seed(&disk0);
-                std::fs::write(&seed, &data)?;
-            }
-            None => warnings.push(format!(
-                "the cloud-init drive {} was not found: the guest boots without its seed (create one with Horcrux cloud-init if the guest needs it again)",
-                v.source
-            )),
-        }
-    }
+    let side: Vec<(VolRole, Option<Resolved>, String)> = p
+        .volumes
+        .iter()
+        .filter(|v| matches!(v.role, VolRole::Efivars | VolRole::Tpm | VolRole::Cloudinit))
+        .map(|v| (v.role, v.resolved.clone(), v.source.clone()))
+        .collect();
+    carry_sidecars(
+        src,
+        &side,
+        &disk0,
+        vm.hardware.secure_boot,
+        undo,
+        &mut warnings,
+    )
+    .await?;
 
     // 6. verify the stored VM
     let got = state.vm_manager.get_vm(&vm.id).await?;
@@ -1496,6 +1673,357 @@ async fn import_ct(
         reason: "lxc-not-built",
         message: "this Horcrux build has no LXC support".into(),
         hint: "Containers are imported as LXC containers: build Horcrux with USE=lxc".into(),
+    })
+}
+
+// ------------------------------------------------------------------ adopt in place
+
+fn not_carried(p: &GuestPlan) -> Vec<String> {
+    p.rows
+        .iter()
+        .filter(|r| r.carry == conf::Carry::NotCarried)
+        .map(|r| format!("{}: {}", r.key, r.note))
+        .collect()
+}
+
+/// The adopt volumes of `p` under its final id (refused on any problem).
+async fn adopt_volumes(
+    a: &adopt::AdoptSource,
+    p: &GuestPlan,
+) -> Result<Vec<adopt::AdoptVol>, ApiError> {
+    let cfg = adopt::storage_cfg(a).await;
+    let (a2, p2) = (a.clone(), p.clone());
+    let (vols, blockers) = tokio::task::spawn_blocking(move || {
+        let mut b = Vec::new();
+        let v = adopt::volumes(&a2, &cfg, &p2, &p2.target_id, &mut b);
+        (v, b)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("adopt task: {e}")))?;
+    if !blockers.is_empty() {
+        return Err(ApiError::Conflict(format!(
+            "not adopted: {}. Nothing was changed",
+            blockers.join("; ")
+        )));
+    }
+    adopt::ensure_parent(a).await?;
+    Ok(vols)
+}
+
+fn write_adopt_record(
+    state: &AppState,
+    id: &str,
+    vmid: u32,
+    a: &adopt::AdoptSource,
+    vols: &[adopt::AdoptVol],
+    t0: std::time::Instant,
+) {
+    let rec = adopt::AdoptRecord {
+        id: id.to_string(),
+        vmid,
+        snapshot: a.snapshot.clone(),
+        volumes: vols.iter().filter(|v| v.kept).cloned().collect(),
+        apply_secs: t0.elapsed().as_secs_f64(),
+    };
+    let dir = record_dir(state);
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(
+        dir.join(format!("{id}.adopt.json")),
+        serde_json::to_vec_pretty(&rec).unwrap_or_default(),
+    );
+}
+
+fn adopt_warning(a: &adopt::AdoptSource) -> String {
+    match &a.snapshot {
+        Some(s) => format!("adopted in place from snapshot {s}: the Proxmox volumes are untouched, so booting Proxmox again brings the guest back as it was at the snapshot (the rollback). Never run it on both"),
+        None => "adopted in place WITHOUT a snapshot: the guest now uses (and writes) the Proxmox volumes themselves, renamed under Horcrux; booting Proxmox again does not find them".into(),
+    }
+}
+
+async fn save_power(
+    state: &Arc<AppState>,
+    kind: crate::api::guest_state::GuestKind,
+    id: &str,
+    p: &GuestPlan,
+) -> Result<(), ApiError> {
+    let ov = crate::api::guest_state::GuestOverride {
+        start_action: Some(if p.autostart.onboot {
+            crate::api::guest_state::StartAction::Always
+        } else {
+            crate::api::guest_state::StartAction::Nothing
+        }),
+        start_order: p.autostart.order,
+        start_delay_secs: p.autostart.up_delay_secs,
+        ..Default::default()
+    };
+    crate::api::guest_state::policy::save_override(state, kind, id, &ov)
+        .await
+        .map_err(|e| ApiError::Internal(format!("start policy: {e}")))
+}
+
+/// Adopt a VM: its disks are clones of the Proxmox zvols (raw devices),
+/// its firmware/TPM/cloud-init files are read from temporary clones.
+async fn adopt_vm(
+    state: &Arc<AppState>,
+    a: &adopt::AdoptSource,
+    g: &source::Guest,
+    p: &GuestPlan,
+    undo: &mut Undo,
+    progress: &(dyn Fn(f32, String) + Sync),
+) -> Result<Vec<String>, ApiError> {
+    let t0 = std::time::Instant::now();
+    let mut warnings = not_carried(p);
+    let mut cfg =
+        p.vm.clone()
+            .ok_or_else(|| ApiError::Internal("no VM in the plan".into()))?;
+    cfg.id = p.target_id.clone();
+    if cfg.hardware.firmware == horcrux_common::Firmware::Ovmf
+        && crate::vm::firmware::find_ovmf_for(cfg.hardware.secure_boot).is_none()
+    {
+        return Err(ApiError::BadRequest(if cfg.hardware.secure_boot {
+            crate::vm::firmware::ovmf_secboot_missing().to_string()
+        } else {
+            crate::vm::firmware::ovmf_missing().to_string()
+        }));
+    }
+    if cfg.hardware.tpm && !crate::api::vm_hw::in_path("swtpm") {
+        return Err(ApiError::BadRequest(
+            "the VM has a vTPM but swtpm is not installed on this host (app-crypt/swtpm)".into(),
+        ));
+    }
+    cfg.hardware
+        .validate_for(&cfg.architecture, cfg.cpus)
+        .map_err(ApiError::BadRequest)?;
+    crate::api::vm_hw::check_host_hardware(state, &cfg.hardware).await?;
+    let vols = adopt_volumes(a, p).await?;
+    let by_key = |k: &str| vols.iter().find(|v| v.key == k);
+
+    // 1. the disks: clones of the zvols, used as they are (raw)
+    progress(5.0, "cloning the disks".into());
+    let mut disk_vols: Vec<&conf::PlanVol> = p
+        .volumes
+        .iter()
+        .filter(|v| v.role == VolRole::Disk)
+        .collect();
+    disk_vols.sort_by_key(|v| v.index);
+    if disk_vols.len() != cfg.disks.len() {
+        return Err(ApiError::Internal(
+            "the plan's disks do not match the VM".into(),
+        ));
+    }
+    for (i, v) in disk_vols.iter().enumerate() {
+        let av = by_key(&v.key).ok_or_else(|| {
+            ApiError::BadRequest(format!("{}: volume {} not found", v.key, v.source))
+        })?;
+        if av.zfs_type != "volume" {
+            return Err(ApiError::BadRequest(format!(
+                "{}: {} is not a ZFS volume",
+                v.key, av.source_dataset
+            )));
+        }
+        let dev = adopt::materialize(a, av, &cfg.id, &mut undo.zfs).await?;
+        let bytes = adopt::zfs_props(&av.dataset, &["volsize"])
+            .and_then(|m| m.get("volsize").and_then(|x| x.parse::<u64>().ok()))
+            .unwrap_or(0);
+        let d = &mut cfg.disks[i];
+        d.path = dev;
+        d.storage = None;
+        if bytes > 0 {
+            d.size_gb = bytes.div_ceil(1 << 30).max(1);
+        }
+    }
+    cfg.disk_size = cfg.disks[0].size_gb;
+
+    // 2. the VM, registered on the existing devices (nothing created)
+    progress(40.0, "defining the VM".into());
+    let vm = state.vm_manager.import_vm(cfg).await?;
+    undo.vm = Some(vm.id.clone());
+    let disk0 = PathBuf::from(&vm.disks[0].path);
+
+    // 3. UEFI variables, TPM state, cloud-init seed (sidecar dir)
+    progress(60.0, "firmware variables, TPM state, cloud-init".into());
+    let mut side: Vec<(VolRole, Option<Resolved>, String)> = Vec::new();
+    let mut temps: Vec<&adopt::AdoptVol> = Vec::new();
+    for v in p
+        .volumes
+        .iter()
+        .filter(|v| matches!(v.role, VolRole::Efivars | VolRole::Tpm | VolRole::Cloudinit))
+    {
+        let r = match by_key(&v.key) {
+            Some(av) if av.from_snapshot.is_some() => {
+                let dev = adopt::materialize(a, av, &vm.id, &mut undo.zfs).await?;
+                temps.push(av);
+                Some(dev)
+            }
+            // no snapshot: read the source volume, never rename it away
+            Some(av) => Some(format!("/dev/zvol/{}", av.source_dataset)),
+            None => None,
+        };
+        side.push((
+            v.role,
+            r.map(|path| Resolved {
+                path,
+                kind: VolKind::Block,
+                format: "raw".into(),
+                size: None,
+            }),
+            v.source.clone(),
+        ));
+    }
+    let src = Source::Adopt(a.clone());
+    let carried = carry_sidecars(
+        &src,
+        &side,
+        &disk0,
+        vm.hardware.secure_boot,
+        undo,
+        &mut warnings,
+    )
+    .await;
+    for t in temps {
+        adopt::drop_temp(t, &mut undo.zfs).await;
+    }
+    carried?;
+
+    // 4. verify, start policy, record
+    let got = state.vm_manager.get_vm(&vm.id).await?;
+    {
+        use std::os::unix::fs::FileTypeExt;
+        let bad: Vec<&str> = got
+            .disks
+            .iter()
+            .filter(|d| !std::fs::metadata(&d.path).is_ok_and(|m| m.file_type().is_block_device()))
+            .map(|d| d.path.as_str())
+            .collect();
+        if !bad.is_empty()
+            || got.hardware.nets.len() != p.vm.as_ref().map(|v| v.hardware.nets.len()).unwrap_or(0)
+        {
+            return Err(ApiError::Internal(format!(
+                "the stored VM does not match the source (disks that are no device: {})",
+                bad.join(", ")
+            )));
+        }
+    }
+    save_power(state, crate::api::guest_state::GuestKind::Vm, &vm.id, p).await?;
+    write_adopt_record(state, &vm.id, g.vmid, a, &vols, t0);
+    warnings.push(adopt_warning(a));
+    undo.vm = None;
+    undo.files.clear();
+    let _ = std::mem::take(&mut undo.zfs);
+    tracing::info!(
+        "VM {}: adopted in place from Proxmox guest {} in {:.2} s",
+        vm.id,
+        p.vmid,
+        t0.elapsed().as_secs_f64()
+    );
+    Ok(warnings)
+}
+
+/// Adopt a container: its rootfs and managed mount points are clones of
+/// the Proxmox subvolumes, mounted in place (owners untouched).
+#[cfg(feature = "lxc")]
+async fn adopt_ct(
+    state: &Arc<AppState>,
+    a: &adopt::AdoptSource,
+    g: &source::Guest,
+    p: &GuestPlan,
+    undo: &mut Undo,
+    progress: &(dyn Fn(f32, String) + Sync),
+) -> Result<Vec<String>, ApiError> {
+    use crate::container::lxc::RootfsSource;
+    let t0 = std::time::Instant::now();
+    let mut warnings = not_carried(p);
+    let mut cfg =
+        p.ct.clone()
+            .ok_or_else(|| ApiError::Internal("no container in the plan".into()))?;
+    cfg.id = p.target_id.clone();
+    cfg.name = p.target_id.clone();
+    let o = cfg.lxc.clone().unwrap_or_default();
+    let vols = adopt_volumes(a, p).await?;
+    let lxc = state.container_manager.lxc();
+    let lxc_dir = lxc.lxc_path().to_path_buf();
+    std::fs::create_dir_all(&lxc_dir)?;
+
+    progress(5.0, "cloning the root file system".into());
+    let root = vols
+        .iter()
+        .find(|v| v.role == VolRole::Rootfs)
+        .ok_or_else(|| ApiError::BadRequest("the container's rootfs was not found".into()))?;
+    if root.zfs_type != "filesystem" {
+        return Err(ApiError::BadRequest(format!(
+            "rootfs: {} is not a ZFS file system (a raw rootfs image is imported with the directory source)",
+            root.source_dataset
+        )));
+    }
+    let ds = adopt::materialize(a, root, &cfg.id, &mut undo.zfs).await?;
+    let created = lxc
+        .create_container_from(&cfg, RootfsSource::Zfs { dataset: ds })
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("creating the container: {e}")))?;
+    let registered = state
+        .container_manager
+        .register_existing(created.to_config())
+        .await
+        .map_err(|e| ApiError::Internal(format!("registering the container: {e}")))?;
+    undo.ct = Some(registered.id.clone());
+
+    // managed mount points: clones mounted where the container expects them
+    let ct_dir = lxc_dir.join(&cfg.name);
+    for v in p.volumes.iter().filter(|v| v.role == VolRole::Mount) {
+        let (Some(i), Some(av)) = (v.index, vols.iter().find(|x| x.key == v.key)) else {
+            return Err(ApiError::BadRequest(format!(
+                "{}: volume {} not found",
+                v.key, v.source
+            )));
+        };
+        let Some(m) = o.mounts.get(i) else { continue };
+        progress(50.0, format!("cloning {} ({})", v.key, v.source));
+        let mds = adopt::materialize(a, av, &cfg.id, &mut undo.zfs).await?;
+        let dst = crate::container::lxc_config::mount_source(&ct_dir, i, m);
+        crate::container::lxc::zfs_mount_at(&mds, &dst)
+            .await
+            .map_err(|e| ApiError::Internal(format!("{}: {e}", v.key)))?;
+    }
+    for m in &o.mounts {
+        if let Some(s) = &m.source {
+            if !Path::new(s).is_dir() {
+                warnings.push(format!("bind mount source {s} does not exist on this host yet: create or restore it before starting the container"));
+            }
+        }
+    }
+    save_power(
+        state,
+        crate::api::guest_state::GuestKind::Container,
+        &registered.id,
+        p,
+    )
+    .await?;
+    write_adopt_record(state, &registered.id, g.vmid, a, &vols, t0);
+    warnings.push(adopt_warning(a));
+    undo.ct = None;
+    let _ = std::mem::take(&mut undo.zfs);
+    tracing::info!(
+        "container {}: adopted in place from Proxmox guest {} in {:.2} s",
+        registered.id,
+        p.vmid,
+        t0.elapsed().as_secs_f64()
+    );
+    Ok(warnings)
+}
+
+#[cfg(not(feature = "lxc"))]
+async fn adopt_ct(
+    _state: &Arc<AppState>,
+    _a: &adopt::AdoptSource,
+    _g: &source::Guest,
+    _p: &GuestPlan,
+    _undo: &mut Undo,
+    _progress: &(dyn Fn(f32, String) + Sync),
+) -> Result<Vec<String>, ApiError> {
+    Err(ApiError::NotAvailable {
+        reason: "lxc-not-built",
+        message: "this Horcrux build has no LXC support".into(),
+        hint: "Containers are adopted as LXC containers: build Horcrux with USE=lxc".into(),
     })
 }
 

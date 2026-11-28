@@ -8,7 +8,7 @@ use serde_json::{json, Map, Value};
 
 #[derive(Subcommand)]
 pub enum ImportCommands {
-    /// Proxmox VE VMs and containers (directory, SSH node or vzdump archive)
+    /// Proxmox VE VMs and containers (directory, SSH node, vzdump archive, or adopt in place)
     Proxmox {
         #[command(subcommand)]
         command: ProxmoxCommands,
@@ -18,10 +18,10 @@ pub enum ImportCommands {
 #[derive(Args, Clone)]
 pub struct SourceArgs {
     /// Directory with the guest configs (qemu-server/, lxc/ or a copy of /etc/pve) and the volumes
-    #[arg(long, conflicts_with_all = ["ssh", "vzdump"])]
+    #[arg(long, conflicts_with_all = ["ssh", "vzdump", "adopt"])]
     pub dir: Option<String>,
     /// A Proxmox node over SSH ([user@]host), read only
-    #[arg(long, conflicts_with = "vzdump")]
+    #[arg(long, conflicts_with_all = ["vzdump", "adopt"])]
     pub ssh: Option<String>,
     #[arg(long, requires = "ssh")]
     pub ssh_port: Option<u16>,
@@ -29,8 +29,28 @@ pub struct SourceArgs {
     #[arg(long, requires = "ssh")]
     pub identity: Option<String>,
     /// A container vzdump archive
-    #[arg(long)]
+    #[arg(long, conflicts_with = "adopt")]
     pub vzdump: Option<String>,
+    /// Adopt in place: the Proxmox root file system on this host's ZFS pool
+    /// (mounted read only); its volumes become ZFS clones, nothing is copied
+    #[arg(long, value_name = "PVE_ROOT")]
+    pub adopt: Option<String>,
+    /// Adopt: the snapshot the volumes are cloned from (name after @)
+    #[arg(long, requires = "adopt")]
+    pub snapshot: Option<String>,
+    /// Adopt: dataset the clones go under (same pool)
+    #[arg(long, requires = "adopt", value_name = "DATASET")]
+    pub target: Option<String>,
+    /// Adopt without a snapshot: rename the Proxmox datasets into place
+    /// (the guests then write Proxmox's data; booting Proxmox again is no rollback)
+    #[arg(long, requires = "adopt")]
+    pub allow_no_snapshot: bool,
+    /// Adopt: the Proxmox node (default: the root's hostname or the only node)
+    #[arg(long, requires = "adopt")]
+    pub node: Option<String>,
+    /// Saved `qm showcmd` output (file or directory) for the QEMU diff
+    #[arg(long, requires = "adopt")]
+    pub showcmd: Option<String>,
     /// Where a Proxmox storage's volumes are now: STORAGE=zfs:DATASET or STORAGE=dir:PATH (repeat)
     #[arg(long = "storage-map", value_name = "ID=LOC")]
     pub storage_map: Vec<String>,
@@ -68,6 +88,9 @@ pub enum ProxmoxCommands {
         /// Storage pool for VM disks (default: the VM storage directory)
         #[arg(long)]
         storage: Option<String>,
+        /// Start the guests the source started at boot, in its start order
+        #[arg(long)]
+        start_onboot: bool,
         /// Return after starting the job
         #[arg(long)]
         no_wait: bool,
@@ -104,8 +127,30 @@ pub fn body(s: &SourceArgs) -> Result<Value> {
         json!({"type": "ssh", "host": h, "port": s.ssh_port, "identity": s.identity})
     } else if let Some(f) = &s.vzdump {
         json!({"type": "vzdump", "path": f})
+    } else if let Some(root) = &s.adopt {
+        let Some(target) = &s.target else {
+            bail!("--adopt needs --target DATASET (where the clones go, e.g. tank/horcrux/guests)");
+        };
+        if s.snapshot.is_none() && !s.allow_no_snapshot {
+            bail!("--adopt needs --snapshot NAME (zfs snapshot -r <pool>/data@NAME once the guests are stopped), or --allow-no-snapshot");
+        }
+        let mut m = Map::new();
+        for (id, loc) in pairs(&s.storage_map, "--storage-map")? {
+            let ds = loc.strip_prefix("zfs:").unwrap_or(&loc).to_string();
+            m.insert(id, Value::String(ds));
+        }
+        json!({
+            "type": "adopt",
+            "pve_root": root,
+            "snapshot": s.snapshot,
+            "target_parent_dataset": target,
+            "storage_map": m,
+            "allow_no_snapshot": s.allow_no_snapshot,
+            "node": s.node,
+            "showcmd": s.showcmd,
+        })
     } else {
-        bail!("give a source: --dir, --ssh or --vzdump");
+        bail!("give a source: --dir, --ssh, --vzdump or --adopt");
     };
     let to_map = |v: Vec<(String, String)>| -> Map<String, Value> {
         v.into_iter().map(|(a, b)| (a, Value::String(b))).collect()
@@ -144,6 +189,22 @@ fn print_plan(p: &Value, details: bool) {
         for b in g["blockers"].as_array().cloned().unwrap_or_default() {
             println!("    blocker: {}", b.as_str().unwrap_or(""));
         }
+        for v in g["adopt"].as_array().cloned().unwrap_or_default() {
+            println!(
+                "    adopt {:<10} {} -> {}{}",
+                v["key"].as_str().unwrap_or(""),
+                v["from_snapshot"]
+                    .as_str()
+                    .or(v["source_dataset"].as_str())
+                    .unwrap_or(""),
+                v["dataset"].as_str().unwrap_or(""),
+                if v["kept"].as_bool() == Some(true) {
+                    ""
+                } else {
+                    " (read, then dropped)"
+                }
+            );
+        }
         if details {
             for r in &rows {
                 println!(
@@ -179,7 +240,7 @@ fn print_job(j: &Value) {
     );
     for g in j["guests"].as_array().cloned().unwrap_or_default() {
         println!(
-            "  {} {}: {} {}",
+            "  {} {}: {} {}{}{}",
             g["kind"].as_str().unwrap_or(""),
             g["vmid"],
             g["state"].as_str().unwrap_or(""),
@@ -187,6 +248,14 @@ fn print_job(j: &Value) {
                 .as_str()
                 .map(|i| format!("-> {i}"))
                 .or_else(|| g["error"].as_str().map(String::from))
+                .unwrap_or_default(),
+            g["secs"]
+                .as_f64()
+                .map(|s| format!(" ({s:.1} s)"))
+                .unwrap_or_default(),
+            g["started_after_secs"]
+                .as_f64()
+                .map(|s| format!(", started at +{s:.1} s"))
                 .unwrap_or_default()
         );
         for w in g["warnings"].as_array().cloned().unwrap_or_default() {
@@ -221,6 +290,7 @@ pub async fn handle_import_command(
             guest,
             id,
             storage,
+            start_onboot,
             no_wait,
         } => {
             let mut b = body(&source)?;
@@ -235,6 +305,7 @@ pub async fn handle_import_command(
             if let Some(s) = storage {
                 b["storage"] = json!(s);
             }
+            b["start_onboot"] = json!(start_onboot);
             let started: Value = api.post("/api/import/proxmox", &b).await?;
             let job = started["job"].as_str().unwrap_or_default().to_string();
             output::print_info(&format!("import job {job} started"));
@@ -281,6 +352,12 @@ mod tests {
             ssh_port: None,
             identity: None,
             vzdump: None,
+            adopt: None,
+            snapshot: None,
+            target: None,
+            allow_no_snapshot: false,
+            node: None,
+            showcmd: None,
             storage_map: vec![
                 "local-zfs=zfs:tank/pve/data".into(),
                 "local=dir:/tank/vz".into(),
@@ -301,7 +378,39 @@ mod tests {
             ..s.clone()
         };
         assert!(body(&bad).is_err());
-        let none = SourceArgs { dir: None, ..s };
+        let none = SourceArgs {
+            dir: None,
+            ..s.clone()
+        };
         assert!(body(&none).is_err());
+        let adopt = SourceArgs {
+            dir: None,
+            adopt: Some("/mnt/pve-root".into()),
+            snapshot: Some("hx-cutover".into()),
+            target: Some("tank/horcrux".into()),
+            storage_map: vec!["local-zfs=zfs:tank/data".into()],
+            ..s.clone()
+        };
+        let b = body(&adopt).unwrap();
+        assert_eq!(b["source"]["type"], "adopt");
+        assert_eq!(b["source"]["pve_root"], "/mnt/pve-root");
+        assert_eq!(b["source"]["snapshot"], "hx-cutover");
+        assert_eq!(b["source"]["target_parent_dataset"], "tank/horcrux");
+        assert_eq!(b["source"]["storage_map"]["local-zfs"], "tank/data");
+        let nosnap = SourceArgs {
+            snapshot: None,
+            ..adopt.clone()
+        };
+        assert!(body(&nosnap).is_err());
+        let waived = SourceArgs {
+            allow_no_snapshot: true,
+            ..nosnap
+        };
+        assert_eq!(body(&waived).unwrap()["source"]["allow_no_snapshot"], true);
+        let notarget = SourceArgs {
+            target: None,
+            ..adopt
+        };
+        assert!(body(&notarget).is_err());
     }
 }

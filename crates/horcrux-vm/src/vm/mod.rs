@@ -24,6 +24,7 @@ pub mod qemu;
 pub mod remote_play;
 pub mod replication;
 pub mod savestate;
+pub mod sidecar;
 pub mod snapshot;
 pub mod snapshot_quota;
 pub mod snapshot_scheduler;

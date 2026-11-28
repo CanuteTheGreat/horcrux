@@ -17,11 +17,11 @@ const HOOK_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Host end of extra serial port / virtiofsd socket `i`.
 pub fn sock(disk: &Path, kind: &str, i: usize) -> PathBuf {
-    disk.with_extension(format!("{kind}{i}.sock"))
+    super::sidecar::anchor(disk).with_extension(format!("{kind}{i}.sock"))
 }
 
 fn virtiofsd_pidfile(disk: &Path, i: usize) -> PathBuf {
-    disk.with_extension(format!("virtiofsd{i}.pid"))
+    super::sidecar::anchor(disk).with_extension(format!("virtiofsd{i}.pid"))
 }
 
 /// Backing file of an ivshmem device (shared by VMs with the same name).

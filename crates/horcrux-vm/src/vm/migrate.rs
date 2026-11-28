@@ -81,8 +81,7 @@ impl VmManager {
             // sockets. SIGKILL skips that cleanup; after a completed
             // migration the source has nothing left to flush (its block
             // devices were inactivated and the target owns the disks).
-            let aside_tpm_pid = vm
-                .disk_path
+            let aside_tpm_pid = super::sidecar::anchor(&vm.disk_path)
                 .with_extension(format!("tpm.pid.{MIG_SRC_SUFFIX}"));
             kill_hard(read_pid(&aside_tpm_pid).await, "swtpm").await;
             kill_hard(read_pid(Path::new(&qemu::pidfile(id))).await, "qemu").await;
@@ -98,7 +97,10 @@ impl VmManager {
         } else {
             super::display::DisplayRuntime::remove(&vm.disk_path).await;
             for ext in ["serial.log", "display.json", "hold.json", "cidata.iso"] {
-                let _ = tokio::fs::remove_file(vm.disk_path.with_extension(ext)).await;
+                let _ = tokio::fs::remove_file(
+                    super::sidecar::anchor(&vm.disk_path).with_extension(ext),
+                )
+                .await;
             }
             super::firmware::remove_state(&vm.disk_path).await;
         }
@@ -134,7 +136,7 @@ pub const MIG_SRC_SUFFIX: &str = "mig-src";
 pub fn renamed_runtime_files(disk0: &Path) -> Vec<PathBuf> {
     RUNTIME_EXTS
         .iter()
-        .map(|e| disk0.with_extension(format!("{e}.{MIG_SRC_SUFFIX}")))
+        .map(|e| super::sidecar::anchor(disk0).with_extension(format!("{e}.{MIG_SRC_SUFFIX}")))
         .collect()
 }
 
@@ -144,8 +146,9 @@ pub fn renamed_runtime_files(disk0: &Path) -> Vec<PathBuf> {
 /// after a rollback.
 pub async fn set_runtime_files_aside(disk0: &Path, restore: bool) {
     for e in RUNTIME_EXTS {
-        let std_path = disk0.with_extension(e);
-        let aside = disk0.with_extension(format!("{e}.{MIG_SRC_SUFFIX}"));
+        let a = super::sidecar::anchor(disk0);
+        let std_path = a.with_extension(e);
+        let aside = a.with_extension(format!("{e}.{MIG_SRC_SUFFIX}"));
         let (from, to) = if restore {
             (aside, std_path)
         } else {

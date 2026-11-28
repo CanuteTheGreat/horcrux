@@ -311,6 +311,9 @@ pub struct GuestPlan {
     pub blockers: Vec<String>,
     /// The guest's `protection` flag.
     pub protection: bool,
+    /// Adopt in place: the volumes taken over as ZFS clones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adopt: Vec<super::adopt::AdoptVol>,
 }
 
 impl GuestPlan {
@@ -438,6 +441,7 @@ pub fn plan_vm(vmid: u32, conf: &PveConf, resolve: Resolver, host: &HostCtx) -> 
         rows: vec![],
         blockers: vec![],
         protection: false,
+        adopt: Vec::new(),
     };
     let mut hw = VmHardware::default();
     let mut adv = VmAdvanced::default();
@@ -1172,6 +1176,7 @@ pub fn plan_ct(vmid: u32, conf: &PveConf, resolve: Resolver, host: &HostCtx) -> 
         rows: vec![],
         blockers: vec![],
         protection: false,
+        adopt: Vec::new(),
     };
     let mut o = LxcOptions {
         // Proxmox's default when the key is absent is privileged.

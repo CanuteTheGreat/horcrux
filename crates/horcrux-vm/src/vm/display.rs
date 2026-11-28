@@ -68,29 +68,29 @@ pub struct DisplayRuntime {
 
 impl DisplayRuntime {
     pub fn state_path(disk: &Path) -> PathBuf {
-        disk.with_extension("display.json")
+        super::sidecar::anchor(disk).with_extension("display.json")
     }
 
     pub fn serial_socket(disk: &Path) -> PathBuf {
-        disk.with_extension("serial.sock")
+        super::sidecar::anchor(disk).with_extension("serial.sock")
     }
 
     pub fn serial_log(disk: &Path) -> PathBuf {
-        disk.with_extension("serial.log")
+        super::sidecar::anchor(disk).with_extension("serial.log")
     }
 
     pub fn qmp_socket(disk: &Path) -> PathBuf {
-        disk.with_extension("qmp.sock")
+        super::sidecar::anchor(disk).with_extension("qmp.sock")
     }
 
     /// Host end of the Horcrux guest tools' virtio-serial port.
     pub fn guest_tools_socket_path(disk: &Path) -> PathBuf {
-        disk.with_extension("hxgt.sock")
+        super::sidecar::anchor(disk).with_extension("hxgt.sock")
     }
 
     /// Host end of the guest agent's virtio-serial channel.
     pub fn qga_socket(disk: &Path) -> PathBuf {
-        disk.with_extension("qga.sock")
+        super::sidecar::anchor(disk).with_extension("qga.sock")
     }
 
     /// Plan the consoles for a VM about to start (allocates free ports).

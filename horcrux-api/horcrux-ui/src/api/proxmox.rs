@@ -62,6 +62,25 @@ pub struct PveGuest {
     pub exists: bool,
     #[serde(default)]
     pub imported_as: Option<String>,
+    /// Adopt in place: the volumes taken over as ZFS clones.
+    #[serde(default)]
+    pub adopt: Vec<PveAdoptVol>,
+}
+
+/// One volume an adopt-in-place import takes over (a ZFS clone).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct PveAdoptVol {
+    pub key: String,
+    pub source_dataset: String,
+    #[serde(default)]
+    pub from_snapshot: Option<String>,
+    pub dataset: String,
+    #[serde(default)]
+    pub zfs_type: String,
+    #[serde(default)]
+    pub kept: bool,
+    #[serde(default)]
+    pub command: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -88,6 +107,10 @@ pub struct PveGuestResult {
     pub warnings: Vec<String>,
     #[serde(default)]
     pub link: Option<String>,
+    #[serde(default)]
+    pub secs: Option<f64>,
+    #[serde(default)]
+    pub started_after_secs: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -103,8 +126,14 @@ pub struct PveJob {
 /// The source form, as the API takes it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PveSourceForm {
-    /// `dir`, `ssh` or `vzdump`.
+    /// `dir`, `ssh`, `vzdump` or `adopt`.
     pub kind: String,
+    /// Adopt: snapshot name (after @), clone parent dataset, node, and
+    /// whether to rename without a snapshot.
+    pub snapshot: String,
+    pub target_dataset: String,
+    pub node: String,
+    pub allow_no_snapshot: bool,
     pub path: String,
     pub host: String,
     pub port: String,
@@ -137,6 +166,22 @@ impl PveSourceForm {
                 "identity": (!self.identity.trim().is_empty()).then(|| self.identity.trim().to_string()),
             }),
             "vzdump" => serde_json::json!({"type": "vzdump", "path": self.path.trim()}),
+            "adopt" => {
+                let opt = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
+                let m: BTreeMap<String, String> = lines(&self.storage_map)
+                    .into_iter()
+                    .map(|(k, v)| (k, v.strip_prefix("zfs:").unwrap_or(&v).to_string()))
+                    .collect();
+                serde_json::json!({
+                    "type": "adopt",
+                    "pve_root": self.path.trim(),
+                    "snapshot": opt(&self.snapshot),
+                    "target_parent_dataset": self.target_dataset.trim(),
+                    "storage_map": m,
+                    "allow_no_snapshot": self.allow_no_snapshot,
+                    "node": opt(&self.node),
+                })
+            }
             _ => {
                 let mut m = serde_json::Map::new();
                 for (k, v) in lines(&self.storage_map) {
@@ -177,8 +222,10 @@ pub async fn start_import(
     guests: &[u32],
     ids: &BTreeMap<u32, String>,
     storage: &str,
+    start_onboot: bool,
 ) -> Result<String, ApiError> {
     let mut b = form.body();
+    b["start_onboot"] = serde_json::json!(start_onboot);
     b["guests"] = serde_json::json!(guests);
     b["ids"] = serde_json::json!(ids);
     if !storage.trim().is_empty() {
@@ -223,5 +270,20 @@ mod tests {
         };
         assert_eq!(s.source()["port"], 2222);
         assert!(s.source()["identity"].is_null());
+        let a = PveSourceForm {
+            kind: "adopt".into(),
+            path: "/mnt/pve-root".into(),
+            snapshot: "hx-cutover".into(),
+            target_dataset: "tank/horcrux".into(),
+            storage_map: "local-zfs=zfs:tank/data".into(),
+            ..Default::default()
+        };
+        let src = a.source();
+        assert_eq!(src["type"], "adopt");
+        assert_eq!(src["pve_root"], "/mnt/pve-root");
+        assert_eq!(src["snapshot"], "hx-cutover");
+        assert_eq!(src["target_parent_dataset"], "tank/horcrux");
+        assert_eq!(src["storage_map"]["local-zfs"], "tank/data");
+        assert!(src["node"].is_null());
     }
 }

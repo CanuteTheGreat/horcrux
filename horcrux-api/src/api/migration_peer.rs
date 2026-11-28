@@ -251,7 +251,8 @@ async fn discard(state: &AppState, job: &str, inc: &Incoming) {
         // disk: serial log, console state, TPM state.
         let disk0 = PathBuf::from(&inc.vm.disks[0].path);
         for ext in ["serial.log", "display.json", "hold.json"] {
-            let _ = tokio::fs::remove_file(disk0.with_extension(ext)).await;
+            let _ = tokio::fs::remove_file(crate::vm::sidecar::anchor(&disk0).with_extension(ext))
+                .await;
         }
         crate::vm::firmware::remove_state(&disk0).await;
     }
