@@ -663,6 +663,50 @@ async fn upgrade_all(u: AuthExt) -> Res<TaskRef> {
     Ok(Json(t))
 }
 
+/// A `package-sync` task ended: tell the notification router what the node
+/// can upgrade now (or that the sync failed).
+pub fn sync_finished(ok: bool) {
+    use horcrux_common::notify::{emit, Event, EventKind, Severity};
+    tokio::spawn(async move {
+        let node = hostname::get()
+            .ok()
+            .map(|h| h.to_string_lossy().to_string());
+        if !ok {
+            let mut ev = Event::new(
+                EventKind::PackageUpdate,
+                Severity::Warning,
+                "Package database sync failed",
+            )
+            .subtype("sync_failed");
+            ev.node = node;
+            emit(ev);
+            return;
+        }
+        let Some(pm) = detect() else { return };
+        let pending = match pm {
+            Pm::Portage => pending_upgrades().len(),
+            Pm::Apt => parse_apt_upgradable(
+                &run("apt", &["list", "--upgradable"])
+                    .await
+                    .unwrap_or_default(),
+            )
+            .len(),
+        };
+        if pending == 0 {
+            return;
+        }
+        let mut ev = Event::new(
+            EventKind::PackageUpdate,
+            Severity::Info,
+            format!("{pending} package update(s) available"),
+        )
+        .subtype("updates_available")
+        .field("count", pending.to_string());
+        ev.node = node;
+        emit(ev);
+    });
+}
+
 /// Sync the package database, then record what is upgradable.
 async fn update_db(u: AuthExt) -> Res<TaskRef> {
     let pm = need_pm()?;

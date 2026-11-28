@@ -1310,7 +1310,7 @@ jobs:
     container: catthehacker/ubuntu:act-26.04
     needs: [check, plan]
     if: needs.plan.outputs.dup != 'true'
-    timeout-minutes: 60
+    timeout-minutes: 100  # UX crawl alone is ~31 min plus two builds; 60 hit the runner deadline with every check passing
     env:
       HX_RUN_TAG: ${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}   # run-scoped sibling container/network/volume names: exact cleanup, no collision with other jobs
     steps:
@@ -1473,6 +1473,13 @@ jobs:
         env:
           BASE_URL: https://localhost:8006
         run: /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/san_wizard_e2e.py
+      - name: Notification routing tree editor (build, drag between groups, save, reload, test panel)
+        env:
+          BASE_URL: https://localhost:8006
+          HORCRUX_CA_FILE: /tmp/horcrux-ca.pem
+        run: |
+          bash "$GITHUB_WORKSPACE/ci/mem-probe.sh" mark "Notification routing e2e"
+          /tmp/pw/bin/python horcrux-api/horcrux-ui/e2e/notification_matchers_e2e.py
 
       - name: UX crawl (every nav page, desktop + phone, light + dark; no JS errors, overlays, dead stat cards, private text)
         # ci/ux-qa/ux_crawl.py: the owner kept finding these by hand (docs/qa/owner-findings.md). Known, tracked

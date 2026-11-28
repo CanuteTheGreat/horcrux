@@ -4,6 +4,7 @@ pub mod dashboards;
 pub mod metric_panel;
 pub mod metric_servers;
 pub mod metrics_explorer;
+pub mod notification_routing;
 pub mod notifications;
 pub mod observability;
 

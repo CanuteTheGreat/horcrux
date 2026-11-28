@@ -14,6 +14,17 @@ pub async fn routes(state: &Arc<AppState>) -> anyhow::Result<Router<Arc<AppState
             .map_err(|e| anyhow::anyhow!("loading notification channels: {:?}", e))?,
     );
     state.alert_manager.attach_channel_store(channels.clone());
+    // Every other notification source (packages, HA, replication,
+    // certificates, security events) hands its event to the router here.
+    let sink_store = channels.clone();
+    horcrux_common::notify::set_sink(move |ev| {
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let store = sink_store.clone();
+            rt.spawn(async move {
+                store.dispatch_event(&ev).await;
+            });
+        }
+    });
     state
         .alert_manager
         .attach_webhooks(state.webhook_manager.clone());

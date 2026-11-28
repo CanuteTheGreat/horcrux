@@ -34,6 +34,7 @@ mod mdev_tests;
 mod metric_servers_tests;
 mod migration_tests;
 mod nightly_stress_tests;
+mod notification_matcher_tests;
 mod oidc_integration_tests;
 mod ovf_import_tests;
 mod persistence_restart_tests;
