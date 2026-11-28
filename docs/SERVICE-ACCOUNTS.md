@@ -27,7 +27,7 @@ Permissions, and the user's API keys page).
 
    ```sh
    curl -sk -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
-     -d '{"name":"HostJobs","privileges":["VM.Audit","VM.PowerMgmt","VM.Console","VM.Snapshot","Sys.Audit","Sys.Modify"]}' \
+     -d '{"name":"HostJobs","privileges":["VM.Audit","VM.PowerMgmt","VM.Console","VM.Snapshot","Sys.Audit","Sys.Modify","Datastore.Audit"]}' \
      https://node:8006/api/roles
    ```
 
@@ -75,6 +75,7 @@ first). Revoke everything for an account by disabling the user.
 | run a command in a VM (`guest-exec`) | `VM.Console` (`/vms/<id>`): console-equivalent |
 | snapshots | `VM.Snapshot` |
 | backup jobs (`/api/backup-jobs`, declarative `backup_jobs`) | `Sys.Audit` to read, `Sys.Modify` (`/`) to change |
+| backup storages (`GET /api/backup-storages`, needed to resolve a job's target) | `Datastore.Audit` (`/storage`) |
 | `horcrux apply` (declarative config) | the privileges of every kind it changes |
 
 Administrators can mint a key for any user; other users can mint keys only for
@@ -98,4 +99,4 @@ A key given this way wins over a stored login token.
 
 Calls made with a key are attributed to the service account in the access log
 and in the audit log (`GuestExec`, `VmRestarted`, backup and configuration
-events). Use one account per job so the trail says which job did what.
+events). Read them with `GET /api/audit/search?event_type=GuestExec&user=svc-hostjobs@pam` (there is no plain `GET /api/audit`; it needs `Sys.Audit`). Use one account per job so the trail says which job did what.
