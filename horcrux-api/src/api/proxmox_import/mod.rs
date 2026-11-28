@@ -1,8 +1,8 @@
 //! Import guests from Proxmox VE: VMs (qemu-server) become Horcrux VMs,
 //! containers (pct) become Horcrux LXC containers.
 //!
-//! * `POST /api/import/proxmox/plan {source, guests?, bridge_map?, io_devices?}`
-//!   - per guest the resulting Horcrux config, a carried / changed / not
+//! * `POST /api/import/proxmox/plan {source, guests?, bridge_map?, io_devices?}`:
+//!   per guest the resulting Horcrux config, a carried / changed / not
 //!   carried table of every Proxmox key, the volumes whose data moves, what
 //!   blocks the import, and for VMs the source's QEMU command line
 //!   (`qm showcmd`, when known) next to the one Horcrux will run. Read only.
@@ -312,7 +312,7 @@ pub fn horcrux_argv_in(
         _pid: None,
         hypervisor: vm.hypervisor.clone(),
         architecture: vm.architecture.clone(),
-        display: vm.display.clone(),
+        display: vm.display,
         hardware: vm.hardware.clone(),
         disks,
     };

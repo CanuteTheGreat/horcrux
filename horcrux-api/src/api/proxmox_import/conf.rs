@@ -365,12 +365,12 @@ fn tags(v: &str) -> Vec<String> {
 /// Proxmox MB/s (`rate=`, `mbps_rd=`) to the Horcrux unit.
 fn mb_s_to_bytes(v: &str) -> Option<u64> {
     let f: f64 = v.parse().ok()?;
-    (f > 0.0).then(|| (f * 1024.0 * 1024.0) as u64)
+    (f > 0.0).then_some((f * 1024.0 * 1024.0) as u64)
 }
 
 fn mb_s_to_mbit(v: &str) -> Option<u32> {
     let f: f64 = v.parse().ok()?;
-    (f > 0.0).then(|| (f * 8.0).ceil() as u32)
+    (f > 0.0).then_some((f * 8.0).ceil() as u32)
 }
 
 /// Full PCI address `0000:ad:00.0` from Proxmox's `ad:00.0` / `0000:ad:00.0`
@@ -709,7 +709,10 @@ pub fn plan_vm(vmid: u32, conf: &PveConf, resolve: Resolver, host: &HostCtx) -> 
             "args" => p.row(k, v, Carry::NotCarried, "", "raw QEMU arguments are never copied: add the equivalent setting by hand"),
             "hotplug" => p.row(k, v, Carry::Ignored, "", "Horcrux decides hot-plug per device"),
             "kvm" if !on(v) => p.row(k, v, Carry::NotCarried, "", "Horcrux always uses KVM when the host has it"),
-            "lock" => p.blockers.push(format!("the guest is locked in Proxmox ({v}): finish or clear that operation first")),
+            "lock" => {
+                p.blockers.push(format!("the guest is locked in Proxmox ({v}): finish or clear that operation first"));
+                p.row(k, v, Carry::NotCarried, "", "a Proxmox lock: blocks the import");
+            }
             "template" if on(v) => p.row(k, v, Carry::NotCarried, "", "Proxmox template: imported as a normal VM (convert it to a Horcrux template afterwards)"),
             k if bookkeeping(k) => p.row(k, v, Carry::Ignored, "", "Proxmox bookkeeping"),
             k if k.starts_with("ipconfig") || matches!(k, "ciuser" | "cipassword" | "nameserver" | "searchdomain" | "sshkeys" | "citype" | "ciupgrade" | "cicustom") => {
@@ -739,12 +742,19 @@ pub fn plan_vm(vmid: u32, conf: &PveConf, resolve: Resolver, host: &HostCtx) -> 
                 }
                 if !dev.contains(':') {
                     p.blockers.push(format!("{k} uses a Proxmox resource mapping ({dev}): give the host PCI address instead"));
+                    p.row(k, v, Carry::NotCarried, "", "resource mappings are Proxmox cluster objects: blocks the import");
                     continue;
                 }
                 let addr = pci_addr(&dev);
                 match host.pci.get(&addr) {
-                    None => p.blockers.push(format!("{k}: PCI device {addr} does not exist on this host: the guest would boot without it. Install the card, or remove {k} from the source config before importing")),
-                    Some(None) => p.blockers.push(format!("{k}: PCI device {addr} has no IOMMU group on this host (IOMMU off: enable VT-d/AMD-Vi and intel_iommu=on / amd_iommu=on), so it cannot be passed through")),
+                    None => {
+                        p.blockers.push(format!("{k}: PCI device {addr} does not exist on this host: the guest would boot without it. Install the card, or remove {k} from the source config before importing"));
+                        p.row(k, v, Carry::NotCarried, "", &format!("{addr} is not on this host: blocks the import"));
+                    }
+                    Some(None) => {
+                        p.blockers.push(format!("{k}: PCI device {addr} has no IOMMU group on this host (IOMMU off: enable VT-d/AMD-Vi and intel_iommu=on / amd_iommu=on), so it cannot be passed through"));
+                        p.row(k, v, Carry::NotCarried, "", &format!("{addr} has no IOMMU group here: blocks the import"));
+                    }
                     Some(Some(g)) => {
                         hw.hostpci.push(VmHostPci {
                             device: addr.clone(),
@@ -1013,6 +1023,13 @@ pub fn plan_vm(vmid: u32, conf: &PveConf, resolve: Resolver, host: &HostCtx) -> 
             .unwrap_or_else(|| src_bridge.clone());
         if bridge.is_empty() {
             p.blockers.push(format!("{key} has no bridge"));
+            p.row(
+                &key,
+                v,
+                Carry::NotCarried,
+                "",
+                "no bridge: blocks the import",
+            );
             continue;
         }
         if !host.bridges.contains(&bridge) {

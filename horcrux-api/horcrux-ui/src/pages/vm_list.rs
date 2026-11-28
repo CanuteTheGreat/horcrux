@@ -196,6 +196,7 @@ pub fn VmList() -> impl IntoView {
                 <A href="/vms/import-ovf" class="btn">"Import OVF / OVA"</A>
                 <A href="/vms/import-esxi" class="btn">"Import from ESXi"</A>
                 <A href="/vms/import-libvirt" class="btn">"Import from libvirt"</A>
+                <A href="/vms/import-proxmox" class="btn" id="vm-import-proxmox">"Import from Proxmox"</A>
             </div>
             <crate::pages::UnmanagedLibvirtBanner/>
             <nav class="filter-links" id="vm-state-filter" aria-label="Filter by state">

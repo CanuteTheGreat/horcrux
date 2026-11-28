@@ -679,6 +679,60 @@ mod tests {
     }
 
     #[test]
+    fn renders_host_devices_and_io_limits_by_device_path() {
+        let mk = |unprivileged: bool| LxcOptions {
+            unprivileged,
+            devices: vec!["/dev/null".into()],
+            io_limits: vec![
+                horcrux_common::lxc::LxcIoLimit {
+                    device: "/dev/hx-no-such-disk".into(),
+                    rbps: Some(1048576),
+                    ..Default::default()
+                },
+                horcrux_common::lxc::LxcIoLimit {
+                    device: "/dev/null".into(),
+                    wbps: Some(1),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let render = |o: &LxcOptions| {
+            render_config(&ConfigInput {
+                id: "ct-dev",
+                name: "ct2",
+                dir: Path::new("/var/lib/lxc/ct2"),
+                distro: "alpine",
+                arch: "amd64",
+                memory_mb: 0,
+                cpus: 1,
+                rootfs: RootfsKind::Dir,
+                opts: o,
+                guest_net_managed: false,
+                host: &host(),
+            })
+        };
+        let u = render(&mk(true));
+        assert!(
+            u.contains("lxc.mount.entry = /dev/null dev/null none bind,create=file,optional 0 0"),
+            "{u}"
+        );
+        // unprivileged: no device policy to extend
+        assert!(!u.contains("devices.allow"), "{u}");
+        // a missing device (or a char device) never gets made-up numbers
+        assert!(
+            u.contains("# io limit on /dev/hx-no-such-disk not applied"),
+            "{u}"
+        );
+        assert!(u.contains("# io limit on /dev/null not applied"), "{u}");
+        assert!(!u.contains("io.max"), "{u}");
+        let p = render(&mk(false));
+        assert!(p.contains("lxc.cgroup2.devices.allow = c 1:3 rwm"), "{p}");
+        assert_eq!(device_numbers("/dev/null"), Some(('c', 1, 3)));
+        assert_eq!(whole_disk_numbers("/dev/null"), None);
+    }
+
+    #[test]
     fn renders_a_full_config() {
         let opts = LxcOptions {
             hostname: Some("web".into()),

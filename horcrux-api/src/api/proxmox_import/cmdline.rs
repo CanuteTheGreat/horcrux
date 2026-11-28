@@ -305,11 +305,7 @@ pub fn facts(argv: &[String]) -> BTreeMap<String, String> {
                     .into(),
                 );
             }
-            "-serial" => {
-                if v != "none" {
-                    serial += 1;
-                }
-            }
+            "-serial" if v != "none" => serial += 1,
             _ => {}
         }
     }

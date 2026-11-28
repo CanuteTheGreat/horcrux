@@ -115,6 +115,11 @@ enum Commands {
         #[command(subcommand)]
         command: AuthCommands,
     },
+    /// Import guests from another hypervisor (Proxmox VE)
+    Import {
+        #[command(subcommand)]
+        command: commands::import::ImportCommands,
+    },
     /// Manage containers
     Container {
         #[command(subcommand)]
@@ -1227,6 +1232,9 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Power { command } => {
             commands::power::handle_power_command(command, &api_client, &cli.output).await?
+        }
+        Commands::Import { command } => {
+            commands::import::handle_import_command(command, &api_client, &cli.output).await?
         }
         Commands::Vm { command } => {
             commands::vm::handle_vm_command(command, &api_client, &cli.output).await?
