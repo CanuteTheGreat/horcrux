@@ -17,12 +17,14 @@ fn resolve_all(v: &PveVol) -> Result<Resolved, String> {
             path: format!("/rpool/data/{}", v.volume),
             kind: VolKind::Dir,
             format: "dir".into(),
+            size: None,
         })
     } else if v.storage.is_some() {
         Ok(Resolved {
             path: format!("/dev/zvol/rpool/data/{}", v.volume),
             kind: VolKind::Block,
             format: "raw".into(),
+            size: None,
         })
     } else {
         Err("host path".into())

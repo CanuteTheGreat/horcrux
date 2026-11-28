@@ -261,7 +261,68 @@ def main():
     st = wait_for("the refused job", lambda: (lambda s: s if s["state"] != "running" else None)(
         req("POST", "/import/proxmox/status", {"job": j["job"]})[1]), timeout=60)
     check(st["state"] == "failed" and "already imported" in (st["guests"][0]["error"] or ""), "re-import refused")
+    ssh_source(bridges)
     log("ALL OK")
+
+
+def ssh_source(bridges):
+    step("SSH source: a (stand-in) Proxmox node reached over ssh, read only")
+    sh("apt-get install -y -qq openssh-server openssh-client >/dev/null")
+    sh("mkdir -p /run/sshd /root/.ssh && ssh-keygen -A >/dev/null && "
+       "rm -f /root/.ssh/id_hx* && ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_hx && "
+       "cat /root/.ssh/id_hx.pub >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys")
+    sh("/usr/sbin/sshd -p 2222 -o PermitRootLogin=prohibit-password -o ListenAddress=127.0.0.1")
+    # Proxmox's own tools on the node: configs in /etc/pve, `pvesm path`
+    sh("mkdir -p /etc/pve/qemu-server /etc/pve/lxc")
+    with open("/usr/local/bin/pvesm", "w") as f:
+        f.write(f"""#!/bin/sh
+[ "$1" = path ] || exit 2
+case "$2" in
+  local-img:*) echo "{STORE}/images/${{2#local-img:}}";;
+  local-zfs:*) echo "{ZFS}/${{2#local-zfs:}}";;
+  *) exit 1;;
+esac
+""")
+    sh("chmod 755 /usr/local/bin/pvesm")
+    vm = open(f"{SRC}/qemu-server/301.conf").read().split("\n[")[0]
+    vm = (vm.replace("name: pve-e2e-vm", "name: pve-ssh-vm").replace(VM_MACS[0].upper(), "BC:24:11:AA:01:01")
+          .replace(VM_MACS[1].upper(), "BC:24:11:AA:01:02").replace(UUID, "2f3c7a52-3e0b-4c43-9d55-0b0d2e7c8a12")
+          .replace(GENID, "8a5f2d0e-81c4-4b0b-a1f6-52c1e4d3b202"))
+    open("/etc/pve/qemu-server/303.conf", "w").write(vm)
+    ct = open(f"{SRC}/lxc/302.conf").read()
+    ct = (ct.replace("hostname: pve-e2e-ct", "hostname: pve-ssh-ct").replace(CT_MAC.upper(), "BC:24:11:AA:01:03")
+          .replace("10.77.0.60/24", "10.77.0.62/24"))
+    open("/etc/pve/lxc/304.conf", "w").write(ct)
+    source = {"type": "ssh", "host": "root@127.0.0.1", "port": 2222, "identity": "/root/.ssh/id_hx"}
+
+    # an unknown host key is refused with what to do, never accepted blindly
+    _, e = req("POST", "/import/proxmox/plan", {"source": source}, expect=400)
+    check("host key" in str(e), f"unknown host key explained: {str(e)[:200]}")
+    sh("ssh-keyscan -p 2222 127.0.0.1 2>/dev/null >> /root/.ssh/known_hosts")
+
+    _, plan = req("POST", "/import/proxmox/plan", {"source": source, "bridge_map": bridges})
+    g = {x["vmid"]: x for x in plan["guests"]}
+    check(set(g) == {303, 304} and not g[303]["blockers"] and not g[304]["blockers"],
+          f"both guests planned over ssh: {[(k, v['blockers']) for k, v in g.items()]}")
+    _, j = req("POST", "/import/proxmox", {"source": source, "bridge_map": bridges, "guests": [303, 304]}, expect=202)
+    st = wait_for("the ssh import", lambda: (lambda s: s if s["state"] != "running" else None)(
+        req("POST", "/import/proxmox/status", {"job": j["job"]})[1]), timeout=900)
+    if st["state"] != "done":
+        fail(f"ssh import: {st}")
+    _, v = req("GET", "/vms/pve-ssh-vm")
+    d0 = v["disks"][0]["path"]
+    sh(f"qemu-img compare -f raw -F qcow2 {STORE}/images/301/vm-301-disk-0.raw {d0}")
+    log("ok: disk copied over ssh equals the source volume")
+    check([n["mac"] for n in v["hardware"]["nets"]] == ["bc:24:11:aa:01:01", "bc:24:11:aa:01:02"], "MACs kept over ssh")
+    check(not any(f.endswith(".fetch.raw") for f in os.listdir(os.path.dirname(d0))), "no staging file left")
+    from lxc_e2e import exec_ct
+    req("POST", "/containers/pve-ssh-ct/start", {}, expect=None)
+    wait_for("the ssh-imported container", lambda: exec_ct("pve-ssh-ct", "echo up") == "up", timeout=60)
+    check(exec_ct("pve-ssh-ct", "stat -c %u:%g /home/u/file") == "1000:1000", "owners kept over ssh")
+    check(exec_ct("pve-ssh-ct", "cat /var/lib/app/data") == "appdata", "storage mount point copied over ssh")
+    req("POST", "/containers/pve-ssh-ct/stop", {}, expect=None)
+    _, pend = req("POST", "/vms/import/cleanup/pending", {})
+    check("pve-ssh-vm" not in {p["vm_id"] for p in pend}, "no local cleanup offer for a remote source")
 
 
 if __name__ == "__main__":

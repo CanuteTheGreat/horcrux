@@ -203,6 +203,9 @@ pub struct Resolved {
     pub kind: VolKind,
     /// `raw` / `qcow2` / `vmdk` for File; `raw` for Block.
     pub format: String,
+    /// Bytes of the volume when the lookup told (SSH sources).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
 }
 
 pub type Resolver<'a> = &'a dyn Fn(&PveVol) -> Result<Resolved, String>;
